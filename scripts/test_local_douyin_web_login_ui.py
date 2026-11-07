@@ -38,7 +38,11 @@ def verify(binary, output):
                     page.route(re.compile(r".*/api/local/apps/catalog$"), fulfill_json({"applications": [{"id": "douyin", "name": "抖音", "install_state": "installed", "source_available": True}]}))
                     page.route(re.compile(r".*/api/apps$"), fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]}))
                     page.route("**/api/apps/douyin/connections", fulfill_json({"items": []}))
-                    page.route("**/api/local/apps/douyin/authorization", fulfill_json({"revision": "", "configured": False, "status": "unconfigured", "label": "", "works_authorized": False, "publish_authorized": False}))
+                    authorization_requests = []
+                    def unexpected_authorization(route):
+                        authorization_requests.append(route.request.method)
+                        route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "removed UI must not call authorization"}))
+                    page.route("**/api/local/apps/douyin/authorization", unexpected_authorization)
                     page.route(re.compile(r".*/api/local/publications\?app_id=douyin(?:&.*)?$"), fulfill_json({"tasks": {"items": [], "next": 0, "has_more": False}, "targets": []}))
 
                     revision = 1
@@ -133,13 +137,20 @@ def verify(binary, output):
                     page.locator("#apps-list[aria-busy='false']").wait_for()
                     open_application(page, "抖音")
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
+                    assert page.get_by_text("API 接入（可选）", exact=True).count() == 0
+                    assert page.get_by_label("抖音 Client Key", exact=True).count() == 0
+                    page.get_by_role("button", name="接入版本管理", exact=True).click()
+                    page.get_by_text("接入版本", exact=True).wait_for()
+                    assert page.get_by_text("源码", exact=False).count() == 0
+                    page.screenshot(path=str(output / f"douyin-integration-version-{suffix}.png"), full_page=True)
+                    page.get_by_role("button", name="账号与使用", exact=True).click()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
                     assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
                     assert page.get_by_label("允许本机转写视频音轨", exact=True).count() == 0
                     assert page.get_by_label("允许本机分析视频画面", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
-                    assert page.get_by_text("已取得开放平台接口权限", exact=False).count() == 0
+                    assert page.get_by_text("已取得额外 API 权限", exact=False).count() == 0
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).wait_for()
@@ -154,7 +165,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).click()
                     page.get_by_text("网页登录资料已保存", exact=True).wait_for()
                     page.get_by_text("最近主人确认：", exact=False).wait_for()
-                    assert page.get_by_text("登录有效性以网页为准，不代表已取得开放平台接口权限。", exact=True).count() == 1
+                    assert page.get_by_text("登录状态以网页为准，保存后可用于本软件已支持的抖音功能。", exact=True).count() == 1
                     page.get_by_role("button", name="允许读取首页文字", exact=True).click()
                     page.get_by_role("button", name="停止网页读取", exact=True).wait_for()
                     page.get_by_text("已允许读取实际网页文字。", exact=False).wait_for()
@@ -166,6 +177,7 @@ def verify(binary, output):
                     scope.select_option("home_and_videos")
                     page.get_by_text("视频页文字不等于音轨或完整观看", exact=False).wait_for()
                     assert scope.input_value() == "home_and_videos"
+                    assert not authorization_requests, "ordinary Douyin login must not request the removed API authorization path"
                     # Older wide-text responses have no media flags; reopening must not grant either.
                     view.pop("playback_enabled", None)
                     view.pop("audio_enabled", None)

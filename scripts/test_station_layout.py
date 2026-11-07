@@ -48,7 +48,7 @@ def verify(binary, output):
                 initial=fixed_shell(page)
                 main=context.request.get(origin+'/api/local/model').json()['persona']
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
-                assert page.get_by_role('button',name='安装源码',exact=True).count()==0
+                assert page.get_by_role('button',name='安装接入版本',exact=True).count()==0
                 page.screenshot(path=str(output/'applications-desktop.png'))
                 for app,text in [('微信','合成微信偏好：喜欢音乐和简洁表达。'),('抖音','合成抖音偏好：喜欢旅行和摄影。')]:
                     open_application(page,app,'应用子角色')
@@ -89,7 +89,7 @@ def verify(binary, output):
                 form.get_by_role('button',name='编辑',exact=True).click()
                 field=form.get_by_role('textbox',name='微信子角色设定',exact=True)
                 field.fill('暂未保存的应用草稿')
-                page.locator('#app-dialog-tabs').get_by_role('button',name='源码管理',exact=True).click()
+                page.locator('#app-dialog-tabs').get_by_role('button',name='接入版本管理',exact=True).click()
                 page.locator('#app-dialog-tabs').get_by_role('button',name='应用子角色',exact=True).click()
                 assert field.input_value()=='暂未保存的应用草稿'
                 # Force a long form body to verify the dialog scrolls and the fixed header stays usable.

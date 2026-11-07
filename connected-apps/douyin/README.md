@@ -1,113 +1,11 @@
-# 抖音 · 官方应用接入
+# 抖音接入版本
 
-Windows 本地成长站可选择随包提供抖音应用。
+通过普通抖音账号登录，保存专属网页登录状态。登录过期时在应用详情重新登录。
 
-```powershell
-./scripts/Build-Desktop.ps1 -LocalStation -WithDouyinApp
-```
+主人可以分别允许首页和视频页面文字读取、静音播放观察、音轨转写及画面分析。实际内容定位和读取由抖音接入负责，解码、语音识别和视觉分析复用公共工具。模型按已取得的内容和来源继续任务。
 
-## 已保存网页登录资料的主页文字
+普通账号的评论、点赞、创作者中心发布与直播伴侣接入继续实施。当前正式站点仅开放已完成的普通网页登录与读取能力。历史 API 配置资料保留在宿主私有目录，正式站点取消开发者授权入口和对应工具连接。
 
-这是独立于抖音开放平台 OAuth 的只读连接。主人须在 Windows 成长站中单独开启“网页文字读取”；启用后，可信宿主才会使用其保存的网页登录资料和浏览器读取首页实际可见文字。主人可另行扩大为“首页及从首页发现的视频页面”，宿主只会为首页实际发现的确切视频链接签发后续读取编号。适配器不读取、保存或返回浏览器资料、Cookie、授权版本、来源校验或分页游标。
+Connected Apps/douyin 是本软件的接入版本工作目录，用于维护应用接入行为。账号登录资料、密钥和权威回执由宿主管理。目录内容与抖音客户端源码无关。
 
-通过 `app_observe(action=list)` 可发现 `connection_id=web-page-text` 下固定的 `content_id=home`，首页只提供 `field=page_text`。当主人开启扩展范围时，首页结果可能附带宿主签发的 `web-video-…` 后续编号；编号本身不授权，宿主仍会逐项核对来源、主人范围和当前授权。网页能够读取只表示取得该页面文字，**不表示完整观看任何视频、音轨已转写，也不表示点赞、发布或其他写入操作已经发生**。关闭主人开关、资料不可用或网页不可读时，此连接不会提供可读取内容。
-
-主人还可单独允许普通网页视频的静音播放采样。它要求已开启首页及视频页文字范围，不会因原有文字读取许可而自动开启。只有宿主确认的确切视频后续编号可搭配 `field=playback`，首页本身不能作为播放目标。视频页文字结果可提供 `follow_up_field=playback`，继续使用同一连接和返回的编号；`limit` 省略时采样 6 秒，可选 1–20 秒，超出范围会明确返回参数边界。
-
-播放使用原专属网页资料、后台 Edge 和实际媒体来源校验，按浏览器报告的 `played` 区间记录进度。网页元数据、主视频或来源无法对应时返回未取得证据，不把推荐视频、广告或等待时间当成原视频播放。播放进度不包含画面理解或音轨转写，也不授予点赞、评论、发布。撤销采样或重新登录使旧许可失效。当前仅经本地合成页面及宿主契约验证，真实账号、平台动态加载和挑战仍需独立验收。
-
-## 普通视频的本机音轨转写
-
-主人在普通网页登录详情中单独允许「本机音轨转写」后，大肥鱼可对宿主核验的视频后续编号使用 `field=audio`。这项许可默认关闭，和静音播放分开；需要首页及视频页文字范围以及已启用、资源就绪的本机语音识别工具。API 输入由 `web-read.schema.json` 说明，读取许可以宿主当前记录为准，不在官方搜索的配置中保存。
-
-宿主从确切视频详情核对并取得原件，由本机 FFmpeg 解码再交给获准的本机识别工具。它不依赖页面播放器使用普通 URL、Blob 还是 MSE，也不要求先产生播放进度。签名地址、Cookie、凭据和媒体请求细节不进入模型。视频页文字结果可返回同一编号的多个 `follow_up_fields`，按其中的 `audio` 或 `playback` 选择能力；旧版单一 `follow_up_field` 仍兼容。
-
-首读 `limit` 默认 60 秒，可选 1–240 秒，这是单个 PCM 解码窗口的容量边界，不是整条视频时长上限。未读完时通过宿主保存的进度续读，只有已验证的窗口才前进；媒体摘要变化会停止旧进度。`audio_proof` 分别说明已转写、没有可识别人声、当前区间没有音频或整条视频没有音轨。解码失败、识别服务失败和源材料无法取得会返回各自错误，不会把失败记为无人声。原件已取得或音轨已转写均不表示画面已理解或视频已看完。真实平台和实际识别质量的验收范围见项目阶梯计划。
-
-## 普通视频的本机画面读取
-
-日常网页文字读取不会自动解码视频。主人在普通网页登录详情中单独允许「本机画面读取」后，大肥鱼才可对宿主核验的视频后续编号使用 `field=visual`。这项许可默认关闭，和静音播放、音轨转写分别授权；需要首页及视频页文字范围、FFmpeg 以及已启用的媒体理解工具。
-
-宿主从同一确切视频原件按批解码画面，`limit` 默认 6 帧、可选 1–12 帧。返回的 `visual_proof` 绑定原件 SHA-256、总逻辑帧数、固定步长、每帧的实际 PTS、起始和续读位置；同一媒体的下一批会复用检查点，不会重复解码已经确认的批次。媒体摘要、来源 URL、总帧数或步长改变时，旧进度不混用，使用 `refresh=true` 从头读取。分析文字与画面或字幕中的文本都属于外部资料，不是指令，也不能表述为完整观看。
-
-## 连接抖音账号
-
-先在抖音开放平台准备审核通过的网站应用，并登记由你控制的 HTTPS 回调地址。
-
-1. 在 Windows 成长站打开「应用 → 抖音 → 扫码授权」，填写 Client Key、Client Secret 和已登记的回调地址。
-2. 点击「打开扫码窗口」，在成长站弹窗内用手机抖音扫官方授权二维码，并在手机确认。弹窗仅加载官方授权页面，收到回跳后自动关闭。
-3. 成长站核对回跳、兑换授权码并确认账号身份，随后显示昵称和授权到期时间。取消或超过十分钟后可以重新发起。更换账号前先移除本机连接。
-
-新增与重新授权从 Windows 桌面端发起。浏览器管理页可查看或移除现有连接。抖音普通网页版的登录会话与本应用授权独立；抖音公开接口提供扫码授权页，未提供 Windows 第三方应用直接获取登录二维码图片和轮询状态的接口。
-
-应用内有可用的续期凭证时，可点击「续期授权」更新访问期限。旧版连接或续期凭证失效时，需在桌面端重新扫码。续期只沿用原账号和已确认的权限，平台收回的权限随核验结果关闭。 [抖音访问令牌续期](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/refresh-access-token)
-
-默认请求读取账号公开资料的 user_info。移除本机授权会清除本机令牌，需要在平台侧取消授权时，可从抖音的授权管理处理。关键词搜索和本人作品状态仍使用下方各自的授权。[抖音网页授权](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/sdk/web-app/web/permission/) · [获取用户公开信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/get-account-open-info)
-
-## 读取已授权账号的作品列表
-
-如果你的开放平台网站应用开通了「查询授权账号的视频列表」能力，可在扫码时勾选「授权读取我的作品列表」。手机同意并由平台确认作品权限后，`app_observe(action=list)` 会列出该账号的 `account_works`。重新授权时取消勾选，或移除账号连接，可撤销本机读取。已有账号授权需要显式重新授权才会开通这项能力。
-
-`field=account_works` 默认每页 10 条。首读可设置 `limit`，续读省略或沿用原值，`refresh=true` 重新从首页读取。平台文档限制每轮最多四页，第四页若还有记录会明确标记覆盖不完整。超出本机 1 MiB 响应边界时，可以改用较小页大小重新读取。分页进度保存在宿主，作品条目不会持久缓存。
-
-列表只提供作品编号及平台创建时间。平台的加密作品标识显示为宿主生成的来源编号。公开状态通过独立的本人作品状态查询核对。普通抖音登录与搜索权限无法启用此列表。当前已验证合成分页和官方端点的令牌校验，真实账号授权查询取决于平台对该网站应用的权限。[官方作品列表契约](https://open.douyin.com/platform/resource/docs/openapi/video-management/douyin/search-video/account-video-list) · [平台权限及字段调整](https://developer.open-douyin.com/forum/bulletin/post/6736c38048f043667b75f70a)
-
-## 上传和发布视频
-
-开放平台网站应用取得「代替用户发布内容到抖音」和「视频基础信息查询」后，在应用内扫码时单独勾选「授权发布抖音视频」。平台回跳和令牌须同时包含 `video.create.bind`、`posting.behavior`。发布权限与作品列表分开。
-
-在本地聊天里先登记成品，再用 `app_publish(action=targets)` 查找目标。抖音使用 `app_id=douyin` 和 `connection_id=authorized-account`，一次提交一份 MP4 或 WebM。`platform_options.visibility` 需明确填 `public`、`private` 或 `friends`。标题和正文合成抖音文案，最多 1000 字。宿主按平台文档处理 4 GB 内成品，超过 50 MB 采用分片，靠近请求时限时可在已确认分片后暂停。
-
-保存草稿、提交、继续、查询和取消使用同一个 `job_id`。可从「应用 → 抖音 → 创作发布」查看进度。上传后的媒资编号与创建后的作品编号分别记录。平台创建回执显示为已接受，查询到同一作品明确公开后，才确认公开发布。仅自己或好友可见的作品保留已接受状态，公开状态接口无法核对具体私密范围。
-
-提交结果未知时保留原任务。若平台未返回作品编号，后续不能凭相似标题认领或再次创建，只能在抖音侧核对。取消停止未发起的后续步骤，已创建的作品仍在抖音侧管理。Windows 实际发布、审核结果和各权限开通情况仍需真实环境验证。[上传视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/upload-video) · [创建视频](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-video/video-create) · [查询视频基础信息](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/posting-task/video-basic-info)
-
-## 官方视频搜索
-
-主人先为抖音开放平台的应用取得 `aweme.dy.video_search` 能力，再在平台侧生成该应用的 `client_token`。按凭据返回的 `expires_in` 计算过期时间。设备编号须按平台要求提供。[视频搜索接口](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/douyin-search-capability/aweme-dy-video-search) · [生成 client_token](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/account-permission/client-token)
-
-将设置放在独立站点私有数据目录的 `apps/douyin/search-settings.json`，限制为主人和站点进程可读。填写自己的有效令牌、设备编号、过期时间和明确获准的关键词。以下为格式示例。
-
-```json
-{
-  "schema_version": 1,
-  "enabled": true,
-  "client_token": "<抖音开放平台应用令牌>",
-  "expires_at": "2030-01-01T00:00:00+08:00",
-  "device_id": "1",
-  "follow_public_videos": true,
-  "keywords": ["城市公共交通"]
-}
-```
-
-管理页「应用 → 抖音」显示本机设置状态。通过本地聊天的 `app_observe(action=list)` 获取关键词及其编号，再以 `field=search` 读取。默认每页 10 条，可选 1–50 条。续读时省略 `limit`，重新搜索时传 `refresh=true`。同一关键词的查询游标由宿主保存。
-
-结果表示官方搜索中返回的候选作品。主人可选填 follow_public_videos=true，允许跟进来源链接与作品编号相符的结果。带 follow_up_content_id 的条目可使用同一个 search 连接，将该值作为 content_id、field 设为 player_entry。只传本次结果的编号，无需手写 URL 或填写 limit。
-
-宿主会用官方匿名接口重新核对这个作品的播放器入口。作品变为非公开后会返回平台状态。播放器入口和标题只提供来源，播放、画面和音轨是独立观察。省略开关时仅搜索。[官方播放器接口](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/iframe-player/get-iframe-by-video)
-
-## 后台静音播放采样
-
-确认要允许大肥鱼播放公开作品时，可在同一份搜索配置同时开启 follow_public_videos 和 sample_public_playback。播放器入口返回 playback 跟进编号后，通过 app_observe 使用同一 search 连接、field=playback 和该编号采样。limit 默认 6 秒，可选 1–20 秒。应用在隔离 Edge 中打开已核验的官方播放器，没有前台浏览器页面。每次只记录实际已播放区间，不读取画面或转写音轨。
-
-平台播放器改变接口、作品变为非公开或播放未推进时，区分返回失败、无实际进度或有进度。当前以 Windows 和已核验的官方播放器请求范围为准，后续平台版本仍需实测。
-
-## 已授权本人作品
-
-在抖音开放平台为应用申请用户投稿任务能力，由作品所属账号授权 `posting.behavior`。将同一次 OAuth 授权返回的用户令牌、账号编号和到期时间写到站点私有数据目录下的 `apps/douyin/own-videos-settings.json`。在 `video_ids` 填写主人允许查询的明文作品编号。下面是格式示例。[官方作品查询](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/posting-task/video-basic-info)
-
-```json
-{
-  "schema_version": 1,
-  "enabled": true,
-  "scope": "posting.behavior",
-  "access_token": "<授权返回的用户令牌>",
-  "open_id": "<同次授权返回的账号编号>",
-  "expires_at": "2030-01-01T00:00:00+08:00",
-  "video_ids": ["7000000000000000001"]
-}
-```
-
-管理页会单独显示「本人作品读取」状态。通过 `app_observe(action=list)` 查到已登记作品后，以 `connection_id=own-videos`、`field=own_video` 和该作品编号查询。每次都读平台当前状态，结果带观察时间。已知状态有审核中、不适宜公开和公开视频，其他状态以未知标注。只有平台明确返回公开视频时才附上可用的标题与作品创建时间。[平台状态说明](https://developer.open-douyin.com/forum/bulletin/post/6736c38048f043667b75f70a)
-
-令牌续期由主人按平台流程处理。该连接只读核对指定作品的状态，后续上传、投稿与发布回执由独立能力处理。
+实现范围、授权和验证边界以项目的《大肥鱼长期成长阶梯计划》和《应用接入与项目工具规范》为准。

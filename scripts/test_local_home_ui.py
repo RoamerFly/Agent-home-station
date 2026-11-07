@@ -164,8 +164,8 @@ def verify_missing_source(binary, output):
                 page.locator("#apps-view").wait_for(state="visible")
                 assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
                 page.locator("#apps-list[aria-busy='false']").wait_for()
-                page.get_by_text("未提供源码", exact=True).wait_for()
-                assert page.get_by_role("button", name="安装源码").count() == 0
+                page.get_by_text("暂无可用版本", exact=True).wait_for()
+                assert page.get_by_role("button", name="安装接入版本").count() == 0
                 page.screenshot(path=str(output / "apps-no-source-light.png"), full_page=True)
                 browser.close()
         finally:
@@ -443,15 +443,15 @@ def verify(binary, output):
                 assert len(catalog) == 1 and catalog[0]["id"] == "wechat"
                 source_available = catalog[0]["source_available"]
                 if source_available:
-                    assert "源码可安装" in source_state, source_state
-                    open_application(page, section="源码管理")
-                    page.get_by_role("button", name="安装源码").click()
-                    page.get_by_text("源码已安装", exact=True).wait_for()
-                    page.locator("#apps-feedback").get_by_text(re.compile("源码已.*家目录")).wait_for()
-                    assert (home / "Connected Apps" / "wechat" / "app.json").is_file(), "installed application source"
+                    assert "有可用版本" in source_state, source_state
+                    open_application(page, section="接入版本管理")
+                    page.get_by_role("button", name="安装接入版本").click()
+                    page.get_by_text("已安装", exact=True).wait_for()
+                    page.locator("#apps-feedback").get_by_text(re.compile("接入版本已.*家目录")).wait_for()
+                    assert (home / "Connected Apps" / "wechat" / "app.json").is_file(), "installed application integration version"
                 else:
-                    assert "未提供源码" in source_state, source_state
-                    assert page.get_by_role("button", name="安装源码").count() == 0
+                    assert "暂无可用版本" in source_state, source_state
+                    assert page.get_by_role("button", name="安装接入版本").count() == 0
 
                 close_application(page)
                 # Application-account HTTP calls are intentionally routed in the browser only:
@@ -467,7 +467,7 @@ def verify(binary, output):
                 page.get_by_text("账号连接", exact=True).wait_for()
                 page.get_by_text("合成微信账号", exact=True).wait_for()
                 page.get_by_text("已登录", exact=True).wait_for()
-                assert page.get_by_text("从旧版接入", exact=True).count() == 0, "legacy import stays hidden without an account flag"
+                assert page.get_by_text("从旧版接入", exact=True).count() == 0, "legacy migration has no daily UI"
                 page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
 
                 # Keep the same request key when the first response is lost,
@@ -915,162 +915,6 @@ def verify(binary, output):
                 refresh_application(page)
                 page.get_by_text("Agent 未启动", exact=True).wait_for()
                 assert page.get_by_role("button", name="启动 Agent").is_disabled()
-                page.get_by_text("从旧版接入", exact=True).click()
-                page.get_by_role("button", name="查看接入预演", exact=True).click()
-                page.get_by_text("接入预演", exact=True).wait_for()
-                page.get_by_text("账号：fixture-account", exact=True).wait_for()
-                page.get_by_text("建议回复范围：synthetic-room@chatroom", exact=True).wait_for()
-                page.get_by_text("仍需核对：旧版允许所有好友回复", exact=True).wait_for()
-                page.get_by_text("管理页发送记录：2；待核对：1", exact=True).wait_for()
-                page.get_by_text("旧宿主：已记录正常停机", exact=True).wait_for()
-                page.get_by_text("原生档案：导入记录与当前连接匹配", exact=True).wait_for()
-                page.get_by_text("目标登录：尚未登录", exact=True).wait_for()
-                page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
-                assert legacy["previews"] == 1 and not legacy["posts"] and not legacy_memory["requests"] and not worker["actions"] and not worker["threads"], "preview must be read-only"
-                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
-                page.get_by_text("旧会话记忆可核对", exact=True).wait_for()
-                page.get_by_text("匹配范围：2；未映射范围：1；外部范围：0", exact=True).wait_for()
-                page.get_by_text("会话：synthetic-room@chatroom；来源候选：12；已排除：2；记忆：3；摘要：有；当前目标历史授权：已授权", exact=True).wait_for()
-                page.get_by_text("历史授权仅表示当前目标连接的读取权限，不代表可读取旧版资料。", exact=True).wait_for()
-                page.get_by_role("button", name="预演接续此会话", exact=True).click()
-                page.get_by_text("可接续此会话", exact=True).wait_for()
-                page.get_by_text("来源事件：12；可接续记忆：3", exact=True).wait_for()
-                page.get_by_text("当前 Agent：Agent 未启动；已配置历史读取会话：0 个。", exact=True).wait_for()
-                page.get_by_text("说明：当前 Agent 已暂停，接续不会自动启动", exact=True).wait_for()
-                memory_apply = page.get_by_role("button", name="确认接续此会话", exact=True)
-                assert memory_apply.is_disabled(), "memory continuation requires explicit identity confirmation"
-                assert not legacy_memory_selection["posts"], "memory preview must not write before confirmation"
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                memory_apply.click()
-                page.get_by_text("旧资料或当前目标已变化，请重新预演此会话。", exact=True).wait_for()
-                assert legacy_memory_selection["posts"] == [{"digest": "fixture-memory-selection-v1", "same_identity": True}]
-                page.get_by_role("button", name="重新预演此会话", exact=True).click()
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                page.get_by_role("button", name="确认接续此会话", exact=True).click()
-                page.get_by_text("此会话已接续", exact=True).wait_for()
-                assert legacy_memory_selection["posts"] == [
-                    {"digest": "fixture-memory-selection-v1", "same_identity": True},
-                    {"digest": "fixture-memory-selection-v2", "same_identity": True}
-                ], "memory continuation must reread after stale confirmation"
-                page.get_by_role("button", name="读取下一页会话", exact=True).click()
-                page.get_by_text("会话：synthetic-room-older@chatroom；来源候选：4；已排除：1；记忆：1；摘要：无；当前目标历史授权：未授权", exact=True).wait_for()
-                assert legacy_memory["requests"] == ["", "fixture-memory-next"] and not legacy["posts"], "memory check must be read-only"
-                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
-                page.get_by_text("旧会话快照不完整，请使用正常关闭后的一致副本", exact=True).wait_for()
-                assert legacy_memory["requests"] == ["", "fixture-memory-next", ""] and not legacy["posts"], "unavailable memory state must remain read-only"
-                page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
-                page.get_by_text("旧版资料或当前状态已变化，请重新读取接入预演。", exact=True).wait_for()
-                assert page.get_by_role("button", name="确认接入旧版摘要", exact=True).count() == 0, "stale preview requires a fresh read"
-                page.get_by_role("button", name="查看接入预演", exact=True).click()
-                page.get_by_role("button", name="确认接入旧版摘要", exact=True).click()
-                page.get_by_text("旧版摘要已保存；没有启动 Agent，也没有修改回复范围。", exact=True).wait_for()
-                assert legacy["previews"] == 2 and legacy["posts"] == [{"digest": "fixture-legacy-digest-1"}, {"digest": "fixture-legacy-digest-2"}]
-                assert not worker["actions"] and not worker["threads"], "legacy import must not mutate lifecycle or reply policy"
-                page.get_by_role("button", name="查看接入摘要", exact=True).wait_for()
-                page.get_by_role("button", name="查看接入摘要", exact=True).click()
-                page.get_by_text("旧宿主：停机记录与当前快照不一致", exact=True).wait_for()
-                page.get_by_text("原生档案：尚未取得档案导入记录", exact=True).wait_for()
-                page.get_by_text("目标登录：已登录且在线", exact=True).wait_for()
-                page.get_by_text("身份确认：仍需主人确认实际微信身份", exact=True).wait_for()
-                assert legacy["previews"] == 3 and len(legacy["posts"]) == 2, "cutover refresh must remain read-only"
-                page.get_by_role("button", name="核对启用条件", exact=True).click()
-                page.get_by_text("可以确认启用条件", exact=True).wait_for()
-                page.get_by_text("确认交接后，支持交接的旧桌面将拒绝启动此数据目录。", exact=True).wait_for()
-                page.get_by_text("已授权回复会话：1；待核对旧回执：2", exact=True).wait_for()
-                page.get_by_text("管理页发送待核对：1", exact=True).wait_for()
-                activation_apply = page.get_by_role("button", name="记录启用核对", exact=True)
-                assert activation_apply.is_disabled() and not legacy_activation["posts"], "activation must remain read-only before both owner acknowledgements"
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                assert activation_apply.is_disabled(), "unresolved old delivery receipts require explicit acknowledgement"
-                page.get_by_label("我已核对待确认旧回执（Agent 2 条，管理页 1 条）", exact=True).check()
-                activation_apply.click()
-                page.get_by_text("旧版资料或当前连接已变化，请重新核对启用条件。", exact=True).wait_for()
-                assert legacy_activation["posts"] == [{"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True}]
-                page.get_by_role("button", name="重新核对启用条件", exact=True).click()
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                page.get_by_label("我已核对待确认旧回执（Agent 2 条，管理页 1 条）", exact=True).check()
-                page.get_by_role("button", name="记录启用核对", exact=True).click()
-                page.get_by_text("启用条件已记录", exact=True).wait_for()
-                page.get_by_text("启用条件已记录。仍需由主人单独启动 Agent。", exact=True).wait_for()
-                assert legacy_activation["posts"] == [
-                    {"digest": "fixture-activation-v1", "same_identity": True, "reviewed_receipts": True},
-                    {"digest": "fixture-activation-v2", "same_identity": True, "reviewed_receipts": True}
-                ], "activation confirmation must post only its explicit checks"
-                assert not worker["actions"] and not worker["threads"], "confirmation must not start Agent or mutate reply policy"
-                page.get_by_role("button", name="查看冻结状态", exact=True).click()
-                page.get_by_text("尚未冻结新投递", exact=True).wait_for()
-                page.get_by_role("button", name="冻结新投递并核对", exact=True).click()
-                page.get_by_text("新提交已停止，正在等待本机工作器和已有请求退出。", exact=True).wait_for()
-                assert page.get_by_role("button", name="读取下一页投递", exact=True).count() == 0
-                page.get_by_role("button", name="刷新投递核对", exact=True).click()
-                page.get_by_text("新投递已冻结", exact=True).wait_for()
-                page.get_by_text("本地新投递已停止。此状态不代表已获得回退权限；仍可能有在途或结果待核对的投递。", exact=True).wait_for()
-                page.get_by_text("文字 · 微信已接受", exact=True).wait_for()
-                page.get_by_text("文件 · 结果待核对", exact=True).wait_for()
-                page.get_by_role("button", name="读取下一页投递", exact=True).click()
-                page.get_by_text("语音 · 已结束", exact=True).wait_for()
-                assert legacy_rollback["posts"] == [{}], "freeze must submit only an empty owner request"
-                assert legacy_rollback["gets"] == ["", "", "", rollback_cursor], "rollback receipts must page only after frozen"
-                page.get_by_role("button", name="查看已保存核对", exact=True).click()
-                page.get_by_text("尚未保存本次核对记录。", exact=True).wait_for()
-                page.get_by_role("button", name="保存本次核对", exact=True).click()
-                page.get_by_text("标识：fixture-rollback-audit-v1；保存于：2026-11-07T08:02:00Z", exact=True).wait_for()
-                page.get_by_text("投递 3；操作 5；处理中 1；待核对 1", exact=True).wait_for()
-                page.get_by_text("原生端：可核对；本次桌面运行：已关联；本地记录：一致", exact=True).wait_for()
-                page.get_by_role("button", name="查看已保存核对", exact=True).click()
-                page.get_by_text("原生端：可核对；本次桌面运行：已关联；本地记录：已变化，请重新保存", exact=True).wait_for()
-                assert legacy_rollback["audit_gets"] == 2 and len(legacy_rollback["audits"]) == 1, "audit summary must be explicitly saved after a frozen read"
-                assert page.get_by_role("button", name="恢复投递", exact=True).count() == 0, "freeze screen must not provide a release path"
-                page.get_by_role("button", name="重新核对启用条件", exact=True).click()
-                page.get_by_text("暂不能启用", exact=True).wait_for()
-                page.get_by_text("说明：旧宿主停机记录已变化，请先重新导入后再启用", exact=True).wait_for()
-                assert len(legacy_activation["posts"]) == 2, "blocked activation state must not send a confirmation"
-                # Delivery records remain usable from the imported snapshot after the old source is removed.
-                page.get_by_role("button", name="查看旧版投递回执", exact=True).click()
-                page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
-                assert page.get_by_text("状态来源：旧版保存的快照，尚未从当前微信查询", exact=True).count() == 3
-                page.set_viewport_size({"width": 375, "height": 800})
-                long_receipt = page.locator(".legacy-receipt-row").filter(has_text=long_legacy_key)
-                expect(long_receipt).to_be_visible()
-                assert long_receipt.evaluate("row => row.scrollWidth <= row.clientWidth + 1"), "long legacy receipt ID must wrap inside the narrow card"
-                page.set_viewport_size({"width": 1280, "height": 800})
-                page.locator(".legacy-memory-scope").filter(has=page.get_by_text("投递编号 legacy-pending", exact=True)).get_by_role("button", name="核对原操作", exact=True).click()
-                page.get_by_text("状态来源：已从当前微信平台查询", exact=True).wait_for()
-                page.locator(".legacy-memory-scope").filter(has=page.get_by_text("投递编号 legacy-unknown", exact=True)).get_by_role("button", name="核对原操作", exact=True).click()
-                page.get_by_text("状态来源：已查询当前原生记录，未找到旧操作；不推断是否送达", exact=True).wait_for()
-                page.get_by_text("文字 · 发送结果待核对", exact=True).wait_for()
-                assert legacy_receipts["lookups"] == ["legacy-pending", "legacy-unknown"], "legacy receipt lookup must only read the original operation"
-                page.get_by_role("button", name="读取下一页旧回执", exact=True).click()
-                page.get_by_text("旧版回执快照已变化，请从第一页重新读取。", exact=True).wait_for()
-                page.get_by_role("button", name="从第一页重新读取", exact=True).click()
-                page.get_by_role("button", name="读取下一页旧回执", exact=True).click()
-                page.locator(".legacy-receipt-list").get_by_text("会话：synthetic-room@chatroom", exact=True).wait_for()
-                assert legacy_receipts["pages"] == ["", "fixture-legacy-stale", "", "fixture-legacy-next"], "stale legacy cursor must restart from the first page"
-                page.get_by_label("只看待核对", exact=True).check()
-                page.get_by_text("快照内回执：4；待核对：2", exact=True).wait_for()
-                assert page.locator(".legacy-receipt-list .legacy-memory-scope").filter(has_text="发送结果待核对").count() == 1, "pending filter must only retain unresolved legacy receipts"
-                assert legacy_receipts["filters"][-1] is True and legacy_receipts["pages"][-1] == "", "pending filter must restart at the first legacy receipt page"
-                page.get_by_label("旧版投递来源", exact=True).select_option("management")
-                page.get_by_text("这些记录来自管理页发送快照；仅供查看，不会查询原操作。", exact=True).wait_for()
-                assert not page.get_by_role("button", name="核对原操作", exact=True).count(), "management snapshots must never offer native lookup"
-                assert legacy_receipts["management_pages"] == [""] and legacy_receipts["management_filters"] == [True], "source switch must preserve the pending filter and restart management pagination"
-                page.get_by_label("旧版投递来源", exact=True).select_option("agent")
-                page.get_by_text("这些记录来自 Agent 投递快照；平台查询结果会单独显示。", exact=True).wait_for()
-                assert legacy_receipts["pages"][-1] == "" and legacy_receipts["filters"][-1] is True, "returning to Agent receipts must restart its cursor and preserve the pending filter"
-                page.get_by_role("button", name="核对旧会话记忆", exact=True).click()
-                page.get_by_role("button", name="核对旧群备注", exact=True).click()
-                page.get_by_text(note_text, exact=True).wait_for()
-                note_apply = page.get_by_role("button", name="确认接续旧备注", exact=True)
-                assert note_apply.is_disabled() and not note_posts, "note preview must wait for identity confirmation"
-                channels_summary_opt_in = page.get_by_role("checkbox", name="同时开启此群的视频号自动总结", exact=True)
-                assert not channels_summary_opt_in.is_checked(), "legacy summary opt-in must start unchecked"
-                page.get_by_text("仅对之后收到的分享生效，沿用当前已有的回复与附件授权。", exact=True).wait_for()
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                assert not channels_summary_opt_in.is_checked(), "identity confirmation must not opt in to automatic summaries"
-                channels_summary_opt_in.check()
-                note_apply.click()
-                page.get_by_text("旧群备注已接续，视频号自动总结已开启。", exact=True).wait_for()
-                assert len(note_posts) == 1 and not worker["actions"] and not worker["threads"]
                 page.get_by_role("button", name="设置回复范围").click()
                 page.get_by_role("textbox", name="回复会话 ID", exact=True).fill("filehelper\nsynthetic-room@chatroom")
                 page.get_by_role("textbox", name="历史与成员读取会话 ID", exact=True).fill("synthetic-room@chatroom")
@@ -1099,19 +943,6 @@ def verify(binary, output):
                 assert worker["attachment_threads"] == ["synthetic-room@chatroom"]
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
                 assert worker["policy_payloads"][-1]["group_rules"] == worker["group_rules"], "group settings must use the local policy route only"
-                page.get_by_role("button", name="核对旧群触发方式", exact=True).click()
-                page.get_by_text("旧群触发方式", exact=True).wait_for()
-                page.get_by_text("触发前缀：!fish ", exact=True).wait_for()
-                page.get_by_text("角色补充：旧版群角色 <原样显示>", exact=True).wait_for()
-                legacy_group_apply = page.get_by_role("button", name="确认接续旧群触发方式", exact=True)
-                assert legacy_group_apply.is_disabled() and not legacy_group_rule["posts"], "group trigger preview must wait for identity confirmation"
-                page.get_by_label("我已确认旧资料和当前目标是同一个实际微信账号", exact=True).check()
-                legacy_group_apply.click()
-                page.locator("#apps-feedback").get_by_text("旧群触发方式已接续。可在本群偏好中继续调整。", exact=True).wait_for()
-                assert legacy_group_rule["gets"] == ["synthetic-room@chatroom"]
-                assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
-                                                   "reply_settings": {"mode": "social", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
-                                                                      "force_reply_when_mentioned": True}}]
                 page.locator("#apps-list[aria-busy='false']").wait_for()
                 page.get_by_text("触发方式与角色（可选）", exact=True).click()
                 assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "social"

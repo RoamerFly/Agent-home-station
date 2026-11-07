@@ -2,37 +2,14 @@
   "version": 1,
   "groups": [
     {
-      "id": "account-authorization",
-      "title": "抖音账号授权",
-      "fields": [
-        "read_works",
-        "publish_video"
-      ],
-      "action": "owner-verified-web-oauth"
-    },
-    {
-      "id": "official-search",
-      "title": "官方视频搜索",
-      "fields": [
-        "enabled",
-        "keywords",
-        "follow_public_videos",
-        "sample_public_playback"
-      ],
-      "action": "owner-provision-private-config"
-    },
-    {
-      "id": "official-own-video",
-      "title": "本人作品状态",
-      "fields": [
-        "enabled",
-        "video_ids"
-      ],
-      "action": "owner-provision-private-config"
+      "id": "ordinary-web-account",
+      "title": "抖音账号",
+      "fields": [],
+      "action": "owner-saved-web-login"
     },
     {
       "id": "publication-tasks",
-      "title": "创作发布",
+      "title": "作品任务",
       "fields": [],
       "action": "owner-publication-tasks"
     }

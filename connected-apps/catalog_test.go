@@ -230,7 +230,7 @@ func TestWeChatApplicationSourceKeepsExactQuoteMediaAndScope(t *testing.T) {
 	}
 }
 
-func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
+func TestDouyinSourceDeclaresOnlyOrdinaryAccountRoutes(t *testing.T) {
 	contract, err := Lookup("douyin")
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +238,9 @@ func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
 	p, err := pluginhost.VerifyDescriptor("douyin", "app.json")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if p.ID != contract.Package.ID || p.Status != "ready" || len(p.HTTPRoutes) != 0 {
+		t.Fatalf("retired API routes still declared: %+v %v", p.HTTPRoutes, err)
 	}
 	var browser struct {
 		Routes []struct {
@@ -247,52 +250,17 @@ func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
 		} `json:"browser_routes"`
 	}
 	raw, err := descriptors.ReadFile("douyin/app.json")
-	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 6 ||
-		browser.Routes[0].Capability != "observation.playback" ||
-		browser.Routes[0].URLTemplate != "https://open.douyin.com/player/video?autoplay=0&vid={video_id}" ||
-		browser.Routes[0].OwnerOptIn != "sample_public_playback" ||
-		browser.Routes[1].Capability != "observation.page-text" ||
-		browser.Routes[1].URLTemplate != "https://www.douyin.com/" ||
-		browser.Routes[1].OwnerOptIn != "explicit-owner-web-read" ||
-		browser.Routes[2].Capability != "observation.page-text" ||
-		browser.Routes[2].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
-		browser.Routes[2].OwnerOptIn != "web-scope-home-and-videos" ||
-		browser.Routes[3].Capability != "observation.web-playback" ||
-		browser.Routes[3].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
-		browser.Routes[3].OwnerOptIn != "web-sample-playback" ||
-		browser.Routes[4].Capability != "observation.web-audio" ||
-		browser.Routes[4].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
-		browser.Routes[4].OwnerOptIn != "web-transcribe-audio" ||
-		browser.Routes[5].Capability != "observation.web-visual" ||
-		browser.Routes[5].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
-		browser.Routes[5].OwnerOptIn != "web-inspect-visual" {
-		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 5 {
+		t.Fatal("ordinary browser routes missing", err)
 	}
-	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||
-		len(p.HTTPRoutes) != 12 ||
-		p.HTTPRoutes[0].Endpoint != "https://open.douyin.com/dy_open_api/v1/search/video/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[0].Capabilities, []string{"observation.search"}) ||
-		p.HTTPRoutes[1].Endpoint != "https://open.douyin.com/api/douyin/v1/video/video_basic_info/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[1].Capabilities, []string{"observation.own-video", "publication.video"}) ||
-		p.HTTPRoutes[2].Endpoint != "https://open.douyin.com/oauth/access_token/" ||
-		p.HTTPRoutes[3].ID != "official-account-refresh" ||
-		p.HTTPRoutes[3].Endpoint != "https://open.douyin.com/oauth/refresh_token/" ||
-		p.HTTPRoutes[3].Credential != "" ||
-		p.HTTPRoutes[4].Endpoint != "https://open.douyin.com/oauth/userinfo/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[2].Capabilities, []string{"account.authorization"}) ||
-		!reflect.DeepEqual(p.HTTPRoutes[3].Capabilities, []string{"account.authorization"}) ||
-		!reflect.DeepEqual(p.HTTPRoutes[4].Capabilities, []string{"account.authorization"}) ||
-		p.HTTPRoutes[5].Endpoint != "https://open.douyin.com/api/douyin/v1/video/get_iframe_by_video" ||
-		!reflect.DeepEqual(p.HTTPRoutes[5].Capabilities, []string{"observation.player-entry"}) || p.HTTPRoutes[5].Credential != "" ||
-		p.HTTPRoutes[6].Endpoint != "https://open.douyin.com/video/list/" ||
-		!reflect.DeepEqual(p.HTTPRoutes[6].Capabilities, []string{"observation.account-works"}) {
-		t.Fatalf("unexpected Douyin application routes: %+v", p.HTTPRoutes)
-	}
-	for i, suffix := range []string{"upload_video/", "init_video_part_upload/", "upload_video_part/", "complete_video_part_upload/", "create_video/"} {
-		route := p.HTTPRoutes[7+i]
-		if route.Endpoint != "https://open.douyin.com/api/douyin/v1/video/"+suffix ||
-			!reflect.DeepEqual(route.Capabilities, []string{"publication.video"}) || route.Credential != "" {
-			t.Fatalf("unexpected Douyin publication route: %+v", route)
+	for i, capability := range []string{"observation.page-text", "observation.page-text", "observation.web-playback", "observation.web-audio", "observation.web-visual"} {
+		route := browser.Routes[i]
+		want := "https://www.douyin.com/video/{video_id}"
+		if i == 0 {
+			want = "https://www.douyin.com/"
+		}
+		if route.Capability != capability || route.URLTemplate != want || route.OwnerOptIn == "" {
+			t.Fatalf("route %d: %+v", i, route)
 		}
 	}
 }

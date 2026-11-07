@@ -2,66 +2,6 @@
   "version": 1,
   "capabilities": [
     {
-      "id": "observation.search",
-      "implementation": "ready",
-      "description": "从抖音官方接口分页读取获准关键词的公开视频搜索结果",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "enabled"
-    },
-    {
-      "id": "observation.own-video",
-      "implementation": "ready",
-      "description": "按用户授权查询本人作品在平台的当前状态",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "enabled"
-    },
-    {
-      "id": "account.authorization",
-      "implementation": "ready",
-      "description": "本机主人完成官方网页授权并核验抖音账号",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": false,
-      "requires_owner_setting": "explicit-owner-oauth"
-    },
-    {
-      "id": "observation.player-entry",
-      "implementation": "ready",
-      "description": "按已授权搜索结果匿名核对抖音官方播放器入口",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "follow_public_videos"
-    },
-    {
-      "id": "observation.playback",
-      "implementation": "ready",
-      "description": "通过独立 Edge 静音采样已核对的公开作品，记录实际播放区间",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "sample_public_playback"
-    },
-    {
-      "id": "observation.account-works",
-      "implementation": "ready",
-      "description": "分页列出主人单独授权的账号作品编号，核对创建时间并标记可见性待核对",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "explicit-owner-works-oauth"
-    },
-    {
       "id": "observation.web-page-text",
       "implementation": "ready",
       "description": "由 Windows 宿主在主人单独开启后读取首页实际可见文字；主人扩大范围后，可读取从首页实际发现的视频页面文字",
@@ -92,16 +32,6 @@
       "permissions": [],
       "discoverable": true,
       "requires_owner_setting": "web-inspect-visual"
-    },
-    {
-      "id": "publication.video",
-      "implementation": "ready",
-      "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",
-      "permissions": [
-        "network"
-      ],
-      "discoverable": true,
-      "requires_owner_setting": "explicit-owner-publish-oauth"
     }
   ]
 }

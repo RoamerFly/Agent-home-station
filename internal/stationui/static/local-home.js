@@ -53,9 +53,9 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
+    return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
-      douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
+      bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
       douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
@@ -93,36 +93,37 @@
   function appSourceRow(record, listing) {
     const row = appElement("div", "", "app-layer");
     const detail = appElement("div", "");
-    let title = "源码状态未知", note = "刷新后可重新检查。";
+    let title = "接入版本状态未知", note = "刷新后可重新检查。";
     if (listing) {
-      const version = listing.installed_version || listing.version;
+      const bundledVersion = listing.version || "未知";
+      const workspaceVersion = listing.installed_version || bundledVersion;
       if (listing.install_state === "installed") {
-        title = "源码已安装";
-        note = version ? `本地版本 ${version}，可在家目录的 Connected Apps 中编辑。` : "可在家目录的 Connected Apps 中编辑。";
+        title = "已安装";
+        note = `随包版本 ${bundledVersion}；工作区版本 ${workspaceVersion}。接入版本用于本软件连接应用和更新接入功能，可在家目录的 Connected Apps 中维护。`;
       } else if (listing.install_state === "conflict") {
         title = "应用目录待整理";
         note = listing.installed_version ? `已有版本 ${listing.installed_version}，请先保留现有修改。` : "家目录已有同名内容，请先保留并整理该目录。";
       } else if (!listing.source_available) {
-        title = "未提供源码";
-        note = "当前发行包未提供可用源码，本地聊天可继续使用。";
+        title = "暂无可用版本";
+        note = "当前发行包未提供此应用的接入版本，本地聊天仍可继续使用。";
       } else if (listing.install_state === "not_installed") {
-        title = "可安装";
+        title = "可用版本";
         note = state.home?.home_access
-          ? `随包版本 ${listing.version}。${["bilibili", "douyin"].includes(record.id) ? "源码副本可在家目录编辑，读取授权单独保存。" : "安装后可单独接入账号。"}`
+          ? `随包版本 ${bundledVersion} 可用。接入版本用于本软件连接应用和更新接入功能；应用授权单独保存。`
           : "请在模型设置中恢复工作空间授权。";
       } else if (listing.install_state === "unavailable") {
         title = "安装状态暂不可读";
         note = "请检查工作空间是否可用。";
       }
     } else if (apps.catalog) {
-      title = "未提供源码";
-      note = "当前发行包没有此应用的源码。";
+      title = "暂无可用版本";
+      note = "当前发行包没有此应用的接入版本。";
     }
     detail.append(appElement("strong", title), appElement("p", note));
-    row.append(appElement("h5", "应用源码"), detail);
-    if (title === "可安装" && state.home?.home_access) {
+    row.append(appElement("h5", "接入版本"), detail);
+    if (title === "可用版本" && state.home?.home_access) {
       const busy = apps.installing === record.id;
-      const button = appElement("button", busy ? "正在安装…" : "安装源码", "button compact primary");
+      const button = appElement("button", busy ? "正在安装…" : "安装接入版本", "button compact primary");
       button.type = "button";
       button.disabled = Boolean(apps.installing) || apps.loading;
       button.addEventListener("click", () => installApp(listing));
@@ -230,755 +231,6 @@
     running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常",
     cutover_blocked: "等待完成启用核对", rollback_frozen: "此连接已为回退停发"
   };
-  function legacyImportControls(id, availability, connection = {}) {
-    if (!availability) return null;
-    const panel = appElement("details", "", "identity-details legacy-import");
-    panel.append(appElement("summary", "从旧版接入"));
-    const body = appElement("div", "", "details-grid");
-    const stateCopy = {
-      available: "发现此账号的旧版隔离资料。先查看预演，确认后才会保存接入摘要。",
-      conflict: "此账号已有新的工作记录，旧版资料不能覆盖接入。",
-      applied: "旧版接入摘要已保存，可随时查看。",
-      invalid: "旧版隔离资料无法通过身份或路径核验，不能接入。"
-    };
-    let plan = null, loading = false;
-    const note = appElement("small", stateCopy[availability] || "旧版接入状态暂不可读。");
-    const result = appElement("div", "");
-    const memoryResult = appElement("div", "", "legacy-memory-result");
-    const receiptResult = appElement("div", "", "legacy-receipt-list");
-    const activationResult = appElement("div", "", "legacy-memory-result legacy-activation-result");
-    const rollbackResult = appElement("div", "", "legacy-memory-result legacy-rollback-result");
-    const actions = appElement("div", "", "app-worker-actions");
-    const legacyImportURL = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import";
-    const preview = appSetupButton(availability === "applied" ? "查看接入摘要" : "查看接入预演", async () => {
-      if (loading) return;
-      loading = true;
-      actions.querySelector("[data-legacy-confirm]")?.remove();
-      preview.disabled = true;
-      result.replaceChildren(appElement("small", "正在读取旧版接入信息…"));
-      try {
-        plan = await request(legacyImportURL);
-        activation = null;
-        rollback = null;
-        rollbackItems = [];
-        rollbackAudit = null;
-        rollbackAuditKnown = false;
-        renderPlan();
-      } catch (error) {
-        plan = null;
-        actions.querySelector("[data-legacy-confirm]")?.remove();
-        result.replaceChildren(appElement("small", error.message));
-      } finally {
-        loading = false;
-        preview.disabled = false;
-      }
-    });
-    function list(label, values) {
-      const reviewCopy = {
-        legacy_text_reply_disabled: "旧版文本回复未开启",
-        custom_filehelper_prefix: "旧版文件传输助手使用了自定义前缀",
-        all_friends: "旧版允许所有好友回复",
-        group_rule: "旧版包含群聊规则"
-      };
-      const items = (Array.isArray(values) ? values : []).filter(Boolean).map((item) => reviewCopy[item] || item);
-      return appElement("p", `${label}：${items.length ? items.join("、") : "无"}`);
-    }
-    function renderPlan(message = "") {
-      const value = plan || {};
-      const cutover = value.cutover && typeof value.cutover === "object" ? value.cutover : null;
-      const cutoverCopy = {
-        legacy_host: {
-          stop_record_matched: "已记录正常停机",
-          pending: "尚未取得停机记录",
-          changed: "停机记录与当前快照不一致"
-        },
-        native_profile: {
-          import_receipt_matched: "导入记录与当前连接匹配",
-          pending: "尚未取得档案导入记录",
-          mismatch: "导入记录与当前连接不匹配"
-        },
-        target_login: {
-          online: "已登录且在线",
-          authenticated_offline: "已登录，当前离线",
-          signed_out: "尚未登录",
-          pending: "待核对"
-        }
-      };
-      const cutoverLines = cutover ? [
-        appElement("p", `旧宿主：${cutoverCopy.legacy_host[cutover.legacy_host] || "待核对"}`),
-        appElement("p", `原生档案：${cutoverCopy.native_profile[cutover.native_profile] || "待核对"}`),
-        appElement("p", `目标登录：${cutoverCopy.target_login[cutover.target_login] || "待核对"}`),
-        appElement("p", "身份确认：仍需主人确认实际微信身份")
-      ] : [appElement("p", "切换前置检查：旧记录未保存，仍需主人逐项核对")];
-      const managementReceiptRecords = Number(value.management_receipt_records || 0);
-      const managementReceiptLines = managementReceiptRecords > 0 ? [
-        appElement("p", `管理页发送记录：${managementReceiptRecords}；待核对：${Number(value.management_unresolved_receipts || 0)}`)
-      ] : [];
-      result.replaceChildren(
-        appElement("strong", value.applied ? "已保存的接入摘要" : "接入预演"),
-        appElement("p", `账号：${value.account_id || "未知"}`),
-        list("建议回复范围", value.suggested_reply_threads),
-        list("仍需核对", value.requires_manual_review),
-        appElement("p", `可读回执：${Number(value.receipt_records || 0)}；待核对回执：${Number(value.unresolved_receipts || 0)}`),
-        ...managementReceiptLines,
-        appElement("p", `原生资料集：${value.same_native_dataset ? "相同，可查询既有操作记录" : "不同或未知，不会覆盖当前资料"}`),
-        appElement("p", `旧版状态：${value.legacy_enabled ? "已启用" : "未启用"}${value.legacy_paused ? "，已暂停" : ""}`),
-        ...cutoverLines,
-        message ? appElement("small", message) : document.createTextNode("")
-      );
-      if (value.applied) {
-        renderLegacyReceipts();
-        renderActivation();
-        renderRollback();
-      } else {
-        receiptResult.replaceChildren();
-        activationResult.replaceChildren();
-        rollbackResult.replaceChildren();
-      }
-      const confirm = actions.querySelector("[data-legacy-confirm]");
-      if (confirm) confirm.remove();
-      if (availability !== "available" || value.applied || !value.digest) return;
-      const apply = appSetupButton("确认接入旧版摘要", async () => {
-        if (loading) return;
-        loading = true;
-        apply.disabled = true;
-        try {
-          plan = await request("/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import", {
-            method: "POST", body: JSON.stringify({ digest: value.digest })
-          });
-          connection.legacy_import = "applied";
-          note.textContent = "旧版接入摘要已保存，可随时查看。";
-          preview.textContent = "查看接入摘要";
-          renderPlan("旧版摘要已保存；没有启动 Agent，也没有修改回复范围。");
-        } catch (error) {
-          if (error.status === 409) {
-            plan = null;
-            apply.remove();
-            result.replaceChildren(appElement("small", "旧版资料或当前状态已变化，请重新读取接入预演。"));
-          } else result.replaceChildren(appElement("small", error.message));
-        } finally {
-          loading = false;
-          apply.disabled = false;
-        }
-      });
-      apply.dataset.legacyConfirm = "true";
-      actions.append(apply);
-    }
-    function legacyReceiptState(item) {
-      const states = {
-        accepted: "微信已接受",
-        completed: "已完成",
-        submitted_pending: "等待微信回执",
-        submission_unknown: "发送结果待核对",
-        not_submitted: "尚未提交",
-        failed: "发送失败",
-        cancelled: "已取消"
-      };
-      return states[item?.state] || "状态待核对";
-    }
-    function legacyReceiptLookup(item) {
-      const lookups = {
-        legacy_snapshot: "旧版保存的快照，尚未从当前微信查询",
-        legacy_management_snapshot: "管理页发送的旧版快照，仅供查看",
-        platform: "已从当前微信平台查询",
-        not_found: "已查询当前原生记录，未找到旧操作；不推断是否送达",
-        unavailable: "当前无法查询平台状态",
-        identity_mismatch: "当前账号与旧资料身份不匹配",
-        legacy_native_unavailable: "旧版原生资料不可用",
-        legacy_dataset_mismatch: "旧资料集与当前连接不匹配",
-        legacy_operation_unknown: "旧版未保留可查询的操作标识"
-      };
-      return lookups[item?.lookup] || "查询来源待核对";
-    }
-    function legacyReceiptNeedsLookup(item) {
-      return legacyReceiptOrigin === "agent" && Boolean(item?.parts_incomplete || ["submitted_pending", "submission_unknown"].includes(item?.state));
-    }
-    let legacyReceiptPage = null, legacyReceiptLoading = false, legacyReceiptPendingOnly = false, legacyReceiptOrigin = "agent";
-    function legacyReceiptURL(after = "") {
-      const params = new URLSearchParams({ limit: "20" });
-      if (after) params.set("after", after);
-      if (legacyReceiptPendingOnly) params.set("pending", "1");
-      if (legacyReceiptOrigin === "management") params.set("origin", "management");
-      return legacyImportURL + "/receipts?" + params.toString();
-    }
-    function legacyReceiptOriginControl() {
-      const origin = document.createElement("select");
-      origin.setAttribute("aria-label", "旧版投递来源");
-      origin.append(new Option("Agent 投递", "agent"), new Option("管理页发送", "management"));
-      origin.value = legacyReceiptOrigin;
-      origin.addEventListener("change", () => {
-        legacyReceiptOrigin = origin.value === "management" ? "management" : "agent";
-        legacyReceiptPage = null;
-        readLegacyReceipts();
-      });
-      const label = document.createElement("label");
-      label.append(document.createTextNode("来源："), origin);
-      return label;
-    }
-    function renderLegacyReceipts(message = "") {
-      const page = legacyReceiptPage;
-      if (!page) {
-        receiptResult.replaceChildren(
-          appElement("strong", "旧版投递回执"),
-          appElement("small", "只读查看旧版保存的投递快照；不会重新发送、取消或重试。"),
-          legacyReceiptOriginControl(),
-          appSetupButton("查看旧版投递回执", () => readLegacyReceipts())
-        );
-        return;
-      }
-      const items = Array.isArray(page.items) ? page.items : [];
-      const kinds = { text: "文字", voice: "语音", image: "图片", video: "视频", file: "文件" };
-      const rows = items.map((item) => {
-        const row = appElement("div", "", "legacy-memory-scope legacy-receipt-row");
-        const key = typeof item?.idempotency_key === "string" ? item.idempotency_key : "";
-        row.append(
-          appElement("strong", `${kinds[item?.kind] || "投递"} · ${legacyReceiptState(item)}`),
-          appElement("small", `会话：${item?.conversation_id || "未知"}`),
-          appElement("small", `状态来源：${legacyReceiptLookup(item)}`)
-        );
-        if (key) row.append(appElement("small", `投递编号 ${key}`));
-        const parts = [];
-        if (Array.isArray(item?.accepted_parts) && item.accepted_parts.length) parts.push(`已接受 ${item.accepted_parts.length} 段`);
-        if (Array.isArray(item?.unconfirmed_parts) && item.unconfirmed_parts.length) parts.push(`待核对 ${item.unconfirmed_parts.length} 段`);
-        if (item?.parts_incomplete) parts.push("分段记录不完整");
-        if (item?.cancel_requested) parts.push("已请求停止后续投递");
-        if (parts.length) row.append(appElement("small", parts.join("；")));
-        if (legacyReceiptNeedsLookup(item) && key) {
-          const lookup = appSetupButton("核对原操作", async () => {
-            lookup.disabled = true;
-            try {
-              const receipt = await request(legacyImportURL + "/receipts/" + encodeURIComponent(key));
-              const index = Array.isArray(legacyReceiptPage?.items) ? legacyReceiptPage.items.indexOf(item) : -1;
-              if (index < 0 || !receipt || typeof receipt !== "object") return;
-              legacyReceiptPage.items[index] = receipt;
-              renderLegacyReceipts("已重新读取这条旧版回执；未成功查询时仍保留旧快照状态。 ");
-            } catch (error) {
-              row.append(appElement("small", error.message));
-            } finally {
-              lookup.disabled = false;
-            }
-          });
-          row.append(appElement("small", "只查询当前原生端保存的同一操作；不会重新发送，也不从未找到的结果推断是否送达。"), lookup);
-        }
-        return row;
-      });
-      const next = typeof page.next_after === "string" && page.next_after
-        ? appSetupButton("读取下一页旧回执", () => readLegacyReceipts(page.next_after)) : null;
-      const pendingOnly = document.createElement("input");
-      pendingOnly.type = "checkbox";
-      pendingOnly.checked = legacyReceiptPendingOnly;
-      const pendingLabel = document.createElement("label");
-      pendingLabel.append(pendingOnly, document.createTextNode("只看待核对"));
-      pendingOnly.addEventListener("change", () => {
-        legacyReceiptPendingOnly = pendingOnly.checked;
-        legacyReceiptPage = null;
-        readLegacyReceipts();
-      });
-      receiptResult.replaceChildren(
-        appElement("strong", "旧版投递回执"),
-        appElement("p", `快照内回执：${Number(page.receipt_count || items.length)}；待核对：${Number(page.pending_count || 0)}`),
-        appElement("small", page.coverage === "legacy_snapshot" ? "这些记录来自 Agent 投递快照；平台查询结果会单独显示。" :
-          page.coverage === "legacy_management_snapshot" ? "这些记录来自管理页发送快照；仅供查看，不会查询原操作。" : "回执覆盖范围待核对。"),
-        legacyReceiptOriginControl(),
-        pendingLabel,
-        ...rows,
-        message ? appElement("small", message.trim()) : document.createTextNode(""),
-        next || document.createTextNode("")
-      );
-    }
-    async function readLegacyReceipts(after = "") {
-      if (legacyReceiptLoading) return;
-      legacyReceiptLoading = true;
-      receiptResult.replaceChildren(appElement("small", legacyReceiptOrigin === "management" ? "正在读取管理页发送记录…" : "正在读取旧版投递回执…"));
-      try {
-        legacyReceiptPage = await request(legacyReceiptURL(after));
-        renderLegacyReceipts();
-      } catch (error) {
-        if (error.status === 409 && after) {
-          legacyReceiptPage = null;
-          receiptResult.replaceChildren(
-            appElement("small", "旧版回执快照已变化，请从第一页重新读取。"),
-            appSetupButton("从第一页重新读取", () => readLegacyReceipts())
-          );
-        } else {
-          receiptResult.replaceChildren(appElement("small", error.message));
-        }
-      } finally {
-        legacyReceiptLoading = false;
-      }
-    }
-    let activation = null, activationLoading = false;
-    function activationLines(value) {
-      const stateCopy = {
-        ready: "可以确认启用条件",
-        blocked: "暂不能启用",
-        confirmed: "启用条件已记录"
-      };
-      const legacyHost = {
-        stop_record_matched: "已记录正常停机",
-        pending: "尚未取得停机记录",
-        changed: "停机记录与当前快照不一致"
-      };
-      const nativeProfile = {
-        import_receipt_matched: "导入记录与当前连接匹配",
-        pending: "尚未取得档案导入记录",
-        mismatch: "导入记录与当前连接不匹配"
-      };
-      const targetLogin = {
-        online: "已登录且在线",
-        authenticated_offline: "已登录，当前离线",
-        signed_out: "尚未登录",
-        pending: "待核对"
-      };
-      const targetIdentity = {
-        owner_confirmed: "主人已确认",
-        owner_check_pending: "待主人确认"
-      };
-      const managementPendingReceipts = Number(value?.management_pending_receipts || 0);
-      return [
-        appElement("strong", stateCopy[value?.status] || "启用条件待核对"),
-        appElement("small", `旧宿主：${legacyHost[value?.legacy_host] || "待核对"}`),
-        appElement("small", `原生档案：${nativeProfile[value?.native_profile] || "待核对"}`),
-        appElement("small", `目标登录：${targetLogin[value?.target_login] || "待核对"}`),
-        appElement("small", `目标身份：${targetIdentity[value?.target_identity] || "待主人确认"}`),
-        appElement("small", `已授权回复会话：${Number(value?.reply_count || 0)}；待核对旧回执：${Number(value?.pending_receipts || 0)}`),
-        managementPendingReceipts > 0 ? appElement("small", `管理页发送待核对：${managementPendingReceipts}`) : document.createTextNode(""),
-        appElement("small", `模型：${value?.model_ready ? "已配置" : "尚未配置"}`)
-      ];
-    }
-    function renderActivation(message = "") {
-      if (!activation) {
-        activationResult.replaceChildren(
-          appElement("strong", "启用前核对"),
-          appElement("small", "核对旧版停机、当前连接和待处理回执；记录确认不会启动 Agent。"),
-          appSetupButton("核对启用条件", () => readActivation())
-        );
-        return;
-      }
-      const value = activation;
-      const lines = activationLines(value);
-      if (value?.reason) lines.push(appElement("small", `说明：${value.reason}`));
-      if (value?.status === "ready" && value?.digest) {
-        lines.push(appElement("small", "确认交接后，支持交接的旧桌面将拒绝启动此数据目录。"));
-        const sameIdentity = document.createElement("input");
-        sameIdentity.type = "checkbox";
-        const sameIdentityLabel = document.createElement("label");
-        sameIdentityLabel.append(sameIdentity, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
-        const pendingReceipts = Number(value.pending_receipts || 0);
-        const managementPendingReceipts = Number(value.management_pending_receipts || 0);
-        const hasPendingReceipts = pendingReceipts > 0 || managementPendingReceipts > 0;
-        const reviewedReceipts = document.createElement("input");
-        reviewedReceipts.type = "checkbox";
-        const reviewedReceiptsLabel = document.createElement("label");
-        reviewedReceiptsLabel.append(reviewedReceipts, document.createTextNode(managementPendingReceipts > 0 ?
-          `我已核对待确认旧回执（Agent ${pendingReceipts} 条，管理页 ${managementPendingReceipts} 条）` :
-          `我已核对 ${pendingReceipts} 条待确认旧回执`));
-        const apply = appSetupButton("记录启用核对", async () => {
-          apply.disabled = true;
-          try {
-            activation = await request(legacyImportURL + "/activation", {
-              method: "POST", body: JSON.stringify({
-                digest: value.digest,
-                same_identity: true,
-                reviewed_receipts: !hasPendingReceipts || reviewedReceipts.checked
-              })
-            });
-            renderActivation("启用条件已记录。仍需由主人单独启动 Agent。");
-          } catch (error) {
-            if (error.status === 409) {
-              activation = null;
-              activationResult.replaceChildren(
-                appElement("small", "旧版资料或当前连接已变化，请重新核对启用条件。"),
-                appSetupButton("重新核对启用条件", () => readActivation())
-              );
-            } else {
-              lines.push(appElement("small", error.message));
-              activationResult.replaceChildren(...lines);
-            }
-          }
-        });
-        apply.disabled = true;
-        const sync = () => { apply.disabled = !sameIdentity.checked || (hasPendingReceipts && !reviewedReceipts.checked); };
-        sameIdentity.addEventListener("change", sync);
-        reviewedReceipts.addEventListener("change", sync);
-        const confirm = appElement("div", "", "legacy-memory-confirm");
-        confirm.append(sameIdentityLabel);
-        if (hasPendingReceipts) confirm.append(reviewedReceiptsLabel);
-        confirm.append(apply);
-        lines.push(confirm);
-      }
-      if (value?.status === "confirmed" || message) lines.push(appElement("small", message || "启用条件已记录。仍需由主人单独启动 Agent。"));
-      if (["blocked", "confirmed"].includes(value?.status)) lines.push(appSetupButton("重新核对启用条件", () => readActivation()));
-      activationResult.replaceChildren(...lines);
-    }
-    async function readActivation() {
-      if (activationLoading) return;
-      activationLoading = true;
-      activationResult.replaceChildren(appElement("small", "正在核对启用条件…"));
-      try {
-        activation = await request(legacyImportURL + "/activation");
-        renderActivation();
-      } catch (error) {
-        activation = null;
-        activationResult.replaceChildren(
-          appElement("small", error.message),
-          appSetupButton("重新核对启用条件", () => readActivation())
-        );
-      } finally {
-        activationLoading = false;
-      }
-    }
-    let rollback = null, rollbackItems = [], rollbackLoading = false;
-    let rollbackAudit = null, rollbackAuditKnown = false, rollbackAuditLoading = false;
-    function rollbackStateLabel(state) {
-      return {
-        not_frozen: "尚未冻结新投递",
-        draining: "正在停止新的投递",
-        frozen: "新投递已冻结"
-      }[state] || "冻结状态待核对";
-    }
-    function rollbackDispositionLabel(disposition) {
-      return {
-        accepted: "微信已接受",
-        terminal: "已结束",
-        not_submitted: "尚未提交",
-        active: "仍在处理",
-        unknown: "结果待核对"
-      }[disposition] || "状态待核对";
-    }
-    function rollbackItemLabel(item) {
-      const kinds = { text: "文字", voice: "语音", image: "图片", video: "视频", file: "文件" };
-      return kinds[item?.kind] || "投递";
-    }
-    function renderRollback(message = "") {
-      if (!plan?.applied) {
-        rollbackResult.replaceChildren();
-        return;
-      }
-      if (!rollback) {
-        rollbackResult.replaceChildren(
-          appElement("strong", "冻结前投递核对"),
-          appElement("small", "只会停止新的投递，并读取已有回执；不会解除接入、恢复旧版或撤回已发送内容。"),
-          appSetupButton("查看冻结状态", () => readRollback())
-        );
-        return;
-      }
-      const value = rollback;
-      const state = value?.state;
-      const lines = [
-        appElement("strong", "冻结前投递核对"),
-        appElement("p", rollbackStateLabel(state))
-      ];
-      if (value?.frozen_at) lines.push(appElement("small", `冻结记录：${value.frozen_at}`));
-      if (state === "frozen") {
-        lines.push(appElement("small", "本地新投递已停止。此状态不代表已获得回退权限；仍可能有在途或结果待核对的投递。"));
-        if (value.native === "unavailable" || value.native === "dataset_mismatch") {
-          lines.push(appElement("small", "本次未能核对原生投递，列表保留本地记录。"));
-        }
-      } else if (state === "draining") {
-        lines.push(appElement("small", "新提交已停止，正在等待本机工作器和已有请求退出。"));
-      } else if (!value?.eligible) {
-        lines.push(appElement("small", "请先完成启用核对后再冻结新投递；旧版归档仍可只读查看。"));
-      } else {
-        lines.push(appElement("small", "冻结后此连接无法从这里重新启动。已提交到微信的操作不会自动撤回。"));
-      }
-      const rows = rollbackItems.map((item) => {
-        const row = appElement("div", "", "legacy-memory-scope legacy-receipt-row");
-        row.append(
-          appElement("strong", `${rollbackItemLabel(item)} · ${rollbackDispositionLabel(item?.disposition)}`),
-          appElement("small", `会话：${item?.conversation_id || "未知"}`)
-        );
-        if (item?.idempotency_key) row.append(appElement("small", `投递编号 ${item.idempotency_key}`));
-        if (item?.state) row.append(appElement("small", `记录状态：${legacyReceiptState(item)}`));
-        if (item?.accepted_parts?.length) row.append(appElement("small", `微信已接受 ${item.accepted_parts.length} 段`));
-        if (item?.unconfirmed_parts?.length) row.append(appElement("small", `待核对 ${item.unconfirmed_parts.length} 段`));
-        return row;
-      });
-      if (rows.length) lines.push(...rows);
-      else if (state === "frozen") lines.push(appElement("small", "当前页没有需要逐条核对的投递。"));
-      if (state === "frozen" && rollbackAuditKnown) {
-        if (rollbackAudit) {
-          const nativeState = { available: "可核对", unavailable: "暂不可用", dataset_mismatch: "数据集不匹配" }[rollbackAudit.native_state] || "待核对";
-          lines.push(
-            appElement("strong", "已保存的核对记录"),
-            appElement("small", `标识：${rollbackAudit.digest || "未知"}；保存于：${rollbackAudit.captured_at || "未知"}`),
-            appElement("small", `投递 ${Number(rollbackAudit.delivery_count || 0)}；操作 ${Number(rollbackAudit.action_count || 0)}；处理中 ${Number(rollbackAudit.active_count || 0)}；待核对 ${Number(rollbackAudit.unknown_count || 0)}`),
-            appElement("small", `原生端：${nativeState}；本次桌面运行：${rollbackAudit.desktop_bound ? "已关联" : "未关联"}；本地记录：${rollbackAudit.local_current ? "一致" : "已变化，请重新保存"}`)
-          );
-        } else {
-          lines.push(appElement("small", "尚未保存本次核对记录。"));
-        }
-      }
-      if (message) lines.push(appElement("small", message));
-      const actions = appElement("div", "", "app-worker-actions");
-      if (state === "not_frozen" && value?.eligible) {
-        actions.append(appSetupButton("冻结新投递并核对", () => freezeRollback()));
-      }
-      actions.append(appSetupButton("刷新投递核对", () => readRollback()));
-      if (state === "frozen" && typeof value?.next_after === "string" && value.next_after) {
-        actions.append(appSetupButton("读取下一页投递", () => readRollback(value.next_after)));
-      }
-      if (state === "frozen") {
-        actions.append(appSetupButton("查看已保存核对", () => readRollbackAudit()));
-        actions.append(appSetupButton("保存本次核对", () => saveRollbackAudit()));
-      }
-      lines.push(actions);
-      rollbackResult.replaceChildren(...lines);
-    }
-    async function readRollback(after = "") {
-      if (rollbackLoading || (after && rollback?.state !== "frozen")) return;
-      rollbackLoading = true;
-      if (!after) rollbackResult.replaceChildren(appElement("small", "正在读取冻结状态与投递回执…"));
-      try {
-        const value = await request(legacyImportURL + "/rollback" + (after ? "?after=" + encodeURIComponent(after) : ""));
-        const pageItems = Array.isArray(value?.items) ? value.items : [];
-        if (after) rollbackItems.push(...pageItems);
-        else rollbackItems = pageItems;
-        rollback = value;
-        if (value?.state !== "frozen") {
-          rollbackAudit = null;
-          rollbackAuditKnown = false;
-        }
-        renderRollback();
-      } catch (error) {
-        rollbackResult.replaceChildren(
-          appElement("small", error.message),
-          appSetupButton("重新读取冻结状态", () => readRollback())
-        );
-      } finally {
-        rollbackLoading = false;
-      }
-    }
-    async function freezeRollback() {
-      if (rollbackLoading) return;
-      rollbackLoading = true;
-      rollbackResult.replaceChildren(appElement("small", "正在冻结新的投递…"));
-      try {
-        await request(legacyImportURL + "/rollback", { method: "POST", body: JSON.stringify({}) });
-        rollback = null;
-        rollbackItems = [];
-        rollbackAudit = null;
-        rollbackAuditKnown = false;
-        rollbackLoading = false;
-        await readRollback();
-      } catch (error) {
-        rollbackResult.replaceChildren(
-          appElement("small", error.message),
-          appSetupButton("重新读取冻结状态", () => readRollback())
-        );
-      } finally {
-        rollbackLoading = false;
-      }
-    }
-    async function readRollbackAudit() {
-      if (rollbackAuditLoading || rollback?.state !== "frozen") return;
-      rollbackAuditLoading = true;
-      try {
-        rollbackAudit = await request(legacyImportURL + "/rollback/audit");
-        rollbackAuditKnown = true;
-        renderRollback();
-      } catch (error) {
-        if (error.status === 404) {
-          rollbackAudit = null;
-          rollbackAuditKnown = true;
-          renderRollback();
-        } else {
-          rollbackResult.append(appElement("small", error.message));
-        }
-      } finally {
-        rollbackAuditLoading = false;
-      }
-    }
-    async function saveRollbackAudit() {
-      if (rollbackAuditLoading || rollback?.state !== "frozen") return;
-      rollbackAuditLoading = true;
-      try {
-        const value = await request(legacyImportURL + "/rollback/audit", { method: "POST", body: JSON.stringify({}) });
-        rollbackAudit = value && typeof value === "object" ? value : null;
-        rollbackAuditKnown = Boolean(rollbackAudit);
-        renderRollback();
-      } catch (error) {
-        rollbackResult.append(appElement("small", error.message));
-      } finally {
-        rollbackAuditLoading = false;
-      }
-    }
-    function currentImportPrerequisites() {
-      const policy = connection.configured_policy || {};
-      const worker = appWorkerLabels[connection.worker] || "Agent 状态待核对";
-      const history = Array.isArray(policy.history_threads) ? policy.history_threads.length : 0;
-      return `当前 Agent：${worker}；已配置历史读取会话：${history} 个。`;
-    }
-    function renderMemorySelection(thread, panel, value) {
-      const statusCopy = {
-        ready: "可接续此会话",
-        applied: "此会话已接续",
-        not_ready: "暂不能接续此会话",
-        conflict: "此会话接续存在冲突",
-        empty: "此会话没有可接续的内容"
-      };
-      const status = value && typeof value.status === "string" ? value.status : "";
-      const lines = [
-        appElement("strong", statusCopy[status] || "接续状态待核对"),
-        appElement("small", `来源事件：${Number(value?.event_count || 0)}；可接续记忆：${Number(value?.memory_count || 0)}`),
-        appElement("small", currentImportPrerequisites())
-      ];
-      if (value?.reason) lines.push(appElement("small", `说明：${value.reason}`));
-      if (status !== "ready") {
-        panel.replaceChildren(...lines);
-        return;
-      }
-      if (!value.digest) {
-        lines.push(appElement("small", "本次预演缺少校验标识，请重新读取后再试。"));
-        panel.replaceChildren(...lines);
-        return;
-      }
-      const confirmID = `legacy-memory-confirm-${String(thread).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-      const confirmation = document.createElement("input");
-      confirmation.type = "checkbox";
-      confirmation.id = confirmID;
-      const label = document.createElement("label");
-      label.htmlFor = confirmID;
-      label.textContent = "我已确认旧资料和当前目标是同一个实际微信账号";
-      const apply = appSetupButton("确认接续此会话", async () => {
-        apply.disabled = true;
-        try {
-          const applied = await request(legacyImportURL + "/memory/" + encodeURIComponent(thread), {
-            method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true })
-          });
-          renderMemorySelection(thread, panel, applied);
-        } catch (error) {
-          if (error.status === 409) {
-            panel.replaceChildren(
-              appElement("small", "旧资料或当前目标已变化，请重新预演此会话。"),
-              appSetupButton("重新预演此会话", () => readMemorySelection(thread, panel))
-            );
-          } else {
-            lines.push(appElement("small", error.message));
-            panel.replaceChildren(...lines);
-          }
-        }
-      });
-      apply.disabled = true;
-      confirmation.addEventListener("change", () => { apply.disabled = !confirmation.checked; });
-      const confirmRow = appElement("div", "", "legacy-memory-confirm");
-      confirmRow.append(confirmation, label, apply);
-      lines.push(confirmRow);
-      panel.replaceChildren(...lines);
-    }
-    async function readMemorySelection(thread, panel) {
-      panel.replaceChildren(appElement("small", "正在预演接续此会话…"));
-      try {
-        renderMemorySelection(thread, panel, await request(legacyImportURL + "/memory/" + encodeURIComponent(thread)));
-      } catch (error) {
-        panel.replaceChildren(appElement("small", error.message));
-      }
-    }
-    async function readLegacyGroupNote(thread, panel) {
-      panel.replaceChildren(appElement("small", "正在核对旧群备注…"));
-      const url = legacyImportURL + "/memory/" + encodeURIComponent(thread) + "/preference";
-      try {
-        const value = await request(url);
-        if (value?.status !== "ready" || !value.digest || typeof value.note !== "string") {
-          panel.replaceChildren(appElement("small", value?.status === "applied" ?
-            "此群已有旧备注接续记录。可在回复范围中查看当前备注。" : value?.reason || "暂时无法接续旧群备注。"));
-          return;
-        }
-        const confirmed = document.createElement("input");
-        confirmed.type = "checkbox";
-        const label = document.createElement("label");
-        label.append(confirmed, document.createTextNode("我已确认旧资料和当前目标是同一个实际微信账号"));
-        const canEnableChannelsSummary = value?.can_enable_channels_summary === true;
-        const enableChannelsSummary = document.createElement("input");
-        enableChannelsSummary.type = "checkbox";
-        const summaryLabel = document.createElement("label");
-        summaryLabel.append(enableChannelsSummary, document.createTextNode("同时开启此群的视频号自动总结"));
-        const summaryScope = appElement("small", "仅对之后收到的分享生效，沿用当前已有的回复与附件授权。");
-        const apply = appSetupButton("确认接续旧备注", async () => {
-          const current = apps;
-          apply.disabled = true;
-          try {
-            const body = { digest: value.digest, same_identity: true };
-            if (canEnableChannelsSummary && enableChannelsSummary.checked) body.enable_channels_summary = true;
-            await request(url, { method: "POST", body: JSON.stringify(body) });
-            if (current !== apps) return;
-            appFeedback(body.enable_channels_summary ?
-              "旧群备注已接续，视频号自动总结已开启。" :
-              "旧群备注已接续。可在回复范围中查看或编辑。");
-            await loadApps();
-          } catch (error) {
-            panel.replaceChildren(appElement("small", error.message),
-              appSetupButton("重新核对旧群备注", () => readLegacyGroupNote(thread, panel)));
-          }
-        });
-        apply.disabled = true;
-        confirmed.addEventListener("change", () => { apply.disabled = !confirmed.checked; });
-        const actions = appElement("div", "", "legacy-memory-confirm");
-        actions.append(label, apply);
-        panel.replaceChildren(appElement("strong", "旧群备注"), appElement("p", value.note),
-          canEnableChannelsSummary ? summaryLabel : appElement("small", "只接续备注文字。分享总结沿用当前连接的开关。"),
-          canEnableChannelsSummary ? summaryScope : document.createTextNode(""), actions);
-      } catch (error) {
-        panel.replaceChildren(appElement("small", error.message));
-      }
-    }
-    function renderMemoryReport(value) {
-      const statusCopy = {
-        ready: "旧会话记忆可核对",
-        missing: "未找到可核对的旧会话记忆",
-        snapshot_incomplete: "旧会话快照不完整，请使用正常关闭后的一致副本",
-        unsupported: "当前旧资料格式不支持会话记忆核对",
-        unavailable: "旧会话记忆暂不可读"
-      };
-      const conversations = Array.isArray(value?.conversations) ? value.conversations : [];
-      const rows = conversations.map((conversation) => {
-        const row = appElement("div", "", "legacy-memory-scope");
-        const thread = typeof conversation.thread_id === "string" ? conversation.thread_id : "";
-        row.append(appElement("p",
-          `会话：${thread || "未知"}；来源候选：${Number(conversation.event_count || 0)}；已排除：${Number(conversation.withheld_events || 0)}；记忆：${Number(conversation.memory_count || 0)}；摘要：${conversation.has_summary ? "有" : "无"}；当前目标历史授权：${conversation.history_granted ? "已授权" : "未授权"}`));
-        if (conversation.history_granted && thread) {
-          const selection = appElement("div", "", "legacy-memory-selection");
-          row.append(appSetupButton("预演接续此会话", () => readMemorySelection(thread, selection)), selection);
-          if (conversation.has_preference && thread.endsWith("@chatroom")) {
-            const note = appElement("div", "", "legacy-memory-selection");
-            row.append(appSetupButton("核对旧群备注", () => readLegacyGroupNote(thread, note)), note);
-          }
-        } else {
-          row.append(appElement("small", "接续此会话前，请先在当前连接中授权历史读取。"));
-        }
-        return row;
-      });
-      const next = typeof value?.next_after === "string" && value.next_after ? appSetupButton("读取下一页会话", () => readLegacyMemory(value.next_after)) : null;
-      memoryResult.replaceChildren(
-        appElement("strong", statusCopy[value?.status] || "旧会话记忆状态待核对"),
-        value?.status === "ready" ? appElement("p", `匹配范围：${Number(value?.matched_scopes || 0)}；未映射范围：${Number(value?.unmapped_scopes || 0)}；外部范围：${Number(value?.foreign_scopes || 0)}`) : document.createTextNode(""),
-        appElement("small", "历史授权仅表示当前目标连接的读取权限，不代表可读取旧版资料。"),
-        ...rows,
-        next || document.createTextNode("")
-      );
-    }
-    let memoryLoading = false;
-    async function readLegacyMemory(after = "") {
-      if (memoryLoading) return;
-      memoryLoading = true;
-      memoryResult.replaceChildren(appElement("small", "正在核对旧会话记忆…"));
-      try {
-        const suffix = after ? "?after=" + encodeURIComponent(after) : "";
-        renderMemoryReport(await request(legacyImportURL + "/memory" + suffix));
-      } catch (error) {
-        memoryResult.replaceChildren(appElement("small", error.message));
-      } finally {
-        memoryLoading = false;
-      }
-    }
-    if (["available", "applied", "conflict"].includes(availability)) {
-      actions.append(appSetupButton("核对旧会话记忆", () => readLegacyMemory()));
-    }
-    actions.append(preview);
-    body.append(note, actions, result, activationResult, rollbackResult, receiptResult, memoryResult);
-    panel.append(body);
-    return panel;
-  }
   function appWorkerControls(id, status) {
     const panel = appElement("div", "", "app-worker");
     const buttons = appElement("div", "", "app-worker-actions");
@@ -992,9 +244,7 @@
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= ["stopping", "rollback_frozen"].includes(status.worker) || !running && !status.configured_policy?.conversation_enabled;
     buttons.append(toggle);
-    const legacyImport = legacyImportControls(id, status.legacy_import, status);
     panel.append(buttons);
-    if (legacyImport) panel.append(legacyImport);
     panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
@@ -1081,79 +331,6 @@
       drafts.set(threadID, { ...readGroupRule(threadID), ...patch });
     };
     const replyGroups = () => field.value.split(/[\s，,]+/u).filter((threadID) => threadID.endsWith("@chatroom"));
-    const legacyGroupRuleURL = (threadID) => "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/groups/" + encodeURIComponent(threadID) + "/rule";
-    let legacyGroupRuleBusy = false;
-    const readLegacyGroupRule = async (threadID, panel) => {
-      if (legacyGroupRuleBusy) return;
-      if (apps.groupRuleDrafts.get(id)?.has(threadID)) {
-        panel.replaceChildren(appElement("small", "请先保存本群设置，再核对旧群触发方式。"));
-        return;
-      }
-      legacyGroupRuleBusy = true;
-      panel.replaceChildren(appElement("small", "正在核对旧群触发方式…"));
-      try {
-        const value = await request(legacyGroupRuleURL(threadID));
-        const statusCopy = {
-          applied: "此群的旧触发方式已接续。",
-          conflict: "旧触发方式与当前群设置冲突，未作修改。",
-          not_ready: "请先完成旧版接入，并在回复范围中保留这个群。",
-          empty: "旧版没有这个群的可接续触发方式。",
-          unsupported: "这份旧版资料不支持接续群触发方式。"
-        };
-        if (value?.status !== "ready" || !value.digest || !value.reply_settings) {
-          panel.replaceChildren(appElement("small", value?.reason || statusCopy[value?.status] || "暂时无法接续旧群触发方式。"));
-          return;
-        }
-        const settings = normalizeReplySettings(value.reply_settings);
-        if (!settings) {
-          panel.replaceChildren(appElement("small", "旧群触发方式格式不完整，未作修改。"));
-          return;
-        }
-        const confirmID = `legacy-group-rule-confirm-${String(threadID).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-        const confirmed = document.createElement("input");
-        confirmed.type = "checkbox";
-        confirmed.id = confirmID;
-        const label = document.createElement("label");
-        label.htmlFor = confirmID;
-        label.textContent = "我已确认旧资料和当前目标是同一个实际微信账号";
-        const apply = appSetupButton("确认接续旧群触发方式", async () => {
-          const current = apps;
-          apply.disabled = true;
-          try {
-            const applied = await request(legacyGroupRuleURL(threadID), {
-              method: "POST", body: JSON.stringify({ digest: value.digest, same_identity: true })
-            });
-            if (current !== apps) return;
-            if (applied?.status !== "applied") {
-              panel.replaceChildren(appElement("small", applied?.reason || statusCopy[applied?.status] || "旧群触发方式没有接续。"));
-              return;
-            }
-            appFeedback("旧群触发方式已接续。可在本群偏好中继续调整。");
-            await loadApps();
-          } catch (error) {
-            panel.replaceChildren(appElement("small", error.message),
-              appSetupButton("重新核对旧群触发方式", () => readLegacyGroupRule(threadID, panel)));
-          }
-        });
-        apply.disabled = true;
-        confirmed.addEventListener("change", () => { apply.disabled = !confirmed.checked; });
-        const actions = appElement("div", "", "legacy-memory-confirm");
-        actions.append(confirmed, label, apply);
-        panel.replaceChildren(
-          appElement("strong", "旧群触发方式"),
-          appElement("small", settings.mode === "social" ? "旧版：允许观察本群并自主选择接话；确认后接续这项授权" : settings.mode === "all" ? "旧版：每条群聊文字都交给大肥鱼判断是否回应" : "旧版：仅在被提及时回应"),
-          settings.prefix ? appElement("small", "触发前缀：" + settings.prefix) : document.createTextNode(""),
-          settings.persona ? appElement("small", "角色补充：" + settings.persona) : document.createTextNode(""),
-          settings.force_reply_when_mentioned ? appElement("small", "被提及时强制回复") : document.createTextNode(""),
-          value.reason ? appElement("small", value.reason) : document.createTextNode(""),
-          actions
-        );
-      } catch (error) {
-        panel.replaceChildren(appElement("small", error.message));
-      } finally {
-        legacyGroupRuleBusy = false;
-      }
-    };
     const renderGroupRules = () => {
       const groups = replyGroups();
       groupRules.replaceChildren(appElement("strong", "群聊偏好"));
@@ -1235,10 +412,6 @@
         }
         advanced.append(fields);
         row.append(advanced);
-        if (status.legacy_import === "applied" && (status.configured_policy?.reply_threads || []).includes(threadID)) {
-          const legacyRule = appElement("div", "", "legacy-memory-selection");
-          row.append(appSetupButton("核对旧群触发方式", () => readLegacyGroupRule(threadID, legacyRule)), legacyRule);
-        }
         groupRules.append(row);
       }
     };
@@ -2217,7 +1390,7 @@
       unconfigured: ["尚未保存网页登录资料", "在独立网页窗口完成普通账号登录后，再回到这里保存。"],
       login_open: ["网页登录窗口已打开", "请在新窗口完成登录；保存前不会把它当作已登录。"],
       unconfirmed: ["网页登录资料待核对", "资料已保留，重新打开窗口核对登录后再保存。"],
-      saved: ["网页登录资料已保存", "登录有效性以网页为准，不代表已取得开放平台接口权限。"],
+      saved: ["网页登录资料已保存", "登录状态以网页为准，保存后可用于本软件已支持的抖音功能。"],
     };
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
@@ -2369,252 +1542,6 @@
     if (actions.childElementCount) detail.append(actions);
     row.append(appElement("h5", "网页登录"), detail);
     return row;
-  }
-  function validDouyinAuthorization(value) {
-    return value && typeof value.revision === "string" && typeof value.configured === "boolean" &&
-      ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string" &&
-      (typeof value.works_authorized === "undefined" || typeof value.works_authorized === "boolean") &&
-      (typeof value.publish_authorized === "undefined" || typeof value.publish_authorized === "boolean") &&
-      (typeof value.refresh_available === "undefined" || typeof value.refresh_available === "boolean");
-  }
-  function douyinAuthorizationSummary(authorization) {
-    const states = {
-      unconfigured: ["可选 API 连接尚未配置", "此项供已有开放平台应用的用户使用。普通账号从上方网页登录接入。"],
-      ready: [authorization?.label || "抖音账号已接入", [
-        authorization?.works_authorized ? "已授权读取我的作品列表。" : "可重新扫码授权读取我的作品列表。",
-        authorization?.publish_authorized
-          ? "已授权发布抖音视频；实际可用性仍会在首次发布时核对。"
-          : "可重新扫码授权发布抖音视频。",
-      ].join("")],
-      expired: ["抖音授权已过期", authorization?.refresh_available ? "在 Windows 桌面端续期可恢复连接。" : "在 Windows 桌面端重新扫码可恢复连接。"],
-    };
-    return states[authorization?.status] || ["抖音授权暂不可读", "刷新应用状态后重查。"];
-  }
-  function douyinAuthorizeURL(value) {
-    if (typeof value !== "string") return "";
-    try {
-      const url = new URL(value);
-      return url.origin === "https://open.douyin.com" && !url.username && !url.password && !url.hash &&
-        url.pathname === "/platform/oauth/connect" ? url.href : "";
-    } catch (_) { return ""; }
-  }
-  function douyinAuthorizeState(value) {
-    const url = douyinAuthorizeURL(value);
-    if (!url) return "";
-    try {
-      const stateValue = new URL(url).searchParams.get("state");
-      return typeof stateValue === "string" && stateValue ? stateValue : "";
-    } catch (_) { return ""; }
-  }
-  function douyinDesktopHost() {
-    const host = window.chrome?.webview;
-    return host && typeof host.postMessage === "function" ? host : null;
-  }
-  function clearDouyinOAuth(flow) {
-    flow.state = ""; flow.completing = false;
-  }
-  async function cancelDouyinAuthorization(flow) {
-    const requestState = flow.state;
-    if (!requestState) return;
-    try { await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "cancel", state: requestState }) }); }
-    catch (_) { /* The next start still uses a new server-bound state. */ }
-  }
-  async function finishDouyinAuthorization(current, flow, callbackURL) {
-    if (!flow.state || current !== apps || flow.saving || flow.completing || typeof callbackURL !== "string" || !callbackURL) return;
-    flow.completing = true; flow.saving = true;
-    renderApps();
-    try {
-      const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "complete", callback_url: callbackURL }) });
-      if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请重新开始扫码。");
-      current.douyinAuthorization = value; current.douyinAuthorizationError = ""; clearDouyinOAuth(flow); appFeedback("抖音账号已接入。"); await loadApps();
-    } catch (error) {
-      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
-        current.douyinAuthorizationError = error.message; clearDouyinOAuth(flow); appFeedback(error.message, true);
-      }
-    } finally { flow.saving = false; if (current === apps) renderApps(); }
-  }
-  async function refreshDouyinAuthorization(current, authorization) {
-    if (current !== apps || current.douyinAuthorizationSaving || !authorization?.refresh_available || !authorization.revision) return;
-    current.douyinAuthorizationSaving = "refresh";
-    renderApps();
-    try {
-      const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "refresh", revision: authorization.revision }) });
-      if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
-      current.douyinAuthorization = value;
-      current.douyinAuthorizationError = "";
-      appFeedback("抖音授权已续期。");
-      await loadApps();
-    } catch (error) {
-      if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
-        current.douyinAuthorizationError = error.message;
-        appFeedback(error.message, true);
-        // A provider rejection can mean the saved refresh credential is no longer usable.
-        // Reload the view so its available actions match the actual server state.
-        await loadApps();
-      }
-    } finally {
-      current.douyinAuthorizationSaving = "";
-      if (current === apps) renderApps();
-    }
-  }
-  function handleDouyinDesktopAuthorization(event) {
-    const value = event?.data;
-    if (!value || typeof value !== "object" || typeof value.type !== "string") return;
-    const current = apps, flow = current.douyinOAuth;
-    if (!flow.state || value.state !== flow.state) return;
-    if (value.type === "douyin-auth-callback" && typeof value.callback_url === "string") {
-      void finishDouyinAuthorization(current, flow, value.callback_url);
-      return;
-    }
-    if (value.type === "douyin-auth-closed" && !flow.completing) {
-      const detail = typeof value.error === "string" && value.error.trim() ? value.error.trim().slice(0, 160) : "扫码窗口已关闭，未更改当前账号连接。";
-      void cancelDouyinAuthorization(flow); clearDouyinOAuth(flow); current.douyinAuthorizationError = detail; appFeedback(detail, true); renderApps();
-    }
-  }
-  if (douyinDesktopHost()) window.chrome.webview.addEventListener("message", handleDouyinDesktopAuthorization);
-  function douyinAuthorizationRow(current) {
-    if (!current.registered?.some((item) => item.id === "douyin")) return null;
-    const authorization = current.douyinAuthorization;
-    const flow = current.douyinOAuth;
-    const [title, note] = douyinAuthorizationSummary(authorization);
-    const row = appElement("section", "", "app-layer publication-layer");
-    const detail = appElement("div", "", "publication-detail");
-    detail.append(appElement("strong", title), appElement("p", note));
-    if (authorization?.status === "unconfigured") {
-      detail.append(appElement("p", "先完成企业或个体工商户等主体认证并创建网站应用，再配置 Client Key、Client Secret 和 HTTPS 回调。个人主体目前仅支持小程序、小游戏、小玩法。", "publication-authorization-note"));
-      const links = appElement("div", "", "publication-actions");
-      for (const [label, href] of [
-        ["申请网站应用", "https://developer.open-douyin.com/console"],
-        ["查看申请条件", "https://partner.open-douyin.com/docs/resource/zh-CN/developer/join/issues"],
-      ]) {
-        const link = appElement("a", label);
-        link.href = href; link.target = "_blank"; link.rel = "noopener noreferrer";
-        links.append(link);
-      }
-      detail.append(links);
-    }
-    if (authorization?.expires_at) {
-      const expiry = new Date(authorization.expires_at);
-      if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `授权到期：${expiry.toLocaleString()}`, "publication-reference"));
-    }
-    if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
-    const authorizationBusy = Boolean(current.douyinAuthorizationSaving) || flow.saving || Boolean(flow.state);
-    let disconnect;
-    if (authorization?.configured) {
-      disconnect = appElement("button", current.douyinAuthorizationSaving === "disconnect" ? "正在移除…" : "移除授权", "button compact quiet");
-      disconnect.type = "button"; disconnect.disabled = authorizationBusy;
-      disconnect.addEventListener("click", async () => {
-        if (current !== apps || current.douyinAuthorizationSaving || flow.saving || flow.state) return;
-        current.douyinAuthorizationSaving = "disconnect";
-        try {
-          const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "disconnect", revision: authorization.revision }) });
-          if (!validDouyinAuthorization(value)) throw new Error("抖音授权状态返回格式无效，请刷新后重试。");
-          current.douyinAuthorization = value; current.douyinAuthorizationError = ""; clearDouyinOAuth(flow); appFeedback("抖音本机账号连接已移除。"); await loadApps();
-        } catch (error) { if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) { current.douyinAuthorizationError = error.message; appFeedback(error.message, true); } }
-        finally { current.douyinAuthorizationSaving = ""; if (current === apps) renderApps(); }
-      });
-    }
-    const host = douyinDesktopHost();
-    if (!host) {
-      detail.append(appElement("p", "已有开放平台应用时，可在 Windows 桌面端配置 API 授权。", "publication-authorization-note"));
-      if (disconnect) detail.append(disconnect);
-      row.append(appElement("h5", "API 接入（可选）"), detail);
-      return row;
-    }
-    const panel = appElement("details", "", "publication-oauth");
-    panel.open = Boolean(flow.state) || Boolean(current.douyinAuthorizationError) ||
-      (authorization?.status === "expired" && !authorization.refresh_available);
-    panel.append(appElement("summary", authorization?.configured ? "重新扫码授权" : "扫码授权"));
-    const form = appElement("form", "", "publication-oauth-form");
-    const clientKey = document.createElement("input");
-    clientKey.name = "client_key"; clientKey.autocomplete = "off"; clientKey.required = true; clientKey.placeholder = "抖音 Client Key"; clientKey.setAttribute("aria-label", "抖音 Client Key");
-    const clientSecret = document.createElement("input");
-    clientSecret.name = "client_secret"; clientSecret.type = "password"; clientSecret.autocomplete = "new-password"; clientSecret.required = true; clientSecret.placeholder = "Client Secret"; clientSecret.setAttribute("aria-label", "抖音 Client Secret");
-    const redirectURI = document.createElement("input");
-    redirectURI.name = "redirect_uri"; redirectURI.type = "url"; redirectURI.autocomplete = "off"; redirectURI.required = true; redirectURI.placeholder = "https://…/callback"; redirectURI.setAttribute("aria-label", "抖音开放平台已登记的回调地址");
-    const readWorks = document.createElement("input");
-    readWorks.name = "read_works"; readWorks.type = "checkbox"; readWorks.checked = Boolean(authorization?.works_authorized); readWorks.setAttribute("aria-label", "授权读取我的作品列表");
-    const publishVideo = document.createElement("input");
-    publishVideo.name = "publish_video"; publishVideo.type = "checkbox"; publishVideo.checked = Boolean(authorization?.publish_authorized); publishVideo.setAttribute("aria-label", "授权发布抖音视频");
-    const begin = appElement("button", "打开扫码窗口", "button compact secondary");
-    begin.type = "submit"; begin.disabled = !authorization || authorizationBusy;
-    for (const [field, label] of [[clientKey, "Client Key"], [clientSecret, "Client Secret"], [redirectURI, "回调地址"]]) {
-      field.id = `douyin-oauth-${field.name}`;
-      const labelNode = appElement("label", label); labelNode.htmlFor = field.id; form.append(labelNode, field);
-    }
-    const worksLabel = appElement("label", "", "publication-authorization-choice");
-    worksLabel.append(readWorks, appElement("span", "授权读取我的作品列表"));
-    const publishLabel = appElement("label", "", "publication-authorization-choice");
-    publishLabel.append(publishVideo, appElement("span", "授权发布抖音视频"));
-    form.append(worksLabel,
-      appElement("p", "可选能力：需要平台开通作品列表权限；每轮最多读取 4 页，只用于登记作品编号范围，详情仍按需读取。", "publication-authorization-note"),
-      publishLabel,
-      appElement("p", "可选能力：仅申请发布视频所需授权；授权成功不代表平台已开通实际发布资格。", "publication-authorization-note"),
-      appElement("p", "仅使用抖音开放平台已登记的回调地址。密钥不会显示、缓存或写入浏览器。", "publication-authorization-note"), begin);
-    const embeddedNotice = appElement("p", flow.completing ? "正在核验抖音账号…" : "请在扫码窗口内扫描二维码，并在手机抖音确认。", "publication-authorization-note");
-    embeddedNotice.setAttribute("role", "status");
-    embeddedNotice.hidden = !flow.state;
-    form.append(embeddedNotice);
-    panel.append(form);
-    detail.append(panel);
-    if (authorization?.refresh_available) {
-      const refresh = appElement("button", current.douyinAuthorizationSaving === "refresh" ? "正在续期…" : "续期授权", "button compact secondary");
-      refresh.type = "button";
-      refresh.disabled = authorizationBusy;
-      refresh.addEventListener("click", () => { void refreshDouyinAuthorization(current, authorization); });
-      detail.append(refresh, appElement("p", "在原账号的授权范围内更新有效期。", "publication-authorization-note"));
-    }
-    if (disconnect) detail.append(disconnect);
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (!authorization || current !== apps || current.douyinAuthorizationSaving || flow.saving || flow.state) return;
-      const credentials = { client_key: clientKey.value, client_secret: clientSecret.value, redirect_uri: redirectURI.value, read_works: readWorks.checked, publish_video: publishVideo.checked };
-      clientKey.value = clientSecret.value = redirectURI.value = "";
-      flow.saving = true; begin.disabled = true; begin.textContent = "正在打开…";
-      try {
-        const value = await request("/api/local/apps/douyin/authorization", { method: "POST", body: JSON.stringify({ action: "begin", revision: authorization.revision, ...credentials }) });
-        if (current !== apps) return;
-        const authorizeURL = douyinAuthorizeURL(value.authorize_url);
-        const authorizationState = douyinAuthorizeState(authorizeURL);
-        if (!authorizationState || !Number.isFinite(Date.parse(value.expires_at))) throw new Error("扫码授权信息无效，请重新扫码。");
-        flow.state = authorizationState; current.douyinAuthorizationError = "";
-        try { host.postMessage({ type: "douyin-auth-open", url: authorizeURL, expires_at: value.expires_at }); }
-        catch (_) { await cancelDouyinAuthorization(flow); clearDouyinOAuth(flow); throw new Error("无法打开应用内扫码窗口，请重新扫码。"); }
-      } catch (error) {
-        if (current === apps && !appSessionExpired([{ status: "rejected", reason: error }])) {
-          current.douyinAuthorizationError = error.message; appFeedback(error.message, true);
-        }
-      } finally { flow.saving = false; if (current === apps) renderApps(); }
-    });
-    row.append(appElement("h5", "API 接入（可选）"), detail);
-    return row;
-  }
-  function douyinReadRows(record) {
-    if (!apps.registered?.some((item) => item.id === record.id)) return [];
-    const connections = apps.connections.get(record.id) || [];
-    const search = {
-      ready: ["官方搜索已配置", "可在聊天中读取获准关键词的搜索结果，实际访问取决于平台授权。"],
-      unconfigured: ["尚未配置官方搜索", "由主人在站点私有目录登记应用令牌、有效期和允许的关键词。"],
-      disabled: ["官方搜索已停用", "主人可在站点私有配置中启用。"],
-      expired: ["应用令牌已过期", "请由主人更新站点私有配置中的应用令牌和有效期。"],
-      invalid: ["官方搜索配置无效", "请核对站点私有配置的字段和格式。"],
-    };
-    const ownVideos = {
-      ready: ["本人作品读取已配置", "可核对获准作品的当前平台状态。"],
-      unconfigured: ["尚未配置本人作品读取", "使用抖音账号独立授权，并由主人登记允许查询的作品编号。"],
-      disabled: ["本人作品读取已停用", "主人可在站点私有配置中启用。"],
-      expired: ["本人作品令牌已过期", "请由主人更新抖音用户令牌。"],
-      invalid: ["本人作品配置无效", "请核对站点私有配置中的授权范围和作品编号。"],
-    };
-    return [["search", "关键词", search], ["own-videos", "作品", ownVideos]].map(([id, label, states]) => {
-      const row = appElement("div", "", "app-layer");
-      const configuration = connections.find((connection) => connection.id === id)?.configuration;
-      const [title, help] = states[configuration] || ["读取状态暂不可用", "可刷新后重查。"];
-      const detail = appElement("div", "");
-      detail.append(appElement("strong", title), appElement("p", help));
-      row.append(appElement("h5", label), detail);
-      return row;
-    });
   }
   function parseBilibiliVideos(value) {
     const unique = new Set();
@@ -2793,17 +1720,18 @@
       const open = appElement("button", "", "app-card-entry");
       open.type = "button"; open.setAttribute("aria-label", `管理${label}`);
       const accounts = apps.connections.get(record.id) || [];
-      const authorization = record.id === "douyin" ? apps.douyinAuthorization : apps.bilibiliAuthorization;
-      const officialAccount = record.id === "douyin" || record.id === "bilibili";
+      const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
+      const officialAccount = record.id === "bilibili";
+      const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
       const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
-      const connected = officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", connected ? "已接入" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
+      const status = appElement("span", connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
       status.classList.toggle("is-connected", connected);
       head.append(status);
-      const summary = appElement("p", officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
+      const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
       const source = catalog.get(record.id);
       const foot = appElement("div", "", "app-card-footer");
-      foot.append(appElement("span", source?.install_state === "installed" ? "本地源码就绪" : source?.source_available ? "源码可安装" : "未提供源码"), appElement("span", "管理应用"));
+      foot.append(appElement("span", source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本"), appElement("span", "管理应用"));
       open.append(head, summary, foot); card.append(open);
       open.addEventListener("click", () => {
         apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal();
@@ -2818,7 +1746,7 @@
     $("#app-dialog-feedback").append($("#apps-feedback"));
     $("#app-dialog-title").textContent = `${record.name || record.id} · 应用设置`;
     const nav = $("#app-dialog-tabs");
-    nav.replaceChildren(...[["account", "账号与使用"], ["persona", "应用子角色"], ["source", "源码管理"]].map(([id, title]) => {
+    nav.replaceChildren(...[["account", "账号与使用"], ["persona", "应用子角色"], ["source", "接入版本管理"]].map(([id, title]) => {
       const button = appElement("button", title, `local-tab${apps.detailTab === id ? " is-active" : ""}`);
       button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
       button.addEventListener("click", () => {
@@ -2829,7 +1757,7 @@
       }); return button;
     }));
     const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
-      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
+      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinPublicationRow(apps)] :
       record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
@@ -2898,14 +1826,9 @@
       const hasDouyin = registered?.some((app) => app.id === "douyin");
       let bilibili = null;
       let authorization = null;
-      let douyinAuthorization = null;
       if (hasDouyin) {
-        const result = await Promise.allSettled([
-          request("/api/local/apps/douyin/authorization"),
-          loadPublicationWork(current, "douyin", current.douyinWork.cursors)
-        ]);
+        const result = await Promise.allSettled([loadPublicationWork(current, "douyin", current.douyinWork.cursors)]);
         if (current !== apps || appSessionExpired(result)) return;
-        douyinAuthorization = result[0];
       }
       if (hasBilibili) {
         const result = await Promise.allSettled([
@@ -2948,17 +1871,6 @@
       } else {
         current.bilibiliAuthorization = null;
         current.bilibiliAuthorizationError = "";
-      }
-      if (douyinAuthorization?.status === "fulfilled") {
-        const value = douyinAuthorization.value;
-        current.douyinAuthorization = validDouyinAuthorization(value) ? value : null;
-        current.douyinAuthorizationError = current.douyinAuthorization ? "" : "抖音授权状态返回格式无效，请刷新后重试。";
-      } else if (hasDouyin) {
-        current.douyinAuthorization = null;
-        current.douyinAuthorizationError = douyinAuthorization?.reason?.message || "抖音授权状态暂不可读。";
-      } else {
-        current.douyinAuthorization = null;
-        current.douyinAuthorizationError = "";
       }
     } finally {
       if (current === apps) {
@@ -3273,7 +2185,6 @@
   function douyinPublicationRow(current) {
     if (!current.registered?.some((item) => item.id === "douyin")) return null;
     const work = current.douyinWork;
-    const authorization = current.douyinAuthorization;
     const row = appElement("section", "", "app-layer publication-layer");
     row.id = "douyin-publication";
     row.setAttribute("aria-labelledby", "douyin-publication-heading");
@@ -3281,21 +2192,10 @@
     const heading = appElement("h5", "创作发布");
     heading.id = "douyin-publication-heading";
     const detail = appElement("div", "", "publication-detail");
-    let title = "API 发布尚未授权";
-    let note = "此处管理开放平台 API 发布任务。普通账号通过创作者中心发布的自动接入仍在开发中。";
-    if (!authorization) {
-      title = "发布授权暂不可读";
-      note = "刷新应用状态后再核对。";
-    } else if (authorization.status === "expired") {
-      title = "发布授权已过期";
-      note = "续期或重新扫码后可恢复获准的发布能力，已有任务继续保留。";
-    } else if (authorization.status === "ready") {
-      title = authorization.publish_authorized ? "已授权发布视频" : "尚未授权发布视频";
-      note = authorization.publish_authorized ? "可创建本地草稿，并按原任务上传、提交和核对。提交前仍会由平台检查实际权限。" :
-        "重新扫码时选择发布视频，平台核验后才会开放创作发布。";
-    }
-    detail.append(appElement("strong", title), appElement("p", note));
-    if (current.douyinAuthorizationError) detail.append(appElement("p", current.douyinAuthorizationError, "publication-feedback is-warn"));
+    detail.append(
+      appElement("strong", "发布记录"),
+      appElement("p", "这里保留已有创作任务及其结果。新的普通账号发布能力会直接使用已保存的登录状态。")
+    );
     detail.append(publicationTasksPanel(current, "douyin", "抖音"));
     row.append(heading, detail);
     return row;
@@ -3562,7 +2462,7 @@
         method: "POST", body: JSON.stringify({ digest: listing.digest, revision: state.home.revision })
       });
       if (current !== apps) return;
-      appFeedback(result.result === "existing" ? "源码已在家目录中。" : "源码已安装到家目录。");
+      appFeedback(result.result === "existing" ? "接入版本已在家目录中。" : "接入版本已安装到家目录。");
       await loadApps();
     } catch (error) {
       if (current !== apps) return;

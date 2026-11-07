@@ -263,7 +263,7 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 		err = stage.Close()
 	}
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, "应用源码复制未完成，已有目录保持原样")
+		websession.Fail(w, http.StatusConflict, "接入版本安装未完成，请重新检查应用目录")
 		return
 	}
 	// Keep revocation and publishing in the same identity critical section.

@@ -2,20 +2,7 @@
   "version": 1,
   "kind": "station-official-douyin-app",
   "host_entrypoint": "douyin-search",
-  "connection": "search",
   "connection_authority": "host",
-  "authentication": "host-only-app-client-token",
-  "scope": "aweme.dy.video_search",
-  "observation_fields": [
-    "search",
-    "own_video",
-    "player_entry",
-    "playback",
-    "account_works",
-    "page_text",
-    "audio",
-    "visual"
-  ],
   "web_read": {
     "connection": "web-page-text",
     "authentication": "host-owned-saved-web-login",
@@ -63,50 +50,12 @@
     "pagination": "host-owned",
     "profile": "host-owned"
   },
-  "own_video": {
-    "connection": "own-videos",
-    "authentication": "host-only-user-access-token",
-    "scope": "posting.behavior",
-    "method": "POST",
-    "config": "own-video.schema.json"
-  },
-  "account": {
-    "connection": "authorized-account",
-    "authentication": "host-only-user-oauth",
-    "scope": "user_info",
-    "owner_action": "web-authorization",
-    "works": {
-      "scope": "video.list.bind",
-      "method": "GET",
-      "owner_opt_in": "read_works",
-      "page_limit_per_scan": 4,
-      "verification": "provider-scope-required"
-    }
-  },
-  "player_entry": {
-    "connection": "search",
-    "authentication": "anonymous",
-    "source": "verified-search-result",
-    "owner_setting": "follow_public_videos"
-  },
-  "playback": {
-    "connection": "search",
-    "source": "verified-official-player",
-    "owner_setting": "sample_public_playback",
-    "evidence": "html-media-played-ranges"
-  },
-  "publication": {
-    "connection": "authorized-account",
-    "authentication": "host-only-user-oauth",
-    "scopes": [
-      "video.create.bind",
-      "posting.behavior"
-    ],
-    "owner_opt_in": "publish_video",
-    "media": [
-      "mp4",
-      "webm"
-    ],
-    "checkpointed": true
-  }
+  "connection": "web-page-text",
+  "authentication": "host-owned-saved-web-login",
+  "observation_fields": [
+    "page_text",
+    "playback",
+    "audio",
+    "visual"
+  ]
 }
