@@ -149,6 +149,51 @@ func TestLegacyHomeRejectsPrivateSourcesTraversalAndBudget(t *testing.T) {
 	}
 }
 
+func TestLegacyHomeChecksScopeOfSelectedSubdirectory(t *testing.T) {
+	f := newLegacyHomeFixture(t)
+	allowed, err := f.preview(t.Context(), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{
+		"managed-workspaces/pri_workspace/old-account/Conversations/old-group/output",
+		"managed-workspaces/pri_workspace/old-account/voice-library/voice-files",
+		"admin/media-assets/inbound/2026",
+		"admin/media-history/old-account",
+		"admin/manual-uploads/staging",
+		"secrets",
+		"managed-workspaces/pri_workspace/old-account/projects/selected",
+		"managed-workspaces/public_workspace/projects/selected",
+	} {
+		t.Run(relative, func(t *testing.T) {
+			source := filepath.Join(filepath.Dir(f.source), filepath.FromSlash(relative))
+			if err := os.MkdirAll(source, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "ordinary.txt"), []byte("synthetic content"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PreviewLegacyHome(t.Context(), f.data, f.workspace, source, f.target, 4096)
+			if strings.Contains(relative, "/projects/") {
+				if err != nil || plan.Files != 1 {
+					t.Fatalf("explicitly selected project blocked: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "受限素材范围") {
+				t.Fatalf("protected source scope accepted: %v", err)
+			}
+			if _, err := ImportLegacyHome(t.Context(), f.data, f.workspace, source, f.target, 4096, allowed.Digest); err == nil ||
+				!strings.Contains(err.Error(), "受限素材范围") {
+				t.Fatalf("confirmation accepted a protected source scope: %v", err)
+			}
+			if _, err := os.Stat(allowed.Target); !os.IsNotExist(err) {
+				t.Fatalf("rejected source created a target: %v", err)
+			}
+		})
+	}
+}
+
 func TestLegacyHomeConcurrentImportsKeepOneVerifiedTarget(t *testing.T) {
 	f := newLegacyHomeFixture(t)
 	plan, err := f.preview(t.Context(), 4096)

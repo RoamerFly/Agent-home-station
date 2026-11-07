@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -104,8 +105,8 @@ func loadLegacyHome(ctx context.Context, dataDir, workspaceRoot, sourceDir, targ
 		return legacyHomeReceipt{}, errors.New("旧资料目录不可用或经过目录链接")
 	}
 	defer source.Close()
-	if legacyHomeIsHostDirectory(source) {
-		return legacyHomeReceipt{}, errors.New("所选目录为旧宿主配置目录，请选择具体项目或笔记子目录")
+	if err := validateLegacyHomeSource(source, sourceDir, dataDir, home); err != nil {
+		return legacyHomeReceipt{}, err
 	}
 	inventory, total, err := inventoryLegacyHome(ctx, source, maxBytes, false)
 	if err != nil {
@@ -123,6 +124,23 @@ func loadLegacyHome(ctx context.Context, dataDir, workspaceRoot, sourceDir, targ
 	}
 	receipt.Digest = legacySettingsHash(raw)
 	return receipt, nil
+}
+
+func validateLegacyHomeSource(root *os.Root, source, dataDir, home string) error {
+	if runtime.GOOS == "windows" {
+		// Inspect the pinned directory's real name, including its ancestors.
+		// A short path or a Win32 alias must not hide a protected component.
+		resolved, err := legacySnapshotLocalPath(root)
+		if err != nil {
+			return errors.New("无法核对旧资料在本机磁盘上的实际路径")
+		}
+		source = resolved
+	}
+	if pathsOverlap(source, dataDir) || pathsOverlap(source, home) ||
+		legacyHomePrivateEntry(filepath.ToSlash(source)) || legacyHomeIsHostDirectory(root) {
+		return errors.New("所选目录属于宿主、会话或受限素材范围，请选择具体项目或笔记子目录")
+	}
+	return nil
 }
 
 func legacyHomeIsHostDirectory(root *os.Root) bool {
@@ -194,10 +212,13 @@ func inventoryLegacyHome(ctx context.Context, root *os.Root, maxBytes int64, pub
 
 func legacyHomePrivateEntry(name string) bool {
 	for _, part := range strings.Split(strings.ToLower(name), "/") {
+		part = strings.TrimRight(part, " .")
 		if slices.Contains([]string{
 			legacyHomeManifest, "api-token", "admin-token", "admin-password", "provider-key",
-			"fish-identity.json", "local-model.json", "accounts.json", "bot-state",
+			"fish-identity.json", "local-model.json", "accounts.json", "bot-state", "account.json", "workspace-directory",
 			"conversations", "secrets", "memory.sqlite", "memory.json", "voice-library",
+			"media-assets", "media-assets.json", "media-history", "manual-uploads",
+			"station-native-stop.json", "station-native-release.json", "legacy-cutover-state.json", "legacy-cutover-claim.json",
 		}, part) {
 			return true
 		}
@@ -222,7 +243,14 @@ func ImportLegacyHome(ctx context.Context, dataDir, workspaceRoot, sourceDir, ta
 	registry := fishidentity.New(dataDir)
 	var parent *os.Root
 	parentPath, targetName := filepath.Dir(receipt.Target), filepath.Base(receipt.Target)
-	err = registry.GuardHome(receipt.FishID, receipt.OwnerID, receipt.Revision, func(fishidentity.Record) error {
+	err = registry.GuardHome(receipt.FishID, receipt.OwnerID, receipt.Revision, func(record fishidentity.Record) error {
+		home, err := (&localHomeService{root: filepath.Clean(workspaceRoot), dataDir: dataDir}).directory(record)
+		if err != nil {
+			return err
+		}
+		if err := validateLegacyHomeSource(source, receipt.Source, dataDir, home); err != nil {
+			return err
+		}
 		var openErr error
 		parent, openErr = workspacefs.EnsurePath(parentPath)
 		return openErr
