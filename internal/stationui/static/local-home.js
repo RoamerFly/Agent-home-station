@@ -61,7 +61,7 @@
       douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], comfyDeployment: { loading: false, saving: false, loaded: false, server: null, draft: null, approved: false, advancedOpen: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: { loading: false, saving: false, loaded: false, server: null, draft: null, approved: false, advancedOpen: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -3688,6 +3688,115 @@
     };
     return integer("port", 1024, 65535, "回环端口") || integer("idle_seconds", 0, 9223372036, "闲置停止秒数") || integer("cuda_device", 0, 64, "CUDA 设备编号") || configuration;
   }
+  function normalizeLocalVision(configuration) {
+    const value = configuration || {};
+    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["low", "high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "low" };
+  }
+  function validLocalVision(view) {
+    return view && Number.isSafeInteger(view.revision) && view.revision >= 0 && view.configuration && typeof view.configuration === "object" && typeof view.key_configured === "boolean" && typeof view.ready === "boolean";
+  }
+  function localVisionSelected(current) { return current === projectTools && current.openID === "media-understanding" && $("#tool-dialog").open && current.tools.some((tool) => tool.id === "media-understanding" && tool.installed); }
+  function updateLocalVisionSave(current = projectTools) {
+    const button = $("#local-vision-save");
+    if (!button) return;
+    const vision = current.vision;
+    button.hidden = !localVisionSelected(current);
+    button.textContent = vision.saving ? "正在保存…" : "保存视觉设置";
+    button.disabled = vision.loading || vision.saving || !vision.server || !vision.approved;
+  }
+  async function loadLocalVision(current = projectTools) {
+    if (!localVisionSelected(current) || current.vision.loading || current.vision.saving) return;
+    const vision = current.vision, generation = ++vision.generation;
+    vision.loading = true; vision.error = "";
+    renderProjectToolDialog(current.tools.find((tool) => tool.id === "media-understanding"));
+    try {
+      const view = await request("/api/local/project-tools/media-understanding/vision");
+      if (!localVisionSelected(current) || vision.generation !== generation) return;
+      if (!validLocalVision(view)) throw new Error("视觉设置返回格式无效，请刷新后重试。");
+      vision.server = view;
+      if (!vision.draft) vision.draft = normalizeLocalVision(view.configuration);
+    } catch (error) {
+      if (!localVisionSelected(current) || vision.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      vision.error = error.message || "视觉设置暂时无法读取。";
+    } finally {
+      if (current === projectTools && vision.generation === generation) {
+        vision.loading = false;
+        if (localVisionSelected(current)) renderProjectToolDialog(current.tools.find((tool) => tool.id === "media-understanding"));
+      }
+    }
+  }
+  async function saveLocalVision(current = projectTools) {
+    const vision = current.vision;
+    if (!localVisionSelected(current) || vision.loading || vision.saving || !vision.approved || !vision.server || !vision.draft) return;
+    const configuration = normalizeLocalVision(vision.draft);
+    configuration.max_tokens = Number(configuration.max_tokens);
+    if (!Number.isSafeInteger(configuration.max_tokens) || configuration.max_tokens < 1) {
+      vision.error = "输出上限请输入正整数。";
+      renderProjectToolDialog(current.tools.find((tool) => tool.id === "media-understanding")); return;
+    }
+    const generation = ++vision.generation;
+    vision.saving = true; vision.error = ""; vision.notice = "";
+    renderProjectToolDialog(current.tools.find((tool) => tool.id === "media-understanding"));
+    try {
+      const view = await request("/api/local/project-tools/media-understanding/vision", { method: "PUT", body: JSON.stringify({ revision: vision.server.revision, configuration, api_key: vision.apiKey, clear_key: vision.clearKey, approve_model: true }) });
+      if (!localVisionSelected(current) || vision.generation !== generation) return;
+      if (!validLocalVision(view)) throw new Error("视觉设置返回格式无效，请刷新后核对。");
+      vision.server = view; vision.draft = normalizeLocalVision(view.configuration);
+      vision.apiKey = ""; vision.clearKey = false; vision.approved = false;
+      vision.notice = "视觉设置已保存，未调用模型；语音识别配置保持不变。";
+    } catch (error) {
+      if (!localVisionSelected(current) || vision.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      vision.error = error.message || "视觉设置未保存。";
+    } finally {
+      if (current === projectTools && vision.generation === generation) {
+        vision.saving = false;
+        if (localVisionSelected(current)) renderProjectToolDialog(current.tools.find((tool) => tool.id === "media-understanding"));
+      }
+    }
+  }
+  function renderLocalVision(tool) {
+    const current = projectTools, vision = current.vision;
+    const section = appElement("section", "", "local-vision-settings");
+    const heading = appElement("div", "", "local-vision-heading");
+    heading.append(appElement("strong", "视觉观察"), appElement("span", vision.server?.ready ? "已配置 · 按需调用" : vision.server?.reason || "为本机大肥鱼单独配置视觉服务。"));
+    section.append(heading);
+    if (vision.error) section.append(appElement("p", vision.error, "local-vision-error"));
+    if (vision.notice) section.append(appElement("p", vision.notice, "local-vision-note"));
+    if (!vision.server) {
+      section.append(appElement("p", vision.loading ? "正在读取视觉设置…" : "视觉设置暂不可读，可点击顶部刷新。", "local-vision-note")); return section;
+    }
+    const draft = vision.draft || (vision.draft = normalizeLocalVision(vision.server.configuration));
+    const form = appElement("form", "", "local-vision-form"); form.noValidate = true;
+    const busy = vision.loading || vision.saving;
+    const fields = [
+      ["接口类型", "backend", { select: [["openai-compatible", "OpenAI 兼容"], ["deepseek", "DeepSeek"]] }],
+      ["视觉模型", "model", {}], ["接口地址", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
+      ["输出上限", "max_tokens", { type: "number", min: 1, inputMode: "numeric" }],
+      ["思考强度", "reasoning_effort", { select: [["low", "低"], ["high", "高"], ["max", "最高"]] }]
+    ];
+    for (const [label, key, options] of fields) {
+      const field = comfyDeploymentField(label, key, draft, { ...options, disabled: busy || key === "reasoning_effort" && !draft.thinking });
+      field.input.id = `local-vision-${key}`; field.label.htmlFor = field.input.id;
+      field.input.setAttribute("aria-label", label);
+      field.input.addEventListener("input", () => { draft[key] = field.input.value; vision.error = ""; vision.notice = ""; });
+      form.append(field.label);
+    }
+    const keyLabel = appElement("label", "服务密钥");
+    const key = document.createElement("input"); key.type = "password"; key.autocomplete = "new-password"; key.id = "local-vision-key";
+    key.value = vision.apiKey; key.placeholder = vision.server.key_configured ? "已配置，留空保留" : "填写此服务的密钥"; key.disabled = busy || vision.clearKey;
+    key.addEventListener("input", () => { vision.apiKey = key.value; }); keyLabel.append(key); form.append(keyLabel);
+    const switches = appElement("div", "", "local-vision-switches");
+    for (const [label, checked, onChange] of [
+      ["开启思考", draft.thinking, (value) => { draft.thinking = value; renderProjectToolDialog(tool); }],
+      ["清除已保存密钥", vision.clearKey, (value) => { vision.clearKey = value; if (value) vision.apiKey = ""; renderProjectToolDialog(tool); }],
+      ["允许使用此视觉服务", vision.approved, (value) => { vision.approved = value; updateLocalVisionSave(current); }]
+    ]) {
+      const labelNode = appElement("label", "", "project-tool-approval"), input = document.createElement("input"); input.type = "checkbox"; input.checked = checked; input.disabled = busy;
+      input.addEventListener("change", () => onChange(input.checked)); labelNode.append(input, document.createTextNode(label)); switches.append(labelNode);
+    }
+    form.append(switches); form.addEventListener("submit", (event) => { event.preventDefault(); void saveLocalVision(current); });
+    section.append(form, appElement("p", "保存不会发起测试调用；仅在实际视觉任务中使用。", "local-vision-note")); return section;
+  }
   function comfyDeploymentState(current = projectTools) { return current.comfyDeployment; }
   async function loadComfyDeployment(current = projectTools) {
     const deployment = comfyDeploymentState(current);
@@ -4110,6 +4219,7 @@
         current.openID = tool.id; renderProjectToolDialog(tool);
         $("#tool-dialog").showModal();
         if (tool.id === "comfyui") void loadComfyDeployment(current);
+        if (tool.id === "media-understanding" && tool.installed) void loadLocalVision(current);
       });
       return card;
     }));
@@ -4119,6 +4229,13 @@
   function renderProjectToolDialog(tool) {
     const current = projectTools, body = $("#tool-dialog-body"), scroll = body.scrollTop;
     $("#tool-dialog-title").textContent = tool.name || tool.id;
+    let visionSave = $("#local-vision-save");
+    if (!visionSave) {
+      visionSave = appElement("button", "保存视觉设置", "button compact primary"); visionSave.id = "local-vision-save"; visionSave.type = "button";
+      visionSave.addEventListener("click", () => { void saveLocalVision(); });
+      $("#tool-dialog .app-dialog-actions").append(visionSave);
+    }
+    updateLocalVisionSave(current);
     $("#tool-dialog-feedback").append($("#project-tools-feedback"));
     body.replaceChildren(projectToolDetails(tool, current));
     body.scrollTop = scroll;
@@ -4130,6 +4247,7 @@
       const [, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
       if (note) detail.append(appElement("p", note));
+      if (tool.id === "media-understanding" && tool.installed) detail.append(renderLocalVision(tool));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
         scope.append(appElement("strong", "音频处理"), appElement("span", "截取本机 WAV 成品，可转单声道，输出 16 位 WAV。每次仅访问获准的输入和任务输出。"));
@@ -4507,10 +4625,11 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
-  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
+  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
     const id = projectTools.openID;
+    if (id === "media-understanding") { projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false; }
     if (id === "obs-preview") stopOBSPreviewOnLeave();
     projectTools.openID = "";
     $("#project-tools-view").insertBefore($("#project-tools-feedback"), $("#project-tools-list"));

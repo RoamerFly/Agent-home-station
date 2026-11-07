@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -38,12 +37,6 @@ type stationImageObservation struct {
 	Coverage    string `json:"coverage"`
 	Observation string `json:"observation"`
 	Untrusted   bool   `json:"untrusted_external_content"`
-}
-
-func stationVisionConfigured(c pluginhost.Configuration) bool {
-	var endpoint, model string
-	return json.Unmarshal(c.Values["vision_endpoint"], &endpoint) == nil && strings.TrimSpace(endpoint) != "" &&
-		json.Unmarshal(c.Values["vision_model"], &model) == nil && strings.TrimSpace(model) != "" && slices.Contains(c.ConfiguredSecrets, "vision_key")
 }
 
 func (t *stationAttachmentTools) imageObservationAvailable(ctx context.Context, account string) bool {

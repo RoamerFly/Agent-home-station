@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
@@ -26,20 +27,23 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
-	home      *localHomeService
-	options   pluginruntime.Options
-	mu        sync.Mutex
-	update    sync.Mutex
-	host      *localProjectToolHost
-	closed    bool
-	active    map[string]int
-	rvc       localRVCBackend
-	comfy     localComfyBackend
-	yue       localYuEBackend
-	tts       localTTSBackend
-	obs       localOBSPreview
-	ttsCancel context.CancelFunc // protected by update
-	ttsJobID  string             // protected by update
+	home            *localHomeService
+	options         pluginruntime.Options
+	mu              sync.Mutex
+	update          sync.Mutex
+	host            *localProjectToolHost
+	closed          bool
+	active          map[string]int
+	rvc             localRVCBackend
+	comfy           localComfyBackend
+	yue             localYuEBackend
+	tts             localTTSBackend
+	obs             localOBSPreview
+	ttsCancel       context.CancelFunc           // protected by update
+	ttsJobID        string                       // protected by update
+	visionPost      pluginruntime.RouteTransport // host-only transport; tests use an offline substitute
+	visionUsage     *billing.Store
+	visionUsageFish string
 }
 
 type localProjectToolHost struct {
@@ -281,8 +285,10 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	view.Installed, view.Enabled, view.Revision = true, item.Enabled, item.Revision
 	if id == localasr.PluginID && item.Enabled {
 		if _, err := s.home.localStationASRVersion(ctx); err != nil {
-			view.RuntimeReady = false
-			view.Reason = "本机识别资源未就绪，请核对 ASR 登记、模型文件和授权。"
+			if _, visionErr := s.home.localStationVisionVersion(ctx); visionErr != nil {
+				view.RuntimeReady = false
+				view.Reason = "本机媒体资源未就绪，请核对语音识别资源或配置视觉服务。"
+			}
 		}
 	}
 	contract, err := catalog.ContractFor(id)
@@ -308,6 +314,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 }
 
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
+	s.visionConfigurationRoutes(owner, mux)
 	s.comfyDeploymentRoutes(owner, mux)
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.Read()
@@ -541,8 +548,11 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			if in.Action == "enable" {
 				if !current.Enabled {
 					if err = s.configureStationASR(ctx, host); err != nil {
-						websession.Fail(w, 409, "本地媒体识别尚未登记可用的主人专属 ASR 资源")
-						return
+						config, configErr := host.store.Configuration(ctx, localasr.PluginID)
+						if configErr != nil || !stationVisionConfigured(config) {
+							websession.Fail(w, 409, "媒体理解尚未配置视觉服务或可用的本机识别资源")
+							return
+						}
 					}
 				}
 				err = host.controller.EnableOnDemand(ctx, id, current.Revision)
