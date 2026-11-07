@@ -50,7 +50,7 @@
       tab.tabIndex = selected ? 0 : -1;
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
-    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); }
+    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") loadProjectTools();
     if (view === "chat" && state.home?.initialized && !document.hidden) void loadChat(true);
   }
@@ -60,6 +60,7 @@
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
+      douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -1845,17 +1846,69 @@
         if (record.id === "douyin" && id !== "account") {
           stopDouyinWebLoginPolling(apps);
           stopDouyinInteractionWork(apps);
+          stopDouyinLiveInspection(apps);
         }
         if (record.id === "douyin" && id === "account") void loadDouyinWebLogin(apps);
         renderAppDialog(record, listing); body.scrollTop = 0;
       }); return button;
     }));
     const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
-      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinPublicationRow(apps)] :
+      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
       record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
     $("#app-dialog-refresh").textContent = apps.loading ? "刷新中…" : "刷新";
+  }
+  function stopDouyinLiveInspection(current) {
+    const draft = current.douyinLiveClient;
+    draft.generation++; draft.controller?.abort(); draft.controller = null; draft.busy = false;
+  }
+  function douyinLiveClientRow(current) {
+    const draft = current.douyinLiveClient;
+    const form = appElement("form", "", "app-layer publication-layer douyin-live-client");
+    form.setAttribute("aria-label", "直播伴侣程序检查");
+    const detail = appElement("div", "", "publication-detail");
+    detail.append(appElement("strong", "直播伴侣"), appElement("p", "安装后选择主程序检查版本；不会打开程序或开始直播。"));
+    const field = appElement("label", "已安装程序的 EXE 路径", "settings-field");
+    const input = document.createElement("input");
+    input.type = "text"; input.value = draft.path; input.maxLength = 4096; input.autocomplete = "off";
+    input.placeholder = "填写已安装主程序的完整路径"; input.disabled = draft.busy;
+    input.setAttribute("aria-label", "直播伴侣主程序路径"); field.append(input);
+    const result = appElement("div", "", "publication-feedback"); result.setAttribute("aria-live", "polite");
+    if (draft.error) { result.classList.add("is-warn"); result.textContent = draft.error; }
+    else if (draft.result) {
+      const file = draft.result.file || {};
+      const identity = [file.product_name, file.version, file.architecture].filter(value => typeof value === "string" && value).join(" · ");
+      if (identity) result.append(appElement("p", identity));
+      result.append(appElement("p", draft.result.reason || "已检查文件，直播控制尚未验证。"));
+    }
+    const actions = appElement("div", "", "publication-actions");
+    const inspect = appElement("button", draft.busy ? "检查中…" : "检查程序", "button compact quiet");
+    inspect.type = "submit"; inspect.disabled = draft.busy || !draft.path.trim(); actions.append(inspect);
+    input.addEventListener("input", () => {
+      draft.path = input.value; draft.result = null; draft.error = ""; result.replaceChildren();
+      inspect.disabled = !draft.path.trim();
+    });
+    form.addEventListener("submit", async event => {
+      event.preventDefault(); if (draft.busy || !draft.path.trim()) return;
+      const generation = ++draft.generation;
+      const controller = new AbortController(); draft.controller = controller; draft.busy = true; draft.error = ""; draft.result = null;
+      renderApps();
+      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && current.detailTab === "account";
+      try {
+        const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify({ executable: draft.path }), signal: controller.signal });
+        if (!selected()) return;
+        if (!["inspected", "metadata_missing"].includes(value.state) || value.control_available !== false || !value.file || typeof value.reason !== "string") throw new Error("程序检查返回不完整，请重新检查。");
+        draft.result = value;
+      } catch (error) {
+        if (!selected()) return;
+        if (error.status === 401) { appSessionExpired([{ status: "rejected", reason: error }]); return; }
+        draft.error = error.message;
+      } finally {
+        if (generation === draft.generation) { draft.busy = false; draft.controller = null; if (selected()) renderApps(); }
+      }
+    });
+    detail.append(field, result); form.append(detail, actions); return form;
   }
   function appPersonaRow(record) {
     const current = apps, id = record.id, label = record.name || id;
@@ -3710,6 +3763,7 @@
     }
   }
   function showLogin() {
+    stopDouyinLiveInspection(apps);
     $("#tool-dialog").close();
     $("#app-dialog").close();
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll); state.chat = newChatView(); renderChat();
@@ -4009,7 +4063,7 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
