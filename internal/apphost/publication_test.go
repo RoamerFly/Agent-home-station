@@ -11,6 +11,43 @@ import (
 	"wechat-bot/internal/pluginhost"
 )
 
+func TestPublicationAccountsForReceiptAfterRequestDeadline(t *testing.T) {
+	for _, state := range []string{"unknown", "accepted", "published"} {
+		t.Run(state, func(t *testing.T) {
+			p, provider, store, target := newPublicationFixture(t)
+			actor := publicationActor("deadline-" + state)
+			view, err := p.Draft(t.Context(), actor, publicationDraft(target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			provider.submit = func(request PublicationRequest) PublicationReceipt {
+				cancel()
+				ref := request.Reference
+				if state != "unknown" {
+					ref.RemoteID = "remote-after-deadline"
+				}
+				return PublicationReceipt{Reference: ref, State: state}
+			}
+			result, err := p.Action(ctx, actor, view.JobID, "submit")
+			if err != nil {
+				t.Fatalf("valid late receipt misclassified: %#v %v", result, err)
+			}
+			job, err := store.Job(t.Context(), view.JobID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != "unknown" && job.RemoteID != "remote-after-deadline" {
+				t.Fatal("late receipt lost", job)
+			}
+			if provider.submits != 1 {
+				t.Fatal("submission repeated", provider.submits)
+			}
+		})
+	}
+}
+
 type publicationFixtureProvider struct {
 	mu      sync.Mutex
 	grant   PublicationGrant

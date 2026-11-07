@@ -162,7 +162,7 @@ func (s *cdpSession) readLoop() {
 	for {
 		frame, e := readCDPFrame(r)
 		if e != nil {
-			s.fail(errCDPClosed)
+			s.fail(fmt.Errorf("%w: %v", errCDPClosed, e))
 			return
 		}
 		var m struct {

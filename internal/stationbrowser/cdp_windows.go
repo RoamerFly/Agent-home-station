@@ -42,11 +42,15 @@ func openCDP(ctx context.Context, profile string) (*cdpSession, error) {
 // network egress is the per-session CONNECT proxy. It is intentionally not a
 // replacement for openCDP: callers must opt in with an explicit host policy.
 func openRestrictedCDP(ctx context.Context, profile string, allowHost func(string) bool) (*cdpSession, error) {
+	return openRestrictedCDPWithCapacity(ctx, profile, allowHost, playerProxyMaxClients)
+}
+
+func openRestrictedCDPWithCapacity(ctx context.Context, profile string, allowHost func(string) bool, capacity int) (*cdpSession, error) {
 	edge, profile, e := cdpLaunchInputs(ctx, profile)
 	if e != nil {
 		return nil, e
 	}
-	proxy, e := openPlayerProxy(ctx, allowHost)
+	proxy, e := openPlayerProxyWithCapacity(ctx, allowHost, capacity)
 	if e != nil {
 		return nil, e
 	}

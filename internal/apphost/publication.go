@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"wechat-bot/internal/pluginhost"
 )
@@ -336,7 +337,8 @@ func (p *Publisher) listActions(ctx context.Context, job pluginhost.Job, record 
 	// Only an interrupted upload or already merged upload can safely continue.
 	// Initialization, merge and post are durable uncertainty boundaries: they
 	// may be queried or cancelled, but must never be replayed from a list UI.
-	if state == "awaiting_receipt" && progress != nil && (progress.Stage == "uploading" || progress.Stage == "merged") && p.listExactGrant(ctx, job, record) {
+	douyinPrepared := record.Draft.Target.AppID == "douyin" && progress != nil && (progress.Stage == "opening_creator" || progress.Stage == "selecting_file" || progress.Stage == "editing" || progress.Stage == "verifying_form")
+	if state == "awaiting_receipt" && progress != nil && (progress.Stage == "uploading" || progress.Stage == "merged" || douyinPrepared) && p.listExactGrant(ctx, job, record) {
 		actions = append(actions, "resume")
 	}
 	return actions
@@ -437,7 +439,12 @@ func (p *Publisher) continueSubmission(ctx context.Context, claimed pluginhost.J
 		}
 		return viewFor(claimed, record), nil
 	}
-	settled, err := p.settle(ctx, claimed, record, receipt)
+	// Receipt accounting is local and may finish after the request deadline.
+	// Never label a valid provider result as a mismatched receipt solely because
+	// the page operation consumed its context. This does not start new work.
+	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer settleCancel()
+	settled, err := p.settle(settleCtx, claimed, record, receipt)
 	if err != nil {
 		return viewFor(claimed, record), ErrPublicationReceipt
 	}
@@ -784,6 +791,8 @@ func validPublicationProgress(progress *PublicationProgress) bool {
 	}
 	switch progress.Stage {
 	case "initializing", "uploading", "part_pending", "merging", "merged", "posting", "accepted", "rejected":
+		return true
+	case "opening_creator", "selecting_file", "editing", "verifying_form":
 		return true
 	default:
 		return false

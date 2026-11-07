@@ -35,6 +35,7 @@ type localDouyinPublicationCheckpoint struct {
 	Rejected       bool   `json:"rejected,omitempty"`
 	RejectionCode  int    `json:"rejection_code,omitempty"`
 	ErrorCode      string `json:"error_code,omitempty"`
+	BrowserStage   string `json:"browser_stage,omitempty"`
 }
 
 // localDouyinWebPublication deliberately reads the same saved profile record
@@ -118,6 +119,10 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 	result, err := stationbrowser.ContinueDouyinPublication(ctx, a.profile, stationbrowser.CreatorPublicationRequest{
 		TaskID: req.Reference.TaskID, ManifestSHA256: req.Reference.ManifestSHA256,
 		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, MediaPath: media,
+		Progress: func(progressCtx context.Context, stage string) error {
+			checkpoint.BrowserStage = stage
+			return req.SaveCheckpoint(progressCtx, mustLocalDouyinJSON(checkpoint))
+		},
 		BeforeSubmit: func(checkpointCtx context.Context) error {
 			if err := req.CheckActive(checkpointCtx); err != nil {
 				return err
@@ -226,8 +231,12 @@ func (p *localDouyinWebPublication) stage(ctx context.Context, access localDouyi
 	if name != artifact.Name || name == "." || name == "" || !localDouyinPublicationHex(req.Reference.TaskID) || !localDouyinPublicationHex(req.Reference.ManifestSHA256) {
 		return "", apphost.ErrPublicationInvalidDraft
 	}
-	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "publication-staging", access.record.FishID, req.Reference.TaskID, req.Reference.ManifestSHA256)
-	path := filepath.Join(dir, name)
+	// Chromium's native file picker cannot reliably open Windows paths beyond
+	// MAX_PATH, even though Go and FFmpeg can. Bind the same identity in a hash
+	// instead of nesting three 64-character IDs into the upload path.
+	key := sha256.Sum256([]byte(access.record.FishID + "\x00" + req.Reference.TaskID + "\x00" + req.Reference.ManifestSHA256))
+	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "publication-staging")
+	path := filepath.Join(dir, hex.EncodeToString(key[:])+strings.ToLower(filepath.Ext(name)))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", apphost.ErrPublicationUnavailable
 	}
@@ -326,6 +335,9 @@ func (p *localDouyinWebPublication) PublicationCheckpointProgress(raw json.RawMe
 		return nil, apphost.ErrPublicationConflict
 	}
 	stage := "uploading"
+	if checkpoint.BrowserStage != "" {
+		stage = checkpoint.BrowserStage
+	}
 	if checkpoint.Submitted {
 		stage = "posting"
 	}
@@ -352,6 +364,8 @@ func localDouyinCreatorErrorCode(err error) string {
 		return "creator_upload_incomplete"
 	case errors.Is(err, stationbrowser.ErrCreatorPublicationVisibility):
 		return "creator_visibility_unconfirmed"
+	case errors.Is(err, stationbrowser.ErrCreatorPublicationCaption):
+		return "creator_caption_unconfirmed"
 	case errors.Is(err, stationbrowser.ErrCreatorPublicationUnknown):
 		return "creator_result_unknown"
 	case errors.Is(err, stationbrowser.ErrBrowserUnavailable):

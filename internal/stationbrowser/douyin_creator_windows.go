@@ -71,6 +71,7 @@ func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPub
 			(in.Visibility != "public" && in.Visibility != "private" && in.Visibility != "friends") {
 			return result, ErrCreatorPublicationInput
 		}
+		in.MediaBytes = info.Size()
 	}
 	if err := authorize(); err != nil {
 		return result, err
@@ -88,7 +89,10 @@ func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPub
 	if fixture {
 		session, err = openCDP(ctx, profile)
 	} else {
-		session, err = openRestrictedCDP(ctx, profile, isDouyinCreatorHost)
+		// Creator pages load many independent bundles. Connections are counted
+		// at both ends of each CONNECT tunnel; the feed's 16-descriptor limit can
+		// otherwise starve essential React/uploader dependencies.
+		session, err = openRestrictedCDPWithCapacity(ctx, profile, isDouyinCreatorHost, 128)
 	}
 	if err != nil {
 		return result, ErrBrowserUnavailable
@@ -112,14 +116,23 @@ func isDouyinCreatorHost(host string) bool {
 	case "auth.zijieapi.com", "lf-c-flwb.bytetos.com", "lf-fe-creator.douyinstatic.com",
 		"lf-security.bytegoofy.com", "lf-ucenter-web.yhgfb-cn-static.com", "lf1-cdn-tos.bytegoofy.com",
 		"lf1-cdn-tos.bytescm.com", "lf3-beecdn.bytetos.com", "lf3-cdn-tos.bytescm.com",
-		"s3.bytecdn.cn", "s3a.bytecdn.cn", "unpkg.byted-static.com":
+		"s3.bytecdn.cn", "s3a.bytecdn.cn", "unpkg.byted-static.com",
+		"mssdk.bytedance.com", "abtestvm.bytedance.com", "creator.amemv.com", "sf3-cdn-tos.douyinstatic.com", "p26.douyinpic.com":
+		return true
+	case "vcs.zijieapi.com", "lf-rc1.yhgfb-cn-static.com", "lf-rc2.yhgfb-cn-static.com", "lf-cdn-tos.bytescm.com":
+		return true
+	case "vod.bytedanceapi.com", "open.bytedanceapi.com", "imagex.bytedanceapi.com", "security.zijieapi.com",
+		"sf1-cdn-tos.douyinstatic.com", "lf3-config.bytetcc.com", "p11.douyinpic.com", "p3.douyinpic.com":
 		return true
 	}
 	return false
 }
 
 type creatorPageState struct {
-	Invalid, Login, FileAvailable, EditorAvailable, Filled, VisibilityOK, Enabled, FileStillBound, Selected, Clicked, Listed, Published bool
+	Invalid, Login, FileAvailable, EditorAvailable, Filled, VisibilityOK, Enabled, FileStillBound, FileLost, Selected, Clicked, Listed, Published, UploadFailed bool
+	PreviewCount                                                                                                                                                int
+	PinMatches                                                                                                                                                  bool
+	PreviewState                                                                                                                                                string
 }
 
 func creatorPage(ctx context.Context, session readerSession, id string, world int64, target, action string, in CreatorPublicationRequest) (creatorPageState, error) {
@@ -127,8 +140,8 @@ func creatorPage(ctx context.Context, session readerSession, id string, world in
 	if err != nil {
 		return creatorPageState{}, ErrCreatorPublicationControls
 	}
-	input, _ := json.Marshal(map[string]string{"origin": origin.Scheme + "://" + origin.Host, "action": action,
-		"title": in.Title, "body": in.Body, "visibility": in.Visibility, "remoteID": in.RemoteID})
+	input, _ := json.Marshal(map[string]any{"origin": origin.Scheme + "://" + origin.Host, "action": action,
+		"title": in.Title, "body": in.Body, "visibility": in.Visibility, "remoteID": in.RemoteID, "mediaBytes": in.MediaBytes})
 	var out struct {
 		Result struct {
 			Type  string
@@ -143,11 +156,24 @@ func creatorPage(ctx context.Context, session readerSession, id string, world in
 	if out.Result.Value.Login {
 		return out.Result.Value, ErrDouyinWebLoginRequired
 	}
+	if out.Result.Value.UploadFailed {
+		return out.Result.Value, ErrCreatorPublicationUpload
+	}
 	return out.Result.Value, nil
 }
 
 func runDouyinCreatorSession(ctx context.Context, session readerSession, target string, in CreatorPublicationRequest, authorize func() error) (CreatorPublicationResult, error) {
 	result := CreatorPublicationResult{Stage: "opening_creator", Submitted: in.Submitted, RemoteID: in.RemoteID}
+	progress := func(stage string) error {
+		result.Stage = stage
+		if in.Progress != nil {
+			return in.Progress(ctx, stage)
+		}
+		return nil
+	}
+	if err := progress("opening_creator"); err != nil {
+		return result, err
+	}
 	var created struct{ TargetID string }
 	var attached struct{ SessionID string }
 	if session.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &created) != nil || created.TargetID == "" ||
@@ -155,11 +181,24 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 		return result, ErrCreatorPublicationControls
 	}
 	id := attached.SessionID
-	for _, method := range []string{"Page.enable", "Runtime.enable", "DOM.enable", "Network.enable", "Performance.enable"} {
+	for _, method := range []string{"Page.enable", "DOM.enable", "Performance.enable"} {
 		if err := session.Call(ctx, id, method, map[string]any{}, nil); err != nil {
 			return result, err
 		}
 	}
+	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": 512 << 10, "maxTotalBufferSize": 2 << 20}, nil); err != nil {
+		return result, err
+	}
+	// Activate only this invisible browser's target, so Chromium loads its
+	// upload preview rather than suspending media as a background tab.
+	if err := session.Call(ctx, id, "Page.bringToFront", map[string]any{}, nil); err != nil {
+		return result, err
+	}
+	// Drain network events from navigation onward. Waiting until submit can
+	// overflow the private CDP queue on a resource-heavy creator page.
+	listener := newCreatorReceiptListener(target, id)
+	listener.start(ctx, session)
+	defer listener.stop()
 	if err := session.Call(ctx, id, "Network.setBypassServiceWorker", map[string]any{"bypass": true}, nil); err != nil {
 		return result, err
 	}
@@ -236,8 +275,14 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	if len(videoNodes) != 1 {
 		return result, ErrCreatorPublicationControls
 	}
+	if err := progress("selecting_file"); err != nil {
+		return result, err
+	}
 	if err := authorize(); err != nil {
 		return result, err
+	}
+	if bound, err := creatorPage(ctx, session, id, world, target, "bind-input", in); err != nil || !bound.Selected {
+		return result, ErrCreatorPublicationUpload
 	}
 	if err := session.Call(ctx, id, "DOM.setFileInputFiles", map[string]any{"nodeId": videoNodes[0], "files": []string{in.MediaPath}}, nil); err != nil {
 		return result, ErrCreatorPublicationUpload
@@ -245,13 +290,32 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	if pin, err := creatorPage(ctx, session, id, world, target, "pin-file", in); err != nil || !pin.Selected {
 		return result, ErrCreatorPublicationUpload
 	}
+	if err := progress("uploading"); err != nil {
+		return result, err
+	}
 	if _, err := waitCreatorState(ctx, session, id, world, target, "snapshot", in, authorize, func(s creatorPageState) bool { return s.EditorAvailable }); err != nil {
+		return result, err
+	}
+	if err := progress("editing"); err != nil {
 		return result, err
 	}
 	if _, err := creatorPage(ctx, session, id, world, target, "fill", in); err != nil {
 		return result, err
 	}
-	if _, err := waitCreatorState(ctx, session, id, world, target, "snapshot", in, authorize, func(s creatorPageState) bool { return s.Filled && s.VisibilityOK && s.Enabled && s.FileStillBound }); err != nil {
+	if err := progress("verifying_form"); err != nil {
+		return result, err
+	}
+	if state, err := waitCreatorState(ctx, session, id, world, target, "snapshot", in, authorize, func(s creatorPageState) bool { return s.Filled && s.VisibilityOK && s.Enabled && s.FileStillBound }); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			switch {
+			case !state.Filled:
+				return result, errors.Join(ErrCreatorPublicationCaption, err)
+			case !state.VisibilityOK:
+				return result, errors.Join(ErrCreatorPublicationVisibility, err)
+			case !state.FileStillBound:
+				return result, errors.Join(ErrCreatorPublicationUpload, err)
+			}
+		}
 		return result, err
 	}
 	if err := authorize(); err != nil {
@@ -284,10 +348,7 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	if err := authorize(); err != nil {
 		return result, err
 	}
-	listener := newCreatorReceiptListener(target, id)
-	listener.submitAfter = submitAfter
-	listener.start(ctx, session)
-	defer listener.stop()
+	listener.arm(submitAfter)
 	if state, err := creatorPage(ctx, session, id, world, target, "submit", in); err != nil || !state.Clicked {
 		return result, ErrCreatorPublicationUnknown
 	}
@@ -316,14 +377,14 @@ func waitCreatorState(ctx context.Context, session readerSession, id string, wor
 		if err != nil {
 			return state, err
 		}
-		if action == "snapshot" && state.Filled && !state.FileStillBound {
+		if action == "snapshot" && state.FileLost {
 			return state, ErrCreatorPublicationUpload
 		}
 		if ready(state) {
 			return state, nil
 		}
 		if err := creatorWait(ctx); err != nil {
-			return state, err
+			return state, fmt.Errorf("%w (creator_ready: editor=%t filled=%t visibility=%t enabled=%t bound=%t preview=%d match=%t native=%s)", err, state.EditorAvailable, state.Filled, state.VisibilityOK, state.Enabled, state.FileStillBound, state.PreviewCount, state.PinMatches, state.PreviewState)
 		}
 	}
 }
@@ -363,6 +424,16 @@ func (l *creatorReceiptListener) rejection() (int, bool) {
 	defer l.mu.Unlock()
 	return l.rejectionCode, l.rejected
 }
+func (l *creatorReceiptListener) arm(timestamp float64) {
+	l.mu.Lock()
+	l.submitAfter = timestamp
+	l.mu.Unlock()
+}
+func (l *creatorReceiptListener) afterSubmission(timestamp float64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.submitAfter > 0 && timestamp > l.submitAfter
+}
 func (l *creatorReceiptListener) stop() { l.cancel(); <-l.done }
 func (l *creatorReceiptListener) endpoint(raw string) bool {
 	u, err := url.Parse(raw)
@@ -396,7 +467,7 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					if json.Unmarshal(event.Params, &p) == nil {
 						delete(requests, p.RequestID)
 						delete(accepted, p.RequestID)
-						if p.Timestamp > l.submitAfter && p.Request.Method == "POST" && l.endpoint(p.Request.URL) {
+						if l.afterSubmission(p.Timestamp) && p.Request.Method == "POST" && l.endpoint(p.Request.URL) {
 							requests[p.RequestID] = true
 						}
 					}

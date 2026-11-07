@@ -10,6 +10,35 @@ import (
 	"time"
 )
 
+func TestPlayerProxyCreatorCapacityDoesNotChangeDefault(t *testing.T) {
+	for _, capacity := range []int{playerProxyMaxClients, 128} {
+		p, err := openPlayerProxyWithCapacity(t.Context(), func(string) bool { return false }, capacity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		connections := make([]net.Conn, 0, capacity)
+		for i := 0; i < capacity; i++ {
+			left, right := net.Pipe()
+			right.Close()
+			if !p.track(left) {
+				t.Fatalf("capacity %d rejected descriptor %d", capacity, i)
+			}
+			connections = append(connections, left)
+		}
+		left, right := net.Pipe()
+		right.Close()
+		if p.track(left) {
+			t.Fatal("capacity not bounded")
+		}
+		left.Close()
+		for _, c := range connections {
+			p.untrack(c)
+			c.Close()
+		}
+		p.Close()
+	}
+}
+
 func TestPlayerProxyRejectsNonConnectAndUnapprovedHost(t *testing.T) {
 	p := newPlayerProxyForTest(t, func(host string) bool { return host == "allowed.example" })
 	var resolves atomic.Int32

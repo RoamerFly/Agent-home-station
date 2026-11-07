@@ -100,6 +100,9 @@ func TestLocalDouyinPublicationStageAndPreSubmitRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(path) > 240 || strings.Contains(path, reference.TaskID+string(os.PathSeparator)+reference.ManifestSHA256) {
+		t.Fatal("upload staging nests IDs beyond native file-picker range", len(path))
+	}
 	if content, err := os.ReadFile(path); err != nil || string(content) != data {
 		t.Fatal("staging did not preserve exact artifact", err)
 	}

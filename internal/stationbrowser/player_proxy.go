@@ -33,15 +33,23 @@ type playerProxy struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 
-	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
-	once  sync.Once
+	mu             sync.Mutex
+	conns          map[net.Conn]struct{}
+	maxConnections int
+	wg             sync.WaitGroup
+	once           sync.Once
 }
 
 func openPlayerProxy(ctx context.Context, allowHost func(string) bool) (*playerProxy, error) {
+	return openPlayerProxyWithCapacity(ctx, allowHost, playerProxyMaxClients)
+}
+
+func openPlayerProxyWithCapacity(ctx context.Context, allowHost func(string) bool, capacity int) (*playerProxy, error) {
 	if ctx == nil || allowHost == nil {
 		return nil, fmt.Errorf("%w: player proxy requires context and allowlist", errCDPProtocol)
+	}
+	if capacity < 2 || capacity > 256 {
+		return nil, errCDPProtocol
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -52,7 +60,7 @@ func openPlayerProxy(ctx context.Context, allowHost func(string) bool) (*playerP
 		listener: listener, allowHost: allowHost,
 		resolver: net.DefaultResolver.LookupIPAddr,
 		dial:     (&net.Dialer{Timeout: playerProxyTimeout, KeepAlive: -1}).DialContext,
-		ctx:      proxyCtx, cancel: cancel, conns: map[net.Conn]struct{}{},
+		ctx:      proxyCtx, cancel: cancel, conns: map[net.Conn]struct{}{}, maxConnections: capacity,
 	}
 	p.wg.Add(1)
 	go p.acceptLoop()
@@ -89,7 +97,7 @@ func (p *playerProxy) acceptLoop() {
 func (p *playerProxy) track(conn net.Conn) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.conns) >= playerProxyMaxClients || p.ctx.Err() != nil {
+	if len(p.conns) >= p.maxConnections || p.ctx.Err() != nil {
 		return false
 	}
 	p.conns[conn] = struct{}{}

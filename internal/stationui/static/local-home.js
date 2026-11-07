@@ -1911,6 +1911,10 @@
     awaiting_receipt: ["待核对", "查询原任务以查看最新状态。"],
   };
   const publicationStages = {
+	opening_creator: ["正在打开创作者中心", "正在准备账号页面。"],
+	selecting_file: ["正在选择成品", "正在将已核对的成品交给上传页面。"],
+	editing: ["正在填写作品信息", "正在填写标题、简介和可见范围。"],
+	verifying_form: ["正在核对发布设置", "等待视频预览和指定可见范围准备完成。"],
     initializing: ["等待上传凭证", "等待确认原上传是否已初始化。"],
     uploading: ["分片上传", "已确认的分片会保留。"],
     merging: ["等待合并回执", "全部分片已确认，合并结果待核对。"],
@@ -1928,6 +1932,7 @@
 	  creator_controls_unavailable: "创作者页面未准备好，或网页控件发生变化；尚未确认提交。",
 	  creator_upload_incomplete: "视频上传尚未完成，或页面已清除所选文件。",
 	  creator_visibility_unconfirmed: "网页未确认作品可见范围，未继续发布。",
+	  creator_caption_unconfirmed: "网页未确认填写的标题或简介，未继续发布。",
 	  creator_result_unknown: "提交结果尚未确认，只查询原任务，避免重复发布。",
 	  creator_browser_unavailable: "专属浏览器暂不可用，原任务已保留。",
 	  creator_timeout: "创作者页面处理超时，原任务和已完成进度保留。",

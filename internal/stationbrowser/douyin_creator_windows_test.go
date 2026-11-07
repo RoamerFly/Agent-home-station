@@ -3,11 +3,13 @@
 package stationbrowser
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -72,6 +74,25 @@ document.querySelector('button').onclick=()=>{
 			if r.URL.Query().Get("clear") == "1" {
 				fmt.Fprint(w, `<script>document.querySelector('[placeholder="标题"]').addEventListener('input',()=>video.value='')</script>`)
 			}
+			if r.URL.Query().Get("spa") == "1" {
+				fmt.Fprint(w, `<script>
+const originalUpload=video;
+const editor=document.createElement('div');editor.contentEditable='true';editor.dataset.placeholder='添加作品简介';editor.style.minHeight='30px';document.querySelector('textarea').replaceWith(editor);
+editor.addEventListener('input',()=>{editor.removeAttribute('data-placeholder');if(!editor.textContent.endsWith('\u200b'))editor.append(document.createTextNode('\u200b'))});
+for(const label of document.querySelectorAll('label')){label.dataset.checked='false';label.querySelector('input').type='checkbox';label.onclick=()=>{for(const other of document.querySelectorAll('label')){other.dataset.checked=String(other===label);other.querySelector('input').checked=other===label;}}}
+originalUpload.onchange=()=>setTimeout(()=>{const preview=document.createElement('video');preview.src='/clip.webm';preview.muted=true;preview.autoplay=true;preview.style.width='240px';document.body.append(preview);originalUpload.remove();document.querySelector('button').disabled=false;},150);
+document.querySelector('button').onclick=()=>{if(editor.innerText.replace(/\u200b/g,'')==='测试内容'&&document.querySelector('label[data-checked=true] input')?.value==='private'&&originalUpload.files[0]?.name==='playback.webm')fetch('/web/api/media/aweme/create/',{method:'POST'})};
+</script>`)
+			}
+		case "/clip.webm":
+			data, err := os.ReadFile(filepath.Join("testdata", "playback.webm"))
+			if err != nil {
+				t.Error(err)
+				http.Error(w, "missing fixture", 500)
+				return
+			}
+			w.Header().Set("Content-Type", "video/webm")
+			http.ServeContent(w, r, "clip.webm", time.Time{}, bytes.NewReader(data))
 		case "/creator-micro/content/manage":
 			fmt.Fprint(w, `<article data-e2e="work-item"><a href="https://www.douyin.com/video/7391234567890123456">合成标题</a> 审核中 </article><p>另一条已发布</p>`)
 		case "/web/api/media/aweme/create/":
@@ -93,6 +114,21 @@ document.querySelector('button').onclick=()=>{
 	}))
 	t.Cleanup(s.Close)
 	return s, posts, uploads
+}
+
+func TestLocalCreatorSPAUploadTransitionAndRichText(t *testing.T) {
+	if !Available() {
+		t.Skip("Edge unavailable")
+	}
+	s, posts, _ := creatorFixture(t, false, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	in := creatorRequest(t)
+	in.BeforeSubmit = func(context.Context) error { return nil }
+	result, err := runDouyinCreator(ctx, filepath.Join(t.TempDir(), "profile"), s.URL+"/creator-micro/content/upload?spa=1", in, func() error { return nil }, true)
+	if err != nil || result.Stage != "accepted" || posts.Load() != 1 {
+		t.Fatalf("SPA transition %#v %v posts=%d", result, err, posts.Load())
+	}
 }
 
 func creatorRequest(t *testing.T) CreatorPublicationRequest {
