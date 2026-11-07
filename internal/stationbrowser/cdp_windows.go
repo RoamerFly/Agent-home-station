@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unsafe"
 
@@ -34,7 +35,7 @@ func openCDP(ctx context.Context, profile string) (*cdpSession, error) {
 	if e != nil {
 		return nil, e
 	}
-	return startEdgePipe(ctx, edge, profile, "", nil)
+	return startEdgePipe(ctx, edge, profile, "", nil, edgeLaunchOptions{})
 }
 
 // openRestrictedCDP starts a separate, ephemeral Edge profile whose only
@@ -49,7 +50,7 @@ func openRestrictedCDP(ctx context.Context, profile string, allowHost func(strin
 	if e != nil {
 		return nil, e
 	}
-	session, e := startEdgePipe(ctx, edge, profile, proxy.address(), proxy.Close)
+	session, e := startEdgePipe(ctx, edge, profile, proxy.address(), proxy.Close, edgeLaunchOptions{})
 	if e != nil {
 		_ = proxy.Close()
 		return nil, e
@@ -79,7 +80,16 @@ func cdpLaunchInputs(ctx context.Context, profile string) (string, string, error
 	_ = r.Close()
 	return edge, profile, nil
 }
-func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onClose func() error) (*cdpSession, error) {
+
+// edgeLaunchOptions remains private: ordinary readers retain the invisible
+// defaults while the dedicated login entry point can ask for one app window.
+type edgeLaunchOptions struct {
+	visible   bool
+	appWindow bool
+	onProcess func(windows.Handle) error
+}
+
+func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onClose func() error, options edgeLaunchOptions) (*cdpSession, error) {
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), InheritHandle: 1}
 	var browserRead, hostWrite, hostRead, browserWrite windows.Handle
 	if e := windows.CreatePipe(&browserRead, &hostWrite, sa, 0); e != nil {
@@ -131,7 +141,15 @@ func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onCl
 		_ = windows.CloseHandle(hostRead)
 		return nil, e
 	}
-	args := []string{edge, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--remote-debugging-pipe", fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", browserRead, browserWrite), "--user-data-dir=" + profile}
+	args := []string{edge, "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--remote-debugging-pipe", fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", browserRead, browserWrite), "--user-data-dir=" + profile}
+	if !options.visible {
+		args = append(args, "--headless=new")
+	}
+	if options.appWindow {
+		// App mode hides the normal omnibox.  The initial page stays blank until
+		// download policy is installed by the login entry point.
+		args = append(args, "--app=about:blank")
+	}
 	if proxyAddress != "" {
 		args = append(args,
 			"--proxy-server=http://"+proxyAddress,
@@ -160,7 +178,11 @@ func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onCl
 	}
 	si := windows.StartupInfoEx{StartupInfo: windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESTDHANDLES, StdInput: nul, StdOutput: nul, StdErr: nul}, ProcThreadAttributeList: attributes.List()}
 	var pi windows.ProcessInformation
-	if e = windows.CreateProcess(app, cmd, nil, nil, true, windows.CREATE_SUSPENDED|windows.CREATE_NO_WINDOW|windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT, &env[0], cwd, &si.StartupInfo, &pi); e != nil {
+	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
+	if !options.visible {
+		flags |= windows.CREATE_NO_WINDOW
+	}
+	if e = windows.CreateProcess(app, cmd, nil, nil, true, flags, &env[0], cwd, &si.StartupInfo, &pi); e != nil {
 		return nil, closeStart(job, hostWrite, hostRead, e)
 	}
 	defer windows.CloseHandle(pi.Thread)
@@ -168,6 +190,13 @@ func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onCl
 		_ = windows.TerminateProcess(pi.Process, 1)
 		_ = windows.CloseHandle(pi.Process)
 		return nil, closeStart(job, hostWrite, hostRead, e)
+	}
+	if options.onProcess != nil {
+		if e = options.onProcess(pi.Process); e != nil {
+			_ = windows.TerminateJobObject(job, 1)
+			_ = windows.CloseHandle(pi.Process)
+			return nil, closeStart(job, hostWrite, hostRead, e)
+		}
 	}
 	if _, e = windows.ResumeThread(pi.Thread); e != nil {
 		_ = windows.TerminateJobObject(job, 1)
@@ -181,15 +210,36 @@ func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onCl
 	}
 	in := os.NewFile(uintptr(hostWrite), "edge-cdp-in")
 	out := os.NewFile(uintptr(hostRead), "edge-cdp-out")
+	var cleanupOnce sync.Once
+	cleanup := func(force bool) (closeErr error) {
+		cleanupOnce.Do(func() {
+			if onClose != nil {
+				_ = onClose()
+			}
+			if force {
+				_ = windows.TerminateJobObject(job, 1)
+			}
+			_, _ = windows.WaitForSingleObject(pi.Process, 2000)
+			_ = windows.CloseHandle(pi.Process)
+			closeErr = windows.CloseHandle(job)
+		})
+		return closeErr
+	}
 	session := newCDPSession(in, out, func() error {
-		if onClose != nil {
-			_ = onClose()
-		}
-		_ = windows.TerminateJobObject(job, 1)
-		_, _ = windows.WaitForSingleObject(pi.Process, 2000)
-		_ = windows.CloseHandle(pi.Process)
-		return windows.CloseHandle(job)
+		return cleanup(true)
 	})
+	session.platformForceClose = func() error { return cleanup(true) }
+	session.platformGracefulClose = func() error {
+		// Interactive login windows may be closed by the user rather than by a
+		// CDP Browser.close. Give Edge a bounded chance to finish its profile
+		// write before killing the Job; ordinary reader sessions never take this
+		// branch.
+		if result, _ := windows.WaitForSingleObject(pi.Process, 1000); result == windows.WAIT_OBJECT_0 {
+			session.gracefulExited.Store(true)
+			return cleanup(false)
+		}
+		return cleanup(true)
+	}
 	session.start(ctx)
 	return session, nil
 }

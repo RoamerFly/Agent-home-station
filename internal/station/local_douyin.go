@@ -20,6 +20,7 @@ func (h *localHomeService) douyinRoutes(s *websession.Store, mux *http.ServeMux,
 	if !ok || !supported {
 		return
 	}
+	h.douyinWebLoginRoutes(s, mux, serviceContext)
 	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		record, err := h.identity.Read()

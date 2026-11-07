@@ -40,26 +40,50 @@ type cdpReply struct {
 type cdpSession struct {
 	in, out       *os.File
 	platformClose func() error
-	writeMu       sync.Mutex
-	mu            sync.Mutex
-	pending       map[uint64]chan cdpReply
-	err           error
-	events        chan cdpEvent
-	done          chan struct{}
-	closed        sync.Once
-	stopContext   func() bool
-	next          atomic.Uint64
+	// platformGracefulClose only releases handles after a browser requested to
+	// exit normally. It must never terminate the Job tree.
+	platformGracefulClose func() error
+	platformForceClose    func() error
+	gracefulClose         atomic.Bool
+	// normalEOFGrace is only enabled by the interactive login window. It gives
+	// a user closing that window a short opportunity to flush profile state;
+	// headless readers keep the immediate-kill behavior.
+	normalEOFGrace atomic.Bool
+	contextClosing atomic.Bool
+	gracefulExited atomic.Bool
+	writeMu        sync.Mutex
+	mu             sync.Mutex
+	pending        map[uint64]chan cdpReply
+	err            error
+	events         chan cdpEvent
+	done           chan struct{}
+	teardownDone   chan struct{}
+	closed         sync.Once
+	stopContext    func() bool
+	next           atomic.Uint64
 }
 
 func newCDPSession(in, out *os.File, closePlatform func() error) *cdpSession {
-	return &cdpSession{in: in, out: out, platformClose: closePlatform, pending: map[uint64]chan cdpReply{}, events: make(chan cdpEvent, 512), done: make(chan struct{})}
+	return &cdpSession{in: in, out: out, platformClose: closePlatform, pending: map[uint64]chan cdpReply{}, events: make(chan cdpEvent, 512), done: make(chan struct{}), teardownDone: make(chan struct{})}
 }
 
 func (s *cdpSession) start(ctx context.Context) {
 	s.mu.Lock()
-	s.stopContext = context.AfterFunc(ctx, func() { _ = s.Close() })
+	s.stopContext = context.AfterFunc(ctx, func() { s.contextClosing.Store(true); _ = s.Close() })
 	s.mu.Unlock()
 	go s.readLoop()
+}
+
+func (s *cdpSession) requestGracefulClose() {
+	if s != nil {
+		s.gracefulClose.Store(true)
+	}
+}
+
+func (s *cdpSession) forceTerminate() {
+	if s != nil && s.platformForceClose != nil {
+		_ = s.platformForceClose()
+	}
 }
 func (s *cdpSession) Events() <-chan cdpEvent { return s.events }
 func (s *cdpSession) Call(ctx context.Context, sessionID, method string, params any, result any) error {
@@ -193,6 +217,7 @@ func readCDPFrame(r *bufio.Reader) ([]byte, error) {
 }
 func (s *cdpSession) fail(e error) {
 	s.closed.Do(func() {
+		defer close(s.teardownDone)
 		s.mu.Lock()
 		s.err = e
 		p := s.pending
@@ -211,7 +236,9 @@ func (s *cdpSession) fail(e error) {
 		}
 		// Kill the owned process tree before closing the pipe endpoints. A blocked
 		// synchronous Read/Write then unblocks without allowing a renderer to live.
-		if s.platformClose != nil {
+		if !s.contextClosing.Load() && (s.gracefulClose.Load() || s.normalEOFGrace.Load()) && s.platformGracefulClose != nil {
+			_ = s.platformGracefulClose()
+		} else if s.platformClose != nil {
 			_ = s.platformClose()
 		}
 		_ = s.in.Close()

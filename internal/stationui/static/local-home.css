@@ -224,6 +224,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-layer strong { font-size: .9rem; overflow-wrap: anywhere; }
 .app-layer .button { align-self: center; }
 .publication-detail { min-width: 0; }
+.douyin-web-login { background: color-mix(in srgb, var(--accent-soft) 32%, var(--surface-solid)); }
+.douyin-web-login-actions { margin-top: 9px; }
 .publication-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .publication-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .publication-task-detail { min-width: 0; }

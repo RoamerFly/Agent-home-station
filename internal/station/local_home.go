@@ -41,6 +41,7 @@ type localHomeService struct {
 	artifacts     *localArtifactStore
 	projectTools  *localProjectTools
 	windows       *agenthost.WindowsConfig
+	douyinWeb     *localDouyinWebLogin
 }
 
 // NewLocalHomeHandler provides the first application-independent station

@@ -49,11 +49,12 @@
       tab.tabIndex = selected ? 0 : -1;
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
-    else window.clearTimeout(apps.loginTimer);
+    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); }
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
+      douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -2145,6 +2146,145 @@
     if (canSetup && connection !== null) row.append(appSetupButton("添加账号", () => runAppSetup()));
     return row;
   }
+  function validDouyinWebLogin(value) {
+    return value && Number.isFinite(Number(value.revision)) &&
+      ["unconfigured", "unconfirmed", "saved", "login_open"].includes(value.state) &&
+      typeof value.active === "boolean" && typeof value.available === "boolean" &&
+      (typeof value.attempt_id === "undefined" || typeof value.attempt_id === "string") &&
+      (typeof value.confirmed_at === "undefined" || typeof value.confirmed_at === "string") &&
+      (typeof value.reason === "undefined" || typeof value.reason === "string");
+  }
+  function stopDouyinWebLoginPolling(current = apps) {
+    const web = current?.douyinWebLogin;
+    if (!web) return;
+    window.clearTimeout(web.poll);
+    web.poll = 0;
+    web.generation += 1;
+    web.loading = false;
+    web.applying = "";
+  }
+  function shouldPollDouyinWebLogin(current, value) {
+    return current === apps && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" &&
+      current.detailTab === "account" && value?.active === true;
+  }
+  function scheduleDouyinWebLoginPoll(current) {
+    const web = current?.douyinWebLogin;
+    if (!web || !shouldPollDouyinWebLogin(current, web.value) || web.poll) return;
+    const generation = web.generation;
+    web.poll = window.setTimeout(() => {
+      web.poll = 0;
+      if (current === apps && web.generation === generation) void loadDouyinWebLogin(current);
+    }, 1800);
+  }
+  async function loadDouyinWebLogin(current = apps) {
+    const web = current?.douyinWebLogin;
+    if (!web || current !== apps || web.loading || web.applying) return;
+    const generation = web.generation;
+    web.loading = true;
+    try {
+      const value = await request("/api/local/apps/douyin/web-login");
+      if (current !== apps || web.generation !== generation) return;
+      if (!validDouyinWebLogin(value)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
+      web.value = value;
+      web.loaded = true;
+      web.error = "";
+    } catch (error) {
+      if (current !== apps || web.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      web.error = error.message || "网页登录状态暂不可读。";
+      web.loaded = true;
+    } finally {
+      if (current === apps && web.generation === generation) {
+        web.loading = false;
+        if (shouldPollDouyinWebLogin(current, web.value)) scheduleDouyinWebLoginPoll(current);
+        renderApps();
+      }
+    }
+  }
+  function douyinWebLoginSummary(value) {
+    const states = {
+      unconfigured: ["尚未保存网页登录资料", "在独立网页窗口完成普通账号登录后，再回到这里保存。"],
+      login_open: ["网页登录窗口已打开", "请在新窗口完成登录；保存前不会把它当作已登录。"],
+      unconfirmed: ["网页登录资料待核对", "资料已保留，重新打开窗口核对登录后再保存。"],
+      saved: ["网页登录资料已保存", "登录有效性以网页为准，不代表已取得开放平台接口权限。"],
+    };
+    if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
+    return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
+  }
+  async function updateDouyinWebLogin(current, action) {
+    const web = current?.douyinWebLogin, value = web?.value;
+    if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
+    if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
+    const generation = ++web.generation;
+    window.clearTimeout(web.poll); web.poll = 0;
+    web.applying = action; web.error = "";
+    renderApps();
+    const body = { action, revision: value.revision };
+    if (action === "begin" || action === "clear") body.approve_profile = true;
+    if (action === "confirm" || action === "cancel") body.attempt_id = value.attempt_id;
+    try {
+      const updated = await request("/api/local/apps/douyin/web-login", { method: "POST", body: JSON.stringify(body) });
+      if (current !== apps || web.generation !== generation) return;
+      if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
+      web.value = updated;
+      web.loaded = true;
+      appFeedback(action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : "已打开网页登录窗口。");
+    } catch (error) {
+      if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
+        web.error = error.message || "网页登录操作未完成。";
+        appFeedback(web.error, true);
+      }
+    } finally {
+      if (current === apps && web.generation === generation) {
+        web.applying = "";
+        if (shouldPollDouyinWebLogin(current, web.value)) scheduleDouyinWebLoginPoll(current);
+        renderApps();
+      }
+    }
+  }
+  function douyinWebLoginRow(current) {
+    if (!current.registered?.some((item) => item.id === "douyin")) return null;
+    const web = current.douyinWebLogin, value = web.value;
+    const [title, note] = douyinWebLoginSummary(value);
+    const row = appElement("section", "", "app-layer publication-layer douyin-web-login");
+    const detail = appElement("div", "", "publication-detail");
+    detail.append(appElement("strong", title), appElement("p", note));
+    if (value?.confirmed_at) {
+      const confirmed = new Date(value.confirmed_at);
+      if (Number.isFinite(confirmed.getTime())) detail.append(appElement("p", `最近主人确认：${confirmed.toLocaleString()}`, "publication-reference"));
+    }
+    if (value?.reason) detail.append(appElement("p", value.reason, "publication-authorization-note"));
+    if (web.error) detail.append(appElement("p", web.error, "publication-feedback is-warn"));
+    const actions = appElement("div", "", "publication-actions douyin-web-login-actions");
+    const busy = Boolean(web.loading || web.applying);
+    const available = value?.available !== false;
+    if (!web.loaded && !web.loading) {
+      const retry = appElement("button", "读取网页登录状态", "button compact quiet");
+      retry.type = "button"; retry.addEventListener("click", () => { void loadDouyinWebLogin(current); }); actions.append(retry);
+    } else if (value) {
+      if (!value.attempt_id || value.state === "saved") {
+        const begin = appElement("button", web.applying === "begin" ? "正在打开…" : value.state === "saved" ? "重新打开登录窗口" : "打开网页登录窗口", "button compact secondary");
+        begin.type = "button"; begin.disabled = busy || !available;
+        begin.addEventListener("click", () => { void updateDouyinWebLogin(current, "begin"); }); actions.append(begin);
+      }
+      if (value.attempt_id) {
+        const confirm = appElement("button", web.applying === "confirm" ? "正在保存…" : "我已完成登录，保存", "button compact primary");
+        confirm.type = "button"; confirm.disabled = busy;
+        confirm.addEventListener("click", () => { void updateDouyinWebLogin(current, "confirm"); });
+        const cancel = appElement("button", web.applying === "cancel" ? "正在取消…" : "取消本次登录", "button compact quiet");
+        cancel.type = "button"; cancel.disabled = busy;
+        cancel.addEventListener("click", () => { void updateDouyinWebLogin(current, "cancel"); });
+        actions.append(confirm, cancel);
+      }
+      if (["saved", "unconfirmed"].includes(value.state)) {
+        const clear = appElement("button", web.applying === "clear" ? "正在移除…" : "移除网页登录资料", "button compact quiet");
+        clear.type = "button"; clear.disabled = busy;
+        clear.addEventListener("click", () => { void updateDouyinWebLogin(current, "clear"); }); actions.append(clear);
+      }
+    }
+    if (actions.childElementCount) detail.append(actions);
+    row.append(appElement("h5", "网页登录"), detail);
+    return row;
+  }
   function validDouyinAuthorization(value) {
     return value && typeof value.revision === "string" && typeof value.configured === "boolean" &&
       ["unconfigured", "ready", "expired"].includes(value.status) && typeof value.label === "string" &&
@@ -2580,7 +2720,10 @@
       const foot = appElement("div", "", "app-card-footer");
       foot.append(appElement("span", source?.install_state === "installed" ? "本地源码就绪" : source?.source_available ? "源码可安装" : "未提供源码"), appElement("span", "管理应用"));
       open.append(head, summary, foot); card.append(open);
-      open.addEventListener("click", () => { apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal(); });
+      open.addEventListener("click", () => {
+        apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal();
+        if (record.id === "douyin") void loadDouyinWebLogin(apps);
+      });
       return card;
     }));
     if ($("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
@@ -2593,10 +2736,15 @@
     nav.replaceChildren(...[["account", "账号与使用"], ["persona", "应用子角色"], ["source", "源码管理"]].map(([id, title]) => {
       const button = appElement("button", title, `local-tab${apps.detailTab === id ? " is-active" : ""}`);
       button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
-      button.addEventListener("click", () => { apps.detailTab = id; renderAppDialog(record, listing); body.scrollTop = 0; }); return button;
+      button.addEventListener("click", () => {
+        apps.detailTab = id;
+        if (record.id === "douyin" && id !== "account") stopDouyinWebLoginPolling(apps);
+        if (record.id === "douyin" && id === "account") void loadDouyinWebLogin(apps);
+        renderAppDialog(record, listing); body.scrollTop = 0;
+      }); return button;
     }));
     const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
-      record.id === "douyin" ? [douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
+      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
       record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
@@ -4025,6 +4173,7 @@
     $("#app-dialog").close();
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
     window.clearTimeout(apps.loginTimer);
+    stopDouyinWebLoginPolling(apps);
     clearOBSPreview();
     apps = newAppView();
     projectTools = newProjectToolsView();
@@ -4299,7 +4448,7 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

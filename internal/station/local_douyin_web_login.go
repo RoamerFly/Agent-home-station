@@ -1,0 +1,324 @@
+package station
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/stationbrowser"
+	"wechat-bot/internal/websession"
+	"wechat-bot/internal/workspacefs"
+)
+
+// Web login is an owner-confirmed browser profile, not an OAuth grant or a
+// claim that the platform has verified an account. Never expose its contents
+// to capability discovery, the editable fish home or model input.
+type localDouyinWebView struct {
+	Revision    uint64 `json:"revision"`
+	State       string `json:"state"`
+	Active      bool   `json:"active"`
+	AttemptID   string `json:"attempt_id,omitempty"`
+	ConfirmedAt string `json:"confirmed_at,omitempty"`
+	Available   bool   `json:"available"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type localDouyinWebInput struct {
+	Action         string `json:"action"`
+	Revision       uint64 `json:"revision"`
+	AttemptID      string `json:"attempt_id,omitempty"`
+	ApproveProfile bool   `json:"approve_profile"`
+}
+
+type localDouyinWebRecord struct {
+	Version     int    `json:"schema_version"`
+	FishID      string `json:"fish_id"`
+	Revision    uint64 `json:"revision"`
+	Profile     string `json:"profile,omitempty"`
+	ConfirmedAt string `json:"confirmed_at,omitempty"`
+}
+
+type localDouyinLoginWindow interface {
+	Active() bool
+	Close(context.Context) error
+}
+
+type localDouyinWebLogin struct {
+	mu            sync.Mutex
+	home          *localHomeService
+	ctx           context.Context
+	open          func(context.Context, string) (localDouyinLoginWindow, error)
+	available     func() bool
+	window        localDouyinLoginWindow
+	cancel        context.CancelFunc
+	attempt, fish string
+}
+
+func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available,
+		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
+			return stationbrowser.OpenDouyinLogin(ctx, profile)
+		}}
+	h.douyinWeb = m
+	handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		identity, err := h.identity.Read()
+		if err != nil || identity.LocalOwner == nil || !fishidentity.ValidFishID(identity.FishID) {
+			websession.Fail(w, http.StatusConflict, "请先准备本机主人身份")
+			return
+		}
+		var input *localDouyinWebInput
+		if r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+			input = new(localDouyinWebInput)
+			if !websession.Decode(w, r, input) {
+				return
+			}
+		}
+		view, status, err := m.apply(r.Context(), identity.FishID, input)
+		if err != nil {
+			websession.Fail(w, status, err.Error())
+			return
+		}
+		websession.Respond(w, http.StatusOK, view)
+	})
+	mux.HandleFunc("GET /api/local/apps/douyin/web-login", handler)
+	mux.HandleFunc("POST /api/local/apps/douyin/web-login", handler)
+}
+
+func localDouyinWebID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func validLocalDouyinWebID(s string) bool {
+	b, err := hex.DecodeString(s)
+	return err == nil && len(b) == 16 && hex.EncodeToString(b) == s
+}
+
+func lockLocalDouyinWebProfile(profile string) (func(), error) {
+	path, err := stationbrowser.DouyinLoginProfileLockPath(profile)
+	if err != nil {
+		return nil, err
+	}
+	return hostfile.TryLock(path)
+}
+
+func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord, error) {
+	record := localDouyinWebRecord{Version: 1, FishID: fish}
+	info, err := root.Lstat("login.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return record, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
+		return record, errors.New("网页登录登记无法读取，原资料保留")
+	}
+	f, err := workspacefs.OpenRegular(root, "login.json")
+	if err != nil {
+		return record, errors.New("网页登录登记无法读取，原资料保留")
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 4097))
+	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &record) != nil || record.Version != 1 || record.FishID != fish ||
+		(record.Profile != "" && !validLocalDouyinWebID(record.Profile)) || (record.Profile == "" && record.ConfirmedAt != "") {
+		return record, errors.New("网页登录登记无效，原资料保留")
+	}
+	if record.ConfirmedAt != "" {
+		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
+			return record, errors.New("网页登录登记时间无效，原资料保留")
+		}
+	}
+	return record, nil
+}
+
+func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
+	v := localDouyinWebView{Revision: record.Revision, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt}
+	if record.Profile != "" {
+		v.State = "unconfirmed"
+	}
+	if record.ConfirmedAt != "" {
+		v.State = "saved"
+	}
+	if record.Profile != "" {
+		profile, err := workspacefs.OpenPath(filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", record.FishID, record.Profile))
+		if err != nil {
+			v.State, v.ConfirmedAt = "unconfirmed", ""
+			v.Reason = "网页登录资料目录缺失或不可用，请重新登录或移除登记"
+		} else {
+			profile.Close()
+		}
+	}
+	if m.window != nil && m.fish == record.FishID {
+		v.AttemptID = m.attempt
+		if m.window.Active() {
+			v.State, v.Active = "login_open", true
+		}
+	}
+	if !v.Available {
+		v.Reason = "未找到可用的 Microsoft Edge，已有网页登录资料保留"
+	}
+	return v
+}
+
+func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localDouyinWebInput) (localDouyinWebView, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fail := func(code int, message string) (localDouyinWebView, int, error) {
+		return localDouyinWebView{}, code, errors.New(message)
+	}
+	dir := filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", fish)
+	root, err := workspacefs.EnsurePath(dir)
+	if err != nil {
+		return fail(503, "网页登录私有目录不可用")
+	}
+	defer root.Close()
+	unlock, err := hostfile.TryLock(filepath.Join(dir, "login.lock"))
+	if err != nil {
+		return fail(409, "网页登录状态正在更新，请稍后重新读取")
+	}
+	defer unlock()
+	record, err := readLocalDouyinWebRecord(root, fish)
+	if err != nil {
+		return fail(503, err.Error())
+	}
+	if in == nil {
+		return m.view(record), 200, nil
+	}
+	if m.ctx.Err() != nil {
+		return fail(503, "服务正在停止，请重新启动后登录")
+	}
+	if in.Revision != record.Revision {
+		return fail(409, "网页登录状态已变化，请重新读取后操作")
+	}
+	save := func() error {
+		record.Revision++
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
+	}
+	switch in.Action {
+	case "begin":
+		if !in.ApproveProfile {
+			return fail(400, "请确认创建或使用项目专属的抖音网页登录资料")
+		}
+		if !m.available() {
+			return fail(503, "未找到可用的 Microsoft Edge")
+		}
+		if m.window != nil && m.window.Active() {
+			return fail(409, "登录窗口已打开，请先完成或取消本次登录")
+		}
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
+		m.window, m.attempt, m.fish = nil, "", ""
+		if record.Profile == "" {
+			record.Profile, err = localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法创建网页登录资料编号")
+			}
+		}
+		profile := filepath.Join(dir, record.Profile)
+		p, err := workspacefs.EnsurePath(profile)
+		if err != nil {
+			return fail(503, "网页登录资料目录不可用")
+		}
+		p.Close()
+		// Reject another live host before changing the durable revision used
+		// by that host's confirmation. The opener takes this lock again for
+		// the browser lifetime; the metadata lock serializes owner actions.
+		probe, err := lockLocalDouyinWebProfile(profile)
+		if err != nil {
+			return fail(409, "网页登录资料仍在使用，请先关闭原登录窗口")
+		}
+		probe()
+		// Beginning a new login never carries forward an old confirmation.
+		record.ConfirmedAt = ""
+		if save() != nil {
+			return fail(503, "无法保存网页登录登记，未启动浏览器")
+		}
+		attempt, err := localDouyinWebID()
+		if err != nil {
+			return fail(503, "无法创建本次登录编号")
+		}
+		browserCtx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
+		window, err := m.open(browserCtx, profile)
+		if err != nil {
+			cancel()
+			return fail(503, "登录窗口启动失败或资料正被使用，请稍后重试")
+		}
+		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
+	case "confirm", "cancel":
+		if in.AttemptID == "" || in.AttemptID != m.attempt || m.window == nil || m.fish != fish {
+			return fail(409, "本次登录已结束或服务已重启，请重新打开登录窗口")
+		}
+		closeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = m.window.Close(closeCtx)
+		cancel()
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.window, m.cancel, m.attempt = nil, nil, ""
+		if err != nil {
+			return fail(503, "登录窗口未能确认正常退出，尚未确认保存；请重新打开后核对")
+		}
+		if in.Action == "confirm" {
+			if m.ctx.Err() != nil {
+				return fail(503, "服务已停止，尚未确认登录保存")
+			}
+			record.ConfirmedAt = time.Now().UTC().Format(time.RFC3339)
+		}
+		if save() != nil {
+			return fail(503, "登录窗口已关闭，但状态未保存；请重新读取后核对")
+		}
+	case "clear":
+		if !in.ApproveProfile {
+			return fail(400, "请确认移除项目专属的网页登录资料")
+		}
+		if m.window != nil && m.fish == fish {
+			closeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err = m.window.Close(closeCtx)
+			cancel()
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.window, m.cancel, m.attempt = nil, nil, ""
+			if err != nil {
+				return fail(503, "登录窗口尚未确认退出，未删除网页登录资料")
+			}
+		}
+		if record.Profile != "" {
+			// The browser takes this same lock for its entire process lifetime.
+			release, err := lockLocalDouyinWebProfile(filepath.Join(dir, record.Profile))
+			if err != nil {
+				return fail(409, "网页登录资料仍在使用，未删除")
+			}
+			defer release()
+			if err = root.RemoveAll(record.Profile); err != nil {
+				return fail(503, "网页登录资料未能全部删除，请重试")
+			}
+		}
+		record.Profile, record.ConfirmedAt = "", ""
+		if save() != nil {
+			return fail(503, "网页登录资料已移除，但登记未更新；请重新读取后重试")
+		}
+	default:
+		return fail(400, "不支持的网页登录操作")
+	}
+	return m.view(record), 200, nil
+}
