@@ -280,7 +280,6 @@ if($LocalStation){
  } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
  if($WithStationSpeech){Stage-LocalStationSpeechRunner -PackageDirectory $OutputDirectory}
- Copy-Item -LiteralPath (Join-Path $workspace 'scripts\Install-StationOBS.ps1') -Destination (Join-Path $OutputDirectory 'Install-StationOBS.ps1') -ErrorAction Stop
 }
 Copy-Item -LiteralPath (Join-Path $cache 'LICENSE.txt') -Destination (Join-Path $OutputDirectory 'WebView2-LICENSE.txt')
 $gorillaLicense=Join-Path $workspace 'docs\licenses\gorilla-websocket.txt'

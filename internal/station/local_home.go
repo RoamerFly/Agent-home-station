@@ -118,6 +118,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	// Recover a durable live ledger at desktop boot for an already prepared
 	// local owner. Recovery reconciles and stops an interrupted old session.
 	chat.liveOutput, chat.liveEncoder = stationLiveOutput(dir, workspaceRoot, chat.livePrograms)
+	chat.obsDeploymentRoutes(auth, mux)
 	chat.startLiveRecovery()
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
 	chat.routes(auth, mux)

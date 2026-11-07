@@ -39,7 +39,7 @@
   }
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
-    if (activeView === "project-tools" && view !== "project-tools") stopOBSPreviewOnLeave();
+    if (activeView === "project-tools" && view !== "project-tools") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -63,7 +63,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -3019,6 +3019,13 @@
   function updateDeploymentSave(current = projectTools) {
     const button = $("#local-deployment-save");
     if (!button) return;
+    if (current.openID === "obs-preview") {
+      const deployment = current.obsDeployment;
+      button.hidden = !obsDeploymentSelected(current) || deployment.server?.installed === true;
+      button.textContent = deployment.saving ? "正在安装…" : "安装专用输出";
+      button.disabled = deployment.loading || deployment.saving || !deployment.readable || deployment.needsRefresh || !deployment.server || deployment.server.state !== "missing" || deployment.server.read_only || !deployment.approved || !deployment.archivePath.trim();
+      return;
+    }
     const id = current.openID, spec = deploymentDescriptor(id), deployment = spec && current[spec.state];
     button.hidden = !spec || !deploymentSelected(current, id);
     button.textContent = deployment?.saving ? "正在保存…" : "保存部署";
@@ -3270,6 +3277,101 @@
     if (tool.update_available) return "当前版本尚未准备 PDF 导出环境；停用后更新工具即可检查新版本。";
     return "当前版本尚未确认 PDF 导出环境；DOCX 仍可创建，导出 PDF 前会再次检查。";
   }
+  function obsDeploymentSelected(current = projectTools) {
+    return activeView === "project-tools" && deploymentSelected(current, "obs-preview");
+  }
+  function invalidateOBSDeploymentView(current = projectTools) {
+    const deployment = current.obsDeployment;
+    deployment.generation += 1; deployment.loading = false; deployment.approved = false;
+  }
+  function validOBSDeploymentView(view) {
+    return view && !Array.isArray(view) && typeof view.revision === "string" && view.revision.length > 0
+      && view.version === "33.0.1" && view.archive_sha256 === "0d9436451c2d772b33428e3fdae9776f071895c335de17283176306fb72651d3"
+      && ["missing", "installed", "invalid"].includes(view.state) && typeof view.installed === "boolean"
+      && view.installed === (view.state === "installed") && typeof view.read_only === "boolean" && typeof view.restart_required === "boolean"
+      && (view.reason === undefined || typeof view.reason === "string");
+  }
+  function renderCurrentOBSDeployment(current) {
+    if (obsDeploymentSelected(current)) renderProjectToolDialog(current.tools.find((tool) => tool.id === "obs-preview"));
+  }
+  async function loadOBSDeployment(current = projectTools, explicit = false) {
+    const deployment = current.obsDeployment;
+    if (!obsDeploymentSelected(current) || deployment.loading || deployment.saving || (deployment.needsRefresh && !explicit)) return;
+    const generation = ++deployment.generation;
+    deployment.loading = true; deployment.readable = false; deployment.error = "";
+    renderCurrentOBSDeployment(current);
+    try {
+      const view = await request("/api/local/project-tools/obs-preview/deployment");
+      if (!obsDeploymentSelected(current) || deployment.generation !== generation) return;
+      if (!validOBSDeploymentView(view)) throw new Error("专用输出安装状态响应无效，请刷新后重试。");
+      deployment.server = view; deployment.readable = true; deployment.needsRefresh = false; deployment.approved = false; deployment.notice = "";
+    } catch (error) {
+      if (!obsDeploymentSelected(current) || deployment.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      deployment.error = error.status === 403 ? "当前登录没有专用输出安装管理权限；路径草稿已保留。" : error.message || "无法读取专用输出安装状态。";
+    } finally {
+      if (current === projectTools && deployment.generation === generation) { deployment.loading = false; renderCurrentOBSDeployment(current); }
+    }
+  }
+  async function installOBSDeployment(current = projectTools) {
+    const deployment = current.obsDeployment, server = deployment.server;
+    if (!obsDeploymentSelected(current) || deployment.loading || deployment.saving || !deployment.readable || deployment.needsRefresh || !server || server.state !== "missing" || server.read_only || !deployment.approved) return;
+    const archivePath = deployment.archivePath.trim();
+    if (!/^[A-Za-z]:[\\/].+\.zip$/i.test(archivePath)) {
+      deployment.error = "请输入本机 Windows ZIP 文件的绝对路径。"; renderCurrentOBSDeployment(current); return;
+    }
+    const generation = ++deployment.generation;
+    deployment.saving = true; deployment.error = ""; deployment.notice = "";
+    renderCurrentOBSDeployment(current);
+    try {
+      const view = await request("/api/local/project-tools/obs-preview/deployment", { method: "PUT", body: JSON.stringify({ revision: server.revision, archive_path: archivePath, approved: true }) });
+      if (current !== projectTools) return;
+      if (!obsDeploymentSelected(current) || deployment.generation !== generation) { deployment.needsRefresh = true; return; }
+      if (!validOBSDeploymentView(view) || !view.installed) { deployment.needsRefresh = true; throw new Error("安装结果尚未确认，请刷新专用输出状态；路径草稿已保留。"); }
+      deployment.server = view; deployment.readable = true; deployment.approved = false;
+      deployment.notice = "专用输出已安装。";
+    } catch (error) {
+      if (current !== projectTools) return;
+      if (!obsDeploymentSelected(current) || deployment.generation !== generation) { deployment.needsRefresh = true; return; }
+      if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+      deployment.approved = false;
+      if (error.status === 409) { deployment.readable = false; deployment.needsRefresh = true; }
+      deployment.error = error.status === 409 ? `${error.message || "安装状态已变化。"} 请刷新后重新确认；路径草稿已保留。` : error.status === 403 ? "当前登录没有专用输出安装管理权限；路径草稿已保留。" : error.message || "专用输出安装失败，路径草稿已保留。";
+    } finally {
+      if (current === projectTools) { deployment.saving = false; renderCurrentOBSDeployment(current); }
+    }
+  }
+  function renderOBSDeployment() {
+    const current = projectTools, deployment = current.obsDeployment, server = deployment.server;
+    const section = appElement("section", "", "comfy-deployment obs-output-deployment"); section.id = "obs-output-deployment";
+    const heading = appElement("div", "", "comfy-deployment-heading");
+    heading.append(appElement("strong", "专用节目输出"), appElement("span", "为本应用准备独立 OBS 运行环境；下方只读预览连接的是你已有的 OBS，两者用途独立。")); section.append(heading);
+    if (deployment.error) section.append(appElement("p", deployment.error, "comfy-deployment-error"));
+    if (deployment.notice) section.append(appElement("p", deployment.notice, "comfy-deployment-note"));
+    if (deployment.loading) section.append(appElement("p", "正在核验本机安装状态…", "comfy-deployment-note"));
+    if (deployment.needsRefresh) section.append(appElement("p", "安装操作已返回，请使用顶栏“刷新”核对最新状态；当前路径草稿已保留。", "comfy-deployment-note"));
+    if (!server) { section.append(appElement("p", "等待主人读取安装状态。读取失败时可用顶栏“刷新”重试。", "comfy-deployment-note")); return section; }
+    if (server.installed) {
+      section.append(appElement("p", server.restart_required ? "OBS 33.0.1 已安装 · 重启应用后启用专用输出。" : "OBS 33.0.1 已安装 · 专用输出环境已就绪。", "comfy-deployment-note"));
+      return section;
+    }
+    const version = appElement("p", "仅接受官方 Windows x64 ZIP · OBS 33.0.1，由宿主核验固定 SHA-256。", "comfy-deployment-note");
+    const release = appElement("a", "查看官方下载页"); release.href = "https://github.com/obsproject/obs-studio/releases/tag/33.0.1"; release.target = "_blank"; release.rel = "noopener noreferrer";
+    version.append(document.createTextNode(" "), release); section.append(version);
+    if (server.reason) section.append(appElement("p", server.reason, server.read_only ? "comfy-deployment-readonly" : "comfy-deployment-note"));
+    if (server.state === "invalid") section.append(appElement("p", "已检测到的专用环境未通过核验，请按当前状态处理后重试。", "comfy-deployment-note"));
+    const form = document.createElement("form"); form.className = "comfy-deployment-form"; form.noValidate = true;
+    const label = appElement("label", "本机官方 ZIP 绝对路径"), input = document.createElement("input");
+    input.type = "text"; input.id = "obs-output-archive-path"; input.name = "archive_path"; input.value = deployment.archivePath; input.placeholder = "C:\\Downloads\\OBS-Studio-33.0.1-Windows-x64.zip"; input.autocomplete = "off"; input.spellcheck = false;
+    input.disabled = deployment.loading || deployment.saving || server.read_only; label.htmlFor = input.id; label.append(input);
+    input.addEventListener("input", () => { if (deployment.saving) return; deployment.archivePath = input.value; deployment.approved = false; const approval = $("#obs-output-approved"); if (approval) approval.checked = false; updateDeploymentSave(current); });
+    const approval = appElement("label", "", "project-tool-approval"), checkbox = document.createElement("input");
+    checkbox.type = "checkbox"; checkbox.id = "obs-output-approved"; checkbox.checked = deployment.approved; checkbox.disabled = input.disabled || !deployment.readable || deployment.needsRefresh || server.state !== "missing";
+    checkbox.addEventListener("change", () => { deployment.approved = checkbox.checked; updateDeploymentSave(current); });
+    approval.append(checkbox, document.createTextNode("确认从此本机 ZIP 安装专用输出；安装不授予直播权限。"));
+    form.append(label, approval); form.addEventListener("submit", (event) => { event.preventDefault(); void installOBSDeployment(current); }); section.append(form);
+    section.append(appElement("p", "安装只校验并解压此 ZIP；不会联网下载、运行脚本、启用工具、重启应用或开播。", "comfy-deployment-note"));
+    return section;
+  }
   function obsPreviewTool() { return projectTools.tools.find((tool) => tool && tool.id === "obs-preview") || null; }
   function decodeOBSPreviewImage(value) {
     if (typeof value !== "string" || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
@@ -3451,9 +3553,12 @@
       heading.append(mark, appElement("strong", tool.name || tool.id));
       card.append(heading, appElement("span", status, "tool-card-status"), appElement("span", "设置与资源", "tool-card-link"));
       card.addEventListener("click", () => {
+        if (current.openID === "obs-preview") invalidateOBSDeploymentView(current);
         current.openID = tool.id; renderProjectToolDialog(tool);
         $("#tool-dialog").showModal();
+        updateDeploymentSave(current);
         if (deploymentDescriptor(tool.id)) void loadDeployment(tool.id, current);
+        if (tool.id === "obs-preview") void loadOBSDeployment(current);
         if (tool.id === "media-understanding" && tool.installed) void loadLocalVision(current);
       });
       return card;
@@ -3474,7 +3579,7 @@
     let deploymentSave = $("#local-deployment-save");
     if (!deploymentSave) {
       deploymentSave = appElement("button", "保存部署", "button compact primary"); deploymentSave.id = "local-deployment-save"; deploymentSave.type = "button";
-      deploymentSave.addEventListener("click", () => { if (deploymentDescriptor(projectTools.openID)) void saveDeployment(projectTools.openID); });
+      deploymentSave.addEventListener("click", () => { if (projectTools.openID === "obs-preview") void installOBSDeployment(); else if (deploymentDescriptor(projectTools.openID)) void saveDeployment(projectTools.openID); });
       $("#tool-dialog .app-dialog-actions").append(deploymentSave);
     }
     updateDeploymentSave(current);
@@ -3488,7 +3593,7 @@
       const card = appElement("article", "", "project-tool-record");
       const [, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
-      if (note) detail.append(appElement("p", note));
+      if (note && tool.id !== "obs-preview") detail.append(appElement("p", note));
       if (tool.id === "media-understanding" && tool.installed) detail.append(renderLocalVision(tool));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
@@ -3523,7 +3628,7 @@
         detail.append(permissions);
         detail.append(pdf);
       }
-      if (tool.id === "obs-preview") detail.append(renderOBSPreview(tool));
+      if (tool.id === "obs-preview") detail.append(renderOBSDeployment(), renderOBSPreview(tool));
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
       const controlsDisabled = current.loading || Boolean(current.applying);
@@ -3532,7 +3637,7 @@
         const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
         approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !tool.catalog_available || !canInstall;
         approval.append(checkbox, copy);
-        const install = appElement("button", busy ? "正在安装…" : "安装", "button compact primary");
+        const install = appElement("button", busy ? "正在安装…" : tool.id === "obs-preview" ? "安装预览工具" : "安装", "button compact primary");
         install.type = "button"; install.disabled = true;
         checkbox.addEventListener("change", () => { install.disabled = checkbox.disabled || !checkbox.checked; });
         install.addEventListener("click", () => updateProjectTool(tool, "install", checkbox.checked));
@@ -3867,14 +3972,14 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
-  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); });
+  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); if (projectTools.openID === "obs-preview") void loadOBSDeployment(projectTools, true); });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
     const id = projectTools.openID;
     if (id === "media-understanding") { projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false; }
     const spec = deploymentDescriptor(id);
     if (spec) { projectTools[spec.state].generation += 1; projectTools[spec.state].approved = false; }
-    if (id === "obs-preview") stopOBSPreviewOnLeave();
+    if (id === "obs-preview") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     projectTools.openID = "";
     $("#project-tools-view").insertBefore($("#project-tools-feedback"), $("#project-tools-list"));
     $("#tool-dialog-body").replaceChildren(); $("#tool-dialog-body").scrollTop = 0;

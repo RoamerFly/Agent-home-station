@@ -53,6 +53,9 @@ type localChatService struct {
 	liveEncoder  string
 	liveRunDone  chan struct{}
 	livePrograms *localLivePrograms
+	obsInstallMu sync.Mutex
+	// Test transport only; production uses the pinned offline installer.
+	obsInstaller func(context.Context, string, string, string) error
 	// liveStopDone is created only when shutdown has claimed an existing live
 	// controller. It lets Close wait for the same bounded stop operation rather
 	// than issue a second remote stop while the first is in flight.

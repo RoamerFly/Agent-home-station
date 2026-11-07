@@ -31,6 +31,11 @@ const (
 	executable     = "bin/64bit/obs64.exe"
 )
 
+var requiredRuntimeFiles = []string{executable, "bin/64bit/obs.dll",
+	"core/obs-outputs/obs-outputs.dll", "core/rtmp-services/rtmp-services.dll",
+	"core/obs-x264/obs-x264.dll", "core/obs-ffmpeg/obs-ffmpeg.dll", "core/image-source/image-source.dll",
+	"core/obs-transitions/obs-transitions.dll", "core/aja/aja.dll", "core/obs-websocket/obs-websocket.dll"}
+
 var (
 	ErrMissing = errors.New("portable OBS installation is missing")
 	ErrInvalid = errors.New("portable OBS installation is incomplete or changed")
@@ -89,10 +94,7 @@ func Open(ctx context.Context, stationData, workspace string) (*Installation, er
 	if err := dec.Decode(&m); err != nil || m.Version != releaseVersion || m.ArchiveDigest != releaseDigest {
 		return nil, ErrInvalid
 	}
-	for _, required := range []string{executable, "bin/64bit/obs.dll",
-		"core/obs-outputs/obs-outputs.dll", "core/rtmp-services/rtmp-services.dll",
-		"core/obs-x264/obs-x264.dll", "core/obs-ffmpeg/obs-ffmpeg.dll", "core/image-source/image-source.dll",
-		"core/obs-transitions/obs-transitions.dll", "core/aja/aja.dll", "core/obs-websocket/obs-websocket.dll"} {
+	for _, required := range requiredRuntimeFiles {
 		if _, ok := m.Files[required]; !ok {
 			return nil, ErrInvalid
 		}
@@ -167,7 +169,7 @@ func (i *Installation) verify(ctx context.Context, studio *os.Root) error {
 			return ErrInvalid
 		}
 		h := sha256.New()
-		_, err = io.Copy(h, file)
+		_, err = copyInstall(ctx, h, file)
 		_ = file.Close()
 		if err != nil || hex.EncodeToString(h.Sum(nil)) != expected {
 			return ErrInvalid
