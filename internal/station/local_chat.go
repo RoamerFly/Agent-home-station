@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,9 +15,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/billing"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
@@ -65,11 +62,12 @@ type localChatService struct {
 	// Tests replace only the model transport, retaining the normal engine,
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
+	followups    *localTaskFollowupWorker
 }
 
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
+	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
 			home: home, options: stationruntime.PackagedToolOptions(),
@@ -77,6 +75,8 @@ func newLocalChatService(home *localHomeService) *localChatService {
 			yue: newLocalYuEService(home.dataDir, home.root),
 			tts: newLocalTTSBackend(home.dataDir, home.root),
 		}}
+	h.followups = &localTaskFollowupWorker{service: h, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return h
 }
 
 func (h *localChatService) BeginShutdown() {
@@ -179,6 +179,9 @@ func (h *localChatService) CloseContext(ctx context.Context) error {
 				h.closeErr = errors.Join(h.closeErr, h.projectTools.close())
 			}
 			if store != nil {
+				if h.followups != nil && h.followups.started.Load() {
+					<-h.followups.done
+				}
 				h.closeErr = errors.Join(h.closeErr, store.Close())
 			}
 		})
@@ -227,6 +230,7 @@ func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	h.publicationRoutes(s, mux)
 	h.interactionRoutes(s, mux)
 	h.liveRoutes(s, mux)
+	h.localFollowupRoutes(s, mux)
 }
 
 func (h *localChatService) modelView(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +280,12 @@ func (h *localChatService) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	websession.Respond(w, 200, map[string]any{"items": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load()})
+	pending, err := store.HasPendingLocalTaskFollowups(r.Context(), in)
+	if err != nil {
+		websession.Fail(w, 503, "后台任务状态不可读，请稍后刷新")
+		return
+	}
+	websession.Respond(w, 200, map[string]any{"items": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load(), "background_pending": pending})
 }
 
 func localConversationConfig(persona string) companion.Config {
@@ -306,6 +315,15 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	if !identity.ValidPathID(request.RequestID) || strings.TrimSpace(request.Text) == "" || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) {
 		websession.Fail(w, 400, "请提供稳定请求编号及 1–65536 字节的有效正文；长资料可分批继续")
 		return
+	}
+	if done := h.followups.interrupt(); done != nil {
+		select {
+		case <-done:
+		case <-r.Context().Done():
+			websession.Fail(w, 409, "本次请求已取消")
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 	if !h.turn.TryLock() {
 		websession.Fail(w, 409, "当前对话正在生成，请等待后查看记录；不会重复提交")
@@ -350,89 +368,6 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 503, "工具检查点无法核验，未执行本轮工具")
 		return
 	}
-	settings, err := h.models.View()
-	if err != nil {
-		websession.Fail(w, 409, "本机模型配置不可读，原文件保留")
-		return
-	}
-	var model companion.LanguageModel
-	if h.modelFactory != nil {
-		model, err = h.modelFactory()
-	} else {
-		model, settings, err = h.models.ClientSnapshot()
-	}
-	if err != nil {
-		websession.Fail(w, 503, "请先保存有效的本机模型配置和 Key；没有调用模型")
-		return
-	}
-	if client, ok := model.(interface{ CloseIdleConnections() }); ok {
-		defer client.CloseIdleConnections()
-	}
-	c := localConversationConfig(settings.Persona)
-	engine, err := companion.New(c, store, model, "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录、已授权的项目工具和已连接的应用。生成本机成品后，把工具实际返回的 artifact_id 告诉主人，界面会显示下载入口。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。")
-	if err != nil {
-		websession.Fail(w, 503, "本地聊天引擎未能准备，原始记录保留")
-		return
-	}
-	tools := h.tools(store, in)
-	tools.run = run
-	tools.inspectOnly = !run.Tracked || len(run.Operations) > 0
-	engine.Tools = tools
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-	defer cancel()
-	stop := context.AfterFunc(h.ctx, cancel)
-	defer stop()
-	var usageErr error
-	ctx = deepseek.WithUsageObserver(deepseek.WithPurpose(ctx, "local_conversation"), func(u deepseek.Usage) {
-		dir := filepath.Join(h.home.dataDir, "local-billing")
-		err := os.MkdirAll(dir, 0700)
-		var ledger *billing.Store
-		if err == nil {
-			ledger, err = billing.Open(dir)
-		}
-		if err == nil {
-			err = ledger.Record(billing.ModelConfig{Provider: settings.Provider, BaseURL: settings.BaseURL, Model: settings.Model}, u)
-		}
-		usageErr = errors.Join(usageErr, err)
-	})
-	decision, err := engine.Respond(ctx, in)
-	if err != nil {
-		message, code := "本轮聊天处理未完成，原消息保留，可查看后重试", "local_turn_failed"
-		if diagnostic, ok := deepseek.ErrorDiagnostics(err); ok {
-			message, code = deepseek.UserMessage(err)+"；原消息保留，可查看后重试", diagnostic.Code
-		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			message, code = "本轮生成已取消或超时，原消息保留", "local_turn_cancelled"
-		}
-		websession.Respond(w, 502, map[string]any{"error": message, "code": code, "stage": "conversation"})
-		return
-	}
-	if decision.Action != "reply" || len(decision.Messages) == 0 || len(decision.MediaIDs) != 0 || decision.ImageID != "" {
-		websession.Respond(w, 200, map[string]any{"request_id": request.RequestID, "messages": []string{}, "status": "no_reply", "reason": decision.Reason})
-		return
-	}
-	// A replaced identity or a forgotten source cannot receive a late result.
-	_, current, err := h.conversation()
-	if err != nil || current.Account != in.Account || current.Sender != in.Sender {
-		websession.Fail(w, 409, "本机身份已变更，本次结果未写入聊天")
-		return
-	}
-	if proof, ok := decision.GenerationEvidence(); ok {
-		if err = engine.ValidateGenerationEvidence(ctx, proof); err != nil {
-			websession.Fail(w, 409, "对话来源已更正或遗忘，本次结果未写入聊天")
-			return
-		}
-	}
-	if err = tools.checkAppObservations(ctx); err != nil {
-		websession.Fail(w, 409, "应用读取授权已变化，本次回复未写入聊天")
-		return
-	}
-	if err = store.AcceptLocalConversation(ctx, in, decision.Messages, c, time.Now().UTC()); err != nil {
-		websession.Fail(w, 503, "回复未能写入本地记录，请先刷新核对，原消息保留")
-		return
-	}
-	warning := ""
-	if usageErr != nil {
-		warning = "回复已保存，但本次用量记录写入失败"
-	}
-	websession.Respond(w, 200, map[string]any{"request_id": request.RequestID, "messages": decision.Messages, "status": "completed", "warning": warning})
+	response, err := h.generateLocalTurn(r.Context(), store, in, run, "")
+	writeLocalTurnResponse(w, response, err)
 }

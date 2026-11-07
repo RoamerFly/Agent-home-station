@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const $ = (selector) => document.querySelector(selector);
-  const state = { csrf: "", home: null, model: null, busy: false, chat: { items: [], nextCursor: "", hasMore: false, busy: false, loading: false, pending: new Map(), failed: new Map(), poll: 0 } };
+  const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView() };
   const tabs = ["chat", "apps", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
@@ -40,6 +40,7 @@
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
     if (activeView === "project-tools" && view !== "project-tools") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
+    if (activeView === "chat" && view !== "chat") { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -51,6 +52,10 @@
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); }
     if (view === "project-tools") loadProjectTools();
+    if (view === "chat" && state.home?.initialized && !document.hidden) void loadChat(true);
+  }
+  function newChatView() {
+    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), poll: 0 };
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
@@ -3707,7 +3712,7 @@
   function showLogin() {
     $("#tool-dialog").close();
     $("#app-dialog").close();
-    state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
+    state.home = null; state.model = null; window.clearTimeout(state.chat.poll); state.chat = newChatView(); renderChat();
     window.clearTimeout(apps.loginTimer);
     stopDouyinWebLoginPolling(apps);
     clearOBSPreview();
@@ -3827,7 +3832,7 @@
     }
     const latestAssistant = state.chat.items.reduce((latest, item, index) => item.role === "assistant" ? index : latest, -1);
     let recoveryID = "";
-    if (!state.chat.busy && !state.chat.pending.size) {
+    if (!state.chat.busy && !state.chat.pending.size && !state.chat.backgroundPending) {
       for (let index = state.chat.items.length - 1; index > latestAssistant; index -= 1) {
         const item = state.chat.items[index];
         if (item.role !== "assistant" && item.request_id) { recoveryID = item.request_id; break; }
@@ -3857,8 +3862,8 @@
       if (!persistedRequestIDs.has(requestID)) renderFailedDraft(requestID, failure);
     }
     $("#load-older-button").hidden = !state.chat.hasMore || state.chat.loading;
-    $("#chat-progress").textContent = state.chat.pending.size ? "正在等待回复…" : "";
-    chatStream.setAttribute("aria-busy", String(state.chat.loading || state.chat.pending.size > 0));
+    $("#chat-progress").textContent = state.chat.busy || state.chat.pending.size ? "正在等待回复…" : state.chat.backgroundPending ? "后台任务完成后会继续回复" : "";
+    chatStream.setAttribute("aria-busy", String(state.chat.loading || state.chat.busy || state.chat.pending.size > 0));
     chatStream.scrollTop = previousScroll;
   }
   function mergeItems(incoming, replace) {
@@ -3867,24 +3872,39 @@
     state.chat.items = Array.from(mapped.values()).sort((a, b) => String(a.time || a.created_at || "").localeCompare(String(b.time || b.created_at || "")));
   }
   async function loadChat(replace = false) {
-    if (!state.home || !state.home.initialized || state.chat.loading) return;
-    state.chat.loading = true; renderChat();
+    const current = state.chat;
+    if (!state.home || !state.home.initialized) return;
+    if (current.loading) { if (replace) current.refreshRequested = true; return; }
+    current.loading = true; current.refreshRequested = false; renderChat();
     try {
-      const query = new URLSearchParams({ limit: "40" }); if (!replace && state.chat.nextCursor) query.set("cursor", state.chat.nextCursor);
+      const query = new URLSearchParams({ limit: "40" }); if (!replace && current.nextCursor) query.set("cursor", current.nextCursor);
       const data = await request(`/api/local/chat?${query.toString()}`);
+      if (current !== state.chat) return;
       mergeItems(Array.isArray(data.items) ? data.items : [], replace); state.chat.nextCursor = data.next_cursor || ""; state.chat.hasMore = Boolean(data.has_more);
       state.chat.busy = Boolean(data.busy);
+      current.backgroundPending = data.background_pending === true;
       const settled = new Set(state.chat.items.filter((item) => item.role === "assistant" && item.request_id).map((item) => item.request_id));
       for (const requestID of settled) { state.chat.pending.delete(requestID); state.chat.failed.delete(requestID); }
-    } catch (error) { if (error.status !== 404) showMessage(error.message, "warn"); }
-    finally { state.chat.loading = false; renderChat(); }
+    } catch (error) {
+      if (current !== state.chat || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      if (error.status !== 404) showMessage(error.message, "warn");
+    } finally {
+      if (current === state.chat) {
+        current.loading = false; renderChat();
+        if (current.refreshRequested && activeView === "chat" && !document.hidden) void loadChat(true);
+        else schedulePoll();
+      }
+    }
   }
   function schedulePoll() {
-    window.clearTimeout(state.chat.poll); if (!state.chat.pending.size) return;
-    state.chat.poll = window.setTimeout(async () => { await loadChat(true); if (state.chat.pending.size) schedulePoll(); }, 1600);
+    const current = state.chat;
+    window.clearTimeout(current.poll); current.poll = 0;
+    if (!state.home?.initialized || activeView !== "chat" || document.hidden || !(current.busy || current.pending.size || current.backgroundPending)) return;
+    current.poll = window.setTimeout(() => { if (current === state.chat) void loadChat(true); }, 1600);
   }
   function newRequestID() { return window.crypto && typeof window.crypto.randomUUID === "function" ? window.crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
   async function sendMessage(raw, requestID = newRequestID()) {
+    const current = state.chat;
     const text = String(raw || ""); if (!text.trim() || state.chat.pending.has(requestID)) return;
     if (!chatConfigured()) { setActiveView("settings"); showMessage("先保存可用的聊天模型，再发送消息。", "warn"); return; }
     state.chat.pending.set(requestID, { text }); state.chat.failed.delete(requestID); $("#chat-input").value = ""; renderChat();
@@ -3894,6 +3914,7 @@
     schedulePoll();
     try {
       const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text }) });
+      if (current !== state.chat) return;
       if (result.status === "completed") state.chat.pending.delete(requestID);
       if (result.status === "no_reply") {
         state.chat.pending.delete(requestID);
@@ -3901,9 +3922,10 @@
       }
       await loadChat(true);
     } catch (error) {
+      if (current !== state.chat || appSessionExpired([{ status: "rejected", reason: error }])) return;
       state.chat.pending.delete(requestID); state.chat.failed.set(requestID, { text, message: error.message || responseMessage(error.status) });
       await loadChat(true); renderChat();
-    } finally { chatStream.scrollTop = chatStream.scrollHeight; schedulePoll(); }
+    } finally { if (current === state.chat) { if (activeView === "chat" && !document.hidden) chatStream.scrollTop = chatStream.scrollHeight; schedulePoll(); } }
   }
   async function loadSession() {
     try {
@@ -3992,5 +4014,9 @@
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
+    else if (activeView === "chat" && state.home?.initialized) void loadChat(true);
+  });
   loadSession();
 })();

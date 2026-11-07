@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS local_tool_checkpoints(
  event_id TEXT NOT NULL,revision INTEGER NOT NULL,call_key TEXT NOT NULL,
  tool TEXT NOT NULL,grant_key TEXT NOT NULL,target TEXT NOT NULL,result TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(event_id,revision,call_key));
+CREATE TABLE IF NOT EXISTS local_task_followups(
+ id TEXT PRIMARY KEY,scope TEXT NOT NULL,request_id TEXT NOT NULL,process_id TEXT NOT NULL,
+ home_revision INTEGER NOT NULL,source_event_id TEXT NOT NULL,source_revision INTEGER NOT NULL,
+ source_hash TEXT NOT NULL,source BLOB NOT NULL,state TEXT NOT NULL,next_at TEXT NOT NULL,
+ created_at TEXT NOT NULL,updated_at TEXT NOT NULL,reason TEXT NOT NULL,revision INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS local_task_followups_due ON local_task_followups(scope,state,next_at,id);
+CREATE INDEX IF NOT EXISTS local_task_followups_page ON local_task_followups(scope,id);
 CREATE INDEX IF NOT EXISTS events_reflection_observable_v2 ON events(scope,seq DESC,id DESC) WHERE role='user' AND suppressed=0 AND instr(CAST(payload AS TEXT),'"observation_excerpt":')>0;
 CREATE TABLE IF NOT EXISTS observations(event_id TEXT,hash TEXT,text TEXT,PRIMARY KEY(event_id,hash));
 CREATE TABLE IF NOT EXISTS event_revisions(event_id TEXT,revision INTEGER,text TEXT,hash TEXT,PRIMARY KEY(event_id,revision));

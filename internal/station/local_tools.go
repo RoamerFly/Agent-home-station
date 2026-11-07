@@ -17,22 +17,23 @@ import (
 )
 
 type localToolSet struct {
-	memory       companion.ToolAccess
-	files        *localWorkspaceFileTools
-	process      *localProcessTools
-	processError error
-	projectTools *localProjectTools
-	access       *localWorkspaceAccess
-	python       string
-	run          *companion.LocalToolRun
-	traceID      string
-	inspectOnly  bool
-	store        *companion.Store
-	wechat       *stationWechat
-	observations *apphost.Observer
-	appReads     []apphost.ObservationResult
-	publications *localChatService
-	requestTime  time.Time
+	memory            companion.ToolAccess
+	files             *localWorkspaceFileTools
+	process           *localProcessTools
+	processError      error
+	projectTools      *localProjectTools
+	access            *localWorkspaceAccess
+	python            string
+	run               *companion.LocalToolRun
+	traceID           string
+	inspectOnly       bool
+	store             *companion.Store
+	wechat            *stationWechat
+	observations      *apphost.Observer
+	appReads          []apphost.ObservationResult
+	publications      *localChatService
+	requestTime       time.Time
+	continuationGuard func(context.Context) error
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -68,9 +69,14 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if t.continuationGuard != nil {
+		if err := t.continuationGuard(ctx); err != nil {
+			return nil, err
+		}
+	}
 	all := []mcptools.Tool{}
 	if t.publications != nil && t.run != nil {
-		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool())
+		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool())
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -107,6 +113,14 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if t.continuationGuard != nil {
+		if err := t.continuationGuard(ctx); err != nil {
+			return "", err
+		}
+	}
+	if name == localFollowupToolName {
+		return t.callFollowup(ctx, raw)
+	}
 	if name == localLiveToolName {
 		return t.callLive(ctx, raw)
 	}

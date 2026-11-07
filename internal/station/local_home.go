@@ -122,6 +122,7 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	chat.startLiveRecovery()
 	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
 	chat.routes(auth, mux)
+	chat.startLocalTaskFollowups()
 	return &LocalHomeHandler{Handler: stationhost.New(mux, auth, registry, dir, chat, apps...), chat: chat, home: home}, nil
 }
 

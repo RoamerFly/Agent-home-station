@@ -189,6 +189,66 @@ func (s *Store) LocalConversationRequest(ctx context.Context, in Input, requestI
 // request and prior output checks occur inside Store's existing synchronized
 // scope transaction, so forgetting cannot race a delayed/retried delivery.
 func (s *Store) AcceptLocalConversation(ctx context.Context, in Input, messages []string, c Config, now time.Time) error {
+	return s.acceptLocalConversationGroup(ctx, in, "local:"+in.TraceID+":", "", messages, c, now)
+}
+
+func localContinuationPrefix(in Input, groupID string) (string, error) {
+	scope, err := localConversationScope(in)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(groupID) == "" || len(groupID) > 512 || !utf8.ValidString(groupID) || strings.TrimSpace(in.TraceID) == "" {
+		return "", ErrLocalConversationIdentity
+	}
+	return "local-continuation:" + localFollowupID(scope, groupID) + ":", nil
+}
+
+// AcceptLocalContinuation appends an independently idempotent assistant group
+// to the original user request. It never manufactures another user event.
+func (s *Store) AcceptLocalContinuation(ctx context.Context, in Input, groupID string, messages []string, c Config, now time.Time) error {
+	prefix, err := localContinuationPrefix(in, groupID)
+	if err != nil {
+		return err
+	}
+	return s.acceptLocalConversationGroup(ctx, in, prefix, groupID, messages, c, now)
+}
+
+// LocalContinuationAccepted lets recovery reconcile an already committed
+// group before it considers another model invocation.
+func (s *Store) LocalContinuationAccepted(ctx context.Context, in Input, groupID string) (bool, error) {
+	prefix, err := localContinuationPrefix(in, groupID)
+	if err != nil {
+		return false, err
+	}
+	scope, _ := localConversationScope(in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return false, errors.New("memory database closed")
+	}
+	if in.Source == nil || !localFollowupSourceIdentity(in, *in.Source) {
+		return false, ErrLocalRequestUnavailable
+	}
+	if err = s.localRequestSourceLocked(ctx, scope, in.TraceID, *in.Source); err != nil {
+		return false, err
+	}
+	var count int
+	var hidden bool
+	var wrongRequest bool
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(e.suppressed!=0 OR EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) OR EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id)),0),COALESCE(MAX(COALESCE(json_extract(e.payload,'$.request_trace_id'),'')!=?),0) FROM events e WHERE e.scope=? AND e.role='assistant' AND substr(e.trace,1,?)=?`, in.TraceID, scope, len(prefix), prefix).Scan(&count, &hidden, &wrongRequest)
+	if err != nil {
+		return false, err
+	}
+	if hidden {
+		return false, ErrDeliveryMemoryBlocked
+	}
+	if wrongRequest {
+		return false, ErrDeliveryMemoryConflict
+	}
+	return count > 0, nil
+}
+
+func (s *Store) acceptLocalConversationGroup(ctx context.Context, in Input, prefix string, continuationID string, messages []string, c Config, now time.Time) error {
 	scopeID, err := localConversationScope(in)
 	if err != nil {
 		return err
@@ -208,6 +268,14 @@ func (s *Store) AcceptLocalConversation(ctx context.Context, in Input, messages 
 		if !ok {
 			return ErrLocalRequestUnavailable
 		}
+		if continuationID != "" {
+			if in.Source == nil || !localFollowupSourceIdentity(in, *in.Source) {
+				return ErrLocalRequestUnavailable
+			}
+			if err := s.localRequestSourceLocked(ctx, scopeID, in.TraceID, *in.Source); err != nil {
+				return err
+			}
+		}
 		var visible bool
 		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events e WHERE e.scope=? AND e.role='user' AND e.trace=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id))`, scopeID, in.TraceID).Scan(&visible); err != nil {
 			return err
@@ -215,7 +283,7 @@ func (s *Store) AcceptLocalConversation(ctx context.Context, in Input, messages 
 		if !visible {
 			return ErrLocalRequestUnavailable
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT e.trace,e.text,e.suppressed, EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) OR EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id) FROM events e WHERE e.scope=? AND e.role='assistant' AND json_extract(e.payload,'$.request_trace_id')=? ORDER BY e.seq ASC`, scopeID, in.TraceID)
+		rows, err := s.db.QueryContext(ctx, `SELECT e.trace,e.text,e.suppressed, EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) OR EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id),COALESCE(json_extract(e.payload,'$.request_trace_id'),'') FROM events e WHERE e.scope=? AND e.role='assistant' AND substr(e.trace,1,?)=? AND (? OR json_extract(e.payload,'$.request_trace_id')=?) ORDER BY e.seq ASC`, scopeID, len(prefix), prefix, continuationID != "", in.TraceID)
 		if err != nil {
 			return err
 		}
@@ -223,14 +291,17 @@ func (s *Store) AcceptLocalConversation(ctx context.Context, in Input, messages 
 		existing := map[string]string{}
 		count := 0
 		for rows.Next() {
-			var key, text string
+			var key, text, request string
 			var suppressed int
 			var blocked bool
-			if err = rows.Scan(&key, &text, &suppressed, &blocked); err != nil {
+			if err = rows.Scan(&key, &text, &suppressed, &blocked, &request); err != nil {
 				return err
 			}
 			if suppressed != 0 || blocked {
 				return ErrDeliveryMemoryBlocked
+			}
+			if request != in.TraceID {
+				return ErrDeliveryMemoryConflict
 			}
 			existing[key] = text
 			count++
@@ -243,14 +314,28 @@ func (s *Store) AcceptLocalConversation(ctx context.Context, in Input, messages 
 				return ErrDeliveryMemoryConflict
 			}
 			for i, text := range canonical {
-				if existing["local:"+in.TraceID+":"+strconv.Itoa(i)] != text {
+				if existing[prefix+strconv.Itoa(i)] != text {
 					return ErrDeliveryMemoryConflict
 				}
 			}
 			return nil
 		}
+		if continuationID != "" {
+			// A cancellation and a late model reply serialize on Store.mu.
+			// Existing groups above remain replayable after completion; a new
+			// group may only cross the original task's generating boundary.
+			var state, request, event, hash string
+			var revision int
+			err := s.db.QueryRowContext(ctx, `SELECT state,request_id,source_event_id,source_revision,source_hash FROM local_task_followups WHERE scope=? AND id=?`, scopeID, continuationID).Scan(&state, &request, &event, &revision, &hash)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && (state != "generating" || request != in.TraceID || event != in.Source.EventID || revision != in.Source.Revision || hash != in.Source.BodyHash) {
+				return ErrLocalTaskFollowupConflict
+			}
+		}
 		for i, text := range canonical {
-			key := "local:" + in.TraceID + ":" + strconv.Itoa(i)
+			key := prefix + strconv.Itoa(i)
 			scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(in.ReplyContext), DeliveryID: key, RequestTraceID: in.TraceID, TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		}
 		scope.LastInteraction = now
