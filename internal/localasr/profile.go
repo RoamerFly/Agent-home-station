@@ -160,11 +160,11 @@ func Run(ctx context.Context, store *pluginhost.Store, scratch string, windows *
 		// The installed package digest and fish identity can make paths exceed
 		// Win32 MAX_PATH. Use extended spelling only after resource validation.
 		for i, path := range readonly {
-			readonly[i] = localASRProcessPath(path)
+			readonly[i] = pluginruntime.WindowsProcessPath(path)
 		}
 		for i, arg := range argv {
 			if filepath.IsAbs(arg) {
-				argv[i] = localASRProcessPath(arg)
+				argv[i] = pluginruntime.WindowsProcessPath(arg)
 			}
 		}
 	}
@@ -190,13 +190,6 @@ func Run(ctx context.Context, store *pluginhost.Store, scratch string, windows *
 		return "", "", errors.New("local_asr_response_invalid")
 	}
 	return result.State, strings.TrimSpace(result.Text), nil
-}
-
-func localASRProcessPath(path string) string {
-	if len(path) >= 248 && len(path) > 2 && path[1] == ':' {
-		return `\\?\` + path
-	}
-	return path
 }
 
 func bytesHasWAVHeader(wav []byte) bool {

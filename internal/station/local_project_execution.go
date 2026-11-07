@@ -474,11 +474,5 @@ func (p *localProjectPolicy) publishOutput(ctx context.Context, job pluginhost.J
 // long-path registry flag. Pass extended paths to the tool, and use ordinary
 // host paths for the separately validated artifact read.
 func windowsProjectToolPath(path string) string {
-	if strings.HasPrefix(path, `\\?\`) {
-		return path
-	}
-	if strings.HasPrefix(path, `\\`) {
-		return `\\?\UNC\` + strings.TrimPrefix(path, `\\`)
-	}
-	return `\\?\` + path
+	return pluginruntime.WindowsProcessPath(path)
 }

@@ -436,6 +436,14 @@ $preview = .\scripts\Update-LegacyWechatLauncher.ps1 @swap | ConvertFrom-Json
 
 PDF 导出还需可用的文档运行时。构建时为上述命令同时提供 `-DocumentPythonPackagesDirectory` 与 `-DocumentFontsDirectory`，分别指向经过审核的纯 Python 依赖和可分发字体目录。「项目工具」会显示 PDF 导出是否就绪。已有旧版文档工坊时，先停用，再确认原有本机素材权限并更新，然后重新启用。当前本地文档入口覆盖已登记 DOCX 的检查、生成和基础版式导出。OCR 与 PDF 页面视觉比对仍需独立接入和验证。
 
+已有相同固定版本的文档环境时，可以复用其中的依赖与字体，不必重新下载或启动 Office。准备脚本接受已经核对为审核摘要的 ReportLab 离线补丁；重复运行会检查现有清单及全部已登记文件的哈希，损坏或路径越界时停止，不覆盖现有目录。只需 Word 与 PDF 的场景可省略 OCR 和页面渲染依赖。
+
+```powershell
+python -B scripts/prepare_document_runtime.py --target '<新版目录>/runtimes/document-workshop' --python-packages-source '<旧版目录>/runtimes/document-workshop/python-packages' --fonts-source '<旧版目录>/runtimes/document-workshop/fonts'
+```
+
+Windows 工具启动器会在权限、来源和文件校验完成后，将进程使用的路径转换为扩展格式。这样鱼身份、工具摘要和任务目录组成的较长路径也能启动工具。路径格式转换不增加文件授权。可用 `AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT=<新版目录>/runtimes` 与 `AHS_LOCAL_PROJECT_DOCUMENT_LPAC_TEST=1` 运行 `go test ./internal/station -run '^TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat$' -v -count=1`，通过合成聊天模型和实际隔离进程核对中文可编辑 Word、PDF、下载、重启及来源失效。该测试不访问模型提供商和微信。
+
 ### 音频工坊
 
 用 `./scripts/Build-Desktop.ps1 -LocalStation -WithAudioWorkshop -Test -OutputDirectory ./temp/local-station-audio` 构建 Windows 音频预览，也可以与 `-WithDocumentWorkshop` 一起使用。音频工坊使用项目内受管 Python，独立于微信、GPU 和在线服务。
