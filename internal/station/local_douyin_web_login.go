@@ -24,15 +24,16 @@ import (
 // claim that the platform has verified an account. Never expose its contents
 // to capability discovery, the editable fish home or model input.
 type localDouyinWebView struct {
-	Revision    uint64 `json:"revision"`
-	State       string `json:"state"`
-	Active      bool   `json:"active"`
-	AttemptID   string `json:"attempt_id,omitempty"`
-	ConfirmedAt string `json:"confirmed_at,omitempty"`
-	Available   bool   `json:"available"`
-	Reason      string `json:"reason,omitempty"`
-	ReadEnabled bool   `json:"read_enabled"`
-	ReadScope   string `json:"read_scope"`
+	Revision        uint64 `json:"revision"`
+	State           string `json:"state"`
+	Active          bool   `json:"active"`
+	AttemptID       string `json:"attempt_id,omitempty"`
+	ConfirmedAt     string `json:"confirmed_at,omitempty"`
+	Available       bool   `json:"available"`
+	Reason          string `json:"reason,omitempty"`
+	ReadEnabled     bool   `json:"read_enabled"`
+	ReadScope       string `json:"read_scope"`
+	PlaybackEnabled bool   `json:"playback_enabled"`
 }
 
 type localDouyinWebInput struct {
@@ -42,16 +43,18 @@ type localDouyinWebInput struct {
 	ApproveProfile bool    `json:"approve_profile"`
 	AllowRead      *bool   `json:"allow_read,omitempty"`
 	ReadScope      *string `json:"read_scope,omitempty"`
+	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
 }
 
 type localDouyinWebRecord struct {
-	Version     int    `json:"schema_version"`
-	FishID      string `json:"fish_id"`
-	Revision    uint64 `json:"revision"`
-	Profile     string `json:"profile,omitempty"`
-	ConfirmedAt string `json:"confirmed_at,omitempty"`
-	ReadEnabled bool   `json:"read_enabled,omitempty"`
-	ReadScope   string `json:"read_scope,omitempty"`
+	Version         int    `json:"schema_version"`
+	FishID          string `json:"fish_id"`
+	Revision        uint64 `json:"revision"`
+	Profile         string `json:"profile,omitempty"`
+	ConfirmedAt     string `json:"confirmed_at,omitempty"`
+	ReadEnabled     bool   `json:"read_enabled,omitempty"`
+	ReadScope       string `json:"read_scope,omitempty"`
+	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
 }
 
 type localDouyinLoginWindow interface {
@@ -67,13 +70,14 @@ type localDouyinWebLogin struct {
 	available     func() bool
 	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
+	sampleVideo   func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	window        localDouyinLoginWindow
 	cancel        context.CancelFunc
 	attempt, fish string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
 		}}
@@ -153,6 +157,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.ReadScope == "home_and_videos" && !record.ReadEnabled {
 		return record, errors.New("网页读取范围缺少有效许可，原资料保留")
 	}
+	if record.PlaybackEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
+		return record, errors.New("网页播放许可缺少有效的视频页读取范围，原资料保留")
+	}
 	if record.ConfirmedAt != "" {
 		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
 			return record, errors.New("网页登录登记时间无效，原资料保留")
@@ -188,6 +195,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 		v.Reason = "未找到可用的 Microsoft Edge，已有网页登录资料保留"
 	}
 	v.ReadEnabled = record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
+	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	return v
 }
 
@@ -247,6 +255,14 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		} else if in.ReadScope != nil {
 			record.ReadScope = *in.ReadScope
 		}
+		if in.AllowPlayback != nil && *in.AllowPlayback && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
+			return fail(400, "请先允许首页及视频页文字读取，再单独允许静音播放观察")
+		}
+		if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {
+			record.PlaybackEnabled = false
+		} else if in.AllowPlayback != nil {
+			record.PlaybackEnabled = *in.AllowPlayback
+		}
 		if save() != nil {
 			return fail(503, "网页读取授权未保存，请重新读取后核对")
 		}
@@ -289,6 +305,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ConfirmedAt = ""
 		record.ReadEnabled = false
 		record.ReadScope = ""
+		record.PlaybackEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
 		}
@@ -335,6 +352,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if record.ReadEnabled {
 			record.ReadEnabled = false
 			record.ReadScope = ""
+			record.PlaybackEnabled = false
 			if save() != nil {
 				return fail(503, "网页读取授权未能撤销，尚未清理资料")
 			}

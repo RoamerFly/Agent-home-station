@@ -45,13 +45,16 @@ def verify(binary, output):
                     begin_count = 0
                     late_401 = False
                     scope_conflict = False
+                    playback_conflict = False
+                    get_count = 0
                     # Older station responses did not include read_enabled; the UI must treat that as false.
                     view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
                     requests = []
 
                     def web_login(route):
-                        nonlocal revision, view, begin_count, late_401, scope_conflict
+                        nonlocal revision, view, begin_count, late_401, scope_conflict, playback_conflict, get_count
                         if route.request.method == "GET":
+                            get_count += 1
                             if late_401:
                                 late_401 = False
                                 route.fulfill(status=401, content_type="application/json", body=json.dumps({"error": "登录状态已失效，请重新验证。"}, ensure_ascii=False))
@@ -66,29 +69,41 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home"}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
                             view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home"}
                         elif action == "set_read":
-                            assert body == {"action": "set_read", "revision": revision, "allow_read": True} or body == {"action": "set_read", "revision": revision, "allow_read": False} or body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home"} or body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home_and_videos"}
+                            assert set(body) <= {"action", "revision", "allow_read", "read_scope", "allow_playback"}
+                            assert isinstance(body["allow_read"], bool)
+                            assert "allow_playback" not in body or isinstance(body["allow_playback"], bool)
+                            assert "read_scope" not in body or body["read_scope"] in ("home", "home_and_videos")
                             assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            if playback_conflict:
+                                playback_conflict = False
+                                assert body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home_and_videos", "allow_playback": True}
+                                revision += 1
+                                view = {**view, "revision": revision, "playback_enabled": False}
+                                route.fulfill(status=409, content_type="application/json", body=json.dumps({"error": "播放许可已在别处更新，请重新读取。"}, ensure_ascii=False))
+                                return
                             if scope_conflict:
                                 scope_conflict = False
                                 assert body == {"action": "set_read", "revision": revision, "allow_read": True, "read_scope": "home"}
                                 route.fulfill(status=409, content_type="application/json", body=json.dumps({"error": "读取范围已在别处更新，请重新读取。"}, ensure_ascii=False))
                                 return
                             revision += 1
-                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": body.get("read_scope", "home") if body["allow_read"] else "home"}
+                            read_scope = body.get("read_scope", view.get("read_scope", "home")) if body["allow_read"] else "home"
+                            playback_enabled = body.get("allow_playback", view.get("playback_enabled", False)) if body["allow_read"] and read_scope == "home_and_videos" else False
+                            view = {**view, "revision": revision, "read_enabled": body["allow_read"], "read_scope": read_scope, "playback_enabled": playback_enabled}
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home"}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home"}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -107,6 +122,7 @@ def verify(binary, output):
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
+                    assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
                     assert page.get_by_text("已取得开放平台接口权限", exact=False).count() == 0
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
@@ -128,19 +144,72 @@ def verify(binary, output):
                     page.get_by_text("已允许读取实际网页文字。", exact=False).wait_for()
                     scope = page.get_by_label("读取范围", exact=True)
                     assert scope.input_value() == "home"
+                    assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
                     scope.select_option("home_and_videos")
                     page.get_by_text("视频页文字不等于音轨或完整观看", exact=False).wait_for()
                     assert scope.input_value() == "home_and_videos"
+                    # An older wide-text response has no playback flag; reopening must not grant it.
+                    view.pop("playback_enabled", None)
+                    page.locator("#app-dialog-close").click()
+                    open_application(page, "抖音")
+                    playback = page.get_by_label("允许静音观察视频播放", exact=True)
+                    playback.wait_for()
+                    assert not playback.is_checked(), "扩大文字范围不得自动开启播放许可；旧状态缺省关闭"
+                    assert "allow_playback" not in requests[-1]
+                    playback.check()
+                    page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
+                    assert view["playback_enabled"] is True
+                    playback.uncheck()
+                    page.get_by_text("已停止静音播放观察。", exact=True).wait_for()
+                    assert view["playback_enabled"] is False
+                    before_gets = get_count
+                    playback_conflict = True
+                    # A failed save intentionally restores unchecked state; use one click rather than
+                    # check(), which may retry a click while the controlled checkbox is replaced.
+                    playback.click()
+                    page.get_by_text("播放许可已在别处更新，请重新读取。", exact=True).first.wait_for()
+                    page.locator(".douyin-web-playback-label input:not(:disabled)").wait_for()
+                    assert get_count > before_gets, "保存冲突后应重新读取服务端许可"
+                    assert not playback.is_checked(), "冲突不得把未保存的播放许可留在界面上"
+                    playback.check()
+                    page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
+                    scope.select_option("home")
+                    page.get_by_text("已允许读取抖音首页网页文字。", exact=True).wait_for()
+                    assert view["playback_enabled"] is False
+                    assert playback.count() == 0, "降级为仅首页时应移除播放许可控件"
+                    scope.select_option("home_and_videos")
+                    playback.wait_for()
+                    assert not playback.is_checked()
+                    playback.check()
+                    page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
+                    page.get_by_role("button", name="停止网页读取", exact=True).click()
+                    page.get_by_role("button", name="允许读取首页文字", exact=True).wait_for()
+                    assert view["playback_enabled"] is False and playback.count() == 0
+                    page.get_by_role("button", name="允许读取首页文字", exact=True).click()
+                    page.get_by_label("读取范围", exact=True).wait_for()
+                    scope.select_option("home_and_videos")
+                    playback.wait_for()
+                    playback.check()
+                    page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
+                    assert_no_horizontal_overflow(page, f"{width}-pixel Douyin playback permission")
+                    assert page.locator("#app-dialog").evaluate("node => node.scrollTop") == 0, "应用弹窗外层不能随内部操作滚动并裁切标题"
+                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-playback-{suffix}.png"))
+                    before_gets = get_count
                     scope_conflict = True
                     scope.select_option("home")
                     page.get_by_text("读取范围已在别处更新，请重新读取。", exact=True).first.wait_for()
+                    page.locator(".douyin-web-playback-label input:not(:disabled)").wait_for()
+                    assert get_count > before_gets
                     assert page.get_by_label("读取范围", exact=True).input_value() == "home_and_videos", "失败后必须保留服务端读取范围"
+                    assert playback.is_checked()
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
                     # A saved profile can be opened again for a later re-login.
                     page.get_by_role("button", name="重新打开登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
                     assert view["read_scope"] == "home", "重新登录必须恢复默认读取范围"
+                    assert view["playback_enabled"] is False, "重新登录必须撤销播放许可"
+                    assert playback.count() == 0
                     view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False, "read_scope": "home"}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
@@ -153,7 +222,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 9
+                    assert len(requests) == 20
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))

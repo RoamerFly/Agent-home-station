@@ -143,7 +143,9 @@ func startEdgePipe(ctx context.Context, edge, profile, proxyAddress string, onCl
 	}
 	args := []string{edge, "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--metrics-recording-only", "--remote-debugging-pipe", fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", browserRead, browserWrite), "--user-data-dir=" + profile}
 	if !options.visible {
-		args = append(args, "--headless=new")
+		// Mute before page scripts run: setting a selected video's muted flag
+		// later cannot prevent an earlier autoplay from reaching system audio.
+		args = append(args, "--headless=new", "--mute-audio")
 	}
 	if options.appWindow {
 		// App mode hides the normal omnibox.  The initial page stays blank until

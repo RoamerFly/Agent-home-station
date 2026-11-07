@@ -101,7 +101,12 @@ func (p *SearchApp) webReadRef(ctx context.Context) (apphost.ConnectionRef, bool
 }
 
 func (p *SearchApp) validWebReadAccess(ref apphost.ConnectionRef, contentID string, field apphost.ObservationField) bool {
-	return ref.AppID == ID && ref.InstallationID == installationID && ref.ConnectionID == WebReadConnectionID && IsWebReadContentID(contentID) && field == apphost.ObservationPageText
+	if ref.AppID != ID || ref.InstallationID != installationID || ref.ConnectionID != WebReadConnectionID || !IsWebReadContentID(contentID) {
+		return false
+	}
+	// The homepage is text-only. Playback requires a host-minted video target
+	// and an independent, current grant checked by the trusted callback.
+	return field == apphost.ObservationPageText || contentID != WebReadContentID && field == apphost.ObservationPlayback
 }
 
 func (p *SearchApp) webReadTargets(ctx context.Context) ([]apphost.ObservationTarget, error) {

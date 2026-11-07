@@ -247,7 +247,7 @@ func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
 		} `json:"browser_routes"`
 	}
 	raw, err := descriptors.ReadFile("douyin/app.json")
-	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 3 ||
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 4 ||
 		browser.Routes[0].Capability != "observation.playback" ||
 		browser.Routes[0].URLTemplate != "https://open.douyin.com/player/video?autoplay=0&vid={video_id}" ||
 		browser.Routes[0].OwnerOptIn != "sample_public_playback" ||
@@ -256,7 +256,10 @@ func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
 		browser.Routes[1].OwnerOptIn != "explicit-owner-web-read" ||
 		browser.Routes[2].Capability != "observation.page-text" ||
 		browser.Routes[2].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
-		browser.Routes[2].OwnerOptIn != "web-scope-home-and-videos" {
+		browser.Routes[2].OwnerOptIn != "web-scope-home-and-videos" ||
+		browser.Routes[3].Capability != "observation.web-playback" ||
+		browser.Routes[3].URLTemplate != "https://www.douyin.com/video/{video_id}" ||
+		browser.Routes[3].OwnerOptIn != "web-sample-playback" {
 		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||

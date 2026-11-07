@@ -190,7 +190,7 @@ body.is-home-ready .page-message:empty { display: none; }
 .app-card-status.is-connected { color: var(--success); }
 .app-card-summary { margin: 0; padding: 0 16px 18px; color: var(--muted); font-size: .84rem; line-height: 1.6; }
 .app-card-footer { display: flex; justify-content: space-between; gap: 12px; padding: 11px 16px; border-top: 1px solid var(--line); color: var(--accent-deep); font-size: .78rem; }
-.app-dialog { width: min(1440px, calc(100vw - 48px)); height: calc(100dvh - 48px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 22px; color: var(--ink); background: var(--surface-solid); box-shadow: var(--shadow); overflow: hidden; }
+.app-dialog { width: min(1440px, calc(100vw - 48px)); height: calc(100dvh - 48px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 22px; color: var(--ink); background: var(--surface-solid); box-shadow: var(--shadow); overflow: clip; }
 .app-dialog[open] { display: flex; flex-direction: column; }
 .app-dialog::backdrop { background: rgba(12,18,44,.55); }
 .app-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 28px 16px; }
@@ -228,6 +228,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .douyin-web-login-actions { margin-top: 9px; }
 .douyin-web-read-scope-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .8rem; font-weight: 700; }
 .douyin-web-read-scope { min-width: 10.5rem; max-width: 100%; min-height: 2rem; border: 1px solid var(--line); border-radius: 9px; padding: 0 8px; color: var(--ink); background: var(--surface-solid); }
+.douyin-web-playback-label { display: inline-flex; align-items: center; gap: 6px; min-height: 2rem; max-width: 100%; color: var(--ink); font-size: .8rem; cursor: pointer; }
+.douyin-web-playback-label input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .publication-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .publication-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .publication-task-detail { min-width: 0; }

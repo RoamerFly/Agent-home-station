@@ -24,6 +24,15 @@
     "expanded_scope_owner_opt_in": "web-scope-home-and-videos",
     "scope_default": "home",
     "scope_expanded": "home_and_videos",
+    "playback": {
+      "field": "playback",
+      "owner_opt_in": "web-sample-playback",
+      "source": "host-verified-home-video-link-and-main-media",
+      "evidence": "html-media-played-ranges",
+      "default_seconds": 6,
+      "min_seconds": 1,
+      "max_seconds": 20
+    },
     "pagination": "host-owned",
     "profile": "host-owned"
   },

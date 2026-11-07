@@ -70,6 +70,14 @@
       "requires_owner_setting": "explicit-owner-web-read"
     },
     {
+      "id": "observation.web-playback",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后，静音采样首页实际发现并核验的视频页主媒体，只记录实际播放区间",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-sample-playback"
+    },
+    {
       "id": "publication.video",
       "implementation": "ready",
       "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",

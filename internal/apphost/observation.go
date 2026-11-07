@@ -170,10 +170,11 @@ var (
 	ErrObservationWebSessionRequired       = errors.New("网页要求登录或验证，请由主人打开抖音网页登录窗口处理")
 	ErrObservationWebSessionInvalid        = errors.New("网页登录资料登记不可用，请在抖音应用详情核对登录资料")
 	ErrObservationWebStorageUnavailable    = errors.New("网页读取进度无法读取或保存，请检查本机存储权限和磁盘空间")
-	ErrObservationWebReadTimeout           = errors.New("网页正文读取超时，可保留当前授权稍后重试")
+	ErrObservationWebReadTimeout           = errors.New("网页读取或播放观察超时，可保留当前授权稍后重试")
 	ErrObservationWebSnapshotChanged       = errors.New("网页读取快照已变化或不可用，请使用 refresh=true 从头读取")
 	ErrObservationPageTextSize             = errors.New("网页正文超出本机单页传输范围，未返回截断内容；可读取更具体的内容入口")
 	ErrObservationRemotePlayerUnavailable  = errors.New("抖音官方播放器暂未提供可采样的媒体，可稍后重试")
+	ErrObservationWebPlaybackUnavailable   = errors.New("未能把网页播放器的媒体来源与这条抖音视频核对一致，未记录播放；可稍后重试或重新读取视频页")
 	ErrObservationPlaybackUnavailable      = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
 	ErrObservationPlaybackLimit            = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
 	ErrObservationPlaybackSize             = errors.New("这条媒体超过当前 32 MiB 的读取上限，可选择体积更小的公开稿件")
@@ -307,7 +308,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	o.mu.Lock()
@@ -346,7 +347,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		}
 		for _, known := range []error{
 			ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid,
-			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationRemotePlayerUnavailable, ErrObservationPlaybackLimit,
+			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationRemotePlayerUnavailable, ErrObservationWebPlaybackUnavailable, ErrObservationPlaybackLimit,
 			ErrObservationWebSessionBusy, ErrObservationWebSessionRequired, ErrObservationWebSnapshotChanged, ErrObservationPageTextSize,
 			ErrObservationWebSessionInvalid, ErrObservationWebStorageUnavailable,
 			ErrObservationWebReadTimeout,
@@ -485,7 +486,7 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 		if chunk.FollowUpContentID != "" || chunk.FollowUpField != "" {
 			validNext := field == ObservationSearch && chunk.FollowUpField == ObservationPlayerEntry ||
 				field == ObservationPlayerEntry && chunk.FollowUpField == ObservationPlayback ||
-				field == ObservationPageText && chunk.FollowUpField == ObservationPageText
+				field == ObservationPageText && (chunk.FollowUpField == ObservationPageText || chunk.FollowUpField == ObservationPlayback)
 			if !validNext || chunk.SourceID == "" || strings.TrimSpace(chunk.FollowUpContentID) == "" || len(chunk.FollowUpContentID) > 256 {
 				return errors.New("应用内容返回了无效的后续读取编号")
 			}

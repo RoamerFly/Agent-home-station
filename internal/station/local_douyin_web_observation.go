@@ -127,7 +127,7 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 	if err != nil {
 		return apphost.ObservationGrant{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.Field != apphost.ObservationPageText {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !localDouyinWebFieldAllowed(a.record, in.ContentID, in.Field) {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
 	if _, ok := p.resolveTarget(a, in.ContentID); !ok {
@@ -162,7 +162,7 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.Field != apphost.ObservationPageText {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !localDouyinWebFieldAllowed(a.record, in.ContentID, in.Field) {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	target, ok := p.resolveTarget(a, in.ContentID)
@@ -178,6 +178,9 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 			return apphost.ErrObservationForbidden
 		}
 		return nil
+	}
+	if in.Field == apphost.ObservationPlayback {
+		return p.readPlayback(ctx, a, in, target, authorize)
 	}
 	dir := p.snapshotDirectory(a)
 	root, err := workspacefs.EnsurePath(dir)
@@ -252,7 +255,12 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if err = authorize(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	return localDouyinWebPage(snapshot, cursor.Offset, in.Limit)
+	page, err := localDouyinWebPage(snapshot, cursor.Offset, in.Limit)
+	if err == nil && target.videoID != "" && a.record.PlaybackEnabled && len(page.Chunks) > 0 {
+		page.Chunks[0].FollowUpContentID = in.ContentID
+		page.Chunks[0].FollowUpField = apphost.ObservationPlayback
+	}
+	return page, err
 }
 
 func fmtLocalDouyinWebCoverage(start, end, total int, captured string, links bool) string {

@@ -165,6 +165,32 @@ func TestObservationAudioProofBindsWindowAndSource(t *testing.T) {
 	}
 }
 
+func TestObservationPlaybackRefreshRechecksGrantAndReplacesOnlyOnRequest(t *testing.T) {
+	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
+		"": {Playback: []PlaybackInterval{{0, 1}}, PlaybackProof: &PlaybackProof{RequestedSeconds: 2, Ready: true, Paused: true, MediaDurationSeconds: 10}, Coverage: "first sample", Complete: true},
+	}}
+	o := NewObserver(observerFixtureRegistry(t, f), t.TempDir())
+	in := ObservationInput{AppID: "offline", ConnectionID: "account", ContentID: "post", Field: ObservationPlayback, Limit: 2}
+	if first, err := o.Read(t.Context(), in); err != nil || first.Cached || first.Playback[0].EndSeconds != 1 {
+		t.Fatalf("first: %+v %v", first, err)
+	}
+	f.pages[""] = ObservationPage{Playback: []PlaybackInterval{{0, 2}}, PlaybackProof: &PlaybackProof{RequestedSeconds: 2, Ready: true, Paused: true, MediaDurationSeconds: 10}, Coverage: "new sample", Complete: true}
+	if old, err := o.Read(t.Context(), in); err != nil || !old.Cached || old.Playback[0].EndSeconds != 1 {
+		t.Fatalf("cached: %+v %v", old, err)
+	}
+	in.Refresh = true
+	if fresh, err := o.Read(t.Context(), in); err != nil || fresh.Cached || fresh.Playback[0].EndSeconds != 2 {
+		t.Fatalf("refresh: %+v %v", fresh, err)
+	}
+	f.allowed = false
+	if _, err := o.Read(t.Context(), in); !errors.Is(err, ErrObservationForbidden) {
+		t.Fatalf("refresh bypassed grant: %v", err)
+	}
+	if len(f.cursors) != 2 {
+		t.Fatal("refresh or cache repeated unexpected browser work", f.cursors)
+	}
+}
+
 func TestObservationSearchRefreshRestartsOnlyOnRequest(t *testing.T) {
 	f := &observationFixture{allowed: true, version: "v1", pages: map[string]ObservationPage{
 		"":     {Chunks: []ObservationChunk{{Text: "first"}}, Coverage: "first page", NextCursor: "next"},

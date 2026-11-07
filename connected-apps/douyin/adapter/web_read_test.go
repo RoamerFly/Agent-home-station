@@ -20,6 +20,7 @@ type webReadStub struct {
 	grantFunc  func(apphost.ObservationAccess) (apphost.ObservationGrant, error)
 	page       apphost.ObservationPage
 	readErr    error
+	request    apphost.ObservationRequest
 	targetsHit int
 	grantHit   int
 	readHit    int
@@ -39,8 +40,9 @@ func (s *webReadStub) Grant(_ context.Context, access apphost.ObservationAccess)
 	}
 	return s.grant, s.grantErr
 }
-func (s *webReadStub) Read(context.Context, apphost.ObservationRequest) (apphost.ObservationPage, error) {
+func (s *webReadStub) Read(_ context.Context, request apphost.ObservationRequest) (apphost.ObservationPage, error) {
 	s.readHit++
+	s.request = request
 	return s.page, s.readErr
 }
 
@@ -179,6 +181,90 @@ func TestIsWebReadContentIDOnlyChecksOpaqueVideoSyntax(t *testing.T) {
 		if IsWebReadContentID(contentID) {
 			t.Fatalf("invalid web-read content ID accepted: %q", contentID)
 		}
+	}
+}
+
+func TestWebVideoPlaybackDelegatesExactHostGrantAndRequest(t *testing.T) {
+	ref := apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "saved-web-profile"}
+	videoID := WebVideoContentPrefix + "hostVideo_1-abc"
+	access := apphost.ObservationAccess{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationPlayback}
+	stub := &webReadStub{
+		connection: apphost.Connection{ID: WebReadConnectionID, AccountID: ref.AccountID, Configuration: "ready"}, present: true,
+		grant: apphost.ObservationGrant{Allowed: true, Version: "explicit-web-playback-grant", Fresh: true},
+		page: apphost.ObservationPage{Coverage: "host verified playback", Complete: true,
+			Playback:      []apphost.PlaybackInterval{{StartSeconds: 0, EndSeconds: 1.25}},
+			PlaybackProof: &apphost.PlaybackProof{RequestedSeconds: 17, MediaDurationSeconds: 20, Ready: true, Paused: true}},
+	}
+	app := New(t.TempDir()).WithWebReadConnection(stub)
+	grant, err := app.ObservationGrant(t.Context(), access)
+	if err != nil || grant != stub.grant || stub.grantHit != 1 {
+		t.Fatalf("playback grant = %#v, %v, hits=%d", grant, err, stub.grantHit)
+	}
+	request := apphost.ObservationRequest{ObservationAccess: access, Cursor: "host-checkpoint", Limit: 17}
+	page, err := app.ReadObservation(t.Context(), request)
+	if err != nil || page.Coverage != stub.page.Coverage || len(page.Playback) != 1 || page.Playback[0] != stub.page.Playback[0] || page.PlaybackProof != stub.page.PlaybackProof || stub.request != request || stub.readHit != 1 {
+		t.Fatalf("playback delegation = %#v, %v, request=%#v, hits=%d", page, err, stub.request, stub.readHit)
+	}
+
+	// Valid syntax never supplies authorization. The current host may deny a
+	// formerly accepted target or independently disable playback at any time.
+	stub.grant = apphost.ObservationGrant{Allowed: false}
+	stub.page = apphost.ObservationPage{}
+	stub.readErr = apphost.ErrObservationForbidden
+	grant, err = app.ObservationGrant(t.Context(), access)
+	if err != nil || grant.Allowed || stub.grantHit != 2 {
+		t.Fatalf("host playback denial lost: %#v, %v", grant, err)
+	}
+	if page, err := app.ReadObservation(t.Context(), request); !errors.Is(err, apphost.ErrObservationForbidden) || len(page.Playback) != 0 || page.PlaybackProof != nil {
+		t.Fatalf("denied playback result returned: %#v, %v", page, err)
+	}
+	grantHits, readHits := stub.grantHit, stub.readHit
+	for _, denied := range []apphost.ObservationAccess{
+		{ConnectionRef: ref, ContentID: WebReadContentID, Field: apphost.ObservationPlayback},
+		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationAudio},
+		{ConnectionRef: ref, ContentID: videoID, Field: apphost.ObservationTitle},
+		{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "bad=padding", Field: apphost.ObservationPlayback},
+		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "other-profile"}, ContentID: videoID, Field: apphost.ObservationPlayback},
+		{ConnectionRef: apphost.ConnectionRef{AppID: ID, InstallationID: "other-installation", ConnectionID: WebReadConnectionID, AccountID: ref.AccountID}, ContentID: videoID, Field: apphost.ObservationPlayback},
+		{ConnectionRef: apphost.ConnectionRef{AppID: "other-app", InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: ref.AccountID}, ContentID: videoID, Field: apphost.ObservationPlayback},
+	} {
+		if grant, err := app.ObservationGrant(t.Context(), denied); err != nil || grant.Allowed {
+			t.Fatalf("invalid playback grant accepted: %#v, %#v, %v", denied, grant, err)
+		}
+		if _, err := app.ReadObservation(t.Context(), apphost.ObservationRequest{ObservationAccess: denied}); !errors.Is(err, apphost.ErrObservationForbidden) {
+			t.Fatalf("invalid playback request reached host: %#v, %v", denied, err)
+		}
+	}
+	if stub.grantHit != grantHits || stub.readHit != readHits {
+		t.Fatalf("invalid playback reached callback: grants %d/%d, reads %d/%d", stub.grantHit, grantHits, stub.readHit, readHits)
+	}
+}
+
+func TestWebVideoPlaybackCallbacksRemainIsolatedAndDiscoveryStaysHomeText(t *testing.T) {
+	ref := apphost.ConnectionRef{AppID: ID, InstallationID: installationID, ConnectionID: WebReadConnectionID, AccountID: "same-synthetic-profile"}
+	video := apphost.ObservationAccess{ConnectionRef: ref, ContentID: WebVideoContentPrefix + "sameSyntaxDifferentOwnerGrant", Field: apphost.ObservationPlayback}
+	first := &webReadStub{connection: apphost.Connection{ID: ref.ConnectionID, AccountID: ref.AccountID, Configuration: "ready"}, present: true,
+		grant:   apphost.ObservationGrant{Allowed: true, Version: "first-owner"},
+		targets: []apphost.ObservationTarget{{ConnectionRef: ref, ContentID: WebReadContentID, Fields: []apphost.ObservationField{apphost.ObservationPageText}}}}
+	second := &webReadStub{connection: first.connection, present: true, grant: apphost.ObservationGrant{Allowed: false}}
+	original := New(t.TempDir())
+	firstApp, secondApp := original.WithWebReadConnection(first), original.WithWebReadConnection(second)
+	if grant, err := firstApp.ObservationGrant(t.Context(), video); err != nil || !grant.Allowed || grant.Version != "first-owner" {
+		t.Fatalf("first callback = %#v, %v", grant, err)
+	}
+	if grant, err := secondApp.ObservationGrant(t.Context(), video); err != nil || grant.Allowed {
+		t.Fatalf("second callback borrowed grant = %#v, %v", grant, err)
+	}
+	if first.grantHit != 1 || second.grantHit != 1 {
+		t.Fatalf("callback identity mixed: first=%d second=%d", first.grantHit, second.grantHit)
+	}
+	targets, err := firstApp.ObservationTargets(t.Context(), WebReadConnectionID)
+	if err != nil || len(targets) != 1 || targets[0].ContentID != WebReadContentID || len(targets[0].Fields) != 1 || targets[0].Fields[0] != apphost.ObservationPageText {
+		t.Fatalf("playback changed initial text discovery: %#v, %v", targets, err)
+	}
+	first.targets[0].Fields = []apphost.ObservationField{apphost.ObservationPageText, apphost.ObservationPlayback}
+	if _, err := firstApp.ObservationTargets(t.Context(), WebReadConnectionID); !errors.Is(err, apphost.ErrObservationForbidden) {
+		t.Fatalf("homepage playback incorrectly discoverable: %v", err)
 	}
 }
 
