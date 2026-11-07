@@ -743,6 +743,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	defer memory.Close()
 	config := companion.Defaults()
 	config.Enabled, config.Name = true, "大肥鱼"
+	// The application model supplies the current main and app personas on each
+	// call. Do not freeze a second copy of the default character in this worker.
+	config.Persona = "使用宿主在本轮提供的主角色设定，并结合当前应用的子角色补充。"
 	config.Permissions = companion.Permissions{ReplyText: true, Remember: true}
 	threads, rules := policy.groupParticipation(&config)
 	mediaReplies := len(policy.MediaReplyGrants) != 0

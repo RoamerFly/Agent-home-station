@@ -53,14 +53,15 @@ type LegacySettingsPlan struct {
 }
 
 type LegacyModelSettingsView struct {
-	Provider        string `json:"provider"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	MaxTokens       int    `json:"max_tokens"`
-	ThinkingEnabled bool   `json:"thinking_enabled"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	KeyConfigured   bool   `json:"key_configured"`
-	PersonaSet      bool   `json:"persona_set"`
+	Provider         string `json:"provider"`
+	BaseURL          string `json:"base_url"`
+	Model            string `json:"model"`
+	MaxTokens        int    `json:"max_tokens"`
+	ThinkingEnabled  bool   `json:"thinking_enabled"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	KeyConfigured    bool   `json:"key_configured"`
+	PersonaSet       bool   `json:"persona_set"`
+	WechatPersonaSet bool   `json:"wechat_persona_set"`
 }
 
 type legacySettingsConfig struct {
@@ -95,6 +96,7 @@ type legacySettingsLoaded struct {
 	identity   []byte
 	configHash string
 	idHash     string
+	appPersona string
 }
 
 // PreviewLegacySettings reads a stopped legacy admin directory without
@@ -160,13 +162,20 @@ func ImportLegacySettings(ctx context.Context, sourceAdminDir, targetDir, expect
 	if err = writeLegacySettingsStageFile(stageRoot, "local-model.json", modelData); err != nil {
 		return LegacySettingsPlan{}, err
 	}
+	profiles, err := json.Marshal(localAppPersonaRecord{Version: 1, Apps: map[string]localAppPersona{"wechat": {Revision: 1, Persona: loaded.appPersona}}})
+	if err != nil {
+		return LegacySettingsPlan{}, err
+	}
+	if err = writeLegacySettingsStageFile(stageRoot, localAppPersonasFile, profiles); err != nil {
+		return LegacySettingsPlan{}, err
+	}
 	if len(loaded.identity) > 0 {
 		if err = writeLegacySettingsStageFile(stageRoot, legacySettingsIdentityFile, loaded.identity); err != nil {
 			return LegacySettingsPlan{}, err
 		}
 	}
 	receipt := legacySettingsReceipt{
-		Version: 1, Digest: loaded.plan.Digest, Source: loaded.plan.Source,
+		Version: 2, Digest: loaded.plan.Digest, Source: loaded.plan.Source,
 		ConfigSHA256: loaded.configHash, IdentitySHA256: loaded.idHash,
 		Model: loaded.plan.Model, FishID: loaded.plan.FishID,
 	}
@@ -253,13 +262,16 @@ func loadLegacySettings(ctx context.Context, sourceAdminDir, targetDir string) (
 		LocalModelSettings: LocalModelSettings{
 			Revision: 1, Provider: old.Provider, BaseURL: old.BaseURL, Model: old.Model,
 			MaxTokens: old.MaxTokens, ThinkingEnabled: old.ThinkingEnabled,
-			ReasoningEffort: old.ReasoningEffort, Persona: persona,
+			ReasoningEffort: old.ReasoningEffort, Persona: defaults.Persona,
 		},
 		APIKey: old.APIKey,
 	}
 	record.KeyConfigured = record.APIKey != ""
 	if err = validateLocalModelRecord(record); err != nil {
 		return legacySettingsLoaded{}, fmt.Errorf("旧管理模型设置不适用于成长站：%w", err)
+	}
+	if !validAppPersona(localAppPersona{Revision: 1, Persona: persona}) {
+		return legacySettingsLoaded{}, errors.New("旧微信角色设定超过应用子角色长度要求")
 	}
 	if err = ctx.Err(); err != nil {
 		return legacySettingsLoaded{}, err
@@ -281,10 +293,11 @@ func loadLegacySettings(ctx context.Context, sourceAdminDir, targetDir string) (
 		Provider: record.Provider, BaseURL: record.BaseURL, Model: record.Model,
 		MaxTokens: record.MaxTokens, ThinkingEnabled: record.ThinkingEnabled,
 		ReasoningEffort: record.ReasoningEffort, KeyConfigured: record.APIKey != "",
-		PersonaSet: strings.TrimSpace(record.Persona) != "",
+		PersonaSet:       strings.TrimSpace(record.Persona) != "",
+		WechatPersonaSet: persona != "",
 	}
 	digest := settingsDigest(source, target, configHash, idHash)
-	return legacySettingsLoaded{plan: LegacySettingsPlan{Digest: digest, Source: source, Target: target, Model: view, HasIdentity: len(identityData) > 0, FishID: fishID}, record: record, identity: identityData, configHash: configHash, idHash: idHash}, nil
+	return legacySettingsLoaded{plan: LegacySettingsPlan{Digest: digest, Source: source, Target: target, Model: view, HasIdentity: len(identityData) > 0, FishID: fishID}, record: record, identity: identityData, configHash: configHash, idHash: idHash, appPersona: persona}, nil
 }
 
 func readLegacySettingsFile(root *os.Root, name string, required bool, limit int64) ([]byte, error) {
@@ -344,7 +357,7 @@ func existingLegacySettingsImport(parent *os.Root, targetName string, loaded leg
 		return true, false, nil
 	}
 	var receipt legacySettingsReceipt
-	if json.Unmarshal(receiptData, &receipt) != nil || receipt.Version != 1 || receipt.Digest != loaded.plan.Digest || receipt.Source != loaded.plan.Source || receipt.ConfigSHA256 != loaded.configHash || receipt.IdentitySHA256 != loaded.idHash {
+	if json.Unmarshal(receiptData, &receipt) != nil || receipt.Version != 2 || receipt.Digest != loaded.plan.Digest || receipt.Source != loaded.plan.Source || receipt.ConfigSHA256 != loaded.configHash || receipt.IdentitySHA256 != loaded.idHash {
 		return true, false, nil
 	}
 	modelData, modelErr := readLegacySettingsFile(target, "local-model.json", true, legacySettingsTargetLimit)
@@ -356,6 +369,10 @@ func existingLegacySettingsImport(parent *os.Root, targetName string, loaded leg
 		return true, false, nil
 	}
 	if record != loaded.record {
+		return true, false, nil
+	}
+	profile, profileErr := (localAppPersonaStore{dir: loaded.plan.Target}).View("wechat")
+	if profileErr != nil || profile.Revision != 1 || profile.Persona != loaded.appPersona {
 		return true, false, nil
 	}
 	if len(loaded.identity) > 0 {
@@ -443,7 +460,7 @@ func legacySettingsHash(data []byte) string {
 }
 
 // mergedLegacyPersona carries every supported character-setting field into the
-// sole station persona without pretending that reply scopes or other legacy
+// WeChat app persona without pretending that reply scopes or other legacy
 // behavior options were migrated. Companion persona remains the primary text;
 // the other user-authored text is labelled and omitted only when identical.
 func mergedLegacyPersona(old legacySettingsConfig) string {

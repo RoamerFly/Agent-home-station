@@ -15,7 +15,7 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}
-	registry, h.wechat, err = bindStationWechat(registry, h.home.dataDir, h.home.root, h.models.applicationModel(), h.home.artifacts,
+	registry, h.wechat, err = bindStationWechat(registry, h.home.dataDir, h.home.root, h.models.applicationModel("wechat"), h.home.artifacts,
 		stationLocalASR{version: h.home.localStationASRVersion, transcribe: h.home.transcribeLocalStationAudio},
 		stationDocumentTools{available: h.home.stationDocumentAvailable, inspect: h.home.inspectStationDocument,
 			exportAvailable: h.home.stationDocumentExportAvailable, exportPDF: h.home.exportStationDocumentPDF,
@@ -26,6 +26,7 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 		return apphost.Registry{}, nil, err
 	}
 	apps := []stationhost.Attachment{{Mount: func(owner *websession.Store, mux *http.ServeMux) {
+		h.home.appPersonaRoutes(owner, mux, registry)
 		h.home.bilibiliRoutes(owner, mux, registry)
 		h.home.douyinRoutes(owner, mux, registry, h.ctx)
 	}}}

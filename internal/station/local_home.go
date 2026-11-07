@@ -85,6 +85,9 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 	if err = errors.Join(fenceErr, root.Close()); err != nil {
 		return nil, err
 	}
+	if err = migrateLegacyAppPersona(dir); err != nil {
+		return nil, err
+	}
 	var runner *agenthost.WindowsConfig
 	if len(windows) > 0 {
 		runner, err = stationruntime.BindWindowsRunner(windows[0], dir, workspaceRoot)

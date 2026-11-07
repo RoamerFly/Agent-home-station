@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationservices"
 )
@@ -17,23 +19,39 @@ func (h *localHomeService) applicationOwner() (stationservices.Owner, error) {
 	return stationservices.Owner{FishID: record.FishID, ID: record.LocalOwner.ID}, nil
 }
 
-func (s *localModelStore) applicationModel() stationservices.Model {
+func (s *localModelStore) applicationModel(app string) stationservices.Model {
 	return stationservices.Model{
 		Persona: func() (string, error) {
 			view, err := s.View()
 			if err != nil || !view.KeyConfigured {
 				return "", errors.New("本机模型尚未就绪")
 			}
-			return view.Persona, nil
+			_, err = (localAppPersonaStore{dir: filepath.Dir(s.path)}).View(app)
+			return "", err
 		},
-		Client: localApplicationModel{s},
+		Client: localApplicationModel{store: s, app: app},
 	}
 }
 
-type localApplicationModel struct{ store *localModelStore }
+type localApplicationModel struct {
+	store *localModelStore
+	app   string
+}
+
+func (m localApplicationModel) prepare(system string) (companion.LanguageModel, string, error) {
+	model, settings, err := m.store.ClientSnapshot()
+	if err != nil {
+		return nil, "", err
+	}
+	profile, err := (localAppPersonaStore{dir: filepath.Dir(m.store.path)}).View(m.app)
+	if err != nil {
+		return nil, "", err
+	}
+	return model, system + applicationPersonaPolicy(settings.Persona, profile), nil
+}
 
 func (m localApplicationModel) Chat(ctx context.Context, system string, history []map[string]string) (string, error) {
-	model, err := m.store.Client()
+	model, system, err := m.prepare(system)
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +59,7 @@ func (m localApplicationModel) Chat(ctx context.Context, system string, history 
 }
 
 func (m localApplicationModel) ChatFunctions(ctx context.Context, system string, history []map[string]string, tools []mcptools.Tool) (string, error) {
-	model, err := m.store.Client()
+	model, system, err := m.prepare(system)
 	if err != nil {
 		return "", err
 	}

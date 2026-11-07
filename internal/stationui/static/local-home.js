@@ -53,7 +53,7 @@
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
+    return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "", douyinAuthorization: null, douyinAuthorizationError: "", douyinAuthorizationSaving: "",
       douyinOAuth: { saving: false, completing: false, state: "" }, bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -2550,12 +2550,85 @@
       const mark = appElement("span", Array.from(label)[0], "app-mark");
       mark.setAttribute("aria-hidden", "true");
       head.append(mark, appElement("h4", label));
-      const controls = record.id === "douyin" ? [douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
-        record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
-      const layers = [head, appSourceRow(record, catalog.get(record.id)), ...controls].filter(Boolean);
-      card.append(...layers);
+      const open = appElement("button", "", "app-card-entry");
+      open.type = "button"; open.setAttribute("aria-label", `管理${label}`);
+      const accounts = apps.connections.get(record.id) || [];
+      const authorization = record.id === "douyin" ? apps.douyinAuthorization : apps.bilibiliAuthorization;
+      const officialAccount = record.id === "douyin" || record.id === "bilibili";
+      const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
+      const connected = officialAccount ? authorization?.status === "ready" : authenticated > 0;
+      const status = appElement("span", connected ? "已接入" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      status.classList.toggle("is-connected", connected);
+      head.append(status);
+      const summary = appElement("p", officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
+      const source = catalog.get(record.id);
+      const foot = appElement("div", "", "app-card-footer");
+      foot.append(appElement("span", source?.install_state === "installed" ? "本地源码就绪" : source?.source_available ? "源码可安装" : "未提供源码"), appElement("span", "管理应用"));
+      open.append(head, summary, foot); card.append(open);
+      open.addEventListener("click", () => { apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal(); });
       return card;
     }));
+    if ($("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
+  }
+  function renderAppDialog(record, listing) {
+    const body = $("#app-dialog-body"), scroll = body.scrollTop;
+    $("#app-dialog-feedback").append($("#apps-feedback"));
+    $("#app-dialog-title").textContent = `${record.name || record.id} · 应用设置`;
+    const nav = $("#app-dialog-tabs");
+    nav.replaceChildren(...[["account", "账号与使用"], ["persona", "应用子角色"], ["source", "源码管理"]].map(([id, title]) => {
+      const button = appElement("button", title, `local-tab${apps.detailTab === id ? " is-active" : ""}`);
+      button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
+      button.addEventListener("click", () => { apps.detailTab = id; renderAppDialog(record, listing); body.scrollTop = 0; }); return button;
+    }));
+    const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
+      record.id === "douyin" ? [douyinAuthorizationRow(apps), douyinPublicationRow(apps), ...douyinReadRows(record)] :
+      record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
+    body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
+    $("#app-dialog-refresh").disabled = apps.loading;
+    $("#app-dialog-refresh").textContent = apps.loading ? "刷新中…" : "刷新";
+  }
+  function appPersonaRow(record) {
+    const current = apps, id = record.id, label = record.name || id;
+    const draft = current.personas.get(id) || { revision: 0, text: "", loaded: false, editing: false, busy: false, error: "" };
+    current.personas.set(id, draft);
+    const form = appElement("form", "", "app-persona-form");
+    form.setAttribute("aria-label", `${label}子角色`);
+    const heading = appElement("div", "", "app-persona-heading");
+    const edit = appElement("button", draft.busy ? "读取中…" : "编辑", "text-action");
+    edit.type = "button"; edit.disabled = draft.busy; edit.hidden = draft.editing;
+    heading.append(appElement("strong", "应用子角色"), edit);
+    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用，留空沿用主角色。" : draft.loaded && draft.text ? draft.text : "在主角色之上，补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
+    const input = document.createElement("textarea");
+    input.setAttribute("aria-label", `${label}子角色设定`); input.maxLength = 4000; input.rows = 3;
+    input.placeholder = "留空沿用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
+    input.addEventListener("input", () => { draft.text = input.value; });
+    const actions = appElement("div", "", "settings-actions"); actions.hidden = !draft.editing;
+    const save = appElement("button", draft.busy ? "保存中…" : "保存子角色", "button compact primary"); save.type = "submit"; save.disabled = draft.busy;
+    const cancel = appElement("button", "取消", "text-action"); cancel.type = "button"; cancel.disabled = draft.busy;
+    actions.append(save, cancel);
+    edit.addEventListener("click", async () => {
+      draft.busy = true; edit.disabled = true;
+      try {
+        if (!draft.loaded) { const value = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`); if (current !== apps) return; draft.revision = value.revision || 0; draft.text = value.persona || ""; draft.loaded = true; }
+        draft.editing = true; draft.error = "";
+      } catch (error) { draft.error = error.message; }
+      finally { draft.busy = false; if (current === apps) renderApps(); }
+    });
+    cancel.addEventListener("click", () => { draft.editing = false; draft.loaded = false; draft.error = ""; renderApps(); });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); if (draft.busy || !draft.editing) return;
+      draft.busy = true; save.disabled = true;
+      try {
+        const value = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`, { method: "PUT", body: JSON.stringify({ revision: draft.revision, persona: draft.text }) });
+        if (current !== apps) return;
+        draft.revision = value.revision; draft.text = value.persona; draft.editing = false; draft.error = "";
+        appFeedback(`${label}子角色已保存，下次模型调用生效。`);
+      } catch (error) {
+        draft.error = error.message;
+        if (error.status === 409) { try { const latest = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`); if (current === apps) draft.revision = latest.revision; } catch (_) { /* Keep the draft and its revision until a fresh read succeeds. */ } }
+      } finally { draft.busy = false; if (current === apps) renderApps(); }
+    });
+    form.append(heading, note, input, actions); return form;
   }
   async function loadApps() {
     const current = apps;
@@ -3730,6 +3803,7 @@
     }
   }
   function showLogin() {
+    $("#app-dialog").close();
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll);
     window.clearTimeout(apps.loginTimer);
     clearOBSPreview();
@@ -3993,6 +4067,9 @@
     });
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
+  $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
+  $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
+  $("#app-dialog").addEventListener("close", () => { apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

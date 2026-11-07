@@ -54,6 +54,29 @@ def stop(process):
     process.stderr.close()
 
 
+def close_application(page):
+    if page.locator("#app-dialog").evaluate("node => node.open"):
+        page.locator("#app-dialog-close").click()
+
+
+def home_tab(page, tab):
+    close_application(page)
+    page.locator(f"#{tab}-tab").click()
+
+
+def open_application(page, name="微信", section="账号与使用"):
+    if not page.locator("#app-dialog").evaluate("node => node.open"):
+        page.get_by_role("button", name=f"管理{name}", exact=True).click()
+    page.locator("#app-dialog-tabs").get_by_role("button", name=section, exact=True).click()
+
+
+def refresh_application(page):
+    node = "#app-dialog-refresh" if page.locator("#app-dialog").evaluate("node => node.open") else "#apps-refresh"
+    page.locator(node).click()
+    page.locator("#apps-list[aria-busy='false']").wait_for()
+    open_application(page)
+
+
 def assert_no_horizontal_overflow(page, scene):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{scene}: narrow overflow"
 
@@ -184,12 +207,12 @@ def verify(binary, output):
                 page.locator("#chat-view").wait_for(state="visible")
                 page.get_by_text("先设置聊天模型", exact=True).wait_for()
                 assert page.locator("#chat-input").is_enabled(), "chat must remain available independently of workspace access"
-                page.locator("#settings-tab").click()
+                home_tab(page, "settings")
                 page.locator("#settings-view").wait_for(state="visible")
                 assert page.locator("#model-save").is_visible()
                 page.locator("#model-name").fill("synthetic-unsaved-draft")
                 assert page.get_by_text("测试模型连接", exact=True).count() == 0
-                page.locator("#chat-tab").click()
+                home_tab(page, "chat")
                 home = Path(initial["directory"])
                 assert home.is_relative_to(workspace)
                 assert not (data / "accounts.json").exists()
@@ -233,7 +256,7 @@ def verify(binary, output):
                     route.fulfill(content_type="application/json", body=json.dumps({"tool": project_tool_payload(**tool_state)["tools"][0]}, ensure_ascii=False))
 
                 page.route(project_tools_pattern, project_tools_route)
-                page.get_by_role("tab", name="项目工具", exact=True).click()
+                home_tab(page, "project-tools")
                 page.locator("#project-tools-view").wait_for(state="visible")
                 page.get_by_text("文档工坊", exact=True).wait_for()
                 install = page.get_by_role("button", name="安装", exact=True)
@@ -259,8 +282,8 @@ def verify(binary, output):
                 audio_catalog = next(tool for tool in context.request.get(origin + "/api/local/project-tools").json()["tools"]
                                      if tool["id"] == "audio-workshop")
                 if audio_catalog["catalog_available"] and audio_catalog["runtime_ready"]:
-                    page.locator("#chat-tab").click()
-                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    home_tab(page, "chat")
+                    home_tab(page, "project-tools")
                     audio = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="音频工坊"))
                     install = audio.get_by_role("button", name="安装", exact=True)
                     install.wait_for()
@@ -291,8 +314,8 @@ def verify(binary, output):
                         "media": str(media), "port": 21981,
                         "profiles": [{"id": "private-synthetic", "label": "合成试听声线"}],
                     }, ensure_ascii=False), encoding="utf-8")
-                    page.locator("#chat-tab").click()
-                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    home_tab(page, "chat")
+                    home_tab(page, "project-tools")
                     card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="RVC 换声"))
                     card.get_by_text("合成试听声线", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
@@ -330,8 +353,8 @@ def verify(binary, output):
                         "entry": str(entry), "frontend": "frontend", "manifest": str(manifest),
                         "models": str(models), "workflows": str(workflows), "port": 21984, "device": "cpu",
                     }), encoding="utf-8")
-                    page.locator("#chat-tab").click()
-                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    home_tab(page, "chat")
+                    home_tab(page, "project-tools")
                     card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="ComfyUI 创作"))
                     card.get_by_text("工作流未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
@@ -364,8 +387,8 @@ def verify(binary, output):
                     # backend is registered. This browser replay deliberately
                     # does not manufacture a backend path or activate it.
                     assert not yue["runtime_ready"]
-                    page.locator("#chat-tab").click()
-                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    home_tab(page, "chat")
+                    home_tab(page, "project-tools")
                     card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="YuE 作曲"))
                     card.get_by_text("YuE 本机后端未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
@@ -382,8 +405,8 @@ def verify(binary, output):
                     # The official package can be installed before a private
                     # local backend and voice inventory are registered.
                     assert not station_speech["runtime_ready"]
-                    page.locator("#chat-tab").click()
-                    page.get_by_role("tab", name="项目工具", exact=True).click()
+                    home_tab(page, "chat")
+                    home_tab(page, "project-tools")
                     card = page.locator(".project-tool-record").filter(has=page.get_by_role("heading", name="本机语音"))
                     card.get_by_text("本机语音后端未就绪", exact=True).wait_for()
                     install = card.get_by_role("button", name="安装", exact=True)
@@ -407,7 +430,8 @@ def verify(binary, output):
                 assert len(catalog) == 1 and catalog[0]["id"] == "wechat"
                 source_available = catalog[0]["source_available"]
                 if source_available:
-                    assert "可安装" in source_state, source_state
+                    assert "源码可安装" in source_state, source_state
+                    open_application(page, section="源码管理")
                     page.get_by_role("button", name="安装源码").click()
                     page.get_by_text("源码已安装", exact=True).wait_for()
                     page.locator("#apps-feedback").get_by_text(re.compile("源码已.*家目录")).wait_for()
@@ -416,6 +440,7 @@ def verify(binary, output):
                     assert "未提供源码" in source_state, source_state
                     assert page.get_by_role("button", name="安装源码").count() == 0
 
+                close_application(page)
                 # Application-account HTTP calls are intentionally routed in the browser only:
                 # no login material, native connector, or actual WeChat request is involved.
                 apps_route = fulfill_json(app_connection_payload())
@@ -425,7 +450,7 @@ def verify(binary, output):
                 status_pattern = "**/api/apps/wechat/connections/synthetic-wechat"
                 status_route = fulfill_json({"connection": {"id": "synthetic-wechat", "login": "authenticated"}})
                 page.route(status_pattern, status_route)
-                page.locator("#apps-refresh").click()
+                refresh_application(page)
                 page.get_by_text("账号连接", exact=True).wait_for()
                 page.get_by_text("合成微信账号", exact=True).wait_for()
                 page.get_by_text("已登录", exact=True).wait_for()
@@ -473,7 +498,7 @@ def verify(binary, output):
                 page.route(login_pattern, setup_start)
                 page.route(operation_pattern, setup_operation)
                 page.route(qr_pattern, setup_qr)
-                page.locator("#apps-refresh").click()
+                refresh_application(page)
                 page.get_by_text("账号未接入", exact=True).wait_for()
                 page.get_by_role("button", name="添加账号").click()
                 page.get_by_role("button", name="扫码登录").click()
@@ -874,7 +899,7 @@ def verify(binary, output):
                                       "coverage": "已读取前 2 位匹配联系人"})(route)
 
                 page.route(contacts_pattern, contact_directory)
-                page.locator("#apps-refresh").click()
+                refresh_application(page)
                 page.get_by_text("Agent 未启动", exact=True).wait_for()
                 assert page.get_by_role("button", name="启动 Agent").is_disabled()
                 page.get_by_text("从旧版接入", exact=True).click()
@@ -1042,8 +1067,7 @@ def verify(binary, output):
                 summary_share = page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True)
                 assert summary_share.is_enabled(), "attachment-read grant should unlock only this group's summary switch"
                 page.get_by_role("textbox", name="synthetic-room@chatroom 群聊备注", exact=True).fill("收到分享时先总结重点")
-                page.locator("#apps-refresh").click()
-                page.locator("#apps-list[aria-busy='true']").wait_for()
+                refresh_application(page)
                 page.locator("#apps-list[aria-busy='false']").wait_for()
                 expect(page.get_by_role("textbox", name="synthetic-room@chatroom 群聊备注", exact=True)).to_have_value("收到分享时先总结重点")
                 page.get_by_role("checkbox", name="synthetic-room@chatroom 自动总结视频号分享", exact=True).check()
@@ -1098,7 +1122,7 @@ def verify(binary, output):
                 assert worker["auto_observe_videos"] is True
                 assert worker["actions"] == ["start", "stop"]
                 worker["state"] = "cutover_blocked"
-                page.locator("#apps-refresh").click()
+                refresh_application(page)
                 page.get_by_text("等待完成启用核对", exact=True).wait_for()
                 page.get_by_role("button", name="暂停 Agent", exact=True).click()
                 page.get_by_text("Agent 已暂停", exact=True).wait_for()
@@ -1501,10 +1525,12 @@ def verify(binary, output):
                 grants_pattern = status_pattern + "/work-grants*"
                 page.route(artifact_pattern, register_artifact)
                 page.route(grants_pattern, work_grants)
+                close_application(page)
                 page.get_by_text("登记家目录中的作品", exact=True).click()
                 page.get_by_label("成品文件", exact=True).fill("作品/合成文档.pdf")
                 page.get_by_role("button", name="登记作品", exact=True).click()
                 page.locator("#artifact-result").filter(has_text=artifact_id).wait_for()
+                open_application(page)
                 page.get_by_text("授权作品交付", exact=True).click()
                 page.get_by_label("作品编号", exact=True).fill(artifact_id)
                 page.get_by_label("接收会话", exact=True).fill("synthetic-room@chatroom")
@@ -1530,21 +1556,21 @@ def verify(binary, output):
                 page.unroute(connection_base, setup_connections)
                 unavailable_route = fulfill_json({"error": "synthetic connection unavailable"}, status=503)
                 page.route("**/api/apps/wechat/connections", unavailable_route)
-                page.locator("#apps-refresh").click()
+                refresh_application(page)
                 page.get_by_text("账号状态暂不可读", exact=True).wait_for()
                 page.unroute("**/api/apps/wechat/connections", unavailable_route)
                 page.unroute("**/api/apps", apps_route)
                 page.unroute(status_pattern, status_route)
 
-                page.locator("#settings-tab").click()
+                home_tab(page, "settings")
                 assert page.locator("#model-name").input_value() == "synthetic-unsaved-draft", "application state replaced the model draft"
-                page.locator("#chat-tab").click()
+                home_tab(page, "chat")
                 page.screenshot(path=str(output / "ready-light.png"), full_page=True)
-                page.locator("#settings-tab").click()
+                home_tab(page, "settings")
                 page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已暂停", exact=True).wait_for()
                 assert page.locator("#model-name").input_value() == "synthetic-unsaved-draft", "workspace change replaced the model draft"
-                page.locator("#chat-tab").click()
+                home_tab(page, "chat")
                 assert page.locator("#chat-input").is_enabled(), "workspace pause must not disable local chat"
                 page.reload()
                 page.get_by_text("工作空间已暂停", exact=True).wait_for()
@@ -1559,7 +1585,7 @@ def verify(binary, output):
                 page.locator("#apps-view").wait_for(state="visible")
                 assert_no_horizontal_overflow(page, "apps")
                 page.screenshot(path=str(output / "apps-dark-375.png"), full_page=True)
-                page.locator("#settings-tab").click()
+                home_tab(page, "settings")
                 page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已授权", exact=True).wait_for()
                 page.locator("#settings-logout-button").click()
@@ -1692,9 +1718,11 @@ def verify_douyin_authorization(binary, output):
                     page.locator("#login-submit").click()
                     if desktop:
                         page.locator("#initialize-button").click()
-                    page.locator("#apps-tab").click()
+                    home_tab(page, "apps")
                     if not desktop:
-                        page.get_by_text(verified["label"], exact=True).wait_for()
+                        page.locator("#apps-list[aria-busy='false']").wait_for()
+                        open_application(page, "抖音")
+                        page.locator("#app-dialog").get_by_text(verified["label"], exact=True).wait_for()
                         page.get_by_text("请在 Windows 桌面端扫码连接抖音账号。", exact=True).wait_for()
                         assert page.get_by_text("扫码授权", exact=True).count() == 0
                         assert page.get_by_role("button", name="续期授权").count() == 0
@@ -1703,6 +1731,8 @@ def verify_douyin_authorization(binary, output):
                         assert not attempts and not completed and not cancelled
                         context.close()
                         continue
+                    page.locator("#apps-list[aria-busy='false']").wait_for()
+                    open_application(page, "抖音")
                     page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     page.get_by_text("扫码授权", exact=True).click()
                     works = page.get_by_label("授权读取我的作品列表")
@@ -1748,7 +1778,7 @@ def verify_douyin_authorization(binary, output):
                     for _ in range(2):
                         emit({"type": "douyin-auth-callback", "state": attempts[1], "callback_url": callback(attempts[1])})
                     expected = callback(attempts[1])
-                    page.get_by_text(verified["label"], exact=True).wait_for()
+                    page.locator("#app-dialog").get_by_text(verified["label"], exact=True).wait_for()
                     page.get_by_text("已授权读取我的作品列表", exact=False).wait_for()
                     page.get_by_text("已授权发布抖音视频", exact=False).wait_for()
                     with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
@@ -1775,7 +1805,9 @@ def verify_douyin_authorization(binary, output):
                     assert cancelled == [attempts[0]]
                     authorization_view = expired
                     page.reload()
-                    page.locator("#apps-tab").click()
+                    home_tab(page, "apps")
+                    page.locator("#apps-list[aria-busy='false']").wait_for()
+                    open_application(page, "抖音")
                     page.get_by_text("抖音授权已过期", exact=True).wait_for()
                     workbench.get_by_text("发布授权已过期", exact=True).wait_for()
                     assert workbench.get_by_text("已授权发布视频", exact=True).count() == 0
@@ -1788,7 +1820,7 @@ def verify_douyin_authorization(binary, output):
                     page.get_by_text("请在扫码窗口内扫描二维码", exact=False).wait_for()
                     assert len(attempts) == 3
                     emit({"type": "douyin-auth-callback", "state": attempts[2], "callback_url": callback(attempts[2])})
-                    page.get_by_text(verified["label"], exact=True).wait_for()
+                    page.locator("#app-dialog").get_by_text(verified["label"], exact=True).wait_for()
                     workbench.get_by_text("已授权发布视频", exact=True).wait_for()
                     assert completed == [expected, callback(attempts[2])]
                     context.close()

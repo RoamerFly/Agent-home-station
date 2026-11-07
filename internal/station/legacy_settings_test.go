@@ -48,8 +48,9 @@ func TestLegacySettingsPreviewAndImportAreBoundedAndIdempotent(t *testing.T) {
 		t.Fatalf("model record=%+v err=%v", record, err)
 	}
 	for _, want := range []string{"legacy companion persona", "旧系统提示：old system prompt", "相处风格：old style", "关系设定：old relationship"} {
-		if !strings.Contains(record.Persona, want) {
-			t.Fatalf("persona did not preserve %q: %q", want, record.Persona)
+		profile,err:=(localAppPersonaStore{dir:target}).View("wechat")
+		if err!=nil || !strings.Contains(profile.Persona, want) || strings.Contains(record.Persona,want) {
+			t.Fatalf("legacy character was not isolated to WeChat: %v",err)
 		}
 	}
 	if _, err = ImportLegacySettings(context.Background(), source, target, plan.Digest); err != nil {
@@ -194,7 +195,7 @@ func TestLegacySettingsImportPreservesOldDefaultsAndDeduplicatesPersona(t *testi
 	if _, err = ImportLegacySettings(t.Context(), source, target, plan.Digest); err != nil {
 		t.Fatal(err)
 	}
-	settings, err := newLocalModelStore(target).View()
+	settings, err := (localAppPersonaStore{dir:target}).View("wechat")
 	if err != nil || strings.Count(settings.Persona, "synthetic shared preference") != 1 {
 		t.Fatal("repeated character fields were not merged", err)
 	}

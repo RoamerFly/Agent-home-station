@@ -61,7 +61,7 @@
                 <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true">聊天</button>
                 <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1">应用</button>
                 <button id="project-tools-tab" class="local-tab" type="button" role="tab" aria-controls="project-tools-view" aria-selected="false" tabindex="-1">项目工具</button>
-                <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">模型设置</button>
+                <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">设置</button>
               </div>
               <button id="local-logout-button" class="text-action" type="button">退出</button>
             </nav>
@@ -99,7 +99,7 @@
               <header class="chat-heading-row">
                 <div>
                   <h3>应用</h3>
-                  <p>在这里准备应用源码，查看已接入的账号。</p>
+                  <p>管理应用账号、使用范围和专属相处方式。</p>
                 </div>
                 <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
@@ -122,7 +122,7 @@
               <header class="chat-heading-row">
                 <div>
                   <h3>项目工具</h3>
-                  <p>按需要启用大肥鱼家目录里的本地工具，不会接入应用账号。</p>
+                  <p>按需启用创作、语音和文件处理能力。</p>
                 </div>
                 <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
@@ -133,12 +133,22 @@
             <section id="settings-view" class="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>
               <div class="settings-heading-row">
                 <div>
-                  <h3 id="settings-heading">聊天模型</h3>
-                  <p>只在这台电脑保存。留空密钥不会覆盖已有配置。</p>
+                  <h3 id="settings-heading">角色与模型</h3>
+                  <p>主角色用于日常相处，各应用可单独补充。</p>
                 </div>
+                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存设置</button>
               </div>
               <form id="model-form" class="model-form">
                 <input id="model-revision" type="hidden" value="0">
+                <fieldset class="settings-group">
+                  <legend>主角色</legend>
+                  <p>决定她的性格和与你的相处方式，应用之外也会使用。</p>
+                  <label>性格与相处方式
+                    <textarea id="model-persona" name="persona" rows="4" maxlength="4000" placeholder="例如：自然真诚，喜欢探索新事物…"></textarea>
+                  </label>
+                </fieldset>
+                <fieldset class="settings-group">
+                  <legend>聊天模型</legend>
                 <div class="field-grid">
                   <label>服务商
                     <select id="model-provider" name="provider">
@@ -176,13 +186,7 @@
                   <input id="model-clear-key" name="clear_key" type="checkbox">
                   <span><strong>清除已保存的密钥</strong><small>保存后才会生效。</small></span>
                 </label>
-                <label>相处方式
-                  <textarea id="model-persona" name="persona" rows="4" maxlength="4000" placeholder="例如：自然、真诚地和我聊天…"></textarea>
-                </label>
-                <div class="settings-actions">
-                  <button id="model-save" class="button primary" type="submit">保存模型设置</button>
-                  <button id="back-to-chat-button" class="button quiet" type="button">返回聊天</button>
-                </div>
+                </fieldset>
               </form>
               <details id="home-details" class="identity-details">
                 <summary>大肥鱼的家</summary>
@@ -192,6 +196,7 @@
                 </div>
               </details>
               <div class="settings-actions home-controls">
+                <button id="back-to-chat-button" class="button quiet" type="button">返回聊天</button>
                 <button id="settings-access-button" class="button secondary" type="button"></button>
                 <button id="settings-logout-button" class="button quiet" type="button">退出登录</button>
               </div>
@@ -203,6 +208,15 @@
       </div>
     </section>
   </main>
+  <dialog id="app-dialog" class="app-dialog" aria-labelledby="app-dialog-title">
+    <header class="app-dialog-header">
+      <div><h2 id="app-dialog-title">应用设置</h2><p>连接账号，设定大肥鱼在这个应用中的相处方式。</p></div>
+      <div class="app-dialog-actions"><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+    </header>
+    <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用设置分区"></nav>
+    <div id="app-dialog-feedback" class="app-dialog-feedback"></div>
+    <div id="app-dialog-body" class="app-dialog-body"></div>
+  </dialog>
   <script src="/assets/local-home.js"></script>
 </body>
 </html>
