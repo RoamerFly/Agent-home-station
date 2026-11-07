@@ -89,6 +89,7 @@ type InteractionView struct {
 	CancelRequested  bool          `json:"cancel_requested"`
 	Target           ConnectionRef `json:"target"`
 	Kind             string        `json:"kind"`
+	Desired          *bool         `json:"desired,omitempty"`
 	ContentID        string        `json:"content_id"`
 	CommentID        string        `json:"comment_id,omitempty"`
 	RemoteID         string        `json:"remote_id,omitempty"`
@@ -201,7 +202,7 @@ func (p *Interactor) List(ctx context.Context, actor pluginhost.Invocation, appI
 	if appID == "" {
 		appID = "local"
 	}
-	page, err := p.store.Jobs(ctx, "application/"+appID, after, limit)
+	page, err := p.store.JobsForTool(ctx, "application/"+appID, "interaction", after, limit)
 	if err != nil {
 		return InteractionPage{}, err
 	}
@@ -281,7 +282,9 @@ func (p *Interactor) query(ctx context.Context, job pluginhost.Job, record inter
 	}
 	receipt, err := provider.QueryInteraction(ctx, InteractionQuery{Reference: p.reference(job, record), Draft: providerInteractionDraft(record.Draft), Checkpoint: checkpoint.Records[interactionCheckpointKey], Cancel: cancel})
 	if err != nil {
-		return p.view(job, record), nil
+		// A failed lookup is not a successful reconciliation. Preserve the
+		// durable unknown task while letting callers explain the actual failure.
+		return p.view(job, record), err
 	}
 	settled, err := p.settle(ctx, job, record, receipt)
 	if err != nil {
@@ -342,7 +345,9 @@ func (p *Interactor) perform(ctx context.Context, job pluginhost.Job, record int
 	}
 	receipt, err := provider.PerformInteraction(ctx, request)
 	if err != nil {
-		return p.view(job, record), nil
+		// The effect may already have begun. Report the failure without
+		// converting this task to failed or creating a replacement submission.
+		return p.view(job, record), err
 	}
 	settled, err := p.settle(context.WithoutCancel(ctx), job, record, receipt)
 	if err != nil {
@@ -608,6 +613,10 @@ func cloneInteractionDraft(d InteractionDraft) InteractionDraft {
 }
 func (p *Interactor) view(job pluginhost.Job, r interactionRecord) InteractionView {
 	v := InteractionView{JobID: job.ID, State: interactionState(job), CancelRequested: job.CancelRequested, Target: r.Draft.Target, Kind: r.Draft.Kind, ContentID: r.Draft.ContentID, CommentID: r.Draft.CommentID, RemoteID: job.RemoteID, UpdatedAt: job.Updated, AvailableActions: []string{}}
+	if r.Draft.Kind == "like" {
+		desired := r.Draft.Desired
+		v.Desired = &desired
+	}
 	if job.Diagnostic != nil {
 		v.Diagnostic = job.Diagnostic.Code
 	}

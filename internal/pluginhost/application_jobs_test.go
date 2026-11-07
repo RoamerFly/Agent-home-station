@@ -66,6 +66,53 @@ func TestCreateApplicationJobUsesDurableHostLedgerWithoutPluginInstall(t *testin
 	}
 }
 
+func TestJobsForToolFiltersBeforePagingAndSurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(dir, "fish-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(key, tool string) Job {
+		input := applicationJobFixture()
+		input.Context.RequestKey, input.Tool = key, tool
+		job, _, createErr := store.CreateApplicationJob(ctx, "douyin", input)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return job
+	}
+	// Deliberately interleave unrelated ledger records before and between the
+	// target tool. A tool page must be full when sufficient target rows exist.
+	create("publication-1", "publication")
+	first := create("interaction-1", "interaction")
+	create("publication-2", "publication")
+	second := create("interaction-2", "interaction")
+	create("publication-3", "publication")
+	third := create("interaction-3", "interaction")
+
+	page, err := store.JobsForTool(ctx, "application/douyin", "interaction", 0, 2)
+	if err != nil || len(page.Items) != 2 || !page.HasMore || page.Items[0].ID != first.ID || page.Items[1].ID != second.ID {
+		t.Fatalf("first filtered page = %#v, err=%v", page, err)
+	}
+	next, err := store.JobsForTool(ctx, "application/douyin", "interaction", page.Next, 2)
+	if err != nil || len(next.Items) != 1 || next.HasMore || next.Items[0].ID != third.ID {
+		t.Fatalf("continued filtered page = %#v, err=%v", next, err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenStore(dir, "fish-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reopened, err := store.JobsForTool(ctx, "application/douyin", "interaction", 0, 10)
+	if err != nil || len(reopened.Items) != 3 || reopened.Items[0].ID != first.ID || reopened.Items[2].ID != third.ID {
+		t.Fatalf("reopened filtered page = %#v, err=%v", reopened, err)
+	}
+}
+
 func TestApplicationJobsCannotUseProjectPluginEntryPoint(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir(), "fish-1")

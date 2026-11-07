@@ -296,7 +296,7 @@ func (p *Publisher) list(ctx context.Context, actor pluginhost.Invocation, appID
 	if appID == "" {
 		appID = "local"
 	}
-	page, err := p.store.Jobs(ctx, "application/"+appID, after, limit)
+	page, err := p.store.JobsForTool(ctx, "application/"+appID, "publication", after, limit)
 	if err != nil {
 		return PublicationPage{}, err
 	}

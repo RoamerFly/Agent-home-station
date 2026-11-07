@@ -49,7 +49,7 @@
       tab.tabIndex = selected ? 0 : -1;
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
-    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); }
+    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); }
     if (view === "project-tools") loadProjectTools();
   }
   function newAppView() {
@@ -58,7 +58,9 @@
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
-      douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false } };
+      douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false },
+      douyinActivityTab: "publications",
+      douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
     return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: { loading: false, saving: false, loaded: false, server: null, draft: null, approved: false, advancedOpen: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
@@ -1356,6 +1358,19 @@
     web.loading = false;
     web.applying = "";
   }
+  function stopDouyinInteractionWork(current = apps) {
+    const work = current?.douyinInteractions;
+    if (!work) return;
+    // Invalidate reads/actions from a closed or hidden app sheet. Keep the
+    // visible page for a quick reopen. A submitted cancellation remains busy:
+    // allowing a duplicate cancel could race the native worker. Other old
+    // operations detach, so a late finally block cannot leave fresh controls
+    // disabled after close/reopen.
+    work.epoch += 1;
+    work.readID += 1;
+    work.reading = false;
+    work.pending = new Map([...work.pending].filter(([, pending]) => pending.has("cancel")));
+  }
   function shouldPollDouyinWebLogin(current, value) {
     return current === apps && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" &&
       current.detailTab === "account" && value?.active === true;
@@ -1803,7 +1818,10 @@
       open.append(head, summary, foot); card.append(open);
       open.addEventListener("click", () => {
         apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal();
-        if (record.id === "douyin") void loadDouyinWebLogin(apps);
+        if (record.id === "douyin") {
+          void loadDouyinWebLogin(apps);
+          if (apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
+        }
       });
       return card;
     }));
@@ -1819,7 +1837,10 @@
       button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
       button.addEventListener("click", () => {
         apps.detailTab = id;
-        if (record.id === "douyin" && id !== "account") stopDouyinWebLoginPolling(apps);
+        if (record.id === "douyin" && id !== "account") {
+          stopDouyinWebLoginPolling(apps);
+          stopDouyinInteractionWork(apps);
+        }
         if (record.id === "douyin" && id === "account") void loadDouyinWebLogin(apps);
         renderAppDialog(record, listing); body.scrollTop = 0;
       }); return button;
@@ -1891,13 +1912,10 @@
       const statuses = await Promise.allSettled(nativeAccounts.map((account) => request(`/api/apps/wechat/connections/${encodeURIComponent(account.id)}`)));
       if (current !== apps || appSessionExpired(statuses)) return;
       const hasBilibili = registered?.some((app) => app.id === "bilibili");
-      const hasDouyin = registered?.some((app) => app.id === "douyin");
       let bilibili = null;
       let authorization = null;
-      if (hasDouyin) {
-        const result = await Promise.allSettled([loadPublicationWork(current, "douyin", current.douyinWork.cursors)]);
-        if (current !== apps || appSessionExpired(result)) return;
-      }
+      // Douyin activity is loaded only when the owner opens its application
+      // detail and selects a record tab. A catalogue refresh never reads it.
       if (hasBilibili) {
         const result = await Promise.allSettled([
           request("/api/local/apps/bilibili/public"),
@@ -2270,24 +2288,115 @@
   }
   function douyinPublicationRow(current) {
     if (!current.registered?.some((item) => item.id === "douyin")) return null;
-    const work = current.douyinWork;
+    const tab = current.douyinActivityTab === "interactions" ? "interactions" : "publications";
+    const work = tab === "interactions" ? current.douyinInteractions : current.douyinWork;
     const row = appElement("section", "", "app-layer publication-layer");
     row.id = "douyin-publication";
     row.setAttribute("aria-labelledby", "douyin-publication-heading");
     row.setAttribute("aria-busy", String(work.reading));
-    const heading = appElement("h5", "创作发布");
+    const heading = appElement("h5", "作品与互动");
     heading.id = "douyin-publication-heading";
     const detail = appElement("div", "", "publication-detail");
-    detail.append(
-      appElement("strong", "发布记录"),
-      appElement("p", "这里保留已有创作任务及其结果。新的普通账号发布能力会直接使用已保存的登录状态。")
-    );
-    detail.append(publicationTasksPanel(current, "douyin", "抖音"));
+    const tabs = appElement("div", "", "publication-actions douyin-activity-tabs");
+    for (const [id, label] of [["publications", "发布记录"], ["interactions", "互动记录"]]) {
+      const button = appElement("button", label, `button compact ${tab === id ? "primary" : "quiet"}`);
+      button.type = "button";
+      button.dataset.activityTab = id;
+      button.setAttribute("aria-pressed", String(tab === id));
+      button.addEventListener("click", () => {
+        if (current !== apps || current.douyinActivityTab === id) return;
+        if (current.douyinActivityTab === "interactions") stopDouyinInteractionWork(current);
+        current.douyinActivityTab = id;
+        updatePublicationRow(current, "douyin");
+        if (id === "interactions") void loadDouyinInteractionWork(current, current.douyinInteractions.cursors);
+        else void loadPublicationWork(current, "douyin", current.douyinWork.cursors);
+      });
+      tabs.append(button);
+    }
+    detail.append(appElement("strong", "应用活动"), appElement("p", tab === "interactions" ? "互动记录只展示已有任务。页面不会自动提交、继续或查询平台。" : "发布记录保留已有创作任务及其结果。新的普通账号发布能力会直接使用已保存的登录状态。"), tabs);
+    detail.append(tab === "interactions" ? douyinInteractionTasksPanel(current) : publicationTasksPanel(current, "douyin", "抖音"));
     row.append(heading, detail);
     return row;
   }
-  function publicationTasksPanel(current, appID, label) {
-    const work = publicationWork(current, appID);
+
+  const interactionStates = {
+    pending: ["待处理", "等待按原任务提交。"],
+    unknown: ["待核对", "平台结果尚未确认；请查询原任务，避免重复操作。"],
+    in_progress: ["进行中", "正在处理原互动任务。"],
+    applied: ["已完成", "已记录本次互动结果。"],
+    failed: ["未完成", "本次互动未完成。"],
+    cancelled: ["已停止", "后续互动已停止。"],
+  };
+  const interactionActions = { submit: "开始互动", resume: "继续任务", status: "查询状态", cancel: "停止后续" };
+  function interactionDiagnostic(code) {
+    const known = {
+      login_required: "抖音网页登录状态需要重新确认，尚未继续互动。",
+      profile_busy: "专属网页登录资料仍在使用，尚未继续互动。",
+      operation_timeout: "互动页面处理超时，原任务保留待核对。",
+      operation_cancelled: "互动页面操作已中断，原任务保留待核对。",
+      like_control_unavailable: "点赞控件暂不可用，原任务保留待核对。",
+      like_state_unavailable: "无法核对当前点赞状态，原任务保留待核对。",
+      reply_parent_unavailable: "无法核对原评论，尚未继续回复。",
+      reply_editor_unavailable: "未找到可用的评论回复输入框，尚未继续回复。",
+      reply_submit_unavailable: "未找到可用的评论回复提交控件，尚未继续回复。",
+      receipt_not_found: "尚未找到平台结果，请查询原任务。",
+      receipt_unknown: "平台结果尚未确认，请查询原任务。",
+      not_submitted: "互动尚未提交，原任务可继续处理。",
+      platform_rejected: "平台没有接受这次互动，原任务保留。",
+      authorization_changed: "互动许可或来源资料已变化，未继续操作。",
+      browser_unavailable: "浏览器暂不可用，原任务保留。",
+      controls_unavailable: "抖音页面控件暂不可用，尚未确认执行。",
+      operation_unavailable: "这次互动暂时无法执行，原任务保留。",
+      interaction_failed: "这次互动未完成，原任务保留。",
+      interaction_cancelled: "这次互动已停止，仍可查询原任务。",
+      interaction_rejected: "平台没有接受这次互动，原任务保留。",
+      interaction_unknown: "结果尚未确认，请查询原任务。",
+      comment_changed: "原评论已变化，未继续回复。",
+      comment_unavailable: "无法核对原评论，未继续回复。",
+    };
+    if (typeof code === "string" && known[code]) return known[code];
+    const limit = typeof code === "string" ? /^reply_text_limit_([1-9][0-9]*)$/.exec(code) : null;
+    if (limit) return `回复文字超过当前允许的 ${limit[1]} 字，尚未提交。`;
+    return code ? "这次互动需要核对原任务。" : "";
+  }
+  function interactionStatus(task) {
+    const normal = interactionStates[task.state] || interactionStates.unknown;
+    if (task.cancel_requested && task.state !== "cancelled" && task.state !== "applied" && task.state !== "failed") {
+      return ["正在停止", task.state === "unknown" ? "已请求停止，但平台结果仍待核对。" : "已请求停止后续操作。"];
+    }
+    const diagnostic = interactionDiagnostic(task.diagnostic);
+    if (task.cancel_requested && task.state === "applied") {
+      return [normal[0], `${diagnostic || normal[1]} 停止请求未撤回这次已核对的操作。`];
+    }
+    if (task.cancel_requested && task.state === "failed") {
+      return [normal[0], `${diagnostic || normal[1]} 停止请求不会撤回此前已发生的操作。`];
+    }
+    return diagnostic ? [normal[0], diagnostic] : normal;
+  }
+  function interactionKind(task) {
+    if (task.kind === "reply_comment") return "回复评论";
+    if (task.kind === "like") {
+      if (task.desired === true) return "点赞";
+      if (task.desired === false) return "取消点赞";
+      return "点赞状态调整";
+    }
+    return "互动";
+  }
+  function douyinInteractionTasksPanel(current) {
+    return publicationTasksPanel(current, "douyin", "抖音", {
+      work: current.douyinInteractions,
+      empty: "暂无抖音互动记录。",
+      listLabel: "抖音互动记录",
+      taskRow: (task) => douyinInteractionTaskRow(current, task),
+      load: (cursors) => loadDouyinInteractionWork(current, cursors),
+    });
+  }
+  function publicationTasksPanel(current, appID, label, options = {}) {
+    const work = options.work || publicationWork(current, appID);
+    const load = options.load || ((cursors) => loadPublicationWork(current, appID, cursors));
+    const taskRow = options.taskRow || ((task) => publicationTaskRow(current, task, appID));
+    const empty = options.empty || `暂无${label}发布任务。`;
+    const listLabel = options.listLabel || `${label}发布任务`;
     const taskPanel = appElement("div", "", "publication-tasks");
     const feedback = appElement("p", work.error || work.notice, work.error || work.actionError ? "publication-feedback is-warn" : "sr-only");
     feedback.setAttribute("role", "status");
@@ -2295,11 +2404,11 @@
     const items = work.page?.items || [];
     if (items.length) {
       const list = appElement("ul", "", "publication-list");
-      list.setAttribute("aria-label", `${label}发布任务`);
-      for (const task of items) list.append(publicationTaskRow(current, task, appID));
+      list.setAttribute("aria-label", listLabel);
+      for (const task of items) list.append(taskRow(task));
       taskPanel.append(list);
     } else if (!work.error) {
-      taskPanel.append(appElement("p", work.reading ? "正在读取发布任务…" : `暂无${label}发布任务。`, "publication-empty"));
+      taskPanel.append(appElement("p", work.reading ? "正在读取记录…" : empty, "publication-empty"));
     }
     if (work.page?.has_more || work.cursors.length > 1) {
       const pages = appElement("div", "", "publication-pages");
@@ -2310,8 +2419,8 @@
       next.dataset.page = "next";
       previous.disabled = work.reading || work.cursors.length === 1;
       next.disabled = work.reading || !work.page?.has_more;
-      previous.addEventListener("click", () => loadPublicationWork(current, appID, work.cursors.slice(0, -1)));
-      next.addEventListener("click", () => loadPublicationWork(current, appID, [...work.cursors, work.page.next]));
+      previous.addEventListener("click", () => load(work.cursors.slice(0, -1)));
+      next.addEventListener("click", () => load([...work.cursors, work.page.next]));
       pages.append(previous, appElement("span", `第 ${work.cursors.length} 页`), next);
       taskPanel.append(pages);
     }
@@ -2370,6 +2479,45 @@
     }
     if (appID === "bilibili" && available.includes("reconcile") && task.state === "awaiting_receipt" && task.progress?.stage === "posting" && !task.remote_id) {
       details.append(publicationReconciliation(current, task));
+    }
+    row.append(details, buttons);
+    return row;
+  }
+  function douyinInteractionTaskRow(current, task) {
+    const row = appElement("li", "", "publication-task");
+    row.dataset.job = task.job_id;
+    row.tabIndex = -1;
+    const details = appElement("div", "", "publication-task-detail");
+    const summary = appElement("div", "", "publication-task-summary");
+    const [title, note] = interactionStatus(task);
+    const badge = appElement("strong", title, "publication-status");
+    badge.dataset.state = task.state === "applied" ? "published" : task.state === "unknown" ? "awaiting_receipt" : task.state;
+    const kind = appElement("span", interactionKind(task), "publication-reference");
+    const identifier = appElement("span", task.remote_id || `任务 ${String(task.job_id || "").slice(0, 10)}`, "publication-reference");
+    identifier.title = task.job_id || "";
+    summary.append(badge, kind, identifier);
+    if (task.updated_at) {
+      const value = new Date(task.updated_at);
+      if (Number.isFinite(value.getTime())) {
+        const time = appElement("time", value.toLocaleString(), "publication-reference");
+        time.dateTime = task.updated_at;
+        summary.append(time);
+      }
+    }
+    details.append(summary, appElement("p", note));
+    const pending = current.douyinInteractions.pending.get(task.job_id);
+    if (pending?.size) details.append(appElement("p", pending.has("cancel") ? "正在登记停止…" : "正在处理原互动任务…", "publication-reference"));
+    const buttons = appElement("div", "", "publication-actions");
+    const available = Array.isArray(task.available_actions) ? task.available_actions : [];
+    for (const [action, label] of Object.entries(interactionActions)) {
+      if (!available.includes(action)) continue;
+      const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
+      button.type = "button";
+      button.dataset.action = action;
+      // Stopping remains usable while a previous submit/status request is in flight.
+      button.disabled = Boolean(pending?.has(action) || (pending?.size && action !== "cancel"));
+      button.addEventListener("click", () => { void applyDouyinInteractionAction(current, task, action); });
+      buttons.append(button);
     }
     row.append(details, buttons);
     return row;
@@ -2512,6 +2660,33 @@
       }
     }
   }
+  async function loadDouyinInteractionWork(current, cursors) {
+    const work = current?.douyinInteractions;
+    if (!work || current !== apps || current.openID !== "douyin" || current.douyinActivityTab !== "interactions") return;
+    const readID = ++work.readID;
+    const epoch = work.epoch;
+    work.reading = true;
+    work.error = "";
+    updatePublicationRow(current, "douyin");
+    try {
+      const after = cursors.at(-1) || 0;
+      const result = await request(`/api/local/interactions?app_id=douyin&limit=6&after=${after}`);
+      if (current !== apps || work.epoch !== epoch || readID !== work.readID || current.openID !== "douyin" || current.douyinActivityTab !== "interactions") return;
+      if (!Array.isArray(result.tasks?.items)) throw new Error("本机未返回互动记录。");
+      work.page = result.tasks;
+      work.cursors = cursors;
+    } catch (error) {
+      // Only an active page may surface a permission failure. A closed/stale
+      // detail response must not overwrite the next owner view or log out.
+      if (current !== apps || work.epoch !== epoch || readID !== work.readID || current.openID !== "douyin" || current.douyinActivityTab !== "interactions" || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      work.error = error.message || "互动记录暂不可读。";
+    } finally {
+      if (current === apps && work.epoch === epoch && readID === work.readID && current.openID === "douyin" && current.douyinActivityTab === "interactions") {
+        work.reading = false;
+        updatePublicationRow(current, "douyin");
+      }
+    }
+  }
   async function loadBilibiliWork(current, cursors) { return loadPublicationWork(current, "bilibili", cursors); }
   async function applyPublicationAction(current, task, action, appID = "bilibili") {
     if (current !== apps || !task.available_actions?.includes(action)) return;
@@ -2535,6 +2710,36 @@
       pending.delete(action);
       if (!pending.size) work.pending.delete(task.job_id);
       if (current === apps) await loadPublicationWork(current, appID, work.cursors);
+    }
+  }
+  async function applyDouyinInteractionAction(current, task, action) {
+    if (current !== apps || current.openID !== "douyin" || current.douyinActivityTab !== "interactions" || !task.available_actions?.includes(action)) return;
+    const work = current.douyinInteractions;
+    const pending = work.pending.get(task.job_id) || new Set();
+    if (pending.has(action) || (pending.size && action !== "cancel")) return;
+    const epoch = work.epoch;
+    pending.add(action);
+    work.pending.set(task.job_id, pending);
+    work.notice = "";
+    work.actionError = false;
+    updatePublicationRow(current, "douyin");
+    try {
+      const updated = await request("/api/local/interactions", { method: "POST", body: JSON.stringify({ action, job_id: task.job_id }) });
+      if (current !== apps || work.epoch !== epoch || current.openID !== "douyin" || current.douyinActivityTab !== "interactions" || updated.job_id !== task.job_id) return;
+      work.notice = interactionStatus(updated)[1];
+    } catch (error) {
+      // 403 is the current task's permission change, not a session logout.
+      if (current !== apps || work.epoch !== epoch || current.openID !== "douyin" || current.douyinActivityTab !== "interactions" || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      work.notice = error.message || "这次互动未完成。";
+      work.actionError = true;
+    } finally {
+      // A close/reopen replaces the Map. Never let an old request clear a
+      // fresh action for the same task; it may only repaint the current view.
+      if (work.pending.get(task.job_id) === pending) {
+        pending.delete(action);
+        if (!pending.size) work.pending.delete(task.job_id);
+      }
+      if (current === apps && work.epoch === epoch && current.openID === "douyin" && current.douyinActivityTab === "interactions") await loadDouyinInteractionWork(current, work.cursors);
     }
   }
   async function installApp(listing) {
@@ -3638,7 +3843,7 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

@@ -267,10 +267,16 @@ func localInteractionFailure(err error) (int, string) {
 		return 409, "同一请求已有操作记录；请从list找到原job_id核对，不能改写旧任务重提"
 	case errors.Is(err, apphost.ErrNotFound):
 		return 404, "未找到原应用操作，请先查看list中的实际任务编号"
-	case errors.Is(err, apphost.ErrInteractionConflict):
+	case errors.Is(err, apphost.ErrInteractionConflict), errors.Is(err, pluginhost.ErrRevision):
 		return 409, "任务状态已变化，请查询原任务继续"
 	case errors.Is(err, apphost.ErrInteractionReceipt):
 		return 409, "操作回执与原任务不一致，原任务保留待核对"
+	case errors.Is(err, context.DeadlineExceeded):
+		return 504, "应用操作请求超时，原任务保留待核对，请按原编号查询结果"
+	case errors.Is(err, context.Canceled):
+		return 408, "本次应用操作请求已中断，原任务保留待核对，请按原编号查询结果"
+	case errors.Is(err, apphost.ErrInteractionUnavailable):
+		return 503, "应用连接暂不可用，原任务保留，可按原编号核对"
 	default:
 		return 503, "应用操作暂时不可用，原任务保留，可按原编号核对"
 	}

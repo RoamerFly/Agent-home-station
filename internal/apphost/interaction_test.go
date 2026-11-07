@@ -21,6 +21,8 @@ type interactionFixtureProvider struct {
 	grants         []InteractionDraft
 	performed      []InteractionDraft
 	queried        []InteractionDraft
+	performErr     error
+	queryErr       error
 }
 
 func (p *interactionFixtureProvider) Connections(context.Context) ([]Connection, error) {
@@ -46,6 +48,9 @@ func (p *interactionFixtureProvider) PerformInteraction(ctx context.Context, r I
 			return InteractionReceipt{}, err
 		}
 	}
+	if p.performErr != nil {
+		return InteractionReceipt{}, p.performErr
+	}
 	if p.receipt.State != "" {
 		receipt := p.receipt
 		if receipt.Reference.TaskID == "" {
@@ -60,6 +65,9 @@ func (p *interactionFixtureProvider) QueryInteraction(_ context.Context, q Inter
 	p.queries++
 	p.queried = append(p.queried, q.Draft)
 	p.mu.Unlock()
+	if p.queryErr != nil {
+		return InteractionReceipt{}, p.queryErr
+	}
 	if p.receipt.State != "" {
 		r := p.receipt
 		r.Reference = q.Reference
@@ -286,5 +294,41 @@ func TestInteractionDiagnosticPersistsWithoutProviderText(t *testing.T) {
 	page, err := p.List(t.Context(), actor, "social", 0, 10)
 	if err != nil || len(page.Items) != 1 || page.Items[0].Diagnostic != "rate_limited" {
 		t.Fatalf("list=%+v %v", page, err)
+	}
+}
+
+func TestInteractionProviderFailureRemainsUnknownAndIsReported(t *testing.T) {
+	for _, action := range []string{"status", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			p, provider, store, target := interactionFixture(t)
+			actor := interactionActor("provider-failure-" + action)
+			v, err := p.Create(t.Context(), actor, interactionDraft(target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.performErr = context.DeadlineExceeded
+			v, err = p.Action(t.Context(), actor, v.JobID, "submit")
+			if err != context.DeadlineExceeded || v.State != "unknown" {
+				t.Fatalf("submit: %+v %v", v, err)
+			}
+			provider.queryErr = ErrInteractionDenied
+			v, err = p.Action(t.Context(), actor, v.JobID, action)
+			if err != ErrInteractionDenied || v.State != "unknown" {
+				t.Fatalf("query: %+v %v", v, err)
+			}
+			job, err := store.Job(t.Context(), v.JobID)
+			if err != nil || job.State != "submitting" || job.CancelRequested != (action == "cancel") {
+				t.Fatalf("failure lost original state: %+v %v", job, err)
+			}
+			if _, err := p.Action(t.Context(), actor, job.ID, "submit"); err != ErrInteractionConflict {
+				t.Fatal("uncertain effect resubmitted", err)
+			}
+			provider.queryErr = nil
+			provider.receipt = InteractionReceipt{State: "applied"}
+			v, err = p.Action(t.Context(), actor, job.ID, "status")
+			if err != nil || v.State != "applied" || v.RemoteID != "remote-1" || provider.calls != 1 {
+				t.Fatalf("late receipt: %+v %v, calls %d", v, err, provider.calls)
+			}
+		})
 	}
 }

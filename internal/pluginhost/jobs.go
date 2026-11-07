@@ -356,12 +356,34 @@ func (s *Store) checkpointResult(ctx context.Context, id string, revision int, s
 }
 
 func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int) (JobPage, error) {
+	return s.jobs(ctx, plugin, "", after, limit)
+}
+
+// JobsForTool pages only durable records for a trusted host tool. The tool
+// predicate is evaluated by SQLite before LIMIT, so separate application
+// ledgers cannot create empty pages for one another.
+func (s *Store) JobsForTool(ctx context.Context, plugin, tool string, after int64, limit int) (JobPage, error) {
+	if strings.TrimSpace(tool) == "" {
+		return JobPage{Items: []Job{}, Next: after, Limit: limit}, errors.New("tool required")
+	}
+	return s.jobs(ctx, plugin, tool, after, limit)
+}
+
+func (s *Store) jobs(ctx context.Context, plugin, tool string, after int64, limit int) (JobPage, error) {
 	page := JobPage{Items: []Job{}, Next: after, Limit: limit}
 	if limit < 1 || after < 0 {
 		return page, errors.New("positive page size and nonnegative cursor required")
 	}
-	// Only the selected plugin's page is loaded; no in-memory full-table filtering.
-	rows, err := s.db.QueryContext(ctx, `SELECT seq,record FROM jobs WHERE plugin=? AND seq>? ORDER BY seq LIMIT ?`, plugin, after, limit)
+	query := `SELECT seq,record FROM jobs WHERE plugin=? AND seq>?`
+	args := []any{plugin, after}
+	if tool != "" {
+		query += ` AND json_extract(CAST(record AS TEXT),'$.tool')=?`
+		args = append(args, tool)
+	}
+	query += ` ORDER BY seq LIMIT ?`
+	args = append(args, limit)
+	// Only the selected plugin/tool page is loaded; no in-memory full-table filtering.
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return page, err
 	}
@@ -385,8 +407,15 @@ func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int)
 	if err != nil {
 		return page, err
 	}
+	moreQuery := `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND seq>?`
+	moreArgs := []any{plugin, page.Next}
+	if tool != "" {
+		moreQuery += ` AND json_extract(CAST(record AS TEXT),'$.tool')=?`
+		moreArgs = append(moreArgs, tool)
+	}
+	moreQuery += `)`
 	var more int
-	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND seq>?)`, plugin, page.Next).Scan(&more)
+	err = s.db.QueryRowContext(ctx, moreQuery, moreArgs...).Scan(&more)
 	page.HasMore = more != 0
 	return page, err
 }
