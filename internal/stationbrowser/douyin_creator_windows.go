@@ -50,6 +50,16 @@ func QueryDouyinPublication(ctx context.Context, profile, remoteID string, autho
 	return runDouyinCreator(ctx, profile, douyinCreatorManage, CreatorPublicationRequest{Submitted: true, RemoteID: remoteID}, authorize, false)
 }
 
+// FindDouyinPublication only opens the saved account's management page. The
+// immutable caption/time/privacy are matched against that page's own response;
+// this path cannot upload a file or click the publish control.
+func FindDouyinPublication(ctx context.Context, profile string, query CreatorPublicationQuery, authorize func() error) (CreatorPublicationResult, error) {
+	if !validCreatorPublicationQuery(query) {
+		return CreatorPublicationResult{}, ErrCreatorPublicationInput
+	}
+	return runDouyinCreator(ctx, profile, douyinCreatorManage, CreatorPublicationRequest{Submitted: true, Query: &query}, authorize, false)
+}
+
 func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPublicationRequest, authorize func() error, fixture bool) (CreatorPublicationResult, error) {
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
@@ -197,6 +207,7 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	// Drain network events from navigation onward. Waiting until submit can
 	// overflow the private CDP queue on a resource-heavy creator page.
 	listener := newCreatorReceiptListener(target, id)
+	listener.query, listener.knownID = in.Query, in.RemoteID
 	listener.start(ctx, session)
 	defer listener.stop()
 	if err := session.Call(ctx, id, "Network.setBypassServiceWorker", map[string]any{"bypass": true}, nil); err != nil {
@@ -232,17 +243,36 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	}
 	if in.Submitted {
 		result.Stage = "awaiting_receipt"
-		state, err := waitCreatorState(ctx, session, id, world, target, "query", in, authorize, func(s creatorPageState) bool { return s.Listed })
-		if err != nil {
-			return result, err
+		for {
+			if err := authorize(); err != nil {
+				return result, err
+			}
+			if found, loaded := listener.listResult(); loaded {
+				if found.RemoteID == "" {
+					return result, ErrCreatorPublicationUnknown
+				}
+				return found, nil
+			}
+			// Retain the DOM route for layouts exposing a stable work link.
+			// Caption-only recovery always needs the account response with ID.
+			if in.RemoteID != "" {
+				state, err := creatorPage(ctx, session, id, world, target, "query", in)
+				if err != nil {
+					return result, err
+				}
+				if state.Listed {
+					result.Stage = "accepted"
+					result.Published = state.Published
+					if state.Published {
+						result.Stage = "published"
+					}
+					return result, nil
+				}
+			}
+			if err := creatorWait(ctx); err != nil {
+				return result, errors.Join(ErrCreatorPublicationUnknown, err)
+			}
 		}
-		result.Published = state.Published
-		if result.Published {
-			result.Stage = "published"
-		} else {
-			result.Stage = "accepted"
-		}
-		return result, nil
 	}
 	result.Stage = "uploading"
 	if _, err := waitCreatorState(ctx, session, id, world, target, "snapshot", in, authorize, func(s creatorPageState) bool { return s.FileAvailable }); err != nil {
@@ -412,6 +442,10 @@ type creatorReceiptListener struct {
 	rejectionCode   int
 	cancel          context.CancelFunc
 	done            chan struct{}
+	query           *CreatorPublicationQuery
+	knownID         string
+	listLoaded      bool
+	listReceipt     CreatorPublicationResult
 }
 
 func newCreatorReceiptListener(target, session string) *creatorReceiptListener {
@@ -419,6 +453,15 @@ func newCreatorReceiptListener(target, session string) *creatorReceiptListener {
 	return &creatorReceiptListener{origin: u.Scheme + "://" + u.Host, session: session, done: make(chan struct{})}
 }
 func (l *creatorReceiptListener) result() string { l.mu.Lock(); defer l.mu.Unlock(); return l.remoteID }
+func (l *creatorReceiptListener) listResult() (CreatorPublicationResult, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.listReceipt, l.listLoaded
+}
+func (l *creatorReceiptListener) manageEndpoint(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.User == nil && u.Scheme+"://"+u.Host == l.origin && u.Path == "/janus/douyin/creator/pc/work_list"
+}
 func (l *creatorReceiptListener) rejection() (int, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -438,7 +481,7 @@ func (l *creatorReceiptListener) stop() { l.cancel(); <-l.done }
 func (l *creatorReceiptListener) endpoint(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.User == nil && u.Scheme+"://"+u.Host == l.origin &&
-		(u.Path == "/web/api/media/aweme/create/" || u.Path == "/aweme/v1/web/aweme/post/")
+		(u.Path == "/web/api/media/aweme/create/" || u.Path == "/web/api/media/aweme/create_v2/" || u.Path == "/aweme/v1/web/aweme/post/")
 }
 func (l *creatorReceiptListener) start(parent context.Context, session readerSession) {
 	ctx, cancel := context.WithCancel(parent)
@@ -446,6 +489,7 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 	go func() {
 		defer close(l.done)
 		requests, accepted := map[string]bool{}, map[string]bool{}
+		manage := map[string]bool{}
 		for {
 			select {
 			case <-ctx.Done():
@@ -467,6 +511,11 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					if json.Unmarshal(event.Params, &p) == nil {
 						delete(requests, p.RequestID)
 						delete(accepted, p.RequestID)
+						delete(manage, p.RequestID)
+						if (l.query != nil || l.knownID != "") && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST") {
+							requests[p.RequestID] = true
+							manage[p.RequestID] = true
+						}
 						if l.afterSubmission(p.Timestamp) && p.Request.Method == "POST" && l.endpoint(p.Request.URL) {
 							requests[p.RequestID] = true
 						}
@@ -480,7 +529,7 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 							FromServiceWorker bool
 						}
 					}
-					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] && p.Response.Status == 200 && !p.Response.FromServiceWorker && l.endpoint(p.Response.URL) {
+					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] && p.Response.Status == 200 && !p.Response.FromServiceWorker && (l.endpoint(p.Response.URL) || (manage[p.RequestID] && l.manageEndpoint(p.Response.URL))) {
 						accepted[p.RequestID] = true
 					}
 				case "Network.loadingFinished":
@@ -493,6 +542,8 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					}
 					delete(accepted, p.RequestID)
 					delete(requests, p.RequestID)
+					isManage := manage[p.RequestID]
+					delete(manage, p.RequestID)
 					if p.EncodedDataLength > 256<<10 {
 						continue
 					}
@@ -510,6 +561,13 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						if err != nil {
 							continue
 						}
+					}
+					if isManage {
+						found := creatorManageReceipt(raw, l.query, l.knownID)
+						l.mu.Lock()
+						l.listReceipt, l.listLoaded = found, true
+						l.mu.Unlock()
+						continue
 					}
 					var status struct {
 						Code *int `json:"status_code"`
@@ -539,6 +597,7 @@ func creatorReceiptID(raw []byte) string {
 	var response struct {
 		StatusCode *int            `json:"status_code"`
 		AwemeID    json.RawMessage `json:"aweme_id"`
+		ItemID     json.RawMessage `json:"item_id"`
 		Aweme      struct {
 			AwemeID json.RawMessage `json:"aweme_id"`
 		} `json:"aweme"`
@@ -550,7 +609,7 @@ func creatorReceiptID(raw []byte) string {
 		return ""
 	}
 	ids := map[string]bool{}
-	for _, value := range []json.RawMessage{response.AwemeID, response.Aweme.AwemeID, response.Data.AwemeID} {
+	for _, value := range []json.RawMessage{response.AwemeID, response.ItemID, response.Aweme.AwemeID, response.Data.AwemeID} {
 		if len(value) == 0 {
 			continue
 		}

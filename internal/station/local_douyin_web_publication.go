@@ -191,6 +191,14 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 	if checkpoint.Rejected {
 		return apphost.PublicationReceipt{Reference: reference, State: "failed", Progress: &apphost.PublicationProgress{Stage: "rejected"}}, nil
 	}
+	// A recovered ID is durably acknowledged by apphost. It need not rewrite
+	// the adapter's older checkpoint, but conflicting identities are invalid.
+	if reference.RemoteID != "" {
+		if checkpoint.RemoteID != "" && checkpoint.RemoteID != reference.RemoteID {
+			return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
+		}
+		checkpoint.RemoteID = reference.RemoteID
+	}
 	if checkpoint.RemoteID == "" {
 		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: checkpoint.ErrorCode}}, nil
 	}
@@ -198,7 +206,16 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 	// an owner who revokes it must still be able to account for an already
 	// submitted work. It does, however, re-check the exact account/profile so a
 	// relogin cannot send an old receipt lookup through a different account.
-	result, err := stationbrowser.QueryDouyinPublication(ctx, access.profile, checkpoint.RemoteID, func() error {
+	result, err := stationbrowser.QueryDouyinPublication(ctx, access.profile, checkpoint.RemoteID, p.queryAuthorization(ctx, access, reference))
+	if err != nil {
+		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
+	}
+	result.RemoteID = checkpoint.RemoteID
+	return localDouyinPublicationReceipt(reference, result), nil
+}
+
+func (p *localDouyinWebPublication) queryAuthorization(ctx context.Context, access localDouyinWebAccess, reference apphost.PublicationReference) func() error {
+	return func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -211,12 +228,48 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 			return apphost.ErrPublicationDenied
 		}
 		return nil
-	})
-	if err != nil {
-		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
 	}
-	result.RemoteID = checkpoint.RemoteID
-	return localDouyinPublicationReceipt(reference, result), nil
+}
+
+// RecoverPublication has no artifact opener, checkpoint writer or submit
+// callback. It can only identify an already submitted work in the same saved
+// account, using the host's immutable draft rather than new model parameters.
+func (p *localDouyinWebPublication) RecoverPublication(ctx context.Context, req apphost.PublicationRecoveryRequest) (apphost.PublicationReceipt, error) {
+	checkpoint, err := localDouyinPublicationCheckpointFrom(req.Checkpoint, req.Reference)
+	if err != nil {
+		return apphost.PublicationReceipt{}, err
+	}
+	if !checkpoint.Submitted || checkpoint.Rejected || checkpoint.RemoteID != "" || req.Reference.RemoteID != "" {
+		return p.ReconcilePublication(ctx, req.Reference, req.Checkpoint, false)
+	}
+	if req.Draft.Target != req.Reference.Target || len(req.Draft.Artifacts) != 1 ||
+		(checkpoint.MediaSHA256 != "" && (checkpoint.MediaSHA256 != req.Draft.Artifacts[0].SHA256 || checkpoint.Bytes != req.Draft.Artifacts[0].Bytes)) {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
+	}
+	visibility, err := localDouyinPublicationVisibility(req.Draft.Options)
+	if err != nil {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationInvalidDraft
+	}
+	if _, err = time.Parse(time.RFC3339Nano, req.CreatedAt); err != nil {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
+	}
+	a, err := p.access(ctx)
+	if err != nil {
+		return apphost.PublicationReceipt{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	authorize := p.queryAuthorization(ctx, a, req.Reference)
+	if err := authorize(); err != nil {
+		return apphost.PublicationReceipt{}, err
+	}
+	result, err := stationbrowser.FindDouyinPublication(ctx, a.profile, stationbrowser.CreatorPublicationQuery{
+		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, CreatedAt: req.CreatedAt,
+	}, authorize)
+	if err != nil {
+		return apphost.PublicationReceipt{Reference: req.Reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
+	}
+	return localDouyinPublicationReceipt(req.Reference, result), nil
 }
 
 func (p *localDouyinWebPublication) stage(ctx context.Context, access localDouyinWebAccess, req apphost.PublicationRequest, checkpoint localDouyinPublicationCheckpoint) (string, error) {

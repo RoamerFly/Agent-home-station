@@ -22,6 +22,8 @@ func TestCreatorReceiptIDsRemainExactAndUnambiguous(t *testing.T) {
 		{`{"status_code":0,"aweme_id":7391234567890123456}`, "7391234567890123456"},
 		{`{"status_code":0,"aweme":{"aweme_id":"123"}}`, "123"},
 		{`{"status_code":0,"data":{"aweme_id":"123"}}`, "123"},
+		{`{"status_code":0,"item_id":"7391234567890123456"}`, "7391234567890123456"},
+		{`{"status_code":0,"item_id":"123","aweme_id":"456"}`, ""},
 		{`{"status_code":1,"aweme_id":"123"}`, ""},
 		{`{"aweme_id":"123"}`, ""},
 		{`{"status_code":0,"aweme_id":"123","data":{"aweme_id":"456"}}`, ""},

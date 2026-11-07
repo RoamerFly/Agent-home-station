@@ -22,6 +22,14 @@ type WebPublicationBridge interface {
 
 var _ apphost.CheckpointedPublicationProvider = (*WebApp)(nil)
 
+func (p *WebApp) RecoverPublication(ctx context.Context, in apphost.PublicationRecoveryRequest) (apphost.PublicationReceipt, error) {
+	provider, ok := p.publication.(apphost.PublicationRecoveryProvider)
+	if !ok {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationUnavailable
+	}
+	return provider.RecoverPublication(ctx, in)
+}
+
 func (p *WebApp) PublicationCheckpointProgress(raw json.RawMessage) (*apphost.PublicationProgress, error) {
 	progress, ok := p.publication.(apphost.PublicationCheckpointProgressProvider)
 	if !ok {

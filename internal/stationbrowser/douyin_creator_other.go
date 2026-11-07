@@ -14,3 +14,7 @@ func ContinueDouyinPublication(context.Context, string, CreatorPublicationReques
 func QueryDouyinPublication(context.Context, string, string, func() error) (CreatorPublicationResult, error) {
 	return CreatorPublicationResult{}, ErrBrowserUnavailable
 }
+
+func FindDouyinPublication(context.Context, string, CreatorPublicationQuery, func() error) (CreatorPublicationResult, error) {
+	return CreatorPublicationResult{}, ErrBrowserUnavailable
+}

@@ -73,7 +73,7 @@ func (p *Publisher) publicationCheckpoint(ctx context.Context, job pluginhost.Jo
 // listProgress asks the adapter to reduce its private checkpoint to safe
 // operational progress. The host validates that reduction before exposing it.
 func (p *Publisher) listProgress(ctx context.Context, job pluginhost.Job, record publicationRecord) (*PublicationProgress, error) {
-	if isLocal(record.Draft.Target) {
+	if isLocal(record.Draft.Target) || publicationState(job, record) == "published" {
 		return nil, nil
 	}
 	state, err := p.publicationCheckpoint(ctx, job, record)
@@ -138,6 +138,11 @@ func (p *Publisher) reconcile(ctx context.Context, job pluginhost.Job, record pu
 		state, err := p.publicationCheckpoint(ctx, job, record)
 		if err != nil {
 			return PublicationReceipt{}, err
+		}
+		if recovery, ok := provider.(PublicationRecoveryProvider); ok && !cancel && !job.CancelRequested && ref.RemoteID == "" {
+			draft := cloneDraft(record.Draft)
+			draft.Origin, draft.Project = nil, nil
+			return recovery.RecoverPublication(ctx, PublicationRecoveryRequest{Reference: ref, Draft: draft, Checkpoint: state.Records[publicationCheckpointKey], CreatedAt: job.Created})
 		}
 		return workflow.ReconcilePublication(ctx, ref, state.Records[publicationCheckpointKey], cancel)
 	}

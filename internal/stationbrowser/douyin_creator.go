@@ -12,6 +12,7 @@ type CreatorPublicationRequest struct {
 	MediaBytes              int64
 	Submitted               bool
 	RemoteID                string
+	Query                   *CreatorPublicationQuery
 	BeforeSubmit            func(context.Context) error
 	Progress                func(context.Context, string) error
 }
@@ -21,6 +22,10 @@ type CreatorPublicationResult struct {
 	RemoteID             string
 	Submitted, Published bool
 	RejectionCode        int
+}
+
+type CreatorPublicationQuery struct {
+	Title, Body, Visibility, CreatedAt string
 }
 
 var (

@@ -54,6 +54,35 @@ func TestLocalDouyinPublicationDiagnosticsRemainSafeAndRecoverable(t *testing.T)
 	}
 }
 
+func TestLocalDouyinPublicationRecoveryRejectsChangedIdentityBeforeBrowser(t *testing.T) {
+	_, p, _, ref := webPublicationFixture(t)
+	reference := apphost.PublicationReference{Target: ref, TaskID: strings.Repeat("a", 64), ManifestSHA256: strings.Repeat("b", 64)}
+	checkpoint := localDouyinPublicationCheckpoint{Version: 1, TaskID: reference.TaskID, ManifestSHA256: reference.ManifestSHA256, Submitted: true}
+	req := apphost.PublicationRecoveryRequest{Reference: reference, Checkpoint: mustLocalDouyinJSON(checkpoint), CreatedAt: "2026-11-01T00:00:00Z", Draft: apphost.PublicationDraft{Target: ref, Title: "合成标题", Body: "合成正文", Options: json.RawMessage(`{"visibility":"private"}`), Artifacts: []apphost.PublicationArtifact{{ID: "synthetic"}}}}
+	changed := req
+	changed.Draft.Target.AccountID = "other-account"
+	if _, err := p.RecoverPublication(t.Context(), changed); !errors.Is(err, apphost.ErrPublicationConflict) {
+		t.Fatal("changed draft target", err)
+	}
+	changed = req
+	changed.CreatedAt = "not-a-host-time"
+	if _, err := p.RecoverPublication(t.Context(), changed); !errors.Is(err, apphost.ErrPublicationConflict) {
+		t.Fatal("invented time", err)
+	}
+	changed = req
+	changed.Reference.Target.AccountID = "other-account"
+	changed.Draft.Target = changed.Reference.Target
+	if _, err := p.RecoverPublication(t.Context(), changed); !errors.Is(err, apphost.ErrPublicationDenied) {
+		t.Fatal("wrong saved account", err)
+	}
+	checkpoint.RemoteID = "123"
+	req.Reference.RemoteID = "456"
+	a, _ := p.access(t.Context())
+	if _, err := p.reconcile(t.Context(), a, req.Reference, checkpoint); !errors.Is(err, apphost.ErrPublicationConflict) {
+		t.Fatal("conflicting recovered ID", err)
+	}
+}
+
 func TestLocalDouyinPublicationGrantAndSubmittedRecovery(t *testing.T) {
 	f, p, _, ref := webPublicationFixture(t)
 	grant, err := p.PublicationGrant(t.Context(), ref)

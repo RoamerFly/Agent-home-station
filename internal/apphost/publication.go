@@ -89,6 +89,19 @@ type PublicationProgress struct {
 	TotalParts     int64  `json:"total_parts"`
 }
 
+// PublicationRecoveryProvider is a read-only account lookup for an original
+// submitted task whose response ID was lost. It receives the immutable draft
+// and host creation time, never authority to submit another copy.
+type PublicationRecoveryRequest struct {
+	Reference  PublicationReference
+	Draft      PublicationDraft
+	Checkpoint json.RawMessage
+	CreatedAt  string
+}
+type PublicationRecoveryProvider interface {
+	RecoverPublication(context.Context, PublicationRecoveryRequest) (PublicationReceipt, error)
+}
+
 // PublicationProvider is optional on an application adapter.  Grant is
 // checked only before a new submit. Query and cancel remain possible after a
 // later revocation so the host can account for an earlier submission safely.

@@ -2,6 +2,7 @@ package apphost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -56,6 +57,45 @@ type publicationFixtureProvider struct {
 	submit  func(PublicationRequest) PublicationReceipt
 	query   func(PublicationReference) PublicationReceipt
 	cancel  func(PublicationReference) PublicationReceipt
+}
+
+// recoveryFixtureProvider models an adapter which has crossed its durable
+// submit boundary but lost the remote work ID.  Its recovery implementation is
+// deliberately read-only: any second ContinuePublication call would be a
+// duplicate external submission.
+type recoveryFixtureProvider struct {
+	*publicationFixtureProvider
+	continues    int
+	reconciles   int
+	recoveries   int
+	continueWith func(PublicationRequest) PublicationReceipt
+	recover      func(PublicationRecoveryRequest) PublicationReceipt
+}
+
+func (p *recoveryFixtureProvider) ValidatePublicationDraft(PublicationDraft) error { return nil }
+
+func (p *recoveryFixtureProvider) ContinuePublication(_ context.Context, request PublicationRequest) (PublicationReceipt, error) {
+	p.continues++
+	if err := request.SaveCheckpoint(context.Background(), []byte(`{"submitted":true}`)); err != nil {
+		return PublicationReceipt{}, err
+	}
+	if p.continueWith != nil {
+		return p.continueWith(request), nil
+	}
+	return PublicationReceipt{Reference: request.Reference, State: "unknown"}, nil
+}
+
+func (p *recoveryFixtureProvider) ReconcilePublication(_ context.Context, reference PublicationReference, _ json.RawMessage, _ bool) (PublicationReceipt, error) {
+	p.reconciles++
+	return PublicationReceipt{Reference: reference, State: "unknown"}, nil
+}
+
+func (p *recoveryFixtureProvider) RecoverPublication(_ context.Context, request PublicationRecoveryRequest) (PublicationReceipt, error) {
+	p.recoveries++
+	if p.recover != nil {
+		return p.recover(request), nil
+	}
+	return PublicationReceipt{Reference: request.Reference, State: "unknown"}, nil
 }
 
 func (p *publicationFixtureProvider) Connections(context.Context) ([]Connection, error) {
@@ -143,6 +183,109 @@ func openPublicationFixture(t *testing.T, directory string) (*Publisher, *public
 		t.Fatal(err)
 	}
 	return publisher, provider, store, target
+}
+
+func newRecoveryPublicationFixture(t *testing.T) (*Publisher, *recoveryFixtureProvider, *pluginhost.Store, ConnectionRef) {
+	t.Helper()
+	base := &publicationFixtureProvider{grant: PublicationGrant{Allowed: true, Version: "home-v1"}}
+	provider := &recoveryFixtureProvider{publicationFixtureProvider: base}
+	registry, err := New(Registration{Application: Application{ID: "social", Name: "Social", InstallationID: "social-install", Registration: "adapter-v1"}, Provider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := pluginhost.OpenStore(t.TempDir(), "fish-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	publisher := NewPublisher(registry, store, func(_ context.Context, _ pluginhost.Job, d PublicationDraft) error {
+		if len(d.Artifacts) != 1 || d.Artifacts[0] != publicationArtifact() {
+			return errors.New("not a verified artifact")
+		}
+		return nil
+	}, func(context.Context, PublicationArtifact) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("synthetic")), nil
+	})
+	target, err := publisher.ResolveTarget(context.Background(), "social", "account-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publisher, provider, store, target
+}
+
+func TestCheckpointedPublicationRecoversLostRemoteIDWithoutContinuing(t *testing.T) {
+	publisher, provider, store, target := newRecoveryPublicationFixture(t)
+	actor := publicationActor("checkpoint-recovery")
+	input := publicationDraft(target)
+	project := publicationArtifact()
+	project.ID = "private-project"
+	input.Project = &project
+	draft, err := publisher.Draft(t.Context(), actor, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view, err := publisher.Action(t.Context(), actor, draft.JobID, "submit"); err != nil || view.State != "awaiting_receipt" || provider.continues != 1 {
+		t.Fatalf("submit=%+v continues=%d err=%v", view, provider.continues, err)
+	}
+	provider.recover = func(request PublicationRecoveryRequest) PublicationReceipt {
+		if request.Reference.RemoteID != "" || request.Draft.Project != nil || len(request.Draft.Origin) != 0 {
+			t.Fatalf("recovery exposed mutable/private data: %#v", request)
+		}
+		if string(request.Checkpoint) != `{"submitted":true}` || request.CreatedAt == "" {
+			t.Fatalf("recovery did not receive durable task evidence: %#v", request)
+		}
+		return PublicationReceipt{Reference: withRemote(request.Reference, "recovered-remote"), State: "published"}
+	}
+	view, err := publisher.Action(t.Context(), actor, draft.JobID, "status")
+	if err != nil || view.State != "published" || view.RemoteID != "recovered-remote" {
+		t.Fatalf("recovery=%+v err=%v", view, err)
+	}
+	job, err := store.Job(t.Context(), draft.JobID)
+	if err != nil || job.RemoteID != "recovered-remote" || provider.continues != 1 || provider.recoveries != 1 || provider.reconciles != 0 || provider.submits != 0 {
+		t.Fatalf("job=%+v continues=%d recoveries=%d reconciles=%d legacySubmits=%d err=%v", job, provider.continues, provider.recoveries, provider.reconciles, provider.submits, err)
+	}
+}
+
+func TestCheckpointedPublicationWithRemoteIDDoesNotRecoverAgain(t *testing.T) {
+	publisher, provider, _, target := newRecoveryPublicationFixture(t)
+	actor := publicationActor("checkpoint-known-id")
+	provider.continueWith = func(request PublicationRequest) PublicationReceipt {
+		return PublicationReceipt{Reference: withRemote(request.Reference, "already-known"), State: "accepted"}
+	}
+	provider.recover = func(PublicationRecoveryRequest) PublicationReceipt {
+		t.Fatal("remote ID must use ordinary reconciliation, never lost-ID recovery")
+		return PublicationReceipt{}
+	}
+	draft, err := publisher.Draft(t.Context(), actor, publicationDraft(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view, err := publisher.Action(t.Context(), actor, draft.JobID, "submit"); err != nil || view.State != "accepted" || view.RemoteID != "already-known" {
+		t.Fatalf("submit=%+v err=%v", view, err)
+	}
+	if view, err := publisher.Action(t.Context(), actor, draft.JobID, "status"); err != nil || view.State != "accepted" || provider.recoveries != 0 || provider.reconciles != 1 || provider.continues != 1 {
+		t.Fatalf("status=%+v continues=%d recoveries=%d reconciles=%d err=%v", view, provider.continues, provider.recoveries, provider.reconciles, err)
+	}
+}
+
+func TestCheckpointedPublicationCancelDoesNotUseLostIDRecovery(t *testing.T) {
+	publisher, provider, _, target := newRecoveryPublicationFixture(t)
+	actor := publicationActor("checkpoint-cancel")
+	provider.recover = func(PublicationRecoveryRequest) PublicationReceipt {
+		t.Fatal("cancellation must not start a page scan for a lost remote ID")
+		return PublicationReceipt{}
+	}
+	draft, err := publisher.Draft(t.Context(), actor, publicationDraft(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = publisher.Action(t.Context(), actor, draft.JobID, "submit"); err != nil {
+		t.Fatal(err)
+	}
+	view, err := publisher.Action(t.Context(), actor, draft.JobID, "cancel")
+	if err != nil || view.State != "awaiting_receipt" || !view.CancelRequested || provider.recoveries != 0 || provider.continues != 1 || provider.reconciles < 1 {
+		t.Fatalf("cancel=%+v continues=%d recoveries=%d reconciles=%d err=%v", view, provider.continues, provider.recoveries, provider.reconciles, err)
+	}
 }
 
 func TestPublicationPendingCancelNeverSubmits(t *testing.T) {
