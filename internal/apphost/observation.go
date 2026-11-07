@@ -166,6 +166,13 @@ var (
 	ErrObservationContentUnavailable       = errors.New("平台暂时未提供这条内容，请核对编号或公开状态")
 	ErrObservationThrottled                = errors.New("平台限制了本次访问，请稍后重试")
 	ErrObservationBrowserUnavailable       = errors.New("独立浏览器暂不可用，请检查本机 Microsoft Edge 与应用授权")
+	ErrObservationWebSessionBusy           = errors.New("网页登录资料正在使用，请完成登录或稍后重试读取")
+	ErrObservationWebSessionRequired       = errors.New("网页要求登录或验证，请由主人打开抖音网页登录窗口处理")
+	ErrObservationWebSessionInvalid        = errors.New("网页登录资料登记不可用，请在抖音应用详情核对登录资料")
+	ErrObservationWebStorageUnavailable    = errors.New("网页读取进度无法读取或保存，请检查本机存储权限和磁盘空间")
+	ErrObservationWebReadTimeout           = errors.New("网页正文读取超时，可保留当前授权稍后重试")
+	ErrObservationWebSnapshotChanged       = errors.New("网页读取快照已变化或不可用，请使用 refresh=true 从头读取")
+	ErrObservationPageTextSize             = errors.New("网页正文超出本机单页传输范围，未返回截断内容；可读取更具体的内容入口")
 	ErrObservationRemotePlayerUnavailable  = errors.New("抖音官方播放器暂未提供可采样的媒体，可稍后重试")
 	ErrObservationPlaybackUnavailable      = errors.New("未取得可播放的公开单段媒体，请核对公开状态、格式及媒体大小")
 	ErrObservationPlaybackLimit            = errors.New("本次播放采样支持 1–20 秒，省略时使用 6 秒")
@@ -300,7 +307,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	o.mu.Lock()
@@ -340,6 +347,9 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		for _, known := range []error{
 			ErrObservationContentUnavailable, ErrObservationThrottled, ErrObservationForbidden, ErrObservationInvalid,
 			ErrObservationBrowserUnavailable, ErrObservationPlaybackUnavailable, ErrObservationRemotePlayerUnavailable, ErrObservationPlaybackLimit,
+			ErrObservationWebSessionBusy, ErrObservationWebSessionRequired, ErrObservationWebSnapshotChanged, ErrObservationPageTextSize,
+			ErrObservationWebSessionInvalid, ErrObservationWebStorageUnavailable,
+			ErrObservationWebReadTimeout,
 			ErrObservationPlaybackSize, ErrObservationUpstreamUnavailable, ErrObservationCommentPageSize,
 			ErrObservationAudioUnavailable, ErrObservationAudioMediaUnavailable, ErrObservationAudioLimit,
 			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,

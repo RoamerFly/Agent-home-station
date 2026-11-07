@@ -1,0 +1,287 @@
+package station
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
+	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/stationbrowser"
+	"wechat-bot/internal/workspacefs"
+)
+
+const localDouyinWebHomeURL = "https://www.douyin.com/"
+const localDouyinWebSnapshotMax = 8 << 20 // private JSON including metadata, bounded by the CDP transport
+
+type localDouyinWebObservation struct {
+	home         *localHomeService
+	installation string
+	mu           sync.Mutex
+}
+
+type localDouyinWebAccess struct {
+	record           localDouyinWebRecord
+	connection       apphost.Connection
+	profile, version string
+}
+
+// state is read on every grant, including cached page use. It never obtains a
+// platform account identity from an owner confirmation or exposes a profile.
+func (p *localDouyinWebObservation) state(ctx context.Context) (localDouyinWebAccess, error) {
+	if err := ctx.Err(); err != nil {
+		return localDouyinWebAccess{}, err
+	}
+	identity, err := p.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		return localDouyinWebAccess{}, apphost.ErrObservationForbidden
+	}
+	m := p.home.douyinWeb
+	if m == nil {
+		return localDouyinWebAccess{}, apphost.ErrObservationBrowserUnavailable
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ctx.Err(); err != nil {
+		return localDouyinWebAccess{}, err
+	}
+	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", identity.FishID)
+	root, err := workspacefs.OpenPath(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return p.access(identity.FishID, identity.LocalOwner.ID, localDouyinWebRecord{Version: 1, FishID: identity.FishID}, localDouyinWebView{State: "unconfigured"}), nil
+	}
+	if err != nil {
+		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
+	}
+	defer root.Close()
+	record, err := readLocalDouyinWebRecord(root, identity.FishID)
+	if err != nil {
+		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
+	}
+	view := m.view(record)
+	if record.ReadEnabled && view.State != "saved" {
+		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
+	}
+	return p.access(identity.FishID, identity.LocalOwner.ID, record, view), nil
+}
+
+func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebRecord, v localDouyinWebView) localDouyinWebAccess {
+	// This identifies a host-owned profile scope, never a verified Douyin user.
+	account := sha256.Sum256([]byte(fish + "\x00" + r.Profile))
+	state := "unconfigured"
+	if r.Profile != "" {
+		state = "disabled"
+	}
+	if v.ReadEnabled && v.Available {
+		state = "ready"
+	}
+	raw, _ := json.Marshal(r)
+	version := sha256.Sum256(append([]byte("douyin-home-text-v1\x00"+fish+"\x00"+owner+"\x00"), raw...))
+	return localDouyinWebAccess{record: r, connection: apphost.Connection{ID: douyinapp.WebReadConnectionID,
+		AccountID: "web-profile-" + hex.EncodeToString(account[:20]), Label: "抖音首页网页文字", Configuration: state},
+		profile: filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", fish, r.Profile), version: hex.EncodeToString(version[:])}
+}
+
+func (p *localDouyinWebObservation) Connection(ctx context.Context) (apphost.Connection, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return apphost.Connection{}, false, err
+	}
+	a, err := p.state(ctx)
+	if errors.Is(err, apphost.ErrObservationForbidden) {
+		return apphost.Connection{}, false, nil
+	}
+	if err != nil {
+		return apphost.Connection{ID: douyinapp.WebReadConnectionID, Label: "抖音首页网页文字", Configuration: "invalid"}, true, nil
+	}
+	return a.connection, true, nil
+}
+
+func (p *localDouyinWebObservation) ref(a localDouyinWebAccess) apphost.ConnectionRef {
+	return apphost.ConnectionRef{AppID: douyinapp.ID, InstallationID: p.installation, ConnectionID: a.connection.ID, AccountID: a.connection.AccountID}
+}
+
+func (p *localDouyinWebObservation) Targets(ctx context.Context) ([]apphost.ObservationTarget, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a, err := p.state(ctx)
+	if err != nil || a.connection.Configuration != "ready" {
+		return []apphost.ObservationTarget{}, nil
+	}
+	return []apphost.ObservationTarget{{ConnectionRef: p.ref(a), ContentID: douyinapp.WebReadContentID,
+		Fields: []apphost.ObservationField{apphost.ObservationPageText}}}, nil
+}
+
+func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.ObservationAccess) (apphost.ObservationGrant, error) {
+	a, err := p.state(ctx)
+	if err != nil {
+		return apphost.ObservationGrant{}, err
+	}
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.ContentID != douyinapp.WebReadContentID || in.Field != apphost.ObservationPageText {
+		return apphost.ObservationGrant{Allowed: false}, nil
+	}
+	return apphost.ObservationGrant{Allowed: true, Version: a.version}, nil
+}
+
+type localDouyinWebSnapshot struct {
+	Version    int    `json:"schema_version"`
+	Grant      string `json:"grant"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Text       string `json:"text"`
+	CapturedAt string `json:"captured_at"`
+}
+type localDouyinWebCursor struct {
+	ID     string `json:"snapshot"`
+	Offset int    `json:"offset"`
+}
+
+func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.ObservationRequest) (apphost.ObservationPage, error) {
+	if in.Limit < 0 {
+		return apphost.ObservationPage{}, apphost.ErrObservationInvalid
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	a, err := p.state(ctx)
+	if err != nil {
+		return apphost.ObservationPage{}, err
+	}
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || in.ContentID != douyinapp.WebReadContentID || in.Field != apphost.ObservationPageText {
+		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+	}
+	authorize := func() error {
+		current, err := p.Grant(ctx, in.ObservationAccess)
+		if err != nil {
+			return err
+		}
+		if !current.Allowed || current.Version != a.version {
+			return apphost.ErrObservationForbidden
+		}
+		return nil
+	}
+	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "web-snapshots", a.record.FishID, a.version)
+	root, err := workspacefs.EnsurePath(dir)
+	if err != nil {
+		return apphost.ObservationPage{}, apphost.ErrObservationWebStorageUnavailable
+	}
+	defer root.Close()
+	unlock, err := hostfile.TryLock(filepath.Join(dir, "snapshot.lock"))
+	if err != nil {
+		return apphost.ObservationPage{}, apphost.ErrObservationWebSessionBusy
+	}
+	defer unlock()
+	var snapshot localDouyinWebSnapshot
+	var cursor localDouyinWebCursor
+	if in.Cursor == "" {
+		m := p.home.douyinWeb
+		m.mu.Lock()
+		readPage, serviceCtx := m.readPage, m.ctx
+		m.mu.Unlock()
+		if readPage == nil {
+			return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+		stop := context.AfterFunc(serviceCtx, cancel)
+		defer stop()
+		defer cancel()
+		page, readErr := readPage(readCtx, a.profile, authorize)
+		if readErr != nil {
+			return apphost.ObservationPage{}, localDouyinWebReadError(readErr)
+		}
+		if err = authorize(); err != nil {
+			return apphost.ObservationPage{}, err
+		}
+		if strings.TrimSpace(page.Text) == "" {
+			return apphost.ObservationPage{}, apphost.ErrObservationContentUnavailable
+		}
+		id, err := localDouyinWebID()
+		if err != nil {
+			return apphost.ObservationPage{}, errors.New("无法登记网页读取编号")
+		}
+		snapshot = localDouyinWebSnapshot{Version: 1, Grant: a.version, ID: id, Title: page.Title, Text: page.Text, CapturedAt: time.Now().UTC().Format(time.RFC3339)}
+		raw, err := json.Marshal(snapshot)
+		if err != nil || len(raw) > localDouyinWebSnapshotMax {
+			return apphost.ObservationPage{}, apphost.ErrObservationPageTextSize
+		}
+		if hostfile.WritePrivate(filepath.Join(dir, snapshot.ID+".json"), raw) != nil {
+			return apphost.ObservationPage{}, apphost.ErrObservationWebStorageUnavailable
+		}
+		cursor.ID = snapshot.ID
+	} else {
+		raw, err := base64.RawURLEncoding.DecodeString(in.Cursor)
+		if err != nil || len(raw) > 512 || json.Unmarshal(raw, &cursor) != nil || cursor.Offset <= 0 || !validLocalDouyinWebID(cursor.ID) {
+			return apphost.ObservationPage{}, apphost.ErrObservationInvalid
+		}
+		f, err := workspacefs.OpenRegular(root, cursor.ID+".json")
+		if err != nil {
+			return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+		}
+		raw, err = io.ReadAll(io.LimitReader(f, localDouyinWebSnapshotMax+1))
+		f.Close()
+		if err != nil || len(raw) > localDouyinWebSnapshotMax || json.Unmarshal(raw, &snapshot) != nil || snapshot.Version != 1 || snapshot.Grant != a.version || snapshot.ID != cursor.ID {
+			return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+		}
+	}
+	if err = authorize(); err != nil {
+		return apphost.ObservationPage{}, err
+	}
+	text := []rune(snapshot.Text)
+	if cursor.Offset < 0 || cursor.Offset >= len(text) {
+		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+	}
+	limit := in.Limit
+	if limit == 0 {
+		limit = 2048
+	}
+	// Compare before adding to avoid integer overflow on an explicit large limit.
+	end := len(text)
+	if limit < len(text)-cursor.Offset {
+		end = cursor.Offset + limit
+	}
+	content := string(text[cursor.Offset:end])
+	if cursor.Offset == 0 && snapshot.Title != "" {
+		content = "页面标题：" + snapshot.Title + "\n" + content
+	}
+	page := apphost.ObservationPage{
+		Coverage: fmt.Sprintf("网页可见文字第 %d–%d 字，共 %d 字；读取时间 %s", cursor.Offset+1, end, len(text), snapshot.CapturedAt), Complete: end == len(text)}
+	if strings.TrimSpace(content) != "" {
+		page.Chunks = []apphost.ObservationChunk{{Position: cursor.Offset, Text: content, SourceID: snapshot.ID, SourceURL: localDouyinWebHomeURL}}
+	}
+	if !page.Complete {
+		raw, _ := json.Marshal(localDouyinWebCursor{ID: snapshot.ID, Offset: end})
+		page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return page, nil
+}
+
+func localDouyinWebReadError(err error) error {
+	switch {
+	case errors.Is(err, apphost.ErrObservationForbidden):
+		return apphost.ErrObservationForbidden
+	case errors.Is(err, context.Canceled):
+		return err
+	case errors.Is(err, context.DeadlineExceeded):
+		return apphost.ErrObservationWebReadTimeout
+	case errors.Is(err, stationbrowser.ErrDouyinLoginActive):
+		return apphost.ErrObservationWebSessionBusy
+	case errors.Is(err, stationbrowser.ErrDouyinWebLoginRequired):
+		return apphost.ErrObservationWebSessionRequired
+	case errors.Is(err, stationbrowser.ErrDouyinWebTextSize):
+		return apphost.ErrObservationPageTextSize
+	case errors.Is(err, stationbrowser.ErrPageUnavailable):
+		return apphost.ErrObservationContentUnavailable
+	default:
+		return apphost.ErrObservationBrowserUnavailable
+	}
+}

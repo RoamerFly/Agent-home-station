@@ -6,6 +6,12 @@ Windows 本地成长站可选择随包提供抖音应用。
 ./scripts/Build-Desktop.ps1 -LocalStation -WithDouyinApp
 ```
 
+## 已保存网页登录资料的主页文字
+
+这是独立于抖音开放平台 OAuth 的只读连接。主人须在 Windows 成长站中单独开启“网页文字读取”；启用后，可信宿主才会使用其保存的网页登录资料和浏览器读取主页文字。适配器不读取、保存或返回浏览器资料、Cookie、授权版本、来源校验或分页游标。
+
+通过 `app_observe(action=list)` 可发现 `connection_id=web-page-text` 下固定的 `content_id=home`；只接受 `field=page_text`。网页能够读取只表示取得该页面文字，**不表示完整观看任何视频，也不表示点赞、发布或其他写入操作已经发生**。关闭主人开关、资料不可用或网页不可读时，此连接不会提供可读取内容。
+
 ## 连接抖音账号
 
 先在抖音开放平台准备审核通过的网站应用，并登记由你控制的 HTTPS 回调地址。

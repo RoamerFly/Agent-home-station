@@ -230,7 +230,7 @@ func TestWeChatApplicationSourceKeepsExactQuoteMediaAndScope(t *testing.T) {
 	}
 }
 
-func TestDouyinSourceDeclaresOnlyOfficialAppRoutes(t *testing.T) {
+func TestDouyinSourceDeclaresOnlyApprovedAppRoutes(t *testing.T) {
 	contract, err := Lookup("douyin")
 	if err != nil {
 		t.Fatal(err)
@@ -247,10 +247,13 @@ func TestDouyinSourceDeclaresOnlyOfficialAppRoutes(t *testing.T) {
 		} `json:"browser_routes"`
 	}
 	raw, err := descriptors.ReadFile("douyin/app.json")
-	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 1 ||
+	if err != nil || json.Unmarshal(raw, &browser) != nil || len(browser.Routes) != 2 ||
 		browser.Routes[0].Capability != "observation.playback" ||
 		browser.Routes[0].URLTemplate != "https://open.douyin.com/player/video?autoplay=0&vid={video_id}" ||
-		browser.Routes[0].OwnerOptIn != "sample_public_playback" {
+		browser.Routes[0].OwnerOptIn != "sample_public_playback" ||
+		browser.Routes[1].Capability != "observation.page-text" ||
+		browser.Routes[1].URLTemplate != "https://www.douyin.com/" ||
+		browser.Routes[1].OwnerOptIn != "explicit-owner-web-read" {
 		t.Fatalf("invalid isolated Douyin player declaration: %v", err)
 	}
 	if p.ID != contract.Package.ID || p.Status != "ready" || p.Runtime.Transport != "http-adapter" ||

@@ -31,6 +31,7 @@ type localDouyinWebView struct {
 	ConfirmedAt string `json:"confirmed_at,omitempty"`
 	Available   bool   `json:"available"`
 	Reason      string `json:"reason,omitempty"`
+	ReadEnabled bool   `json:"read_enabled"`
 }
 
 type localDouyinWebInput struct {
@@ -38,6 +39,7 @@ type localDouyinWebInput struct {
 	Revision       uint64 `json:"revision"`
 	AttemptID      string `json:"attempt_id,omitempty"`
 	ApproveProfile bool   `json:"approve_profile"`
+	AllowRead      *bool  `json:"allow_read,omitempty"`
 }
 
 type localDouyinWebRecord struct {
@@ -46,6 +48,7 @@ type localDouyinWebRecord struct {
 	Revision    uint64 `json:"revision"`
 	Profile     string `json:"profile,omitempty"`
 	ConfirmedAt string `json:"confirmed_at,omitempty"`
+	ReadEnabled bool   `json:"read_enabled,omitempty"`
 }
 
 type localDouyinLoginWindow interface {
@@ -59,13 +62,14 @@ type localDouyinWebLogin struct {
 	ctx           context.Context
 	open          func(context.Context, string) (localDouyinLoginWindow, error)
 	available     func() bool
+	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	window        localDouyinLoginWindow
 	cancel        context.CancelFunc
 	attempt, fish string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome,
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
 		}}
@@ -136,6 +140,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 		(record.Profile != "" && !validLocalDouyinWebID(record.Profile)) || (record.Profile == "" && record.ConfirmedAt != "") {
 		return record, errors.New("网页登录登记无效，原资料保留")
 	}
+	if record.ReadEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
+		return record, errors.New("网页读取授权没有已确认的登录资料，原资料保留")
+	}
 	if record.ConfirmedAt != "" {
 		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
 			return record, errors.New("网页登录登记时间无效，原资料保留")
@@ -170,6 +177,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	if !v.Available {
 		v.Reason = "未找到可用的 Microsoft Edge，已有网页登录资料保留"
 	}
+	v.ReadEnabled = record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
 }
 
@@ -212,6 +220,18 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
 	}
 	switch in.Action {
+	case "set_read":
+		if in.AllowRead == nil {
+			return fail(400, "请明确是否允许大肥鱼读取抖音首页网页文字")
+		}
+		view := m.view(record)
+		if *in.AllowRead && (view.State != "saved" || view.AttemptID != "" || !view.Available) {
+			return fail(409, "请先完成网页登录并确认保存，再开启网页文字读取")
+		}
+		record.ReadEnabled = *in.AllowRead
+		if save() != nil {
+			return fail(503, "网页读取授权未保存，请重新读取后核对")
+		}
 	case "begin":
 		if !in.ApproveProfile {
 			return fail(400, "请确认创建或使用项目专属的抖音网页登录资料")
@@ -249,6 +269,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		probe()
 		// Beginning a new login never carries forward an old confirmation.
 		record.ConfirmedAt = ""
+		record.ReadEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
 		}
@@ -289,6 +310,14 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	case "clear":
 		if !in.ApproveProfile {
 			return fail(400, "请确认移除项目专属的网页登录资料")
+		}
+		// Revoke pending reads before trying to close/delete profile files.
+		// Another browser may still own the profile lock during that cleanup.
+		if record.ReadEnabled {
+			record.ReadEnabled = false
+			if save() != nil {
+				return fail(503, "网页读取授权未能撤销，尚未清理资料")
+			}
 		}
 		if m.window != nil && m.fish == fish {
 			closeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)

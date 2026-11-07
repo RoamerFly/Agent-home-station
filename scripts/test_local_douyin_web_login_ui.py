@@ -22,6 +22,17 @@ def verify(binary, output):
                 for width, color, suffix in ((375, "dark", "mobile-dark"), (1280, "light", "desktop-light")):
                     context = browser.new_context(viewport={"width": width, "height": 800}, color_scheme=color)
                     page = context.new_page()
+                    page.add_init_script("""(() => {
+                        window.fixtureDelayWebLogin = false;
+                        const nativeFetch = window.fetch.bind(window);
+                        window.fetch = (...args) => {
+                            const target = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+                            const response = nativeFetch(...args);
+                            return String(target).includes('/api/local/apps/douyin/web-login') && window.fixtureDelayWebLogin
+                              ? response.then(value => new Promise(resolve => setTimeout(() => resolve(value), 1000)))
+                              : response;
+                        };
+                    })();""")
                     dialogs = []
                     page.on("dialog", lambda dialog: dialogs.append(dialog.type))
                     page.route(re.compile(r".*/api/local/apps/catalog$"), fulfill_json({"applications": [{"id": "douyin", "name": "抖音", "install_state": "installed", "source_available": True}]}))
@@ -32,12 +43,18 @@ def verify(binary, output):
 
                     revision = 1
                     begin_count = 0
+                    late_401 = False
+                    # Older station responses did not include read_enabled; the UI must treat that as false.
                     view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
                     requests = []
 
                     def web_login(route):
-                        nonlocal revision, view, begin_count
+                        nonlocal revision, view, begin_count, late_401
                         if route.request.method == "GET":
+                            if late_401:
+                                late_401 = False
+                                route.fulfill(status=401, content_type="application/json", body=json.dumps({"error": "登录状态已失效，请重新验证。"}, ensure_ascii=False))
+                                return
                             fulfill_json(view)(route)
                             return
                         body = route.request.post_data_json
@@ -48,19 +65,24 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}"}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z"}
+                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False}
+                        elif action == "set_read":
+                            assert body == {"action": "set_read", "revision": revision, "allow_read": True} or body == {"action": "set_read", "revision": revision, "allow_read": False}
+                            assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            revision += 1
+                            view = {**view, "revision": revision, "read_enabled": body["allow_read"]}
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -77,24 +99,31 @@ def verify(binary, output):
                     page.locator("#apps-list[aria-busy='false']").wait_for()
                     open_application(page, "抖音")
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
+                    assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
                     assert page.get_by_text("已取得开放平台接口权限", exact=False).count() == 0
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).wait_for()
                     # The next ordinary polling response may only move to an unconfirmed state.
-                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-1"}
+                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-1", "read_enabled": False}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
+                    assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).click()
                     page.get_by_text("网页登录资料已保存", exact=True).wait_for()
                     page.get_by_text("最近主人确认：", exact=False).wait_for()
                     assert page.get_by_text("登录有效性以网页为准，不代表已取得开放平台接口权限。", exact=True).count() == 1
+                    page.get_by_role("button", name="允许读取首页文字", exact=True).click()
+                    page.get_by_role("button", name="停止读取首页文字", exact=True).wait_for()
+                    page.get_by_text("已允许读取实际首页网页文字。", exact=False).wait_for()
+                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
                     # A saved profile can be opened again for a later re-login.
                     page.get_by_role("button", name="重新打开登录窗口", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
-                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2"}
+                    assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
+                    view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False}
                     page.locator("#app-dialog-close").click()
                     open_application(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
@@ -106,12 +135,24 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 6
+                    assert len(requests) == 7
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))
 
-                    # Closing the dialog and logging out must not let a pending UI poll repopulate the old detail.
+                    # A delayed 401 from a closed detail must not log the owner out or repaint stale state.
+                    page.locator("#app-dialog-close").click()
+                    late_401 = True
+                    page.evaluate("window.fixtureDelayWebLogin = true")
+                    page.get_by_role("button", name="管理抖音", exact=True).click()
+                    page.locator("#app-dialog").wait_for(state="visible")
+                    page.locator("#app-dialog-close").click()
+                    page.evaluate("window.fixtureDelayWebLogin = false")
+                    page.get_by_role("button", name="管理抖音", exact=True).click()
+                    page.locator("#app-dialog").wait_for(state="visible")
+                    page.wait_for_timeout(1100)
+                    assert page.locator("#home-view").is_visible(), "late closed-detail 401 must not end the current session"
+                    # Logging out also must not let a pending UI poll repopulate the old detail.
                     page.locator("#app-dialog-close").click()
                     page.locator("#local-logout-button").click()
                     page.locator("#login-view").wait_for(state="visible")

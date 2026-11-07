@@ -62,6 +62,14 @@
       "requires_owner_setting": "explicit-owner-works-oauth"
     },
     {
+      "id": "observation.web-page-text",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人单独开启后，从其保存的网页登录资料读取抖音主页文字",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-web-read"
+    },
+    {
       "id": "publication.video",
       "implementation": "ready",
       "description": "显式授权后分阶段上传、创建并按原作品标识核对抖音视频",

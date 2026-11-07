@@ -11,8 +11,18 @@
     "own_video",
     "player_entry",
     "playback",
-    "account_works"
+    "account_works",
+    "page_text"
   ],
+  "web_read": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "content": "home",
+    "field": "page_text",
+    "owner_opt_in": "explicit-owner-web-read",
+    "pagination": "host-owned",
+    "profile": "host-owned"
+  },
   "own_video": {
     "connection": "own-videos",
     "authentication": "host-only-user-access-token",

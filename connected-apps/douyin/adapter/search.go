@@ -89,7 +89,11 @@ type SearchApp struct {
 	accountMu        sync.Mutex
 	accountRefreshMu sync.Mutex
 	accountPending   *accountAttempt
-	samplePlayer     func(context.Context, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
+	// webRead is installed by the trusted station before the app starts. The
+	// adapter never receives the browser profile, cookies, grant version, or
+	// pagination state behind this callback.
+	webRead      WebReadConnection
+	samplePlayer func(context.Context, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 }
 
 // New constructs the adapter. The supplied directory is owned by the station
@@ -139,7 +143,15 @@ func (p *SearchApp) Connections(ctx context.Context) ([]apphost.Connection, erro
 	}
 	// A static connection lets the UI show configuration and expiry problems
 	// without treating a not-yet-configured app as absent.
-	return []apphost.Connection{p.searchConnection(), p.ownVideoConnection(), p.accountConnection()}, nil
+	connections := []apphost.Connection{p.searchConnection(), p.ownVideoConnection(), p.accountConnection()}
+	connection, present, err := p.webReadConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		connections = append(connections, connection)
+	}
+	return connections, nil
 }
 
 func (p *SearchApp) searchConnection() apphost.Connection {
@@ -153,6 +165,21 @@ func (p *SearchApp) Inspect(ctx context.Context, id string) (apphost.ConnectionS
 	var connection apphost.Connection
 	var action string
 	switch id {
+	case WebReadConnectionID:
+		connection, present, err := p.webReadConnection(ctx)
+		if err != nil {
+			return apphost.ConnectionStatus{}, err
+		}
+		if !present {
+			return apphost.ConnectionStatus{}, apphost.ErrNotFound
+		}
+		state := connection.Configuration
+		status := apphost.ConnectionStatus{Connection: connection, Login: "saved网页登录资料", Runtime: "local", Worker: "disabled", CapabilityCheck: state}
+		if state == "ready" {
+			status.Worker = "ready"
+			status.SupportedActions = []string{"content.page-text"}
+		}
+		return status, nil
 	case connectionID:
 		connection, action = p.searchConnection(), "content.search"
 	case ownVideoConnectionID:
@@ -200,6 +227,9 @@ func (p *SearchApp) ObservationTargets(ctx context.Context, id string) ([]apphos
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if id == WebReadConnectionID {
+		return p.webReadTargets(ctx)
+	}
 	if id == ownVideoConnectionID {
 		return p.ownVideoTargets(ctx)
 	}
@@ -227,6 +257,16 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationGrant{}, err
 	}
+	if access.ConnectionID == WebReadConnectionID {
+		valid, err := p.webReadAccess(ctx, access)
+		if err != nil {
+			return apphost.ObservationGrant{Allowed: false}, err
+		}
+		if !valid {
+			return apphost.ObservationGrant{Allowed: false}, nil
+		}
+		return p.webRead.Grant(ctx, access)
+	}
 	if access.ConnectionID == ownVideoConnectionID {
 		return p.ownVideoGrant(ctx, access)
 	}
@@ -249,6 +289,16 @@ func (p *SearchApp) ObservationGrant(ctx context.Context, access apphost.Observa
 func (p *SearchApp) ReadObservation(ctx context.Context, request apphost.ObservationRequest) (apphost.ObservationPage, error) {
 	if err := ctx.Err(); err != nil {
 		return apphost.ObservationPage{}, err
+	}
+	if request.ConnectionID == WebReadConnectionID {
+		valid, err := p.webReadAccess(ctx, request.ObservationAccess)
+		if err != nil {
+			return apphost.ObservationPage{}, err
+		}
+		if !valid {
+			return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+		}
+		return p.webRead.Read(ctx, request)
 	}
 	if request.ConnectionID == ownVideoConnectionID {
 		return p.readOwnVideo(ctx, request)
