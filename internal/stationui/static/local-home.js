@@ -2154,7 +2154,7 @@
   }
   function douyinAuthorizationSummary(authorization) {
     const states = {
-      unconfigured: ["尚未接入抖音账号", "扫码授权后，这里会显示已核验的账号。"],
+      unconfigured: ["尚未接入抖音账号", "此入口需要已审核的开放平台网站应用；普通抖音网页登录不能代替这项授权。"],
       ready: [authorization?.label || "抖音账号已接入", [
         authorization?.works_authorized ? "已授权读取我的作品列表。" : "可重新扫码授权读取我的作品列表。",
         authorization?.publish_authorized
@@ -2255,6 +2255,19 @@
     const row = appElement("section", "", "app-layer publication-layer");
     const detail = appElement("div", "", "publication-detail");
     detail.append(appElement("strong", title), appElement("p", note));
+    if (authorization?.status === "unconfigured") {
+      detail.append(appElement("p", "先完成企业或个体工商户等主体认证并创建网站应用，再配置 Client Key、Client Secret 和 HTTPS 回调。个人主体目前仅支持小程序、小游戏、小玩法。", "publication-authorization-note"));
+      const links = appElement("div", "", "publication-actions");
+      for (const [label, href] of [
+        ["申请网站应用", "https://developer.open-douyin.com/console"],
+        ["查看申请条件", "https://partner.open-douyin.com/docs/resource/zh-CN/developer/join/issues"],
+      ]) {
+        const link = appElement("a", label);
+        link.href = href; link.target = "_blank"; link.rel = "noopener noreferrer";
+        links.append(link);
+      }
+      detail.append(links);
+    }
     if (authorization?.expires_at) {
       const expiry = new Date(authorization.expires_at);
       if (Number.isFinite(expiry.getTime())) detail.append(appElement("p", `授权到期：${expiry.toLocaleString()}`, "publication-reference"));
@@ -2280,7 +2293,7 @@
     if (!host) {
       detail.append(appElement("p", "请在 Windows 桌面端扫码连接抖音账号。", "publication-authorization-note"));
       if (disconnect) detail.append(disconnect);
-      row.append(appElement("h5", "账号授权"), detail);
+      row.append(appElement("h5", "开放平台授权"), detail);
       return row;
     }
     const panel = appElement("details", "", "publication-oauth");
@@ -2348,7 +2361,7 @@
         }
       } finally { flow.saving = false; if (current === apps) renderApps(); }
     });
-    row.append(appElement("h5", "账号授权"), detail);
+    row.append(appElement("h5", "开放平台授权"), detail);
     return row;
   }
   function douyinReadRows(record) {

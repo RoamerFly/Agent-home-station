@@ -8,6 +8,10 @@
 
 这是 Windows 开发预览，正式程序切换情况以阶梯计划的最新验收记录为准。独立入口可在桌面窗口或本机 HTTP 服务中运行。Agent 可以在自己的家目录读写文件、持久保存工具，并通过受管 Windows 运行器执行程序。应用页支持源码安装、微信账号登记与扫码、会话授权、Agent 启停及回执查询。抖音提供应用内授权窗、授权续期、作品读取与发布接入，各项真实平台验收范围见阶梯计划。
 
+当前抖音扫码入口是**开放平台网站应用授权**，并非普通抖音网页登录。申请从[开放平台控制台](https://developer.open-douyin.com/console)开始：完成开发者主体认证，创建网站应用，审核通过后在应用信息取得 Client Key、Client Secret，并登记自己控制的 HTTPS 回调地址。密钥只填写在软件的私有配置表单中，不发到聊天或提交仓库。[官方创建步骤](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/app-mgmt/create-mobile-and-web-app)
+
+2026-11-07 核对的[官方入驻条件](https://partner.open-douyin.com/docs/resource/zh-CN/developer/join/issues)列明：企业、个体工商户等主体可创建网站应用；个人主体支持小程序、小游戏、小玩法。仅有普通个人抖音账号，不能因此认为已具备网站应用资格或接口权限。软件在未配置时展示申请入口与这一前置条件。普通账号的专用网页登录及会话复用尚未接入，当前不能作为已实现能力。
+
 ## Windows 桌面预览
 
 在源码目录构建到全新的隔离目录：
