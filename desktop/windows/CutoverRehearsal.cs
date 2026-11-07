@@ -34,7 +34,8 @@ namespace WechatAgent.Desktop {
             old.Account = Account;
             var ports = new HashSet<string>();
             Func<string> url = () => { string value; do { value = ControllerTests.CycleUrl(); } while (!ports.Add(value)); return value; };
-            old.Url = url(); old.NativeUrl = url(); next.Url = url(); next.StationNativeUrl = url();
+            old.Url = url(); old.NativeUrl = url(); next.Url = url();
+            var stationNativeUrl = url();
             NativeBundle(kit, old.NativeExe, old.AdminExe);
             NativeBundle(kit, next.StationNativeExe, null);
             var oldConfig = Path.Combine(old.Root, "admin", "config.json");
@@ -50,6 +51,25 @@ namespace WechatAgent.Desktop {
             using (var current = new LocalStationRuntime(next))
             using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
                 client.Timeout = TimeSpan.FromSeconds(5);
+                const string originalWork = "Synthetic local work before connecting WeChat.";
+                const string firstDraft = "连接微信前保留的本地聊天原文";
+                const string lastDraft = "断开微信后保留的本地聊天原文";
+                current.Start(CancellationToken.None).GetAwaiter().GetResult();
+                WaitHealthy(client, next.Url, current.CheckAlive);
+                AuthenticateStation(client, next.Url);
+                AssertLocalOnly(client, next, current);
+                var identity = ControllerTests.StationJSON(client, HttpMethod.Post, next.Url + "/api/local/home", new { action = "initialize" });
+                AssertSameHome(client, next.Url, identity);
+                SubmitLocalDraft(client, next.Url, "before-connect", firstDraft);
+                var work = Path.Combine(Deployment.Text(identity, "directory"), "works", "cutover-fixture.txt");
+                WriteText(work, originalWork);
+                var artifact = ControllerTests.StationJSON(client, HttpMethod.Post, next.Url + "/api/local/artifacts",
+                    new { path = "works/cutover-fixture.txt", expected_sha256 = Sha256(work).ToLowerInvariant(), request_key = "cutover-local-work" });
+                var artifactURL = next.Url + "/api/local/artifacts/" + Deployment.Text(artifact, "artifact_id") + "/download";
+                WriteText(work, "Edited after registration.");
+                AssertLocalContinuity(client, next.Url, identity, artifactURL, originalWork, firstDraft);
+                current.Stop().GetAwaiter().GetResult();
+
                 var snapshot = Path.Combine(kit, "legacy-snapshot");
                 var snapshotArgs = new [] { "legacy-wechat-snapshot", "--legacy-data", old.Root, "--snapshot", snapshot, "--account", Account };
                 StartLegacy(legacy, old, client);
@@ -70,11 +90,11 @@ namespace WechatAgent.Desktop {
                 Write(Path.Combine(app, "legacy-import-source.json"), new { snapshot_root = snapshot, legacy_host_root = old.Root,
                     primary_account = Account, snapshot_stopped = true, snapshot_manifest_digest = Deployment.Text(verified, "manifest_digest") });
 
+                next.StationNativeUrl = stationNativeUrl;
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
-                client.DefaultRequestHeaders.Add("Origin", next.Url);
-                var login = ControllerTests.StationJSON(client, HttpMethod.Post, next.Url + "/api/login", new { password = Password });
-                client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
+                AuthenticateStation(client, next.Url);
+                AssertLocalContinuity(client, next.Url, identity, artifactURL, originalWork, firstDraft);
                 var list = (IList)Read(client, next.Url + "/api/apps/wechat/connections")["items"];
                 ControllerTests.Assert(list.Count == 1, "new station sees exactly the synthetic account");
                 var connection = Deployment.Text((Dictionary<string, object>)list[0], "id");
@@ -103,6 +123,12 @@ namespace WechatAgent.Desktop {
                 settings["base_url"] = "https://127.0.0.1:1";
                 ControllerTests.StationJSON(client, HttpMethod.Put, next.Url + "/api/local/model", settings);
                 ControllerTests.StationJSON(client, HttpMethod.Put, connectionUrl + "/policy", new { reply_threads = new [] { "filehelper" } });
+                var ungranted = new { artifact_id = Deployment.Text(artifact, "artifact_id"), thread_id = "filehelper",
+                    requester_id = "synthetic-member", request_key = "cutover-ungranted", enabled = true };
+                using (var request = new StringContent(Deployment.Json.Serialize(ungranted), Utf8, "application/json"))
+                using (var response = client.PostAsync(connectionUrl + "/work-grants", request).GetAwaiter().GetResult()) {
+                    ControllerTests.Assert(response.StatusCode == HttpStatusCode.Conflict, "text reply grant alone cannot export the local artifact to WeChat");
+                }
                 File.AppendAllText(snapshotQueue, "\n", Utf8);
                 try {
                     var blocked = Read(client, importUrl + "/activation");
@@ -152,6 +178,20 @@ namespace WechatAgent.Desktop {
                 ExpectRefused(() => current.Start(CancellationToken.None).GetAwaiter().GetResult(), "拒绝重新启动微信原生服务");
                 ControllerTests.Assert(current.PID == 0 && current.NativePID == 0 && newProof.SequenceEqual(File.ReadAllBytes(newMarker)), "new runtime cannot start a child or change its stop proof after release");
 
+                next.StationNativeUrl = "";
+                current.Start(CancellationToken.None).GetAwaiter().GetResult();
+                WaitHealthy(client, next.Url, current.CheckAlive);
+                AuthenticateStation(client, next.Url);
+                AssertLocalOnly(client, next, current);
+                settings = Read(client, next.Url + "/api/local/model");
+                settings["clear_key"] = true;
+                ControllerTests.StationJSON(client, HttpMethod.Put, next.Url + "/api/local/model", settings);
+                SubmitLocalDraft(client, next.Url, "after-release", lastDraft);
+                AssertLocalContinuity(client, next.Url, identity, artifactURL, originalWork, firstDraft, lastDraft);
+                current.Stop().GetAwaiter().GetResult();
+                ControllerTests.Assert(newProof.SequenceEqual(File.ReadAllBytes(newMarker)) && File.Exists(fence),
+                    "restarting the local station without WeChat keeps the native release fence and clean-stop proof");
+
                 client.DefaultRequestHeaders.Remove("Origin");
                 client.DefaultRequestHeaders.Remove("X-CSRF-Token");
                 StartLegacy(legacy, old, client);
@@ -163,6 +203,50 @@ namespace WechatAgent.Desktop {
                 foreach (var root in new [] { old.Root, next.StationNativeRoot })
                     ControllerTests.Assert(!File.Exists(Path.Combine(root, "unexpected-native-write")), "rehearsal performed no native mutation except owned shutdown");
             }
+        }
+
+        static void AuthenticateStation(HttpClient client, string url) {
+            client.DefaultRequestHeaders.Remove("Origin");
+            client.DefaultRequestHeaders.Remove("X-CSRF-Token");
+            client.DefaultRequestHeaders.Add("Origin", url);
+            var login = ControllerTests.StationJSON(client, HttpMethod.Post, url + "/api/login", new { password = Password });
+            client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
+        }
+
+        static void AssertLocalOnly(HttpClient client, Deployment deployment, LocalStationRuntime runtime) {
+            var apps = (IList)Read(client, deployment.Url + "/api/apps")["items"];
+            using (var response = client.GetAsync(deployment.Url + "/api/apps/wechat/connections").GetAwaiter().GetResult()) {
+                ControllerTests.Assert(apps.Count == 0 && response.StatusCode == HttpStatusCode.NotFound && runtime.NativePID == 0,
+                    "local-only desktop has no connected app, WeChat routes or native child");
+            }
+        }
+
+        static void AssertSameHome(HttpClient client, string url, Dictionary<string, object> expected) {
+            var actual = Read(client, url + "/api/local/home");
+            var keys = new [] { "fish_id", "owner_id", "directory" };
+            ControllerTests.Assert(keys.All(key => Deployment.Text(expected, key) != "" && Deployment.Text(expected, key) == Deployment.Text(actual, key))
+                && Convert.ToBoolean(actual["home_access"]) && Convert.ToBoolean(actual["chat_available"])
+                && Convert.ToInt64(expected["revision"]) == Convert.ToInt64(actual["revision"]), "local identity and home authorization survive the app lifecycle");
+        }
+
+        static void SubmitLocalDraft(HttpClient client, string url, string id, string draft) {
+            using (var request = new StringContent(Deployment.Json.Serialize(new { request_id = id, text = draft }), Utf8, "application/json"))
+            using (var response = client.PostAsync(url + "/api/local/chat", request).GetAwaiter().GetResult()) {
+                var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                ControllerTests.Assert(response.StatusCode == HttpStatusCode.ServiceUnavailable && body.Contains("没有调用模型"),
+                    "chat accepted the local input and reported that the model was unconfigured");
+            }
+        }
+
+        static void AssertLocalContinuity(HttpClient client, string url, Dictionary<string, object> identity, string artifactURL, string work, params string[] drafts) {
+            AssertSameHome(client, url, identity);
+            var items = (IList)Read(client, url + "/api/local/chat")["items"];
+            var records = items.Cast<Dictionary<string, object>>().ToArray();
+            ControllerTests.Assert(records.Length == drafts.Length && records.All(record => Deployment.Text(record, "role") == "user")
+                && drafts.All(draft => records.Count(record => Deployment.Text(record, "text") == draft) == 1),
+                "each local chat source is retained exactly once without a fabricated reply");
+            ControllerTests.Assert(client.GetStringAsync(artifactURL).GetAwaiter().GetResult() == work,
+                "local work keeps the registered bytes across connecting and disconnecting the application");
         }
 
         static void NativeBundle(string kit, string native, string admin) {
