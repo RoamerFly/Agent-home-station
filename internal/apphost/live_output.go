@@ -20,6 +20,7 @@ type LiveEncoder interface {
 
 type ManagedLiveOutput struct {
 	launch func(context.Context, LiveReference) (LiveEncoder, error)
+	check  func(context.Context, LiveReference) error
 	mu     sync.Mutex
 	lease  *liveOutputLease
 }
@@ -39,10 +40,17 @@ type liveOutputLease struct {
 const liveOutputMediaTimeout = 20 * time.Second
 
 func NewManagedLiveOutput(launch func(context.Context, LiveReference) (LiveEncoder, error)) *ManagedLiveOutput {
+	return NewManagedLiveOutputWithPreflight(launch, nil)
+}
+
+// NewManagedLiveOutputWithPreflight rechecks host-owned program authorization
+// before platform dispatch and encoder launch, and during an active lease.
+// The callback must not start an encoder or perform an external action.
+func NewManagedLiveOutputWithPreflight(launch func(context.Context, LiveReference) (LiveEncoder, error), check func(context.Context, LiveReference) error) *ManagedLiveOutput {
 	if launch == nil {
 		return nil
 	}
-	return &ManagedLiveOutput{launch: launch}
+	return &ManagedLiveOutput{launch: launch, check: check}
 }
 
 func (o *ManagedLiveOutput) StartLiveOutput(ctx context.Context, ref LiveReference, ingest LiveIngest) (err error) {
@@ -75,6 +83,11 @@ func (o *ManagedLiveOutput) StartLiveOutput(ctx context.Context, ref LiveReferen
 			lease.cancel()
 		}
 	}()
+	if o.check != nil {
+		if err := o.check(setup, ref); err != nil || setup.Err() != nil {
+			return ErrLiveUnavailable
+		}
+	}
 	lease.encoder, err = o.launch(setup, ref)
 	if err != nil || lease.encoder == nil || setup.Err() != nil {
 		return ErrLiveUnavailable
@@ -102,7 +115,15 @@ func (o *ManagedLiveOutput) current(ref LiveReference) *liveOutputLease {
 
 // CheckLiveOutput is also called before remote start. At that point no media
 // can exist; the selected platform must first return its private ingest route.
-func (o *ManagedLiveOutput) CheckLiveOutput(_ context.Context, ref LiveReference) error {
+func (o *ManagedLiveOutput) CheckLiveOutput(ctx context.Context, ref LiveReference) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if o.check != nil {
+		if err := o.check(ctx, ref); err != nil {
+			return err
+		}
+	}
 	lease := o.current(ref)
 	if lease == nil {
 		return nil

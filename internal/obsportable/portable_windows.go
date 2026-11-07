@@ -190,11 +190,48 @@ type Encoder struct {
 	lock         windows.Handle
 	process      *obspreview.EncoderProcess
 	started      bool
+	media        *ownedMedia
 }
 
 // Encoder reserves the private installation before a new profile is created.
 // The non-inherited lock is released by Windows if the station exits.
 func (i *Installation) Encoder(ctx context.Context) (*Encoder, error) {
+	return i.EncoderWithMedia(ctx, nil)
+}
+
+// Media describes an MP4 stream already probed and authorized by the host. No
+// model-provided path, URL, source type or FFmpeg options are accepted here.
+// Width and Height are the probed display dimensions used for aspect fitting.
+type Media struct {
+	Source io.ReadCloser
+	SHA256 string
+	Bytes  int64
+	Width  int
+	Height int
+	Loop   bool
+}
+
+// EncoderWithMedia reserves the installation and always takes ownership of a
+// non-nil Source, including when validation or reservation fails. Start closes
+// it after copying; every Start failure and Stop also close it. Close failures
+// remain observable from Stop. Callers must not read or close Source afterward.
+// A nil Media retains the standalone solid-color program.
+func (i *Installation) EncoderWithMedia(ctx context.Context, media *Media) (_ *Encoder, result error) {
+	var owned *ownedMedia
+	if media != nil {
+		owned = &ownedMedia{Media: *media}
+	}
+	defer func() {
+		if result != nil && owned != nil {
+			result = errors.Join(result, owned.close())
+		}
+	}()
+	if media != nil && (media.Source == nil || !digestValid(media.SHA256) || media.Bytes <= 0 || media.Width <= 0 || media.Height <= 0) {
+		return nil, ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	name, err := windows.UTF16PtrFromString(filepath.Join(i.base, "session.lock"))
 	if err != nil {
 		return nil, ErrInvalid
@@ -221,12 +258,17 @@ func (i *Installation) Encoder(ctx context.Context) (*Encoder, error) {
 		_ = windows.CloseHandle(lock)
 		return nil, err
 	}
-	return &Encoder{installation: i, lock: lock}, nil
+	return &Encoder{installation: i, lock: lock, media: owned}, nil
 }
 
-func (e *Encoder) Start(ctx context.Context, port int, ticket string) error {
+func (e *Encoder) Start(ctx context.Context, port int, ticket string) (result error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	defer func() {
+		if result != nil && e.media != nil {
+			result = errors.Join(result, e.media.close())
+		}
+	}()
 	if e.lock == 0 || e.started || !validRelay(port, ticket) {
 		return ErrInvalid
 	}
@@ -239,7 +281,7 @@ func (e *Encoder) Start(ctx context.Context, port int, ticket string) error {
 		return ErrInvalid
 	}
 	defer root.Close()
-	if err := writeProfile(root, port, ticket); err != nil {
+	if err := writeProfileWithMedia(ctx, root, e.installation.studio, port, ticket, e.media); err != nil {
 		return err
 	}
 	exe := filepath.Join(e.installation.studio, filepath.FromSlash(executable))
@@ -271,19 +313,23 @@ func (e *Encoder) VerifyPublisher(ctx context.Context, socket *net.TCPConn) erro
 func (e *Encoder) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	var result error
+	if e.media != nil {
+		result = e.media.close()
+	}
 	if e.process != nil {
 		if err := e.process.Stop(ctx); err != nil {
-			return err
+			return errors.Join(result, err)
 		}
 		e.process = nil
 	}
 	if e.lock != 0 {
 		if err := windows.CloseHandle(e.lock); err != nil {
-			return err
+			return errors.Join(result, err)
 		}
 		e.lock = 0
 	}
-	return nil
+	return result
 }
 
 func loopbackService(port int, ticket string) ([]byte, error) {

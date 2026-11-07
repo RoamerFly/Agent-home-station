@@ -119,13 +119,36 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 
 // Probe inspects the first video stream using the existing local-only protocol.
 func Probe(ctx context.Context, path string) (Metadata, error) {
-	var result Metadata
-	command := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path)
+	return probeVideo(ctx, path, true)
+}
+
+// ProbeMetadata reads the first video stream's container metadata without
+// counting frames across the video. It does not prove complete decoding;
+// callers can separately decode the frames needed for their operation.
+func ProbeMetadata(ctx context.Context, path string) (Metadata, error) {
+	return probeVideo(ctx, path, false)
+}
+
+func probeVideo(ctx context.Context, path string, countFrames bool) (Metadata, error) {
+	arguments := []string{"-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0"}
+	if countFrames {
+		arguments = append(arguments, "-count_frames")
+	}
+	arguments = append(arguments, "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path)
+	command := exec.CommandContext(ctx, "ffprobe", arguments...)
 	hideDecoderWindow(command)
 	raw, err := command.Output()
 	if errors.Is(err, exec.ErrNotFound) {
-		return result, errors.New("video_analysis_decoder_unavailable")
+		return Metadata{}, errors.New("video_analysis_decoder_unavailable")
 	}
+	if err != nil {
+		return Metadata{}, errors.New("video_inspect_probe_failed")
+	}
+	return parseVideoMetadata(raw, countFrames)
+}
+
+func parseVideoMetadata(raw []byte, countFrames bool) (Metadata, error) {
+	var result Metadata
 	var info struct {
 		Streams []struct {
 			Count  string `json:"nb_read_frames"`
@@ -137,7 +160,7 @@ func Probe(ctx context.Context, path string) (Metadata, error) {
 			Duration string `json:"duration"`
 		} `json:"format"`
 	}
-	if err != nil || json.Unmarshal(raw, &info) != nil || len(info.Streams) != 1 {
+	if json.Unmarshal(raw, &info) != nil || len(info.Streams) != 1 {
 		return result, errors.New("video_inspect_probe_failed")
 	}
 	stream := info.Streams[0]
@@ -152,7 +175,9 @@ func Probe(ctx context.Context, path string) (Metadata, error) {
 			result.FPS = numerator / denominator
 		}
 	}
-	if result.Frames < 1 || result.Seconds <= 0 || math.IsNaN(result.Seconds) || math.IsInf(result.Seconds, 0) {
+	if result.Seconds <= 0 || math.IsNaN(result.Seconds) || math.IsInf(result.Seconds, 0) ||
+		(countFrames && result.Frames < 1) ||
+		(!countFrames && (result.Width < 1 || result.Height < 1 || result.FPS <= 0 || math.IsNaN(result.FPS) || math.IsInf(result.FPS, 0))) {
 		return result, errors.New("video_inspect_metadata_invalid")
 	}
 	return result, nil

@@ -479,3 +479,56 @@ func TestManagedLiveOutputRestartNeverRepublishesOwnedSession(t *testing.T) {
 		t.Fatalf("restart replayed platform StartLive: %d", starts)
 	}
 }
+
+func TestManagedLiveOutputPreflightPreventsPlatformAndEncoderStart(t *testing.T) {
+	f := newLiveTestFixture(t)
+	launches, checks := 0, 0
+	denied := errors.New("synthetic program authorization revoked")
+	output := NewManagedLiveOutputWithPreflight(func(context.Context, LiveReference) (LiveEncoder, error) {
+		launches++
+		return nil, errors.New("must not launch")
+	}, func(context.Context, LiveReference) error { checks++; return denied })
+	f.control = NewLiveController(f.control.registry, f.store, output)
+	f.control.now = f.time
+	started := f.start("preflight-denied", 60)
+	if checks == 0 || launches != 0 {
+		t.Fatalf("preflight checks=%d launches=%d", checks, launches)
+	}
+	if starts, _, _ := f.provider.calls(); starts != 0 {
+		t.Fatalf("preflight denial dispatched %d platform starts", starts)
+	}
+	if started.StopReason != "output-unavailable" {
+		t.Fatalf("missing preflight failure: %#v", started)
+	}
+	// A direct output call must not bypass the same check.
+	ref := LiveReference{ID: "direct", Deadline: time.Now().Add(time.Minute)}
+	if err := output.StartLiveOutput(f.ctx, ref, LiveIngest{}); !errors.Is(err, ErrLiveUnavailable) {
+		t.Fatalf("direct preflight result: %v", err)
+	}
+	if launches != 0 {
+		t.Fatalf("direct call launched %d encoders", launches)
+	}
+	if err := output.StopLiveOutput(f.ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagedLiveOutputPreflightRechecksActiveLease(t *testing.T) {
+	checks := 0
+	var denied error
+	output := NewManagedLiveOutputWithPreflight(func(context.Context, LiveReference) (LiveEncoder, error) { return nil, errors.New("not used") }, func(context.Context, LiveReference) error { checks++; return denied })
+	ref := LiveReference{ID: "active", Deadline: time.Now().Add(time.Minute)}
+	if err := output.CheckLiveOutput(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	output.lease = &liveOutputLease{ref: ref, ctx: leaseCtx, ready: make(chan struct{})}
+	denied = errors.New("source forgotten")
+	if err := output.CheckLiveOutput(context.Background(), ref); !errors.Is(err, denied) {
+		t.Fatalf("active lease authorization not rechecked: %v", err)
+	}
+	if checks != 2 {
+		t.Fatalf("checks=%d, want 2", checks)
+	}
+}

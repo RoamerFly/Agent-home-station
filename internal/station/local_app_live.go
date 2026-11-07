@@ -16,16 +16,19 @@ import (
 const localLiveToolName = "app_live"
 
 func localLiveTool() mcptools.Tool {
-	return mcptools.NewTool(localLiveToolName, "管理已授权应用的限时直播会话。先用targets核对available、获准目标和active原会话；响应中断或重启后从active恢复原id。start提供app_id、connection_id和duration_seconds，宿主绑定本轮来源并持久去重。status只读原会话；reconcile核对原平台状态，stop停止原会话与本机输出，均只提供原id。unknown不证明开播或结束，不可另建会话重复开始；按原id核对。平台回执与本机输出状态分别返回。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","start","status","reconcile","stop"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"duration_seconds":{"type":"integer","minimum":1},"id":{"type":"string","format":"uuid"}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(localLiveToolName, "管理已授权应用的限时直播会话。先用targets核对available、获准目标和active原会话；响应中断或重启后从active恢复原id。start提供app_id、connection_id和duration_seconds；播放已登记MP4时同时提供program_artifact_id和program_sha256，program_loop控制循环，省略素材沿用测试色板。宿主绑定本轮来源、素材版本并持久去重。status只读原会话；reconcile核对原平台状态，stop停止原会话与本机输出，均只提供原id。unknown需核对原id，不可重复开始。平台与本机输出分别返回。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","start","status","reconcile","stop"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"duration_seconds":{"type":"integer","minimum":1},"program_artifact_id":{"type":"string"},"program_sha256":{"type":"string","minLength":64,"maxLength":64},"program_loop":{"type":"boolean"},"id":{"type":"string","format":"uuid"}},"required":["action"],"additionalProperties":false}`)
 }
 
 type localLiveToolInput struct {
-	Action          string `json:"action"`
-	AppID           string `json:"app_id"`
-	ConnectionID    string `json:"connection_id"`
-	DurationSeconds int64  `json:"duration_seconds"`
-	ID              string `json:"id"`
+	Action            string `json:"action"`
+	AppID             string `json:"app_id"`
+	ConnectionID      string `json:"connection_id"`
+	DurationSeconds   int64  `json:"duration_seconds"`
+	ID                string `json:"id"`
+	ProgramArtifactID string `json:"program_artifact_id"`
+	ProgramSHA256     string `json:"program_sha256"`
+	ProgramLoop       bool   `json:"program_loop"`
 }
 
 // Never forward a provider error body: it may contain private ingest routing.
@@ -72,6 +75,7 @@ func (t *localToolSet) callLive(ctx context.Context, raw json.RawMessage) (value
 	case "start":
 		stage = "开始直播"
 		allowed["app_id"], allowed["connection_id"], allowed["duration_seconds"] = true, true, true
+		allowed["program_artifact_id"], allowed["program_sha256"], allowed["program_loop"] = true, true, true
 	case "status", "reconcile", "stop":
 		stage = map[string]string{"status": "读取原会话", "reconcile": "核对原会话", "stop": "停止原会话"}[in.Action]
 		allowed["id"] = true
@@ -132,8 +136,18 @@ func (t *localToolSet) callLive(ctx context.Context, raw json.RawMessage) (value
 		if err := t.run.CheckSource(ctx); err != nil {
 			return "", apphost.ErrLiveDenied
 		}
-		key := localCheckpointKey(localLiveToolName, source.EventID, source.Revision, identity.FishID, owner, in.AppID, in.ConnectionID, in.DurationSeconds)
-		result, err = live.Start(ctx, owner, apphost.LiveStart{AppID: in.AppID, ConnectionID: in.ConnectionID, DurationSeconds: in.DurationSeconds, RequestKey: key})
+		start := apphost.LiveStart{AppID: in.AppID, ConnectionID: in.ConnectionID, DurationSeconds: in.DurationSeconds,
+			ProgramArtifactID: in.ProgramArtifactID, ProgramSHA256: in.ProgramSHA256, ProgramLoop: in.ProgramLoop}
+		if err := h.checkLiveProgramStart(ctx, start); err != nil {
+			return "", err
+		}
+		// Preserve the previous no-program key so interrupted old requests keep
+		// their original session rather than becoming new broadcasts on upgrade.
+		start.RequestKey = localCheckpointKey(localLiveToolName, source.EventID, source.Revision, identity.FishID, owner, in.AppID, in.ConnectionID, in.DurationSeconds)
+		if in.ProgramArtifactID != "" || in.ProgramSHA256 != "" || in.ProgramLoop {
+			start.RequestKey = localCheckpointKey(start.RequestKey, in.ProgramArtifactID, in.ProgramSHA256, in.ProgramLoop)
+		}
+		result, err = live.Start(ctx, owner, start)
 	case "status", "reconcile", "stop":
 		id, parseErr := uuid.Parse(in.ID)
 		if parseErr != nil || id == uuid.Nil || id.String() != in.ID || in.AppID != "" || in.ConnectionID != "" || in.DurationSeconds != 0 {

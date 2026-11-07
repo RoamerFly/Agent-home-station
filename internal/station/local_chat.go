@@ -47,11 +47,12 @@ type localChatService struct {
 	applications apphost.Registry
 	// The output registration belongs to the host and cannot be set by a
 	// browser request or connected account.
-	live        *apphost.LiveController
-	liveFish    string
-	liveOutput  apphost.LiveOutput
-	liveEncoder string
-	liveRunDone chan struct{}
+	live         *apphost.LiveController
+	liveFish     string
+	liveOutput   apphost.LiveOutput
+	liveEncoder  string
+	liveRunDone  chan struct{}
+	livePrograms *localLivePrograms
 	// liveStopDone is created only when shutdown has claimed an existing live
 	// controller. It lets Close wait for the same bounded stop operation rather
 	// than issue a second remote stop while the first is in flight.
@@ -66,6 +67,7 @@ type localChatService struct {
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
+		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
 			home: home, options: stationruntime.PackagedToolOptions(),
 			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),

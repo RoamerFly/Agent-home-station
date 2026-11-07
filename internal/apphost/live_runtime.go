@@ -131,7 +131,8 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 
 func sameLiveReference(a, b LiveReference) bool {
 	return a.ID == b.ID && a.Target == b.Target && a.Registration == b.Registration &&
-		a.GrantVersion == b.GrantVersion && a.Deadline.Equal(b.Deadline)
+		a.GrantVersion == b.GrantVersion && a.Deadline.Equal(b.Deadline) &&
+		a.ProgramArtifactID == b.ProgramArtifactID && a.ProgramSHA256 == b.ProgramSHA256 && a.ProgramLoop == b.ProgramLoop
 }
 
 func validLiveReceipt(s liveState, r LiveReceipt) bool {

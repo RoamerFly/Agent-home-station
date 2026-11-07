@@ -40,10 +40,13 @@ type LiveGrant struct {
 }
 
 type LiveStart struct {
-	AppID           string `json:"app_id"`
-	ConnectionID    string `json:"connection_id"`
-	RequestKey      string `json:"request_key"`
-	DurationSeconds int64  `json:"duration_seconds"`
+	AppID             string `json:"app_id"`
+	ConnectionID      string `json:"connection_id"`
+	RequestKey        string `json:"request_key"`
+	DurationSeconds   int64  `json:"duration_seconds"`
+	ProgramArtifactID string `json:"program_artifact_id,omitempty"`
+	ProgramSHA256     string `json:"program_sha256,omitempty"`
+	ProgramLoop       bool   `json:"program_loop,omitempty"`
 }
 
 type LiveTarget struct {
@@ -58,11 +61,14 @@ type LiveTarget struct {
 // LiveReference is an immutable, host-issued operation identity. Platform and
 // local encoder adapters must use this identity for retries and cleanup.
 type LiveReference struct {
-	ID           string        `json:"id"`
-	Target       ConnectionRef `json:"target"`
-	Registration string        `json:"registration"`
-	GrantVersion string        `json:"grant_version"`
-	Deadline     time.Time     `json:"deadline"`
+	ID                string        `json:"id"`
+	Target            ConnectionRef `json:"target"`
+	Registration      string        `json:"registration"`
+	GrantVersion      string        `json:"grant_version"`
+	Deadline          time.Time     `json:"deadline"`
+	ProgramArtifactID string        `json:"program_artifact_id,omitempty"`
+	ProgramSHA256     string        `json:"program_sha256,omitempty"`
+	ProgramLoop       bool          `json:"program_loop,omitempty"`
 }
 
 type LiveReceipt struct {
@@ -115,16 +121,19 @@ type liveStreamOutput interface {
 }
 
 type LiveView struct {
-	ID           string            `json:"id"`
-	State        string            `json:"state"`
-	AppID        string            `json:"app_id"`
-	ConnectionID string            `json:"connection_id"`
-	RoomID       string            `json:"room_id,omitempty"`
-	Deadline     time.Time         `json:"deadline"`
-	StopReason   string            `json:"stop_reason,omitempty"`
-	LocalStopped bool              `json:"local_stopped"`
-	RemoteEnded  bool              `json:"remote_ended"`
-	LocalOutput  *LiveOutputStatus `json:"local_output,omitempty"`
+	ID                string            `json:"id"`
+	State             string            `json:"state"`
+	AppID             string            `json:"app_id"`
+	ConnectionID      string            `json:"connection_id"`
+	RoomID            string            `json:"room_id,omitempty"`
+	Deadline          time.Time         `json:"deadline"`
+	StopReason        string            `json:"stop_reason,omitempty"`
+	LocalStopped      bool              `json:"local_stopped"`
+	RemoteEnded       bool              `json:"remote_ended"`
+	LocalOutput       *LiveOutputStatus `json:"local_output,omitempty"`
+	ProgramArtifactID string            `json:"program_artifact_id,omitempty"`
+	ProgramSHA256     string            `json:"program_sha256,omitempty"`
+	ProgramLoop       bool              `json:"program_loop,omitempty"`
 }
 
 type liveState struct {
@@ -141,7 +150,8 @@ type liveState struct {
 func (l *LiveController) view(s liveState) LiveView {
 	v := LiveView{ID: s.Reference.ID, State: s.State, AppID: s.Reference.Target.AppID,
 		ConnectionID: s.Reference.Target.ConnectionID, RoomID: s.RoomID, Deadline: s.Reference.Deadline,
-		StopReason: s.StopReason, LocalStopped: s.LocalStopped, RemoteEnded: s.RemoteEnded}
+		StopReason: s.StopReason, LocalStopped: s.LocalStopped, RemoteEnded: s.RemoteEnded,
+		ProgramArtifactID: s.Reference.ProgramArtifactID, ProgramSHA256: s.Reference.ProgramSHA256, ProgramLoop: s.Reference.ProgramLoop}
 	if output, ok := l.output.(liveStreamOutput); ok {
 		v.LocalOutput = output.LiveOutputStatus(s.Reference)
 	}
@@ -241,10 +251,21 @@ func grantCovers(g LiveGrant, now, deadline time.Time) bool {
 	return validLiveGrant(g) && !now.Before(g.OpensAt) && deadline.After(now) && !deadline.After(g.ClosesAt) && deadline.Sub(now) <= g.MaxDuration
 }
 
+// validLiveProgram validates the public immutable reference only. The station
+// separately proves artifact ownership, source authorization and video bytes.
+func validLiveProgram(id, digest string, loop bool) bool {
+	if id == "" && digest == "" && !loop {
+		return true
+	}
+	decoded, err := hex.DecodeString(digest)
+	return liveIdentifier.MatchString(id) && err == nil && len(decoded) == sha256.Size && digest == strings.ToLower(digest)
+}
+
 func decodeLive(r pluginhost.LiveSessionRecord) (liveState, error) {
 	var s liveState
 	if json.Unmarshal(r.Payload, &s) != nil || s.Reference.ID != r.ID || s.Owner == "" || s.Reference.Target.AccountID == "" ||
 		s.Reference.Registration == "" || s.Reference.GrantVersion == "" || s.Reference.Deadline.IsZero() ||
+		!validLiveProgram(s.Reference.ProgramArtifactID, s.Reference.ProgramSHA256, s.Reference.ProgramLoop) ||
 		r.Active == (s.State == "ended") {
 		return liveState{}, ErrLiveConflict
 	}
@@ -302,7 +323,7 @@ func (l *LiveController) Active(ctx context.Context, owner string) (LiveView, er
 
 func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) (LiveView, error) {
 	if owner == "" || !stableID.MatchString(in.AppID) || !liveIdentifier.MatchString(in.ConnectionID) ||
-		!liveIdentifier.MatchString(in.RequestKey) || in.DurationSeconds < 1 || in.DurationSeconds > math.MaxInt64/int64(time.Second) {
+		!liveIdentifier.MatchString(in.RequestKey) || !validLiveProgram(in.ProgramArtifactID, in.ProgramSHA256, in.ProgramLoop) || in.DurationSeconds < 1 || in.DurationSeconds > math.MaxInt64/int64(time.Second) {
 		return LiveView{}, ErrLiveInput
 	}
 	raw, _ := json.Marshal(struct {
@@ -334,7 +355,8 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 		return LiveView{}, ErrLiveDenied
 	}
 	s := liveState{Owner: owner, State: "starting", Reference: LiveReference{ID: uuid.NewString(), Target: target,
-		Registration: entry.Registration, GrantVersion: grant.Version, Deadline: deadline}}
+		Registration: entry.Registration, GrantVersion: grant.Version, Deadline: deadline,
+		ProgramArtifactID: in.ProgramArtifactID, ProgramSHA256: in.ProgramSHA256, ProgramLoop: in.ProgramLoop}}
 	initial := s
 	ref := initial.Reference
 	raw, _ = json.Marshal(s)

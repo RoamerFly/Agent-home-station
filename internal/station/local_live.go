@@ -123,15 +123,17 @@ func (h *localChatService) liveAction(w http.ResponseWriter, r *http.Request) {
 			websession.Fail(w, http.StatusBadRequest, "开始直播时请提供目标、时长和本次请求编号")
 			return
 		}
-		out, err = live.Start(ctx, owner, in.LiveStart)
+		if err = h.checkLiveProgramStart(ctx, in.LiveStart); err == nil {
+			out, err = live.Start(ctx, owner, in.LiveStart)
+		}
 	case "stop":
-		if in.ID == "" || in.AppID != "" || in.ConnectionID != "" || in.RequestKey != "" || in.DurationSeconds != 0 {
+		if in.ID == "" || in.AppID != "" || in.ConnectionID != "" || in.RequestKey != "" || in.DurationSeconds != 0 || in.ProgramArtifactID != "" || in.ProgramSHA256 != "" || in.ProgramLoop {
 			websession.Fail(w, http.StatusBadRequest, "停止直播时请只提供原直播会话编号")
 			return
 		}
 		out, err = live.Stop(ctx, owner, in.ID)
 	case "status", "reconcile":
-		if in.ID == "" || in.AppID != "" || in.ConnectionID != "" || in.RequestKey != "" || in.DurationSeconds != 0 {
+		if in.ID == "" || in.AppID != "" || in.ConnectionID != "" || in.RequestKey != "" || in.DurationSeconds != 0 || in.ProgramArtifactID != "" || in.ProgramSHA256 != "" || in.ProgramLoop {
 			websession.Fail(w, http.StatusBadRequest, "查询直播时请只提供原直播会话编号")
 			return
 		}
@@ -168,6 +170,12 @@ func liveAvailabilityReason(targets []apphost.LiveTarget, encoder string) string
 
 func localLiveFailure(err error) (int, string) {
 	switch {
+	case errors.Is(err, errLiveProgramSource):
+		return http.StatusForbidden, errLiveProgramSource.Error()
+	case errors.Is(err, errLiveProgramFormat):
+		return http.StatusBadRequest, errLiveProgramFormat.Error()
+	case errors.Is(err, errLiveProgramProbe):
+		return http.StatusServiceUnavailable, errLiveProgramProbe.Error()
 	case errors.Is(err, apphost.ErrLiveInput):
 		return http.StatusBadRequest, "直播请求编号、目标或时长无效"
 	case errors.Is(err, apphost.ErrLiveDenied):
