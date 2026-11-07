@@ -1922,6 +1922,19 @@
   function publicationStatus(task) {
     if (task.state === "failed" && task.progress?.stage === "rejected") return ["未提交成功", "本次发布已被拒绝。"];
     const normal = publicationStates[task.state] || publicationStates.awaiting_receipt;
+	const creatorIssues = {
+	  creator_login_required: "创作者中心需要重新登录，请在抖音应用详情打开登录窗口。",
+	  creator_profile_busy: "专属登录窗口仍在使用，关闭并确认保存后可继续原任务。",
+	  creator_controls_unavailable: "创作者页面未准备好，或网页控件发生变化；尚未确认提交。",
+	  creator_upload_incomplete: "视频上传尚未完成，或页面已清除所选文件。",
+	  creator_visibility_unconfirmed: "网页未确认作品可见范围，未继续发布。",
+	  creator_result_unknown: "提交结果尚未确认，只查询原任务，避免重复发布。",
+	  creator_browser_unavailable: "专属浏览器暂不可用，原任务已保留。",
+	  creator_timeout: "创作者页面处理超时，原任务和已完成进度保留。",
+	  creator_cancelled: "本次操作已中断，请先核对原任务。",
+	  creator_failed: "创作者页面处理失败，原任务已保留。",
+	};
+	if (task.state === "awaiting_receipt" && creatorIssues[task.progress?.error_code]) return ["等待继续", creatorIssues[task.progress.error_code]];
     if (task.state !== "awaiting_receipt") return normal;
     if (task.cancel_requested) return ["已要求停止", "已请求停止后续操作，原投稿结果仍待核对。"];
     return publicationStages[task.progress?.stage] || normal;

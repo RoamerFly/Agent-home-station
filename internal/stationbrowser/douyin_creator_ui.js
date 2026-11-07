@@ -3,7 +3,8 @@
   const locationOK = location.origin === input.origin && location.pathname.startsWith("/creator-micro/");
   if (!locationOK) return { invalid: true };
   const visibleLogin = [...document.querySelectorAll('input[type=password],form[action*="login"],iframe[src*="captcha"],iframe[src*="verify"]')].some(visible);
-  if (visibleLogin) return { login: true };
+  if (visibleLogin || /\/login(?:\/|$)/u.test(location.pathname) ||
+    [...document.querySelectorAll('h1,h2,h3')].some(e => visible(e) && /(?:扫码登录|登录创作者中心)/u.test(e.textContent))) return { login: true };
   if (input.action === "query") {
     if (!location.pathname.startsWith("/creator-micro/content/manage")) return { invalid: true };
     const matches = [...document.querySelectorAll("a[href]")].filter(visible).filter(e => { try {

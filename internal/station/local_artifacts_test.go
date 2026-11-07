@@ -13,6 +13,51 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func TestLocalArtifactPublishComputesHashAndRecoversWithoutExecutor(t *testing.T) {
+	f := localChatFixture(t)
+	_, home := f.request("GET", "/api/local/home", nil, false)
+	path := filepath.Join(home["directory"].(string), "works", "auto.txt")
+	const body = "synthetic output without a separate hashing process"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	publish := localToolCall(localArtifactPublishTool, map[string]string{"path": "works/auto.txt"})
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			calls++
+			if calls == 1 {
+				return publish, nil
+			}
+			return "", fmt.Errorf("synthetic model interruption after verified snapshot")
+		}), nil
+	}
+	if code, _ := localChatSend(f, "auto-hash-work", "登记现有成品"); code != 502 {
+		t.Fatal(code)
+	}
+	if err := os.WriteFile(path, []byte("changed mutable file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	next := localRestartChat(t, f)
+	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+			calls++
+			if calls == 1 {
+				return publish, nil
+			}
+			history := localModelHistory(turns)
+			if !strings.Contains(history, sha256Hex([]byte(body))) || !strings.Contains(history, "work-") {
+				t.Error("verified original snapshot and actual hash missing from recovery")
+			}
+			return `{"action":"reply","messages":["已登记原成品。"]}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(next, "auto-hash-work", "登记现有成品"); code != 200 {
+		t.Fatal(code, out)
+	}
+}
+
 func TestLocalArtifactsPublishThroughChatAndRetainVerifiedSnapshot(t *testing.T) {
 	f := localChatFixture(t)
 	const body = "a synthetic finished document"

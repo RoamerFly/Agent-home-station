@@ -37,6 +37,19 @@ func TestCreatorReceiptIDsRemainExactAndUnambiguous(t *testing.T) {
 	}
 }
 
+func TestCreatorDependenciesStaySeparateFromOrdinaryFeed(t *testing.T) {
+	for _, host := range []string{"lf-fe-creator.douyinstatic.com", "auth.zijieapi.com", "lf1-cdn-tos.bytescm.com"} {
+		if !isDouyinCreatorHost(host) || isDouyinHomeHost(host) {
+			t.Fatalf("creator dependency %q not independently scoped", host)
+		}
+	}
+	for _, host := range []string{"lf-fe-creator.douyinstatic.com.evil.invalid", "127.0.0.1", "example.invalid", "user@auth.zijieapi.com"} {
+		if isDouyinCreatorHost(host) {
+			t.Fatalf("unexpected creator host %q", host)
+		}
+	}
+}
+
 func creatorFixture(t *testing.T, reject, stale bool) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	posts, uploads := new(atomic.Int32), new(atomic.Int32)

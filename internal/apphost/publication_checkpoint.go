@@ -92,7 +92,7 @@ func (p *Publisher) listProgress(ctx context.Context, job pluginhost.Job, record
 	if err != nil || !validPublicationProgress(progress) {
 		return nil, ErrPublicationConflict
 	}
-	return &PublicationProgress{Stage: progress.Stage, ConfirmedParts: progress.ConfirmedParts, TotalParts: progress.TotalParts}, nil
+	return &PublicationProgress{Stage: progress.Stage, ErrorCode: progress.ErrorCode, ConfirmedParts: progress.ConfirmedParts, TotalParts: progress.TotalParts}, nil
 }
 
 func (p *Publisher) runCheckpointed(ctx context.Context, job pluginhost.Job, record publicationRecord, active *atomic.Bool, workflow CheckpointedPublicationProvider, req PublicationRequest) (PublicationReceipt, error) {

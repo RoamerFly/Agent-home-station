@@ -88,13 +88,34 @@ func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPub
 	if fixture {
 		session, err = openCDP(ctx, profile)
 	} else {
-		session, err = openRestrictedCDP(ctx, profile, isDouyinHomeHost)
+		session, err = openRestrictedCDP(ctx, profile, isDouyinCreatorHost)
 	}
 	if err != nil {
 		return result, ErrBrowserUnavailable
 	}
 	defer closeDouyinHomeSession(session)
 	return runDouyinCreatorSession(ctx, session, target, in, authorize)
+}
+
+// The creator SPA has different static/auth dependencies from the public
+// feed. These exact hosts were referenced by its public HTML on 2026-11-07;
+// granting them here does not expand ordinary feed-reading access.
+func isDouyinCreatorHost(host string) bool {
+	if isDouyinHomeHost(host) {
+		return true
+	}
+	u, err := url.Parse("https://" + host)
+	if err != nil || u.User != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")) {
+	case "auth.zijieapi.com", "lf-c-flwb.bytetos.com", "lf-fe-creator.douyinstatic.com",
+		"lf-security.bytegoofy.com", "lf-ucenter-web.yhgfb-cn-static.com", "lf1-cdn-tos.bytegoofy.com",
+		"lf1-cdn-tos.bytescm.com", "lf3-beecdn.bytetos.com", "lf3-cdn-tos.bytescm.com",
+		"s3.bytecdn.cn", "s3a.bytecdn.cn", "unpkg.byted-static.com":
+		return true
+	}
+	return false
 }
 
 type creatorPageState struct {

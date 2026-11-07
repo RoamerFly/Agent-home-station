@@ -13,6 +13,7 @@ import (
 
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/stationbrowser"
 )
 
 func webPublicationFixture(t *testing.T) (*localHomeFixture, *localDouyinWebPublication, localDouyinWebAccess, apphost.ConnectionRef) {
@@ -31,6 +32,26 @@ func webPublicationFixture(t *testing.T) (*localHomeFixture, *localDouyinWebPubl
 	}
 	ref := apphost.ConnectionRef{AppID: douyinapp.ID, InstallationID: p.installation, ConnectionID: a.connection.ID, AccountID: a.connection.AccountID}
 	return f, p, a, ref
+}
+
+func TestLocalDouyinPublicationDiagnosticsRemainSafeAndRecoverable(t *testing.T) {
+	if code := localDouyinCreatorErrorCode(errors.New("private-profile-path and synthetic-secret-value")); code != "creator_failed" {
+		t.Fatal("raw provider error escaped", code)
+	}
+	if code := localDouyinCreatorErrorCode(stationbrowser.ErrDouyinWebLoginRequired); code != "creator_login_required" {
+		t.Fatal(code)
+	}
+	_, p, _, ref := webPublicationFixture(t)
+	reference := apphost.PublicationReference{Target: ref, TaskID: strings.Repeat("a", 64), ManifestSHA256: strings.Repeat("b", 64)}
+	checkpoint := localDouyinPublicationCheckpoint{Version: 1, TaskID: reference.TaskID, ManifestSHA256: reference.ManifestSHA256, ErrorCode: "creator_controls_unavailable"}
+	progress, err := p.PublicationCheckpointProgress(mustLocalDouyinJSON(checkpoint))
+	if err != nil || progress.Stage != "uploading" || progress.ErrorCode != checkpoint.ErrorCode {
+		t.Fatalf("lost diagnostic %#v %v", progress, err)
+	}
+	receipt, err := p.ReconcilePublication(t.Context(), reference, mustLocalDouyinJSON(checkpoint), false)
+	if err != nil || receipt.State != "unknown" || receipt.Progress.ErrorCode != checkpoint.ErrorCode {
+		t.Fatalf("pre-submit diagnostic %#v %v", receipt, err)
+	}
 }
 
 func TestLocalDouyinPublicationGrantAndSubmittedRecovery(t *testing.T) {

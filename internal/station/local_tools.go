@@ -82,7 +82,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = append(all, wechatapp.StationGroupMuteTool())
 	}
 	if t.access.home.artifacts != nil && t.run != nil {
-		all = append(all, mcptools.NewTool(localArtifactPublishTool, "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，expected_sha256 为实际文件哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path","expected_sha256"],"additionalProperties":false}`))
+		all = append(all, mcptools.NewTool(localArtifactPublishTool, "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，宿主自动计算并返回实际 SHA-256；已知哈希时可选 expected_sha256 核对指定版本，无需仅为登记另起进程算哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path"],"additionalProperties":false}`))
 	}
 	all = append(all, t.localDocumentTools(ctx)...)
 	all = append(all, t.localAudioTools(ctx)...)

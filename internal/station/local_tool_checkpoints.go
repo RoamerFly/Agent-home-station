@@ -116,7 +116,7 @@ func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMess
 	if strictLocalMemoryDecode(raw, &in) != nil {
 		return "", mcptools.ArgumentError("$", "请提供 path 和 expected_sha256")
 	}
-	if !artifactID("sha-"+in.Expected, "sha-") {
+	if in.Expected != "" && !artifactID("sha-"+in.Expected, "sha-") {
 		return "", mcptools.ArgumentError("$.expected_sha256", "请提供文件的 64 位小写 SHA-256")
 	}
 	grant, err := t.access.resolve()
@@ -174,7 +174,7 @@ func (t *localToolSet) artifactCheckpointView(op companion.LocalToolCheckpoint, 
 	}
 	store := t.access.home.artifacts
 	artifact, err := store.read(identity.ID)
-	if err != nil || localCheckpointKey(op.Tool, path, artifact.SHA256) != op.Key {
+	if err != nil || (localCheckpointKey(op.Tool, path, artifact.SHA256) != op.Key && localCheckpointKey(op.Tool, path, "") != op.Key) {
 		return view
 	}
 	file, err := store.open(ctx, artifact, func() bool { return t.access.current(grant) && store.artifactLineageValid(artifact) })

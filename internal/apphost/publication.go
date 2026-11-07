@@ -83,6 +83,7 @@ type PublicationReceipt struct {
 
 type PublicationProgress struct {
 	Stage          string `json:"stage"`
+	ErrorCode      string `json:"error_code,omitempty"`
 	ConfirmedParts int64  `json:"confirmed_parts"`
 	TotalParts     int64  `json:"total_parts"`
 }
@@ -772,6 +773,14 @@ func validReceipt(job pluginhost.Job, record publicationRecord, receipt Publicat
 func validPublicationProgress(progress *PublicationProgress) bool {
 	if progress == nil || progress.ConfirmedParts < 0 || progress.TotalParts < progress.ConfirmedParts {
 		return false
+	}
+	if len(progress.ErrorCode) > 64 {
+		return false
+	}
+	for _, ch := range progress.ErrorCode {
+		if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '_') {
+			return false
+		}
 	}
 	switch progress.Stage {
 	case "initializing", "uploading", "part_pending", "merging", "merged", "posting", "accepted", "rejected":

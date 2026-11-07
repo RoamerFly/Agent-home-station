@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
@@ -33,6 +34,7 @@ type localDouyinPublicationCheckpoint struct {
 	RemoteID       string `json:"remote_id,omitempty"`
 	Rejected       bool   `json:"rejected,omitempty"`
 	RejectionCode  int    `json:"rejection_code,omitempty"`
+	ErrorCode      string `json:"error_code,omitempty"`
 }
 
 // localDouyinWebPublication deliberately reads the same saved profile record
@@ -101,6 +103,7 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 	// A durable pre-submit checkpoint exposes safe resume even if materializing
 	// the input or opening the creator page fails before any publish attempt.
 	checkpoint.MediaSHA256, checkpoint.Bytes = req.Draft.Artifacts[0].SHA256, req.Draft.Artifacts[0].Bytes
+	checkpoint.ErrorCode = ""
 	if err := req.SaveCheckpoint(ctx, mustLocalDouyinJSON(checkpoint)); err != nil {
 		return apphost.PublicationReceipt{}, err
 	}
@@ -134,13 +137,21 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 	// checkpoint so neither a restart nor a retry can upload it again.
 	if result.Stage == "rejected" {
 		checkpoint.Rejected, checkpoint.RejectionCode = true, result.RejectionCode
+		checkpoint.ErrorCode = "creator_rejected"
 		if err := req.SaveCheckpoint(ctx, mustLocalDouyinJSON(checkpoint)); err != nil {
 			return apphost.PublicationReceipt{}, err
 		}
 		return localDouyinPublicationReceipt(req.Reference, result), nil
 	}
 	if err != nil {
-		return apphost.PublicationReceipt{}, err
+		checkpoint.ErrorCode = localDouyinCreatorErrorCode(err)
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if saveErr := req.SaveCheckpoint(saveCtx, mustLocalDouyinJSON(checkpoint)); saveErr != nil {
+			return apphost.PublicationReceipt{}, saveErr
+		}
+		progress, _ := p.PublicationCheckpointProgress(mustLocalDouyinJSON(checkpoint))
+		return apphost.PublicationReceipt{Reference: req.Reference, State: "unknown", Progress: progress}, nil
 	}
 	return localDouyinPublicationReceipt(req.Reference, result), nil
 }
@@ -155,7 +166,7 @@ func (p *localDouyinWebPublication) ReconcilePublication(ctx context.Context, re
 		if cancel {
 			state = "cancelled"
 		}
-		return apphost.PublicationReceipt{Reference: reference, State: state, Progress: &apphost.PublicationProgress{Stage: "uploading"}}, nil
+		return apphost.PublicationReceipt{Reference: reference, State: state, Progress: &apphost.PublicationProgress{Stage: "uploading", ErrorCode: checkpoint.ErrorCode}}, nil
 	}
 	if checkpoint.Rejected {
 		return apphost.PublicationReceipt{Reference: reference, State: "failed", Progress: &apphost.PublicationProgress{Stage: "rejected"}}, nil
@@ -176,7 +187,7 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 		return apphost.PublicationReceipt{Reference: reference, State: "failed", Progress: &apphost.PublicationProgress{Stage: "rejected"}}, nil
 	}
 	if checkpoint.RemoteID == "" {
-		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting"}}, nil
+		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: checkpoint.ErrorCode}}, nil
 	}
 	// Reconciliation intentionally does not require the current publish grant:
 	// an owner who revokes it must still be able to account for an already
@@ -197,7 +208,7 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 		return nil
 	})
 	if err != nil {
-		return apphost.PublicationReceipt{}, err
+		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
 	}
 	result.RemoteID = checkpoint.RemoteID
 	return localDouyinPublicationReceipt(reference, result), nil
@@ -324,7 +335,34 @@ func (p *localDouyinWebPublication) PublicationCheckpointProgress(raw json.RawMe
 	if checkpoint.Rejected {
 		stage = "rejected"
 	}
-	return &apphost.PublicationProgress{Stage: stage}, nil
+	return &apphost.PublicationProgress{Stage: stage, ErrorCode: checkpoint.ErrorCode}, nil
+}
+
+// Only host-defined codes reach the model/UI. Raw browser failures, response
+// bodies and private profile paths are never copied into task diagnostics.
+func localDouyinCreatorErrorCode(err error) string {
+	switch {
+	case errors.Is(err, stationbrowser.ErrDouyinWebLoginRequired):
+		return "creator_login_required"
+	case errors.Is(err, stationbrowser.ErrDouyinLoginActive):
+		return "creator_profile_busy"
+	case errors.Is(err, stationbrowser.ErrCreatorPublicationControls):
+		return "creator_controls_unavailable"
+	case errors.Is(err, stationbrowser.ErrCreatorPublicationUpload):
+		return "creator_upload_incomplete"
+	case errors.Is(err, stationbrowser.ErrCreatorPublicationVisibility):
+		return "creator_visibility_unconfirmed"
+	case errors.Is(err, stationbrowser.ErrCreatorPublicationUnknown):
+		return "creator_result_unknown"
+	case errors.Is(err, stationbrowser.ErrBrowserUnavailable):
+		return "creator_browser_unavailable"
+	case errors.Is(err, context.Canceled):
+		return "creator_cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "creator_timeout"
+	default:
+		return "creator_failed"
+	}
 }
 
 func localDouyinPublicationHex(value string) bool {
