@@ -187,7 +187,7 @@ func (t *stationAttachmentTools) documentRevision(ctx context.Context, raw json.
 	word.TitleHalfPoints, word.ParentAsset = half, prior.id()
 	in := stationDocumentInput{record: stationAttachmentRecord{ID: prior.id(), Source: prior.Source, Bytes: prior.Product.Bytes,
 		MIME: localDOCXMIME, SHA256: prior.Product.SHA256}, file: old, extension: ".docx", trace: t.trace.TraceID,
-		epoch: prior.Epoch, requester: t.trace.Sender, check: check, handoffKey: word.id()}
+		epoch: prior.Epoch, requester: t.trace.Sender, check: check, handoffKey: word.id(), illustrationRegions: prior.Layout.Illustrations}
 	if prior.Reference.EventID != "" {
 		in.versions = map[string]int{prior.Reference.EventID: prior.Reference.Revision}
 	}

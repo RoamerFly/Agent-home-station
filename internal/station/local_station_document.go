@@ -20,22 +20,27 @@ func (h *localHomeService) stationDocumentAvailable(ctx context.Context, ext str
 }
 
 func (h *localHomeService) stationDocumentToolAvailable(ctx context.Context, operation localProjectOperation, needsPDF bool) bool {
+	_, ok := h.stationDocumentToolRelease(ctx, operation, needsPDF)
+	return ok
+}
+
+func (h *localHomeService) stationDocumentToolRelease(ctx context.Context, operation localProjectOperation, needsPDF bool) (string, bool) {
 	if h.projectTools == nil || !h.projectTools.runtimeReady() || needsPDF && !h.projectTools.pdfRuntimeReady() {
-		return false
+		return "", false
 	}
 	identity, err := h.identity.Read()
 	if err != nil || identity.LocalOwner == nil {
-		return false
+		return "", false
 	}
 	if _, err := os.Stat(filepath.Join(h.dataDir, "project-tools", identity.FishID)); err != nil {
-		return false
+		return "", false
 	}
 	host, err := h.projectTools.forFish(identity.FishID)
 	if err != nil {
-		return false
+		return "", false
 	}
 	installed, err := installedLocalProject(ctx, host, operation)
-	return err == nil && stationDocumentPermission(installed, operation.capability)
+	return installed.Digest, err == nil && stationDocumentPermission(installed, operation.capability)
 }
 
 func stationDocumentPermission(installed pluginhost.InstalledPackage, capability string) bool {
@@ -84,6 +89,10 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	if err != nil {
 		s.update.Unlock()
 		return nil, err
+	}
+	if image != nil && image.originalImage != nil && len(image.layout.Illustrations) > 0 && compatibleDocumentDigest(operation, installed.Digest) {
+		s.update.Unlock()
+		return nil, errors.New("保留插图需要文档工坊 0.1.4 或更高版本")
 	}
 	release := s.markActive(operation.pkg)
 	s.update.Unlock()
@@ -140,7 +149,16 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 		options.DocumentRuntimeRoot = ""
 	}
 	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, filepath.Join(h.dataDir, "project-tool-tasks"),
-		host.store, options, operation.pkg, true, in.materialize)
+		host.store, options, operation.pkg, true, func(ctx context.Context, dir string) (localProjectArtifactMaterialized, error) {
+			material, err := in.materialize(ctx, dir)
+			if err == nil && image != nil && image.originalImage != nil && len(image.layout.Illustrations) != 0 {
+				err = image.stageIllustrations(ctx, dir, image.originalImage)
+				if err == nil {
+					err = in.check(ctx)
+				}
+			}
+			return material, err
+		})
 	if err != nil {
 		return nil, errors.New("无法创建文档任务所需的隔离输入")
 	}
@@ -254,8 +272,12 @@ func (p stationDocumentPolicy) CallMetadata(ctx context.Context, job pluginhost.
 		mimeType = p.in.record.MIME
 	}
 	out := windowsProjectToolPath(p.output)
-	metadata := map[string]any{"inputs": []map[string]string{{"artifact_id": p.in.record.ID,
-		"path": windowsProjectToolPath(p.input), "sha256": p.in.record.SHA256, "mime_type": mimeType}},
+	inputs := []map[string]string{{"artifact_id": p.in.record.ID,
+		"path": windowsProjectToolPath(p.input), "sha256": p.in.record.SHA256, "mime_type": mimeType}}
+	if p.image != nil {
+		inputs = append(inputs, p.image.illustrationInputs...)
+	}
+	metadata := map[string]any{"inputs": inputs,
 		"input_root": windowsProjectToolPath(filepath.Dir(p.input)), "output_dir": out, "output_root": out}
 	if p.image != nil && p.image.inspect {
 		if p.image.ocrObservation == nil {

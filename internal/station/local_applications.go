@@ -20,7 +20,8 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 		stationDocumentTools{available: h.home.stationDocumentAvailable, inspect: h.home.inspectStationDocument,
 			exportAvailable: h.home.stationDocumentExportAvailable, exportPDF: h.home.exportStationDocumentPDF,
 			imageAvailable: h.home.stationDocumentImageAvailable, reconstructImage: h.home.reconstructStationDocumentImage,
-			reviseAvailable: h.home.stationDocumentRevisionAvailable, reviseTitle: h.home.reviseStationDocumentTitle})
+			illustrationsAvailable: h.home.stationDocumentIllustrationsAvailable,
+			reviseAvailable:        h.home.stationDocumentRevisionAvailable, reviseTitle: h.home.reviseStationDocumentTitle})
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}

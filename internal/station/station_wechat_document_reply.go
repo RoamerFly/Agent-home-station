@@ -42,6 +42,7 @@ type stationDocumentReply struct {
 	MediaGrant, HistoryGrant        time.Time
 	Name                            string
 	RequestAt                       string              `json:",omitempty"`
+	IllustrationKey                 string              `json:",omitempty"`
 	TitleHalfPoints                 int                 `json:",omitempty"`
 	ParentAsset                     string              `json:",omitempty"`
 	Layout                          *stationImageLayout `json:",omitempty"`
@@ -57,6 +58,9 @@ func (r stationDocumentReply) id() string {
 		r.OriginalSHA, r.Epoch, r.Trace, r.User, r.MediaGrant, r.HistoryGrant, r.Name}
 	if r.ParentAsset != "" {
 		key = append(key, r.ParentAsset)
+	}
+	if r.IllustrationKey != "" {
+		key = append(key, r.IllustrationKey)
 	}
 	if r.TitleHalfPoints != 0 {
 		key = append(key, r.TitleHalfPoints)

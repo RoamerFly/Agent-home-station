@@ -138,7 +138,7 @@ func StationDocumentPDFReplyTool() mcptools.Tool {
 }
 
 func StationImageDocumentTool() mcptools.Tool {
-	return tool("wechat_document_reconstruct_image", "从获准的 PNG/JPEG 原图用本机 OCR 重建可编辑 Word，并按请求准备 PDF、Word 或两者。默认只准备 PDF，保留可编辑原稿。识别不可靠时先核对对应位置。成功后仅选中用户要求交付的 media.id，程序才会发送。适合正文、标题和有边框表格。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"base_name":{"type":"string","minLength":1,"maxLength":110,"description":"可选文件名主体，不含后缀。"},"format":{"type":"string","enum":["pdf","docx","both"],"default":"pdf"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
+	return tool("wechat_document_reconstruct_image", "从获准的 PNG/JPEG 原图用本机 OCR 重建可编辑 Word，并按请求准备 PDF、Word 或两者。默认只准备 PDF，保留可编辑原稿。识别不可靠时先核对对应位置。成功后仅选中用户要求交付的 media.id，程序才会发送。适合正文、标题和有边框表格。自动保留明显的独立彩色插图，或指定原图像素区域。空数组关闭插图保留。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"base_name":{"type":"string","minLength":1,"maxLength":110,"description":"可选文件名主体，不含后缀。"},"format":{"type":"string","enum":["pdf","docx","both"],"default":"pdf"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"illustration_regions":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"left":{"type":"integer","minimum":0},"top":{"type":"integer","minimum":0},"right":{"type":"integer","minimum":1},"bottom":{"type":"integer","minimum":1}},"required":["left","top","right","bottom"],"additionalProperties":false}}},"required":["message_id"],"additionalProperties":false}`)
 }
 
 func StationDocumentRevisionTool() mcptools.Tool {

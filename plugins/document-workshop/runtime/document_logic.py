@@ -262,7 +262,8 @@ def _verify_docx_container(zf: zipfile.ZipFile) -> None:
 
 
 def png_size(path: Path):
-    raw = path.read_bytes()[:32]
+    with path.open("rb") as source:
+        raw = source.read(24)
     if raw[:8] != b"\x89PNG\r\n\x1a\n" or raw[12:16] != b"IHDR":
         return None
     return struct.unpack(">II", raw[16:24])
@@ -397,7 +398,14 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             image_index = block.get("image_index")
             if type(image_index) is not int or not isinstance(images, list) or not 0 <= image_index < len(images):
                 raise DocumentError("document_image_not_authorized")
-            body.append(_picture("rId%d" % (image_index + 1), image_index + 1, images[image_index].name))
+            picture = images[image_index]
+            size = png_size(picture) if picture.suffix.lower() == ".png" else None
+            if size is not None and min(size) > 0:
+                scale = min(4572000 / size[0], 5486400 / size[1])
+                body.append(_picture("rId%d" % (image_index + 1), image_index + 1, picture.name,
+                                     max(1, round(size[0] * scale)), max(1, round(size[1] * scale))))
+            else:
+                body.append(_picture("rId%d" % (image_index + 1), image_index + 1, picture.name))
             if isinstance(block.get("caption"), str) and block["caption"]:
                 body.append(_paragraph(block["caption"][:500]))
         else:

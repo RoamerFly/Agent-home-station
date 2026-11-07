@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"image"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +25,12 @@ func (h *localHomeService) stationDocumentImageAvailable(ctx context.Context) bo
 		stationImageOCRRuntimeReady(h.projectTools.options.DocumentRuntimeRoot) &&
 		h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentInspectTool), false) &&
 		h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentToolName), false)
+}
+
+func (h *localHomeService) stationDocumentIllustrationsAvailable(ctx context.Context) bool {
+	operation := projectOperation(localDocumentToolName)
+	digest, ok := h.stationDocumentToolRelease(ctx, operation, false)
+	return ok && !compatibleDocumentDigest(operation, digest)
 }
 
 func stationImageOCRRuntimeReady(path string) bool {
@@ -82,7 +89,7 @@ func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, 
 	// OCR may use a task-private, rule-cleaned derivative so that a ruled
 	// table does not hide its cell text from Tesseract. The source identity and
 	// later DOCX reconstruction remain bound to the original attachment.
-	ocrInput, grid, cleanupOCR, err := stationPrepareImageOCRInput(ctx, in, h.dataDir)
+	ocrInput, preparation, cleanupOCR, err := stationPrepareImageOCRInput(ctx, in, h.dataDir)
 	if err != nil {
 		return empty, err
 	}
@@ -96,10 +103,11 @@ func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, 
 	}
 	// The deterministic layout parser receives the initial OCR evidence and a
 	// host-produced table grid. Neither contains a path supplied by a message.
-	layout, err := stationImageWordLayout(evidence, grid)
+	layout, err := stationImageWordLayout(evidence, preparation.grid, preparation.regions...)
 	if err != nil {
 		return empty, err
 	}
+	layout.ImageWidth, layout.ImageHeight = preparation.original.Bounds().Dx(), preparation.original.Bounds().Dy()
 	if layout.NeedsClarification {
 		// A low-confidence original is useful diagnostic state but must never be
 		// converted into a plausible-looking, wrong editable document.
@@ -111,11 +119,18 @@ func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, 
 	if _, err := in.file.Seek(0, io.SeekStart); err != nil {
 		return empty, errors.New("图片原件无法重新读取")
 	}
-	reconstruct := &stationDocumentImagePolicy{reconstruct: true, filename: stationDOCXRuntimeName, layout: layout, persist: persist}
+	reconstruct := &stationDocumentImagePolicy{reconstruct: true, filename: stationDOCXRuntimeName, layout: layout, persist: persist, originalImage: preparation.original}
 	// document.reconstruct accepts only a measured layout and a fixed output
 	// filename. Its input remains host metadata; passing artifact_id here would
 	// be rejected by the plugin's strict argument schema.
 	reconstructArgs := map[string]any{"layout": json.RawMessage(layout.Layout), "filename": stationDOCXRuntimeName}
+	if len(layout.Illustrations) != 0 {
+		images := make([]map[string]string, len(layout.Illustrations))
+		for i := range images {
+			images[i] = map[string]string{"artifact_id": stationIllustrationID(i)}
+		}
+		reconstructArgs["images"] = images
+	}
 	reconstructKey := []any{"image-docx-reconstruct", in.record.ID, in.record.SHA256, in.trace, in.epoch, in.requester, in.handoffKey, json.RawMessage(layout.Layout)}
 	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentToolName), reconstructArgs, reconstructKey, nil, reconstruct)
 	if err != nil {
@@ -138,6 +153,7 @@ func (h *localHomeService) reviseStationDocumentTitle(ctx context.Context, in st
 		return errors.New("Word 修订缺少已核验原稿或有效字号")
 	}
 	policy := &stationDocumentImagePolicy{reconstruct: true, filename: stationDOCXRuntimeName, titleHalfPoints: halfPoints,
+		layout: stationImageLayout{Illustrations: in.illustrationRegions},
 		persist: func(ctx context.Context, f *os.File, p stationDocumentProduct, _ stationImageLayout) error {
 			return persist(ctx, f, p)
 		}}
@@ -161,6 +177,8 @@ type stationDocumentImagePolicy struct {
 	persist              func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error
 	ocrObservation       *pluginruntime.DocumentOCRObservation
 	titleHalfPoints      int
+	originalImage        image.Image
+	illustrationInputs   []map[string]string
 }
 
 func stationImageInspectionEvidence(in stationDocumentInput, evidence json.RawMessage) error {
@@ -240,6 +258,9 @@ func (p stationDocumentPolicy) persistVerifiedDOCX(ctx context.Context, job plug
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > stationDocumentLimit ||
 		validateLocalDOCX(file, info.Size()) != nil {
 		return empty, errors.New("Word 输出文件结构无效")
+	}
+	if err := stationVerifyWordIllustrations(file, info.Size(), p.image.layout.Illustrations); err != nil {
+		return empty, err
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return empty, errors.New("Word 输出文件无法校验")

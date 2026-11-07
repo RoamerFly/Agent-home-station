@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -18,15 +19,16 @@ func (t *stationAttachmentTools) canReconstructImage(ctx context.Context) bool {
 
 func (t *stationAttachmentTools) prepareImageDocument(ctx context.Context, raw json.RawMessage) (string, error) {
 	args := struct {
-		Message string `json:"message_id"`
-		Base    string `json:"base_name"`
-		Format  string `json:"format"`
-		Hash    string `json:"expected_sha256"`
+		Message       string                    `json:"message_id"`
+		Base          string                    `json:"base_name"`
+		Format        string                    `json:"format"`
+		Hash          string                    `json:"expected_sha256"`
+		Illustrations []stationIllustrationRect `json:"illustration_regions"`
 	}{Base: "复刻文档", Format: "pdf"}
 	if !t.allowed() || !t.replyAllowed(t.trace) || t.trace.TraceID == "" || t.trace.Sender == "" {
 		return "", wechatapp.ErrAttachmentDenied
 	}
-	if strictLocalMemoryDecode(raw, &args) != nil || args.Message == "" || len(args.Message) > 8192 || args.Base == "" ||
+	if strictLocalMemoryDecode(raw, &args) != nil || args.Message == "" || len(args.Message) > 8192 || args.Base == "" || len(args.Illustrations) > stationIllustrationLimit ||
 		stationDocumentExtension(args.Base) != "" ||
 		!validStationDocumentName(args.Base+".docx", ".docx") || !validStationPDFName(args.Base+".pdf") ||
 		(args.Format != "docx" && args.Format != "pdf" && args.Format != "both") ||
@@ -41,7 +43,19 @@ func (t *stationAttachmentTools) prepareImageDocument(ctx context.Context, raw j
 		return "", err
 	}
 	defer in.file.Close()
+	if t.documents.illustrationsAvailable != nil && !t.documents.illustrationsAvailable(ctx) {
+		if len(args.Illustrations) > 0 {
+			return "", errors.New("保留插图需要文档工坊 0.1.4 或更高版本")
+		}
+		args.Illustrations = []stationIllustrationRect{}
+	}
+	sort.Slice(args.Illustrations, func(i, j int) bool {
+		a, b := args.Illustrations[i], args.Illustrations[j]
+		return a.Top < b.Top || a.Top == b.Top && a.Left < b.Left
+	})
+	in.illustrationRegions = args.Illustrations
 	wordReply := t.documentReplyForInput(&in, args.Base+".docx")
+	wordReply.IllustrationKey = localCheckpointKey("illustrations-v1", args.Illustrations)
 	in.handoffKey = wordReply.id()
 	word, wordFile, err := t.openDocumentReply(ctx, t.trace, in.handoffKey)
 	if errors.Is(err, os.ErrNotExist) {
@@ -112,5 +126,5 @@ func (t *stationAttachmentTools) prepareEditableDelivery(ctx context.Context, in
 
 func stationImageLayoutSummary(layout stationImageLayout) map[string]any {
 	return map[string]any{"headings": layout.Headings, "paragraphs": layout.Paragraphs,
-		"tables": layout.Tables, "needs_clarification": layout.NeedsClarification, "uncertain_locations": layout.Uncertain}
+		"tables": layout.Tables, "illustrations": layout.Illustrations, "image_width": layout.ImageWidth, "image_height": layout.ImageHeight, "needs_clarification": layout.NeedsClarification, "uncertain_locations": layout.Uncertain}
 }

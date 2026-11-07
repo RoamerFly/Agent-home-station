@@ -20,17 +20,23 @@ type stationImageGrid struct {
 	Horizontal, Vertical []int
 }
 
+type stationImagePreparation struct {
+	original image.Image
+	grid     stationImageGrid
+	regions  []stationIllustrationRect
+}
+
 type imageGridRules struct {
 	left, right int
 	rows        []int
 }
 
 // Tesseract's page pass can omit text inside a ruled box. Remove only the
-// detected rule bands in a private grayscale copy, without moving any pixel
+// detected rule bands and illustration regions in a private grayscale copy, without moving any pixel
 // coordinates. The OCR broker verifies the copy's own hash; authorization and
 // delivery continue to refer to the original image and its verified digest.
-func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, dataDir string) (stationDocumentInput, stationImageGrid, func(), error) {
-	empty, noop := stationImageGrid{}, func() {}
+func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, dataDir string) (stationDocumentInput, stationImagePreparation, func(), error) {
+	empty, noop := stationImagePreparation{}, func() {}
 	if err := in.check(ctx); err != nil {
 		return in, empty, noop, err
 	}
@@ -46,23 +52,34 @@ func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, d
 		return in, empty, noop, errors.New("图片 OCR 无法完整解码原图")
 	}
 	grid := stationGridFromImage(img)
-	if len(grid.Horizontal) < 3 || len(grid.Vertical) < 3 {
-		return in, grid, noop, in.check(ctx)
+	regions, err := stationIllustrations(img, grid, in.illustrationRegions)
+	if err != nil {
+		return in, empty, noop, err
+	}
+	preparation := stationImagePreparation{original: img, grid: grid, regions: regions}
+	hasGrid := len(grid.Horizontal) >= 3 && len(grid.Vertical) >= 3
+	if !hasGrid && len(regions) == 0 {
+		return in, preparation, noop, in.check(ctx)
 	}
 	bounds := img.Bounds()
 	gray := image.NewGray(bounds)
 	draw.Draw(gray, bounds, image.White, image.Point{}, draw.Src)
 	draw.Draw(gray, bounds, img, bounds.Min, draw.Over)
-	left, right := grid.Vertical[0], grid.Vertical[len(grid.Vertical)-1]
-	top, bottom := grid.Horizontal[0], grid.Horizontal[len(grid.Horizontal)-1]
 	erase := func(r image.Rectangle) {
 		draw.Draw(gray, r.Intersect(bounds), image.White, image.Point{}, draw.Src)
 	}
-	for _, y := range grid.Horizontal {
-		erase(image.Rect(left-3, y-3, right+4, y+4))
+	if hasGrid {
+		left, right := grid.Vertical[0], grid.Vertical[len(grid.Vertical)-1]
+		top, bottom := grid.Horizontal[0], grid.Horizontal[len(grid.Horizontal)-1]
+		for _, y := range grid.Horizontal {
+			erase(image.Rect(left-3, y-3, right+4, y+4))
+		}
+		for _, x := range grid.Vertical {
+			erase(image.Rect(x-3, top-3, x+4, bottom+4))
+		}
 	}
-	for _, x := range grid.Vertical {
-		erase(image.Rect(x-3, top-3, x+4, bottom+4))
+	for _, region := range regions {
+		erase(region.rectangle())
 	}
 	dir := filepath.Join(dataDir, "project-tool-tasks")
 	root, err := workspacefs.EnsurePath(dir)
@@ -91,7 +108,7 @@ func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, d
 		return in, empty, noop, err
 	}
 	in.file, in.extension, in.record.Bytes, in.record.MIME, in.record.SHA256 = file, ".png", size, "image/png", fmt.Sprintf("%x", hash.Sum(nil))
-	return in, grid, cleanup, nil
+	return in, preparation, cleanup, nil
 }
 
 // Only a connected, axis-aligned set of long rules is interpreted as a table.

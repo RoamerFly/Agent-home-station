@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -70,7 +72,8 @@ func TestLiveStationWechatDocumentLPAC(t *testing.T) {
 	home := f.handler.chat.projectTools.home
 	testStationWechatDocument(t, stationDocumentTools{available: home.stationDocumentAvailable, inspect: home.inspectStationDocument,
 		imageAvailable: home.stationDocumentImageAvailable, reconstructImage: home.reconstructStationDocumentImage,
-		reviseAvailable: home.stationDocumentRevisionAvailable, reviseTitle: home.reviseStationDocumentTitle,
+		illustrationsAvailable: home.stationDocumentIllustrationsAvailable,
+		reviseAvailable:        home.stationDocumentRevisionAvailable, reviseTitle: home.reviseStationDocumentTitle,
 		exportAvailable: home.stationDocumentExportAvailable, exportPDF: home.exportStationDocumentPDF}, true,
 		func(data []byte) string { return localPDFExtractText(t, options, data) })
 	entries, err := os.ReadDir(filepath.Join(home.dataDir, "project-tool-tasks"))
@@ -104,8 +107,13 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	pdf := syntheticStationPDF()
 	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf}
 	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
+	withIllustrations := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_ILLUSTRATIONS_TEST") == "1"
 	if imagePDFText != nil {
-		image, err := os.ReadFile(filepath.Join("testdata", "synthetic-wechat-document-grid.png"))
+		name := "synthetic-wechat-document-grid.png"
+		if withIllustrations {
+			name = "synthetic-wechat-illustrated-document.png"
+		}
+		image, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,8 +281,11 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		var prepared struct {
 			Status string
 			Media  []companion.GeneratedMedia
-			Layout struct{ Headings, Paragraphs, Tables int }
-			Word   struct {
+			Layout struct {
+				Headings, Paragraphs, Tables int
+				Illustrations                []stationIllustrationRect
+			}
+			Word struct {
 				ID string `json:"asset_id"`
 			} `json:"editable_document"`
 		}
@@ -295,12 +306,22 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			}
 			return data
 		}
-		wordXML := localDOCXDocumentXML(t, readProduct(prepared.Word.ID))
+		wordBytes, pdfBytes := readProduct(prepared.Word.ID), readProduct(prepared.Media[0].AssetID)
+		wordXML := localDOCXDocumentXML(t, wordBytes)
 		if strings.Count(wordXML, "<w:tc>") != 4 || !strings.Contains(wordXML, "<w:tbl>") ||
-			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") {
+			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") != withIllustrations {
 			t.Fatalf("reconstructed Word did not contain editable heading and table: %s", wordXML)
 		}
-		pdfText := imagePDFText(readProduct(prepared.Media[0].AssetID))
+		if withIllustrations {
+			verifyStationWordCrop(t, wordBytes, fixtures["grid"], prepared.Layout.Illustrations)
+			figure := strings.Index(wordXML, "<w:drawing>")
+			if figure < strings.Index(wordXML, "本次测试用于核对文档复刻结果") || figure > strings.Index(wordXML, "<w:tbl>") ||
+				!strings.Contains(wordXML, `<wp:extent cx="4572000" cy="2286000"/>`) ||
+				!bytes.Contains(pdfBytes, []byte("/Subtype /Image")) {
+				t.Fatal("Word reading order, image aspect ratio or PDF illustration did not match the source")
+			}
+		}
+		pdfText := imagePDFText(pdfBytes)
 		for _, expected := range []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"} {
 			if !strings.Contains(wordXML, expected) || !strings.Contains(pdfText, expected) {
 				t.Fatalf("missing %q from Word or PDF text: Word=%s PDF=%s", expected, wordXML, pdfText)
@@ -372,7 +393,11 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			}
 			return data
 		}
-		revisedXML := localDOCXDocumentXML(t, readRevision(revised.Word.ID))
+		revisedWord := readRevision(revised.Word.ID)
+		if withIllustrations {
+			verifyStationWordCrop(t, revisedWord, fixtures["grid"], prepared.Layout.Illustrations)
+		}
+		revisedXML := localDOCXDocumentXML(t, revisedWord)
 		revisedPDF := imagePDFText(readRevision(revised.Media[0].AssetID))
 		if !strings.Contains(revisedXML, `<w:sz w:val="53"/>`) || strings.Count(revisedXML, "<w:tc>") != 4 ||
 			!strings.Contains(revisedXML, "本次测试用于核对文档复刻结果") || !strings.Contains(revisedPDF, "文件交接记录") {
@@ -521,4 +546,50 @@ func syntheticStationPDF() []byte {
 	}
 	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
 	return buf.Bytes()
+}
+
+func verifyStationWordCrop(t *testing.T, docx, original []byte, regions []stationIllustrationRect) {
+	t.Helper()
+	if len(regions) != 1 || regions[0].rectangle() != image.Rect(108, 224, 508, 424) {
+		t.Fatalf("unexpected original illustration geometry: %#v", regions)
+	}
+	source, err := png.Decode(bytes.NewReader(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := zip.NewReader(bytes.NewReader(docx), int64(len(docx)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range doc.File {
+		if part.Name != "word/media/image1.png" {
+			continue
+		}
+		input, err := part.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(input)
+		_ = input.Close()
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != regions[0].SHA256 {
+			t.Fatal("the embedded part did not match its verified digest")
+		}
+		crop, err := png.Decode(bytes.NewReader(data))
+		if err != nil || crop.Bounds() != image.Rect(0, 0, 400, 200) {
+			t.Fatal("unexpected native illustration dimensions")
+		}
+		for y := range 200 {
+			for x := range 400 {
+				if crop.At(x, y) != source.At(x+108, y+224) {
+					r, g, b, a := crop.At(x, y).RGBA()
+					sr, sg, sb, sa := source.At(x+108, y+224).RGBA()
+					if r != sr || g != sg || b != sb || a != sa {
+						t.Fatalf("crop differs from original at %d,%d", x, y)
+					}
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("Word omitted the original illustration")
 }

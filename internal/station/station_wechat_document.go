@@ -27,19 +27,21 @@ const (
 )
 
 type stationDocumentTools struct {
-	available        func(context.Context, string) bool
-	inspect          func(context.Context, stationDocumentInput) (string, error)
-	exportAvailable  func(context.Context) bool
-	exportPDF        func(context.Context, stationDocumentInput, string, func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error)
-	imageAvailable   func(context.Context) bool
-	reconstructImage func(context.Context, stationDocumentInput, func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error) (stationImageLayout, error)
-	reviseAvailable  func(context.Context) bool
-	reviseTitle      func(context.Context, stationDocumentInput, int, func(context.Context, *os.File, stationDocumentProduct) error) error
+	available              func(context.Context, string) bool
+	inspect                func(context.Context, stationDocumentInput) (string, error)
+	exportAvailable        func(context.Context) bool
+	exportPDF              func(context.Context, stationDocumentInput, string, func(context.Context, *os.File, stationDocumentProduct) error) (stationDocumentProduct, error)
+	imageAvailable         func(context.Context) bool
+	illustrationsAvailable func(context.Context) bool
+	reconstructImage       func(context.Context, stationDocumentInput, func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error) (stationImageLayout, error)
+	reviseAvailable        func(context.Context) bool
+	reviseTitle            func(context.Context, stationDocumentInput, int, func(context.Context, *os.File, stationDocumentProduct) error) error
 }
 
 type stationDocumentInput struct {
 	record              stationAttachmentRecord
 	file                *os.File
+	illustrationRegions []stationIllustrationRect
 	extension, epoch    string
 	requester, trace    string
 	handoffKey          string

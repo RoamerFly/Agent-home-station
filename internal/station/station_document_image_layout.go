@@ -23,12 +23,14 @@ const (
 // workshop's document.reconstruct capability. Uncertain contains locations in
 // OCR evidence only; it never repeats unverified text.
 type stationImageLayout struct {
-	Layout             json.RawMessage
-	Tables             int
-	Paragraphs         int
-	Headings           int
-	NeedsClarification bool
-	Uncertain          []string
+	Layout                  json.RawMessage
+	Tables                  int
+	Paragraphs              int
+	Headings                int
+	ImageWidth, ImageHeight int
+	Illustrations           []stationIllustrationRect `json:",omitempty"`
+	NeedsClarification      bool
+	Uncertain               []string
 }
 
 type stationImageEvidence struct {
@@ -85,10 +87,11 @@ type stationImageTable struct {
 }
 
 type stationLayoutBlock struct {
-	Kind  string     `json:"kind"`
-	Text  string     `json:"text,omitempty"`
-	Level int        `json:"level,omitempty"`
-	Rows  [][]string `json:"rows,omitempty"`
+	Kind       string     `json:"kind"`
+	Text       string     `json:"text,omitempty"`
+	Level      int        `json:"level,omitempty"`
+	Rows       [][]string `json:"rows,omitempty"`
+	ImageIndex *int       `json:"image_index,omitempty"`
 }
 
 type stationVisualBlock struct {
@@ -102,8 +105,8 @@ type stationVisualBlock struct {
 // restricted JSON layout consumed by document.reconstruct. It deliberately
 // does not guess missing OCR text or table cells. A non-empty result marked
 // NeedsClarification must be reviewed by the caller before reconstruction.
-func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid) (stationImageLayout, error) {
-	result := stationImageLayout{}
+func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, illustrations ...stationIllustrationRect) (stationImageLayout, error) {
+	result := stationImageLayout{Illustrations: illustrations}
 	if len(evidence) == 0 || len(evidence) > stationImageEvidenceLimit {
 		return markImageLayoutReview(result, "图片识别结果无效，请重新读取原图")
 	}
@@ -195,6 +198,25 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid) (st
 		visual = append(visual, stationVisualBlock{bbox: table.BBox, order: tableIndex, block: stationLayoutBlock{Kind: "table", Rows: rows}})
 	}
 
+	for i, box := range illustrations {
+		visual = append(visual, stationVisualBlock{
+			bbox:  stationImageBBox{Left: float64(box.Left), Top: float64(box.Top), Right: float64(box.Right), Bottom: float64(box.Bottom)},
+			order: i, block: stationLayoutBlock{Kind: "image", ImageIndex: &i},
+		})
+	}
+	appendParagraph := func(lines []string, first, second stationImageLine, order int) bool {
+		if len(lines) == 0 {
+			return true
+		}
+		text, ok := stationImageText(strings.Join(lines, "\n"))
+		if !ok {
+			return false
+		}
+		leadingLargeLine := len(lines) > 1 && first.BBox.Bottom <= second.BBox.Top && stationTypicalGlyphHeight(first) >= 1.25*stationTypicalGlyphHeight(second)
+		visual = append(visual, stationVisualBlock{bbox: first.BBox, order: order,
+			block: stationLayoutBlock{Kind: "paragraph", Text: text}, leadingLargeLine: leadingLargeLine})
+		return true
+	}
 	for blockIndex, block := range page.Blocks {
 		if !block.BBox.valid() || len(block.Lines) == 0 {
 			return markImageLayoutReview(result, "图片段落位置无效，请重新读取原图")
@@ -202,7 +224,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid) (st
 		lines := append([]stationImageLine(nil), block.Lines...)
 		sort.SliceStable(lines, func(i, j int) bool { return stationBefore(lines[i].BBox, lines[j].BBox, lines[i].Line, lines[j].Line) })
 		textLines := make([]string, 0, len(lines))
-		var first, second stationImageLine
+		var first, second, prior stationImageLine
 		for lineIndex, line := range lines {
 			if !line.BBox.valid() {
 				return markImageLayoutReview(result, "图片文字位置无效，请重新读取原图")
@@ -216,6 +238,16 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid) (st
 				result.Uncertain = append(result.Uncertain, stationLineLocation(page.SourcePage, blockIndex+1, lineIndex+1))
 			}
 			if text != "" {
+				for _, region := range illustrations {
+					if len(textLines) > 0 && prior.BBox.Bottom <= float64(region.Top) && line.BBox.Top >= float64(region.Bottom) {
+						if !appendParagraph(textLines, first, second, blockIndex) {
+							return markImageLayoutReview(result, "图片段落文字无效，请重新读取原图")
+						}
+						textLines = textLines[:0]
+						break
+					}
+				}
+				prior = line
 				switch len(textLines) {
 				case 0:
 					first = line
@@ -225,18 +257,11 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid) (st
 				textLines = append(textLines, text)
 			}
 		}
-		if len(textLines) == 0 {
-			continue // The block belongs wholly to a native table.
-		}
-		text, ok := stationImageText(strings.Join(textLines, "\n"))
-		if !ok {
+		if !appendParagraph(textLines, first, second, blockIndex) {
 			return markImageLayoutReview(result, "图片段落文字无效，请重新读取原图")
 		}
-		leadingLargeLine := len(textLines) > 1 && first.BBox.Bottom <= second.BBox.Top && stationTypicalGlyphHeight(first) >= 1.25*stationTypicalGlyphHeight(second)
-		visual = append(visual, stationVisualBlock{bbox: first.BBox, order: blockIndex,
-			block: stationLayoutBlock{Kind: "paragraph", Text: text}, leadingLargeLine: leadingLargeLine})
 	}
-	if len(visual) == 0 {
+	if len(visual) == len(illustrations) {
 		return markImageLayoutReview(result, "图片未识别到可重建的文字或表格，请提供更清晰原图")
 	}
 	sort.SliceStable(visual, func(i, j int) bool {
