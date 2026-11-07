@@ -90,7 +90,13 @@ func (s *Store) LiveSessionByRequest(ctx context.Context, requestKey string) (Li
 func (s *Store) ActiveLiveSession(ctx context.Context) (LiveSessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return scanLiveSession(s.db.QueryRowContext(ctx, `SELECT `+liveSessionColumns+` FROM live_sessions WHERE active=1`))
+	if err := ctx.Err(); err != nil {
+		return LiveSessionRecord{}, err
+	}
+	// Finish this single indexed local read once admitted. The SQLite driver
+	// can discard an already-created row handle when cancelled during query
+	// setup, leaving the Windows file open after the database has closed.
+	return scanLiveSession(s.db.QueryRowContext(context.WithoutCancel(ctx), `SELECT `+liveSessionColumns+` FROM live_sessions WHERE active=1`))
 }
 
 // CreateLiveSession atomically reserves the per-fish active slot. A replay of

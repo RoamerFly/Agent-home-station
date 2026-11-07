@@ -41,9 +41,23 @@ namespace WechatAgent.Desktop {
             var oldConfig = Path.Combine(old.Root, "admin", "config.json");
             var oldQueue = Path.Combine(old.Root, "bot-state", "messages-v2.json");
             FixtureRoot(old.Root, OldDataset);
-            Write(oldConfig, new { enabled = false, filehelper_enabled = true });
+            Write(oldConfig, new { enabled = false, filehelper_enabled = true, provider = "deepseek",
+                model = "deepseek-flash", base_url = "https://model.invalid", max_tokens = 2048,
+                thinking_enabled = true, reasoning_effort = "low" });
+            var oldConfigHash = Sha256(oldConfig);
             WriteCheckpoint(oldQueue, OldDataset, OldKey, "87111");
-            WindowsRuntime.PrivateDirectory(next.Root);
+            // Rehearse the deployed old host shape without a fish identity
+            // file. Only model settings move before the first local login.
+            Directory.CreateDirectory(Path.GetDirectoryName(next.Root));
+            var settingsArgs = new [] { "--data", next.Root, "--legacy-settings-source", Path.GetDirectoryName(oldConfig) };
+            var settingsPlan = OfflineCommand(next.StationExe, settingsArgs);
+            ControllerTests.Assert(Deployment.Text(settingsPlan, "status") == "preview" && !Convert.ToBoolean(settingsPlan["has_identity"])
+                && !Directory.Exists(next.Root), "settings preview without an old fish identity did not create the new host");
+            var settingsApply = settingsArgs.Concat(new [] { "--legacy-settings-digest", Deployment.Text(settingsPlan, "digest") }).ToArray();
+            ControllerTests.Assert(Deployment.Text(OfflineCommand(next.StationExe, settingsApply), "status") == "applied"
+                && !File.Exists(Path.Combine(next.Root, "fish-identity.json")), "settings import did not invent an old fish identity");
+            ControllerTests.Assert(Deployment.Text(OfflineCommand(next.StationExe, settingsApply), "status") == "applied",
+                "settings import without an old identity can be retried before first use");
             FixtureRoot(next.StationNativeRoot, NewDataset);
             WriteText(Path.Combine(next.Root, "admin-password"), Password);
 
@@ -57,9 +71,12 @@ namespace WechatAgent.Desktop {
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
                 AuthenticateStation(client, next.Url);
-                AssertLocalOnly(client, next, current);
+                var otherApps = AssertWithoutWeChat(client, next, current);
+                ControllerTests.Assert(!Convert.ToBoolean(Read(client, next.Url + "/api/local/home")["initialized"]),
+                    "the packaged station waits for the owner to initialize a new fish identity");
                 var identity = ControllerTests.StationJSON(client, HttpMethod.Post, next.Url + "/api/local/home", new { action = "initialize" });
                 AssertSameHome(client, next.Url, identity);
+                AssertImportedModel(client, next.Url);
                 SubmitLocalDraft(client, next.Url, "before-connect", firstDraft);
                 var work = Path.Combine(Deployment.Text(identity, "directory"), "works", "cutover-fixture.txt");
                 WriteText(work, originalWork);
@@ -182,10 +199,13 @@ namespace WechatAgent.Desktop {
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
                 AuthenticateStation(client, next.Url);
-                AssertLocalOnly(client, next, current);
+                ControllerTests.Assert(otherApps.SequenceEqual(AssertWithoutWeChat(client, next, current)),
+                    "the same independently bundled apps remain registered after WeChat release");
                 settings = Read(client, next.Url + "/api/local/model");
+                settings["base_url"] = "https://model.invalid";
                 settings["clear_key"] = true;
                 ControllerTests.StationJSON(client, HttpMethod.Put, next.Url + "/api/local/model", settings);
+                AssertImportedModel(client, next.Url);
                 SubmitLocalDraft(client, next.Url, "after-release", lastDraft);
                 AssertLocalContinuity(client, next.Url, identity, artifactURL, originalWork, firstDraft, lastDraft);
                 current.Stop().GetAwaiter().GetResult();
@@ -198,7 +218,8 @@ namespace WechatAgent.Desktop {
                 legacy.Stop().GetAwaiter().GetResult();
                 ControllerTests.Assert(StoppedEpoch(oldMarker, OldDataset) != oldEpoch, "old runtime reacquired its lease and wrote a fresh normal stop proof");
                 ControllerTests.Assert(Deployment.Text(OfflineCommand(next.StationExe, apply), "state") == "released", "release remains idempotent after the old host restarted");
-                ControllerTests.Assert(originalQueue.SequenceEqual(File.ReadAllBytes(snapshotQueue)) && originalQueue.SequenceEqual(File.ReadAllBytes(oldQueue))
+                ControllerTests.Assert(oldConfigHash == Sha256(oldConfig)
+                    && originalQueue.SequenceEqual(File.ReadAllBytes(snapshotQueue)) && originalQueue.SequenceEqual(File.ReadAllBytes(oldQueue))
                     && File.ReadAllText(queue).Contains(NewKey), "the snapshot and independent old/new receipts survive the return");
                 foreach (var root in new [] { old.Root, next.StationNativeRoot })
                     ControllerTests.Assert(!File.Exists(Path.Combine(root, "unexpected-native-write")), "rehearsal performed no native mutation except owned shutdown");
@@ -213,12 +234,14 @@ namespace WechatAgent.Desktop {
             client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
         }
 
-        static void AssertLocalOnly(HttpClient client, Deployment deployment, LocalStationRuntime runtime) {
-            var apps = (IList)Read(client, deployment.Url + "/api/apps")["items"];
+        static string[] AssertWithoutWeChat(HttpClient client, Deployment deployment, LocalStationRuntime runtime) {
+            var apps = ((IList)Read(client, deployment.Url + "/api/apps")["items"]).Cast<Dictionary<string, object>>()
+                .Select(app => Deployment.Text(app, "id")).OrderBy(id => id, StringComparer.Ordinal).ToArray();
             using (var response = client.GetAsync(deployment.Url + "/api/apps/wechat/connections").GetAwaiter().GetResult()) {
-                ControllerTests.Assert(apps.Count == 0 && response.StatusCode == HttpStatusCode.NotFound && runtime.NativePID == 0,
-                    "local-only desktop has no connected app, WeChat routes or native child");
+                ControllerTests.Assert(!apps.Contains("wechat") && response.StatusCode == HttpStatusCode.NotFound && runtime.NativePID == 0,
+                    "the desktop without WeChat has no WeChat registration, routes or native child");
             }
+            return apps;
         }
 
         static void AssertSameHome(HttpClient client, string url, Dictionary<string, object> expected) {
@@ -227,6 +250,14 @@ namespace WechatAgent.Desktop {
             ControllerTests.Assert(keys.All(key => Deployment.Text(expected, key) != "" && Deployment.Text(expected, key) == Deployment.Text(actual, key))
                 && Convert.ToBoolean(actual["home_access"]) && Convert.ToBoolean(actual["chat_available"])
                 && Convert.ToInt64(expected["revision"]) == Convert.ToInt64(actual["revision"]), "local identity and home authorization survive the app lifecycle");
+        }
+
+        static void AssertImportedModel(HttpClient client, string url) {
+            var model = Read(client, url + "/api/local/model");
+            ControllerTests.Assert(Deployment.Text(model, "model") == "deepseek-flash" && Deployment.Text(model, "base_url") == "https://model.invalid"
+                && Convert.ToInt32(model["max_tokens"]) == 2048 && Convert.ToBoolean(model["thinking_enabled"])
+                && Deployment.Text(model, "reasoning_effort") == "low" && !Convert.ToBoolean(model["key_configured"]),
+                "the local station preserved the imported model and thinking settings with no configured key");
         }
 
         static void SubmitLocalDraft(HttpClient client, string url, string id, string draft) {

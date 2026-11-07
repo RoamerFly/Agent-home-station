@@ -55,9 +55,14 @@ func (h *localChatService) liveController() (*apphost.LiveController, string, er
 		return live, identity.LocalOwner.ID, nil
 	}
 	live := apphost.NewLiveController(h.applications, host.store, h.liveOutput)
+	done := make(chan struct{})
 	h.live, h.liveFish = live, identity.FishID
+	h.liveRunDone = done
 	h.mu.Unlock()
-	go live.Run(h.ctx)
+	go func() {
+		defer close(done)
+		live.Run(h.ctx)
+	}()
 	return live, identity.LocalOwner.ID, nil
 }
 

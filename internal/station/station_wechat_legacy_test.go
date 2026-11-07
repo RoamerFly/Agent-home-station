@@ -183,8 +183,12 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		server := httptest.NewServer(handler)
-		t.Cleanup(server.Close)
-		t.Cleanup(func() { _ = handler.Close() })
+		t.Cleanup(func() {
+			server.Close()
+			if err := handler.Close(); err != nil {
+				t.Errorf("close cutover fixture: %v", err)
+			}
+		})
 		jar, _ := cookiejar.New(nil)
 		return handler, &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: host, root: work, handler: handler}
 	}

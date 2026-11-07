@@ -51,6 +51,7 @@ type localChatService struct {
 	liveFish    string
 	liveOutput  apphost.LiveOutput
 	liveEncoder string
+	liveRunDone chan struct{}
 	// liveStopDone is created only when shutdown has claimed an existing live
 	// controller. It lets Close wait for the same bounded stop operation rather
 	// than issue a second remote stop while the first is in flight.
@@ -106,7 +107,7 @@ func (h *localChatService) closeLiveAsync() {
 		return
 	}
 	h.mu.Lock()
-	live := h.live
+	live, liveRunDone := h.live, h.liveRunDone
 	h.mu.Unlock()
 	if live == nil {
 		return
@@ -120,6 +121,11 @@ func (h *localChatService) closeLiveAsync() {
 		h.liveStopDone = done
 		h.mu.Unlock()
 		go func() {
+			// BeginShutdown cancels the recovery loop. Let it release the
+			// shared ledger before reconciling the final state.
+			if liveRunDone != nil {
+				<-liveRunDone
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			err := live.Close(ctx)
 			cancel()
@@ -145,16 +151,16 @@ func (h *localChatService) CloseContext(ctx context.Context) error {
 			defer h.turn.Unlock()
 			h.mu.Lock()
 			h.closed = true
-			processes, store, liveDone := h.processes, h.store, h.liveStopDone
+			processes, store, liveStopDone := h.processes, h.store, h.liveStopDone
 			h.mu.Unlock()
 			// beginShutdown starts this before waiting for turn. The shared wait
 			// avoids racing two StopLive calls against the same durable session.
-			if liveDone != nil {
+			if liveStopDone != nil {
 				// Do not let an outer desktop timeout close SQLite while the
 				// bounded live stop is still persisting its final state. The outer
 				// CloseContext caller regains control through its own select below;
 				// this background closer remains responsible for ordering.
-				<-liveDone
+				<-liveStopDone
 				h.mu.Lock()
 				h.closeErr = errors.Join(h.closeErr, h.liveStopErr)
 				h.mu.Unlock()
