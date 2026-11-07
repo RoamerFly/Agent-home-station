@@ -72,11 +72,11 @@ func compatibleDocumentDigest(operation localProjectOperation, digest string) bo
 	}
 	switch operation.capability {
 	case localDocumentCapability:
-		return digest == localDocumentLegacyDigest || digest == localDocumentV012Digest || digest == localDocumentV013Digest
+		return digest == localDocumentLegacyDigest || digest == localDocumentV012Digest || digest == localDocumentV013Digest || digest == localDocumentV014Digest
 	case localDocumentInspect, localDocumentExport:
-		return digest == localDocumentV012Digest || digest == localDocumentV013Digest
+		return digest == localDocumentV012Digest || digest == localDocumentV013Digest || digest == localDocumentV014Digest
 	case localDocumentRevise:
-		return digest == localDocumentV013Digest
+		return digest == localDocumentV013Digest || digest == localDocumentV014Digest
 	}
 	return false
 }

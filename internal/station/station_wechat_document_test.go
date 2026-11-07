@@ -108,10 +108,14 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf}
 	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
 	withIllustrations := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_ILLUSTRATIONS_TEST") == "1"
+	withMerges := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_MERGED_TABLE_TEST") == "1"
 	if imagePDFText != nil {
 		name := "synthetic-wechat-document-grid.png"
 		if withIllustrations {
 			name = "synthetic-wechat-illustrated-document.png"
+		}
+		if withMerges {
+			name = "synthetic-wechat-merged-table.png"
 		}
 		image, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
@@ -283,6 +287,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			Media  []companion.GeneratedMedia
 			Layout struct {
 				Headings, Paragraphs, Tables int
+				MergedCells                  int `json:"merged_cells"`
 				Illustrations                []stationIllustrationRect
 			}
 			Word struct {
@@ -308,7 +313,15 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		wordBytes, pdfBytes := readProduct(prepared.Word.ID), readProduct(prepared.Media[0].AssetID)
 		wordXML := localDOCXDocumentXML(t, wordBytes)
-		if strings.Count(wordXML, "<w:tc>") != 4 || !strings.Contains(wordXML, "<w:tbl>") ||
+		cells := 4
+		if withMerges {
+			cells = 7
+			if prepared.Layout.MergedCells != 2 || !strings.Contains(wordXML, `<w:gridSpan w:val="3"/>`) ||
+				!strings.Contains(wordXML, `<w:vMerge w:val="restart"/>`) || !strings.Contains(wordXML, `<w:vMerge/>`) {
+				t.Fatalf("Word lacks the two native merges: %#v, %s", prepared.Layout, wordXML)
+			}
+		}
+		if strings.Count(wordXML, "<w:tc>") != cells || !strings.Contains(wordXML, "<w:tbl>") ||
 			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") != withIllustrations {
 			t.Fatalf("reconstructed Word did not contain editable heading and table: %s", wordXML)
 		}
@@ -322,7 +335,16 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			}
 		}
 		pdfText := imagePDFText(pdfBytes)
-		for _, expected := range []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"} {
+		expectedWords := []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"}
+		if withMerges {
+			expectedWords = []string{"文件交接记录", "本次测试用于核对文档复刻结果", "课程计划", "活动分组", "上午", "下午", "已确认", "未完成"}
+			for _, name := range []string{"课程计划", "活动分组"} {
+				if strings.Count(wordXML, name) != 1 || strings.Count(pdfText, name) != 1 {
+					t.Fatalf("merged cell %q missing or repeated: %s", name, pdfText)
+				}
+			}
+		}
+		for _, expected := range expectedWords {
 			if !strings.Contains(wordXML, expected) || !strings.Contains(pdfText, expected) {
 				t.Fatalf("missing %q from Word or PDF text: Word=%s PDF=%s", expected, wordXML, pdfText)
 			}
@@ -399,9 +421,12 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		revisedXML := localDOCXDocumentXML(t, revisedWord)
 		revisedPDF := imagePDFText(readRevision(revised.Media[0].AssetID))
-		if !strings.Contains(revisedXML, `<w:sz w:val="53"/>`) || strings.Count(revisedXML, "<w:tc>") != 4 ||
+		if !strings.Contains(revisedXML, `<w:sz w:val="53"/>`) || strings.Count(revisedXML, "<w:tc>") != cells ||
 			!strings.Contains(revisedXML, "本次测试用于核对文档复刻结果") || !strings.Contains(revisedPDF, "文件交接记录") {
 			t.Fatalf("title, table and Chinese text verification failed: %s, %s", revisedXML, revisedPDF)
+		}
+		if withMerges && (!strings.Contains(revisedXML, `<w:gridSpan w:val="3"/>`) || !strings.Contains(revisedXML, `<w:vMerge/>`)) {
+			t.Fatal("title revision discarded a native table merge")
 		}
 		if repeated, err := resize(raw); err != nil || repeated != newReply {
 			t.Fatalf("revision retry prepared a different product: %s, %v", repeated, err)

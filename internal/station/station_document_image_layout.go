@@ -29,6 +29,7 @@ type stationImageLayout struct {
 	Headings                int
 	ImageWidth, ImageHeight int
 	Illustrations           []stationIllustrationRect `json:",omitempty"`
+	MergedCells             int
 	NeedsClarification      bool
 	Uncertain               []string
 }
@@ -83,15 +84,17 @@ type stationImageTable struct {
 		Row   int      `json:"row"`
 		Cells []string `json:"cells"`
 	} `json:"rows"`
+	Merges          []stationTableMerge
 	CellsUnreadable bool `json:"cells_unreadable"`
 }
 
 type stationLayoutBlock struct {
-	Kind       string     `json:"kind"`
-	Text       string     `json:"text,omitempty"`
-	Level      int        `json:"level,omitempty"`
-	Rows       [][]string `json:"rows,omitempty"`
-	ImageIndex *int       `json:"image_index,omitempty"`
+	Kind       string              `json:"kind"`
+	Text       string              `json:"text,omitempty"`
+	Level      int                 `json:"level,omitempty"`
+	Rows       [][]string          `json:"rows,omitempty"`
+	Merges     []stationTableMerge `json:"merges,omitempty"`
+	ImageIndex *int                `json:"image_index,omitempty"`
 }
 
 type stationVisualBlock struct {
@@ -144,7 +147,10 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 	// cannot offer native OCR table rows, the host's measured grid is enough to
 	// place the already measured TSV words into real cells. This is still OCR
 	// evidence, never guessed text.
-	if len(page.Tables) == 0 && len(grid.Horizontal) >= 3 && len(grid.Vertical) >= 3 {
+	if grid.Ambiguous {
+		return markImageLayoutReview(result, "图片表格边界不完整或相互冲突，请核对原图")
+	}
+	if len(page.Tables) == 0 && len(grid.Horizontal) >= 2 && len(grid.Vertical) >= 2 {
 		inferred, review := stationTableFromGrid(page, grid)
 		if review {
 			result.NeedsClarification = true
@@ -184,7 +190,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 				}
 				cells[column] = clean
 			}
-			if !stationRowHasText(cells) {
+			if !stationRowHasText(cells) && len(table.Merges) == 0 {
 				result.NeedsClarification = true
 				result.Uncertain = append(result.Uncertain, stationTableLocation(page.SourcePage, tableIndex+1)+":row_"+stationImageNumber(rowIndex+1))
 				continue
@@ -195,7 +201,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 			result.NeedsClarification = true
 			continue
 		}
-		visual = append(visual, stationVisualBlock{bbox: table.BBox, order: tableIndex, block: stationLayoutBlock{Kind: "table", Rows: rows}})
+		visual = append(visual, stationVisualBlock{bbox: table.BBox, order: tableIndex, block: stationLayoutBlock{Kind: "table", Rows: rows, Merges: table.Merges}})
 	}
 
 	for i, box := range illustrations {
@@ -295,6 +301,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 		switch item.block.Kind {
 		case "table":
 			result.Tables++
+			result.MergedCells += len(item.block.Merges)
 		case "heading":
 			result.Headings++
 		case "paragraph":
@@ -308,6 +315,9 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 		return markImageLayoutReview(result, "图片布局生成失败，请重新读取原图")
 	}
 	result.Layout = layout
+	if result.NeedsClarification && len(result.Uncertain) == 0 {
+		result.Uncertain = append(result.Uncertain, "page_"+stationImageNumber(page.SourcePage)+":ocr")
+	}
 	result.Uncertain = stationUniqueLocations(result.Uncertain)
 	return result, nil
 }
@@ -326,9 +336,14 @@ func stationTableFromGrid(page stationImagePage, grid stationImageGrid) (*statio
 	if !table.BBox.valid() || len(grid.Horizontal)-1 > stationImageMaxRows || len(grid.Vertical)-1 > stationImageMaxRows {
 		return nil, true
 	}
-	cellWords := make([][][]string, len(grid.Horizontal)-1)
+	table.Merges = grid.Merges
+	type cellWord struct {
+		text       string
+		line, left float64
+	}
+	cellWords := make([][][]cellWord, len(grid.Horizontal)-1)
 	for row := range cellWords {
-		cellWords[row] = make([][]string, len(grid.Vertical)-1)
+		cellWords[row] = make([][]cellWord, len(grid.Vertical)-1)
 	}
 	for _, block := range page.Blocks {
 		for _, line := range block.Lines {
@@ -344,7 +359,13 @@ func stationTableFromGrid(page stationImagePage, grid stationImageGrid) (*statio
 				row, inRow := stationGridSlot(y, grid.Horizontal)
 				column, inColumn := stationGridSlot(x, grid.Vertical)
 				if inRow && inColumn {
-					cellWords[row][column] = append(cellWords[row][column], text)
+					for _, merge := range grid.Merges {
+						if row >= merge.Row && row < merge.Row+merge.RowSpan && column >= merge.Column && column < merge.Column+merge.ColSpan {
+							row, column = merge.Row, merge.Column
+							break
+						}
+					}
+					cellWords[row][column] = append(cellWords[row][column], cellWord{text: text, line: line.BBox.Top, left: word.BBox.Left})
 				}
 			}
 		}
@@ -356,7 +377,25 @@ func stationTableFromGrid(page stationImagePage, grid stationImageGrid) (*statio
 			Cells []string `json:"cells"`
 		}{Row: row, Cells: make([]string, len(cellWords[row]))}
 		for column := range cellWords[row] {
-			entry.Cells[column] = stationJoinOCRWords(cellWords[row][column])
+			measured := cellWords[row][column]
+			sort.SliceStable(measured, func(i, j int) bool {
+				if measured[i].line != measured[j].line {
+					return measured[i].line < measured[j].line
+				}
+				return measured[i].left < measured[j].left
+			})
+			var lines []string
+			for first := 0; first < len(measured); {
+				last := first + 1
+				words := []string{measured[first].text}
+				for last < len(measured) && measured[last].line == measured[first].line {
+					words = append(words, measured[last].text)
+					last++
+				}
+				lines = append(lines, stationJoinOCRWords(words))
+				first = last
+			}
+			entry.Cells[column] = strings.Join(lines, "\n")
 			found = found || entry.Cells[column] != ""
 		}
 		table.Rows = append(table.Rows, entry)
@@ -388,7 +427,7 @@ func stationOCRNeedsReview(page stationImagePage) bool {
 }
 
 func stationStrictlyIncreasing(values []int) bool {
-	if len(values) < 3 {
+	if len(values) < 2 {
 		return false
 	}
 	for index := 1; index < len(values); index++ {

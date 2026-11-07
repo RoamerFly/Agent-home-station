@@ -30,7 +30,7 @@ func (h *localHomeService) stationDocumentImageAvailable(ctx context.Context) bo
 func (h *localHomeService) stationDocumentIllustrationsAvailable(ctx context.Context) bool {
 	operation := projectOperation(localDocumentToolName)
 	digest, ok := h.stationDocumentToolRelease(ctx, operation, false)
-	return ok && !compatibleDocumentDigest(operation, digest)
+	return ok && (digest == localDocumentV014Digest || !compatibleDocumentDigest(operation, digest))
 }
 
 func stationImageOCRRuntimeReady(path string) bool {
@@ -94,6 +94,10 @@ func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, 
 		return empty, err
 	}
 	defer cleanupOCR()
+	if preparation.grid.Ambiguous {
+		return markImageLayoutReview(stationImageLayout{ImageWidth: preparation.original.Bounds().Dx(), ImageHeight: preparation.original.Bounds().Dy()},
+			"图片表格边界不完整或相互冲突，请核对原图")
+	}
 	inspect := &stationDocumentImagePolicy{inspect: true}
 	inspectArgs := map[string]any{"artifact_id": in.record.ID, "include_layout": true}
 	inspectKey := []any{"image-ocr-layout", in.record.ID, in.record.SHA256, in.trace, in.epoch, in.requester, in.handoffKey}

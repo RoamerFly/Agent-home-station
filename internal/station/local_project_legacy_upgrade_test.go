@@ -36,7 +36,7 @@ func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared, err := host.store.Prepare(t.Context(), filepath.Join(legacy, pluginruntime.DocumentWorkshopID))
-	previousMinor := prepared.Digest == localDocumentV012Digest || prepared.Digest == localDocumentV013Digest
+	previousMinor := prepared.Digest == localDocumentV012Digest || prepared.Digest == localDocumentV013Digest || prepared.Digest == localDocumentV014Digest
 	if err != nil || !previousMinor && prepared.Digest != localDocumentLegacyDigest {
 		t.Fatalf("legacy official catalog not verified: %v", err)
 	}

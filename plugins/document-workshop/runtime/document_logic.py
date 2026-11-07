@@ -76,7 +76,16 @@ def text_content(path: Path) -> str:
 
 def _docx_paragraph_text(node: ET.Element) -> str:
     """Return the editable text represented by one Word paragraph node."""
-    return "".join(part.text or "" for part in node.findall(".//{%s}t" % WORD_NS))
+    w = "{%s}" % WORD_NS
+    parts = []
+    for part in node.iter():
+        if part.tag == w + "t":
+            parts.append(part.text or "")
+        elif part.tag in (w + "br", w + "cr"):
+            parts.append("\n")
+        elif part.tag == w + "tab":
+            parts.append("\t")
+    return "".join(parts)
 
 
 def _docx_style(node: ET.Element) -> str:
@@ -100,20 +109,50 @@ def _docx_block_for_paragraph(node: ET.Element) -> dict | None:
 
 
 def _docx_block_for_table(node: ET.Element) -> dict | None:
-    rows = []
-    for row in node.findall("{%s}tr" % WORD_NS):
-        cells = []
-        for cell in row.findall("{%s}tc" % WORD_NS):
-            # A cell may contain multiple paragraphs. Keep their editable text
-            # together rather than inventing a visual cell position.
+    rows, merges = [], []
+    active = {}
+    w = "{%s}" % WORD_NS
+    for r, row in enumerate(node.findall(w + "tr")):
+        cells, continued = [], {}
+        for cell in row.findall(w + "tc"):
             value = "\n".join(
-                value for value in (_docx_paragraph_text(paragraph) for paragraph in cell.findall("{%s}p" % WORD_NS))
+                value for value in (_docx_paragraph_text(paragraph) for paragraph in cell.findall(w + "p"))
                 if value
             )
-            cells.append(value)
+            width = cell.find(w + "tcPr/" + w + "gridSpan")
+            vertical = cell.find(w + "tcPr/" + w + "vMerge")
+            col = len(cells)
+            try:
+                span = int(width.get(w + "val", "1")) if width is not None else 1
+            except ValueError:
+                raise DocumentError("document_table_merge_invalid")
+            if span < 1 or col + span > MAX_LAYOUT_CELLS_PER_ROW:
+                raise DocumentError("document_table_merge_invalid")
+            if vertical is not None and vertical.get(w + "val", "continue") == "continue":
+                prior = active.get(col)
+                if prior is None or prior["col_span"] != span or value:
+                    raise DocumentError("document_table_merge_invalid")
+                prior["row_span"] += 1
+                continued[col] = prior
+            elif vertical is not None or span > 1:
+                merge = {"row": r, "column": col, "row_span": 1, "col_span": span}
+                merges.append(merge)
+                if vertical is not None:
+                    if vertical.get(w + "val") != "restart":
+                        raise DocumentError("document_table_merge_invalid")
+                    continued[col] = merge
+            cells.extend([value] + [""] * (span - 1))
         if cells:
             rows.append(cells)
-    return {"kind": "table", "rows": rows} if rows else None
+        active = continued
+    if not rows:
+        return None
+    result = {"kind": "table", "rows": rows}
+    merges = [merge for merge in merges if merge["row_span"] > 1 or merge["col_span"] > 1]
+    if merges:
+        _table_coverage(rows, merges)
+        result["merges"] = merges
+    return result
 
 
 def _docx_flow_layout(path: Path) -> dict:
@@ -342,13 +381,50 @@ def _paragraph(text: str, style: str = "", font_size_pt: float | None = None) ->
     return "<w:p>%s%s</w:p>" % (ppr, runs)
 
 
-def _table(rows) -> str:
+def _table_coverage(rows, merges) -> dict:
+    """Map covered coordinates to their validated, rectangular merge."""
+    if not isinstance(merges, list) or not rows or not isinstance(rows[0], list):
+        raise DocumentError("document_table_merge_invalid")
+    cols = len(rows[0])
+    if not 1 <= cols <= MAX_LAYOUT_CELLS_PER_ROW or any(not isinstance(row, list) or len(row) != cols for row in rows):
+        raise DocumentError("document_table_merge_invalid")
+    coverage = {}
+    keys = ("row", "column", "row_span", "col_span")
+    for merge in merges:
+        if not isinstance(merge, dict) or set(merge) != set(keys) or any(type(merge[key]) is not int for key in keys):
+            raise DocumentError("document_table_merge_invalid")
+        r, c, h, w = (merge[key] for key in keys)
+        if min(r, c) < 0 or min(h, w) < 1 or h * w < 2 or r+h > len(rows) or c+w > cols:
+            raise DocumentError("document_table_merge_invalid")
+        for y in range(r, r+h):
+            for x in range(c, c+w):
+                if (y, x) in coverage or (y, x) != (r, c) and rows[y][x] != "":
+                    raise DocumentError("document_table_merge_invalid")
+                coverage[y, x] = (r, c, h, w)
+    return coverage
+
+
+def _table(rows, merges=None) -> str:
     parts = ["<w:tbl><w:tblPr><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/><w:left w:val=\"single\" w:sz=\"4\"/><w:bottom w:val=\"single\" w:sz=\"4\"/><w:right w:val=\"single\" w:sz=\"4\"/><w:insideH w:val=\"single\" w:sz=\"4\"/><w:insideV w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPr>"]
-    for row in rows:
+    coverage = _table_coverage(rows, merges) if merges is not None else {}
+    if coverage:
+        parts.append("<w:tblGrid>%s</w:tblGrid>" % ("<w:gridCol/>" * len(rows[0])))
+    for r, row in enumerate(rows):
         if not isinstance(row, list):
             continue
-        cells = "".join("<w:tc><w:tcPr/><w:p><w:r><w:t xml:space=\"preserve\">%s</w:t></w:r></w:p></w:tc>" % _xml(str(cell)) for cell in row)
-        parts.append("<w:tr>%s</w:tr>" % cells)
+        cells = []
+        for c, text in enumerate(row):
+            if (r, c) not in coverage:
+                cells.append("<w:tc><w:tcPr/>%s</w:tc>" % _paragraph(str(text)))
+                continue
+            origin_r, origin_c, height, width = coverage[r, c]
+            if c != origin_c:
+                continue
+            props = '<w:gridSpan w:val="%d"/>' % width if width > 1 else ""
+            if height > 1:
+                props += '<w:vMerge w:val="restart"/>' if r == origin_r else "<w:vMerge/>"
+            cells.append("<w:tc><w:tcPr>%s</w:tcPr>%s</w:tc>" % (props, _paragraph(str(text))))
+        parts.append("<w:tr>%s</w:tr>" % "".join(cells))
     return "".join(parts) + "</w:tbl>"
 
 
@@ -374,7 +450,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             raise DocumentError("document_font_size_invalid")
         body.append(_paragraph(title[:256], "Title", title_font_size_pt))
     for block in blocks:
-        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt"}:
+        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges"}:
             raise DocumentError("document_layout_invalid")
         kind = block.get("kind")
         if kind in ("paragraph", "heading", "title"):
@@ -393,7 +469,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             rows = block.get("rows")
             if not isinstance(rows, list) or len(rows) > 200:
                 raise DocumentError("document_layout_invalid")
-            body.append(_table(rows))
+            body.append(_table(rows, block.get("merges")))
         elif kind == "image":
             image_index = block.get("image_index")
             if type(image_index) is not int or not isinstance(images, list) or not 0 <= image_index < len(images):

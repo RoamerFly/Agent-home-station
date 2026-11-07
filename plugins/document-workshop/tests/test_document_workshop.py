@@ -49,6 +49,22 @@ class DocumentWorkshopTests(unittest.TestCase):
             self.assertTrue(verified["ok"])
             self.assertTrue(verified["editable"])
 
+    def test_merged_table_round_trips_without_losing_cell_content(self):
+        table = {
+            "kind": "table",
+            "rows": [["课程\n计划", "", ""], ["分组", "一", "二"], ["", "三", "四"]],
+            "merges": [
+                {"row": 0, "column": 0, "row_span": 1, "col_span": 3},
+                {"row": 1, "column": 0, "row_span": 2, "col_span": 1},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(logic.reconstruct({"blocks": [table]}, Path(raw), "table.docx")["path"])
+            self.assertEqual(logic._docx_flow_layout(path)["blocks"], [table])
+            table["rows"][2][0] = "不能丢失的内容"
+            with self.assertRaisesRegex(logic.DocumentError, "document_table_merge_invalid"):
+                logic.reconstruct({"blocks": [table]}, Path(raw), "invalid.docx")
+
     def test_revise_title_preserves_body_tables_and_original(self):
         layout = {"blocks": [
             {"kind": "heading", "level": 1, "text": "旧文档标题"},

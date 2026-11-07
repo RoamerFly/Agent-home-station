@@ -42,6 +42,7 @@ type stationDocumentInput struct {
 	record              stationAttachmentRecord
 	file                *os.File
 	illustrationRegions []stationIllustrationRect
+	mergedTable         bool
 	extension, epoch    string
 	requester, trace    string
 	handoffKey          string

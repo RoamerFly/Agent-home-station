@@ -18,6 +18,9 @@ import (
 
 type stationImageGrid struct {
 	Horizontal, Vertical []int
+	Merges               []stationTableMerge
+	Rules                []image.Rectangle
+	Ambiguous            bool
 }
 
 type stationImagePreparation struct {
@@ -57,8 +60,8 @@ func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, d
 		return in, empty, noop, err
 	}
 	preparation := stationImagePreparation{original: img, grid: grid, regions: regions}
-	hasGrid := len(grid.Horizontal) >= 3 && len(grid.Vertical) >= 3
-	if !hasGrid && len(regions) == 0 {
+	hasGrid := len(grid.Horizontal) >= 2 && len(grid.Vertical) >= 2
+	if grid.Ambiguous || !hasGrid && len(regions) == 0 {
 		return in, preparation, noop, in.check(ctx)
 	}
 	bounds := img.Bounds()
@@ -68,15 +71,8 @@ func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, d
 	erase := func(r image.Rectangle) {
 		draw.Draw(gray, r.Intersect(bounds), image.White, image.Point{}, draw.Src)
 	}
-	if hasGrid {
-		left, right := grid.Vertical[0], grid.Vertical[len(grid.Vertical)-1]
-		top, bottom := grid.Horizontal[0], grid.Horizontal[len(grid.Horizontal)-1]
-		for _, y := range grid.Horizontal {
-			erase(image.Rect(left-3, y-3, right+4, y+4))
-		}
-		for _, x := range grid.Vertical {
-			erase(image.Rect(x-3, top-3, x+4, bottom+4))
-		}
+	for _, rule := range grid.Rules {
+		erase(rule)
 	}
 	for _, region := range regions {
 		erase(region.rectangle())
@@ -143,7 +139,7 @@ func stationGridFromImage(img image.Image) stationImageGrid {
 	remaining := 2 * bounds.Dx() * bounds.Dy()
 	for _, group := range groups {
 		rows := imageRuleCenters(group.rows)
-		if len(rows) < 3 || len(rows) > 51 {
+		if len(rows) < 2 || len(rows) > 51 {
 			continue
 		}
 		top, bottom := rows[0], rows[len(rows)-1]
@@ -155,28 +151,24 @@ func stationGridFromImage(img image.Image) stationImageGrid {
 		if remaining < 0 {
 			return stationImageGrid{}
 		}
-		var columns []int
-		for x := left; x <= right; x++ {
-			dark := 0
-			for y := top; y <= bottom; y++ {
-				if imageRulePixel(img, x, y) {
-					dark++
-				}
-			}
-			if dark*100 >= (bottom-top+1)*88 {
-				columns = append(columns, x)
-			}
+		if !stationOuterColumn(img, group.left, top, bottom, tolerance) ||
+			!stationOuterColumn(img, group.right-1, top, bottom, tolerance) {
+			continue
 		}
-		columns = imageRuleCenters(columns)
-		if len(columns) < 3 || len(columns) > 17 ||
-			columns[0] > group.left+tolerance || columns[len(columns)-1] < group.right-tolerance {
+		columns := stationPartialRules(img, true, left, right, top, bottom)
+		rows = stationPartialRules(img, false, top, bottom, group.left, group.right-1)
+		if len(columns) < 2 || len(rows) < 2 || len(columns) == 2 && len(rows) == 2 {
+			continue
+		}
+		candidate := stationGridSegments(img, rows, columns)
+		if len(candidate.Horizontal) == 0 {
 			continue
 		}
 		if len(found.Horizontal) != 0 {
-			// Multiple independent grids require a richer layout pass.
-			return stationImageGrid{}
+			found.Ambiguous = true
+			return found
 		}
-		found = stationImageGrid{Horizontal: rows, Vertical: columns}
+		found = candidate
 	}
 	return found
 }

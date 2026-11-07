@@ -90,7 +90,12 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 		s.update.Unlock()
 		return nil, err
 	}
-	if image != nil && image.originalImage != nil && len(image.layout.Illustrations) > 0 && compatibleDocumentDigest(operation, installed.Digest) {
+	if compatibleDocumentDigest(operation, installed.Digest) && (in.mergedTable || image != nil && image.originalImage != nil && image.layout.MergedCells > 0) {
+		s.update.Unlock()
+		return nil, errors.New("保留合并单元格需要文档工坊 0.1.5 或更高版本")
+	}
+	if image != nil && image.originalImage != nil && len(image.layout.Illustrations) > 0 &&
+		compatibleDocumentDigest(operation, installed.Digest) && installed.Digest != localDocumentV014Digest {
 		s.update.Unlock()
 		return nil, errors.New("保留插图需要文档工坊 0.1.4 或更高版本")
 	}
