@@ -31,6 +31,11 @@ var (
 const liveRemoteTimeout = 5 * time.Second
 const liveStartTimeout = 20 * time.Second
 
+// LiveMediaLocalSource is for a client that captures a source prepared on the
+// host (for example a virtual camera). The empty mode is the existing ingest
+// contract and keeps old session records valid.
+const LiveMediaLocalSource = "local-source"
+
 type LiveGrant struct {
 	Allowed     bool
 	Version     string
@@ -56,6 +61,7 @@ type LiveTarget struct {
 	OpensAt            time.Time `json:"opens_at"`
 	ClosesAt           time.Time `json:"closes_at"`
 	MaxDurationSeconds int64     `json:"max_duration_seconds"`
+	MediaMode          string    `json:"media_mode,omitempty"`
 }
 
 // LiveReference is an immutable, host-issued operation identity. Platform and
@@ -69,6 +75,7 @@ type LiveReference struct {
 	ProgramArtifactID string        `json:"program_artifact_id,omitempty"`
 	ProgramSHA256     string        `json:"program_sha256,omitempty"`
 	ProgramLoop       bool          `json:"program_loop,omitempty"`
+	MediaMode         string        `json:"media_mode,omitempty"`
 }
 
 type LiveReceipt struct {
@@ -108,6 +115,28 @@ type LiveOutput interface {
 	StopLiveOutput(context.Context, LiveReference) error
 }
 
+// LiveSourceOutput prepares the exact session's input before the platform may
+// start. Prepare succeeds only after the source is ready for client capture.
+// Stop must also clean up a partially prepared source or a source whose
+// platform start was never attempted.
+type LiveSourceOutput interface {
+	LiveOutput
+	PrepareLiveSource(context.Context, LiveReference) error
+}
+
+// liveMediaProvider is optional. Its answer is trusted adapter configuration,
+// not a browser/model argument. It must be stable for a given connection.
+type liveMediaProvider interface {
+	LiveMediaMode(ConnectionRef) string
+}
+
+func liveMediaMode(provider LiveProvider, target ConnectionRef) string {
+	if p, ok := provider.(liveMediaProvider); ok {
+		return p.LiveMediaMode(target)
+	}
+	return ""
+}
+
 // LiveOutputStatus is local transport evidence. Platform acceptance is
 // reported independently by LiveReceipt.
 type LiveOutputStatus struct {
@@ -134,6 +163,7 @@ type LiveView struct {
 	ProgramArtifactID string            `json:"program_artifact_id,omitempty"`
 	ProgramSHA256     string            `json:"program_sha256,omitempty"`
 	ProgramLoop       bool              `json:"program_loop,omitempty"`
+	MediaMode         string            `json:"media_mode,omitempty"`
 }
 
 type liveState struct {
@@ -151,8 +181,11 @@ func (l *LiveController) view(s liveState) LiveView {
 	v := LiveView{ID: s.Reference.ID, State: s.State, AppID: s.Reference.Target.AppID,
 		ConnectionID: s.Reference.Target.ConnectionID, RoomID: s.RoomID, Deadline: s.Reference.Deadline,
 		StopReason: s.StopReason, LocalStopped: s.LocalStopped, RemoteEnded: s.RemoteEnded,
-		ProgramArtifactID: s.Reference.ProgramArtifactID, ProgramSHA256: s.Reference.ProgramSHA256, ProgramLoop: s.Reference.ProgramLoop}
-	if output, ok := l.output.(liveStreamOutput); ok {
+		ProgramArtifactID: s.Reference.ProgramArtifactID, ProgramSHA256: s.Reference.ProgramSHA256, ProgramLoop: s.Reference.ProgramLoop,
+		MediaMode: s.Reference.MediaMode}
+	if output, ok := l.outputFor(s.Reference.MediaMode).(interface {
+		LiveOutputStatus(LiveReference) *LiveOutputStatus
+	}); ok {
 		v.LocalOutput = output.LiveOutputStatus(s.Reference)
 	}
 	return v
@@ -162,6 +195,7 @@ type LiveController struct {
 	registry Registry
 	store    *pluginhost.Store
 	output   LiveOutput
+	source   LiveSourceOutput
 	now      func() time.Time
 	mu       sync.Mutex
 	closed   bool
@@ -175,13 +209,28 @@ type LiveController struct {
 }
 
 func NewLiveController(registry Registry, store *pluginhost.Store, output LiveOutput) *LiveController {
-	return &LiveController{registry: registry, store: store, output: output, now: time.Now,
+	return NewLiveControllerWithSource(registry, store, output, nil)
+}
+
+func NewLiveControllerWithSource(registry Registry, store *pluginhost.Store, output LiveOutput, source LiveSourceOutput) *LiveController {
+	return &LiveController{registry: registry, store: store, output: output, source: source, now: time.Now,
 		wake: make(chan struct{}, 1), local: make(chan struct{}, 1)}
+}
+
+func (l *LiveController) outputFor(mode string) LiveOutput {
+	switch mode {
+	case "":
+		return l.output
+	case LiveMediaLocalSource:
+		return l.source
+	default:
+		return nil
+	}
 }
 
 func (l *LiveController) Targets(ctx context.Context) []LiveTarget {
 	out := []LiveTarget{}
-	if l.output == nil {
+	if l.output == nil && l.source == nil {
 		return out
 	}
 	for _, app := range l.registry.Applications() {
@@ -199,11 +248,15 @@ func (l *LiveController) Targets(ctx context.Context) []LiveTarget {
 				continue
 			}
 			ref := liveConnection(entry, connection)
+			mode := liveMediaMode(provider, ref)
+			if l.outputFor(mode) == nil {
+				continue
+			}
 			grant, err := provider.LiveGrant(ctx, ref)
 			now := l.now()
 			if err == nil && grantCovers(grant, now, now.Add(time.Second)) {
 				out = append(out, LiveTarget{AppID: ref.AppID, ConnectionID: ref.ConnectionID, Label: connection.Label,
-					OpensAt: grant.OpensAt, ClosesAt: grant.ClosesAt, MaxDurationSeconds: int64(grant.MaxDuration / time.Second)})
+					OpensAt: grant.OpensAt, ClosesAt: grant.ClosesAt, MaxDurationSeconds: int64(grant.MaxDuration / time.Second), MediaMode: mode})
 			}
 		}
 	}
@@ -216,7 +269,7 @@ func liveConnection(entry Registration, c Connection) ConnectionRef {
 
 func (l *LiveController) resolve(ctx context.Context, appID, connectionID string) (Registration, ConnectionRef, LiveProvider, error) {
 	entry, ok := l.registry.Lookup(appID)
-	if !ok || l.output == nil {
+	if !ok {
 		return Registration{}, ConnectionRef{}, nil, ErrLiveUnavailable
 	}
 	provider, ok := entry.Provider.(LiveProvider)
@@ -238,6 +291,9 @@ func (l *LiveController) resolve(ctx context.Context, appID, connectionID string
 		target = liveConnection(entry, c)
 	}
 	if target.ConnectionID != "" {
+		if l.outputFor(liveMediaMode(provider, target)) == nil {
+			return Registration{}, ConnectionRef{}, nil, ErrLiveUnavailable
+		}
 		return entry, target, provider, nil
 	}
 	return Registration{}, ConnectionRef{}, nil, ErrLiveDenied
@@ -266,6 +322,7 @@ func decodeLive(r pluginhost.LiveSessionRecord) (liveState, error) {
 	if json.Unmarshal(r.Payload, &s) != nil || s.Reference.ID != r.ID || s.Owner == "" || s.Reference.Target.AccountID == "" ||
 		s.Reference.Registration == "" || s.Reference.GrantVersion == "" || s.Reference.Deadline.IsZero() ||
 		!validLiveProgram(s.Reference.ProgramArtifactID, s.Reference.ProgramSHA256, s.Reference.ProgramLoop) ||
+		(s.Reference.MediaMode != "" && s.Reference.MediaMode != LiveMediaLocalSource) ||
 		r.Active == (s.State == "ended") {
 		return liveState{}, ErrLiveConflict
 	}
@@ -356,7 +413,8 @@ func (l *LiveController) Start(ctx context.Context, owner string, in LiveStart) 
 	}
 	s := liveState{Owner: owner, State: "starting", Reference: LiveReference{ID: uuid.NewString(), Target: target,
 		Registration: entry.Registration, GrantVersion: grant.Version, Deadline: deadline,
-		ProgramArtifactID: in.ProgramArtifactID, ProgramSHA256: in.ProgramSHA256, ProgramLoop: in.ProgramLoop}}
+		ProgramArtifactID: in.ProgramArtifactID, ProgramSHA256: in.ProgramSHA256, ProgramLoop: in.ProgramLoop,
+		MediaMode: liveMediaMode(provider, target)}}
 	initial := s
 	ref := initial.Reference
 	raw, _ = json.Marshal(s)

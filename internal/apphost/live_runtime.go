@@ -55,7 +55,7 @@ func (l *LiveController) checkGrant(ctx context.Context, ref LiveReference) stri
 		return "deadline"
 	}
 	entry, target, provider, err := l.resolve(ctx, ref.Target.AppID, ref.Target.ConnectionID)
-	if err != nil || target != ref.Target || entry.Registration != ref.Registration {
+	if err != nil || target != ref.Target || entry.Registration != ref.Registration || liveMediaMode(provider, target) != ref.MediaMode {
 		return "authorization-changed"
 	}
 	grant, err := provider.LiveGrant(ctx, target)
@@ -69,15 +69,45 @@ func (l *LiveController) check(ctx context.Context, ref LiveReference) string {
 	if reason := l.checkGrant(ctx, ref); reason != "" {
 		return reason
 	}
-	if l.output.CheckLiveOutput(ctx, ref) != nil {
+	output := l.outputFor(ref.MediaMode)
+	if output == nil || output.CheckLiveOutput(ctx, ref) != nil {
+		return "output-unavailable"
+	}
+	return ""
+}
+
+func (l *LiveController) prepareSource(ctx context.Context, ref LiveReference) string {
+	// Use the same ownership gate as StopLiveOutput. A cancelled prepare
+	// may still hold local resources until it returns, so recovery cannot
+	// mark those resources stopped while prepare is in flight.
+	select {
+	case l.local <- struct{}{}:
+	case <-ctx.Done():
+		return "start-interrupted"
+	}
+	defer func() { <-l.local }()
+	record, err := readLive(l.store.LiveSession(ctx, ref.ID))
+	if err != nil || !sameLiveReference(record.Reference, ref) || record.State != "starting" || record.DispatchClaimed || ctx.Err() != nil {
+		return "start-interrupted"
+	}
+	if l.source == nil || l.source.PrepareLiveSource(ctx, ref) != nil {
 		return "output-unavailable"
 	}
 	return ""
 }
 
 func (l *LiveController) dispatch(ctx context.Context, s liveState, provider LiveProvider) (string, LiveReceipt) {
-	if reason := l.check(ctx, s.Reference); reason != "" {
+	check := l.check
+	if s.Reference.MediaMode == LiveMediaLocalSource {
+		check = l.checkGrant
+	}
+	if reason := check(ctx, s.Reference); reason != "" {
 		return reason, LiveReceipt{}
+	}
+	if s.Reference.MediaMode == LiveMediaLocalSource {
+		if reason := l.prepareSource(ctx, s.Reference); reason != "" {
+			return reason, LiveReceipt{}
+		}
 	}
 	if !l.remote.TryLock() {
 		return "start-interrupted", LiveReceipt{}
@@ -88,6 +118,11 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	l.mu.Unlock()
 	if closed {
 		return "shutdown", LiveReceipt{}
+	}
+	if s.Reference.MediaMode == LiveMediaLocalSource {
+		if reason := l.check(ctx, s.Reference); reason != "" {
+			return reason, LiveReceipt{}
+		}
 	}
 	current, err := l.update(ctx, s.Reference.ID, func(state *liveState) error {
 		if state.State != "starting" || state.DispatchClaimed || ctx.Err() != nil || !l.now().Before(state.Reference.Deadline) {
@@ -113,7 +148,11 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 	if platformErr != nil || ctx.Err() != nil || !l.now().Before(s.Reference.Deadline) {
 		return "start-interrupted", receipt
 	}
-	if output, ok := l.output.(liveStreamOutput); ok {
+	if s.Reference.MediaMode == LiveMediaLocalSource {
+		if result.Ingest != nil {
+			return "output-unavailable", receipt
+		}
+	} else if output, ok := l.output.(liveStreamOutput); ok {
 		if result.Ingest == nil {
 			return "output-unavailable", receipt
 		}
@@ -132,7 +171,8 @@ func (l *LiveController) dispatch(ctx context.Context, s liveState, provider Liv
 func sameLiveReference(a, b LiveReference) bool {
 	return a.ID == b.ID && a.Target == b.Target && a.Registration == b.Registration &&
 		a.GrantVersion == b.GrantVersion && a.Deadline.Equal(b.Deadline) &&
-		a.ProgramArtifactID == b.ProgramArtifactID && a.ProgramSHA256 == b.ProgramSHA256 && a.ProgramLoop == b.ProgramLoop
+		a.ProgramArtifactID == b.ProgramArtifactID && a.ProgramSHA256 == b.ProgramSHA256 && a.ProgramLoop == b.ProgramLoop &&
+		a.MediaMode == b.MediaMode
 }
 
 func validLiveReceipt(s liveState, r LiveReceipt) bool {
@@ -185,7 +225,11 @@ func markLiveStop(current *liveState, reason string) {
 	}
 	if !current.DispatchClaimed {
 		current.RemoteEnded = true
-		current.LocalStopped = true
+		// A local source can already exist before the platform dispatch
+		// claim. It still needs an idempotent StopLiveOutput.
+		if current.Reference.MediaMode != LiveMediaLocalSource {
+			current.LocalStopped = true
+		}
 	}
 }
 
@@ -212,7 +256,8 @@ func (l *LiveController) requestStop(ctx context.Context, s liveState, reason st
 }
 
 func (l *LiveController) stopOutput(ctx context.Context, ref LiveReference, wait bool) bool {
-	if l.output == nil {
+	output := l.outputFor(ref.MediaMode)
+	if output == nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, liveRemoteTimeout)
@@ -231,7 +276,7 @@ func (l *LiveController) stopOutput(ctx context.Context, ref LiveReference, wait
 		}
 	}
 	defer func() { <-l.local }()
-	return l.output.StopLiveOutput(ctx, ref) == nil
+	return output.StopLiveOutput(ctx, ref) == nil
 }
 
 func (l *LiveController) finishStop(ctx context.Context, s liveState, waitLocal bool) (liveState, error) {
@@ -306,7 +351,14 @@ func (l *LiveController) inspect(ctx context.Context, s liveState) (liveState, e
 	if s.State == "ended" {
 		return s, nil
 	}
-	if reason := l.check(ctx, s.Reference); reason != "" {
+	check := l.check
+	if s.State == "starting" && s.Reference.MediaMode == LiveMediaLocalSource {
+		// Preparation owns the source readiness check. The periodic
+		// supervisor can still revoke the grant without mistaking an
+		// in-progress preparation for a failed local output.
+		check = l.checkGrant
+	}
+	if reason := check(ctx, s.Reference); reason != "" {
 		return l.stopSession(ctx, s, reason)
 	}
 	if s.State == "starting" {
