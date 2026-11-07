@@ -276,6 +276,12 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		return view, err
 	}
 	view.Installed, view.Enabled, view.Revision = true, item.Enabled, item.Revision
+	if id == localasr.PluginID && item.Enabled {
+		if _, err := s.home.localStationASRVersion(ctx); err != nil {
+			view.RuntimeReady = false
+			view.Reason = "本机识别资源未就绪，请核对 ASR 登记、模型文件和授权。"
+		}
+	}
 	contract, err := catalog.ContractFor(id)
 	if err != nil {
 		return view, err

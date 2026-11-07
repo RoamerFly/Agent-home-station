@@ -46,6 +46,24 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 	if _, err = host.store.Install(t.Context(), prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write", "model.invoke"}); err != nil {
 		t.Fatal(err)
 	}
+	modelPath := filepath.Join(resources, "public_workspace", "models", "sensevoice-small-int8", "model.int8")
+	configurationBefore, err := host.store.Configuration(t.Context(), localasr.PluginID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(modelPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = home.projectTools.configureStationASR(t.Context(), host); err == nil {
+		t.Fatal("missing ASR model must prevent configuration and enablement")
+	}
+	configurationAfter, err := host.store.Configuration(t.Context(), localasr.PluginID)
+	if err != nil || configurationAfter.Revision != configurationBefore.Revision {
+		t.Fatalf("failed ASR admission changed configuration: %#v, %v", configurationAfter, err)
+	}
+	if err = os.WriteFile(modelPath, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err = home.projectTools.configureStationASR(t.Context(), host); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +82,16 @@ func TestLocalBilibiliAudioUsesOwnerScopedLocalASRProfile(t *testing.T) {
 	first, err := home.localStationASRBinding(t.Context())
 	if err != nil || first.version == "" || first.account != record.FishID || first.profile.Metadata().ProfileID != "sensevoice-small-int8" {
 		t.Fatalf("owner local ASR binding = %#v, %v", first, err)
+	}
+	if err = os.Remove(modelPath); err != nil {
+		t.Fatal(err)
+	}
+	view, err := home.projectTools.projectView(t.Context(), host, localasr.PluginID, "本地媒体识别")
+	if err != nil || view.RuntimeReady || view.State != "runtime_missing" || view.Reason == "" {
+		t.Fatalf("missing ASR resources reported ready: %#v, %v", view, err)
+	}
+	if err = os.WriteFile(modelPath, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	configuration, err := host.store.Configuration(t.Context(), localasr.PluginID)
 	if err != nil {

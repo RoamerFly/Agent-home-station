@@ -3383,7 +3383,7 @@
       if (tool.state === "failed") return ["本机语音后端异常", projectToolReason(tool) || "下次语音任务会重新检查本机后端。"];
       return ["已启用，等待任务", "本地聊天需要语音时会按需启动已登记的本机语音后端。"];
     }
-    if (!tool.runtime_ready) return ["缺少本地运行环境", "工具尚不能启动；先补齐本机运行环境或依赖包。"];
+    if (!tool.runtime_ready) return ["本地环境未就绪", projectToolReason(tool) || "请先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
     if (!tool.enabled) return ["已安装，未启用", "需要时启用；停用不会删除已生成的本地成品。"];

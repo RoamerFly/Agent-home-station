@@ -140,9 +140,9 @@ func Run(ctx context.Context, store *pluginhost.Store, scratch string, windows *
 		// canonicalized and manifest-bound while resolving this profile.
 		readonly = append(readonly, resource.Root)
 	}
-	// The plugin-owned runner itself is immutable package code. Its parent is
-	// narrower than the package root and contains only this runtime module.
-	readonly = append(readonly, filepath.Dir(entry))
+	// Installed files can have a protected DACL on Windows. The directory
+	// permits traversal, while the exact script grant admits the existing file.
+	readonly = append(readonly, filepath.Dir(entry), entry)
 	cfg := agenthost.Defaults()
 	if runtime.GOOS == "windows" {
 		cfg.Windows = windows
@@ -155,6 +155,18 @@ func Run(ctx context.Context, store *pluginhost.Store, scratch string, windows *
 	argv := []string{profile.runner.Python, "-X", "utf8", entry, "--packages", profile.runner.Packages, "--model", profile.runner.Model, "--tokens", profile.runner.Tokens, "--input", input, "--threads", strconv.Itoa(profile.runner.Threads), "--language", profile.runner.Language, "--chunk-seconds", strconv.FormatFloat(profile.runner.ChunkSeconds, 'f', -1, 64)}
 	if profile.runner.VADModel != "" {
 		argv = append(argv, "--vad-model", profile.runner.VADModel, "--vad-threshold", strconv.FormatFloat(profile.runner.VADThreshold, 'f', -1, 64))
+	}
+	if runtime.GOOS == "windows" {
+		// The installed package digest and fish identity can make paths exceed
+		// Win32 MAX_PATH. Use extended spelling only after resource validation.
+		for i, path := range readonly {
+			readonly[i] = localASRProcessPath(path)
+		}
+		for i, arg := range argv {
+			if filepath.IsAbs(arg) {
+				argv[i] = localASRProcessPath(arg)
+			}
+		}
 	}
 	out, err := agenthost.RunIsolated(bounded, cfg, folder, argv)
 	if err != nil {
@@ -178,6 +190,13 @@ func Run(ctx context.Context, store *pluginhost.Store, scratch string, windows *
 		return "", "", errors.New("local_asr_response_invalid")
 	}
 	return result.State, strings.TrimSpace(result.Text), nil
+}
+
+func localASRProcessPath(path string) string {
+	if len(path) >= 248 && len(path) > 2 && path[1] == ':' {
+		return `\\?\` + path
+	}
+	return path
 }
 
 func bytesHasWAVHeader(wav []byte) bool {

@@ -723,6 +723,10 @@ python -B scripts/test_station_cutover_cli.py --binary 'E:\AgentHomePreview\agen
 
 需要读画面或音轨时，构建可加 `-WithMediaUnderstanding`，也可与 `-WithShareReader` 同时使用。解码使用 FFmpeg 和 FFprobe，桌面优先使用程序旁 `runtimes/windows-media` 中的组件。展开微信连接的「媒体理解」，安装并授权媒体处理和模型调用。视觉可单独配置 OpenAI 兼容接口。视频音轨的「语音识别方式」可选「远程接口」或「本机识别」。远程接口填写 HTTPS 地址、模型和密钥。本机识别先按站点的 `station-asr.json` 登记资源，再启用项目工具中的「本地媒体识别」，随后为该微信连接选择本机识别。微信只交付获准的音频，本机模型路径和凭据仍由宿主管理。本机识别不可用时返回错误，不会改用远程语音识别接口。
 
+本地媒体识别启用前会检查模型、SDK、解释器和资源登记；缺少文件时不保存新的识别配置。启用后，工具列表也核对资源与授权，资源被移走时显示未就绪及原因。Windows 识别进程对已核验的长路径使用扩展路径格式，兼容安装路径中包含完整鱼身份与工具摘要的情况。
+
+已有本机 SenseVoice 资源时，可设置 `AHS_LOCAL_ASR_RESOURCES` 为包含 `public_workspace` 的资源目录，`AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT` 为候选发行包的 `runtimes`，运行 `go test ./internal/station -run '^TestLiveLocalStationASRThroughWindowsIsolation$' -v -count=1`。该回归在新建的隔离身份下通过管理接口安装、启用工具，检查一秒合成静音确认为无人声，不连接模型提供商或微信。额外设置 `AHS_LOCAL_ASR_SYNTHETIC_WAV` 可以传入本机合成的 16 kHz 单声道 PCM16 英文测试录音，内容包含 “local speech recognition test”，检查识别链路。不要传入真实聊天录音作为仓库夹具。
+
 取得视频后，`wechat_video_observe(message_id,asset_id,mode,...)` 使用原返回的两个编号。画面模式 `mode=frames` 从 `start_frame` 起按 `step` 选择帧，返回实际索引与时间戳，从 `next_start_frame` 续读。步长为 1 时连续读取，视觉模型截断的批次会明确标记。音轨模式 `mode=audio` 从 `start_seconds` 起转写，按 `next_start_seconds` 续读。长区间按 PCM 传输上限分页，结果区分缺少音轨、该区间无音频、无可识别词和调用失败。模型只收到所选帧或 PCM 页，微信原件留在本机连接的私有目录。需要处理真实资料时，先确认该连接和所用模型服务的授权。
 
 「回复范围」可以单独开启「自动读视频」。默认关闭，仅对开启后已获附件授权且进入有效回合的普通视频文件生效。自动读取先用已配置的音轨识别检查开头最多 45 秒，没有可用转写时再用已配置的视觉服务观察最多 6 帧。聊天模型获得实际读取范围和内容。需要继续读时仍可按需调用视频工具。这个开关与各群的视频号自动总结规则分别设置。

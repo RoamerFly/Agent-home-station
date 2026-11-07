@@ -217,6 +217,17 @@ func (s *localProjectTools) configureStationASR(ctx context.Context, host *local
 	if err != nil {
 		return err
 	}
+	if _, err = s.home.localStationASRWindows(); err != nil {
+		return err
+	}
+	installed, err := host.store.Installed(ctx, localasr.PluginID)
+	if err != nil {
+		return err
+	}
+	grant := pluginhost.Grant{Account: record.FishID, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+	if _, err = localasr.ReadProfile(filepath.Join(registration.Workspace, "public_workspace"), installed.Package, grant, registration.ProfileID); err != nil {
+		return err
+	}
 	configuration, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		return err
