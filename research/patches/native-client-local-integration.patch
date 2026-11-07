@@ -5513,10 +5513,10 @@ index 7a647dd..402d47d 100644
  }
 diff --git a/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
 new file mode 100644
-index 0000000..c2a095d
+index 0000000..048d114
 --- /dev/null
 +++ b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,117 @@
 +#![cfg(windows)]
 +use wechat_store::Store;
 +
@@ -5558,6 +5558,81 @@ index 0000000..c2a095d
 +    let held = store.profile_leases().unwrap();
 +    assert_eq!(std::fs::read(account.profile_path.join("preserve")).unwrap(), b"synthetic content");
 +    drop(held);
++}
++
++#[test]
++fn native_snapshot_retains_recovery_state_and_rebinds_private_paths() {
++    use wechat_store::{copy::inventory, cutover};
++    let temp = wechat_platform::private_tempdir("native-relocation-test-").unwrap();
++    let source = temp.path().join("source");
++    let destination = temp.path().join("destination");
++    let store = Store::open(&source).unwrap();
++    let account = store.create_account("synthetic").unwrap();
++    std::fs::write(
++        account.profile_path.join("profile.bin"),
++        b"synthetic opaque profile",
++    )
++    .unwrap();
++    store
++        .put_runtime(
++            "synthetic",
++            "apply:pending",
++            b"synthetic sealed pending projection",
++        )
++        .unwrap();
++    let key = source.join("accounts/synthetic/keys.json");
++    std::fs::write(&key, b"synthetic key file").unwrap();
++    store.set_keys_file("synthetic", &key).unwrap();
++    let server = store.server_id.clone();
++    drop(store);
++    for name in ["storage-key", "cursor-key"] {
++        use std::io::Write;
++        let mut file = wechat_platform::OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .mode(0o600)
++            .open(source.join(name))
++            .unwrap();
++        file.write_all(b"synthetic vault bytes").unwrap();
++    }
++    let before = inventory(&source).unwrap();
++    cutover::snapshot(&source, &destination, "synthetic").unwrap();
++    assert_eq!(inventory(&source).unwrap(), before);
++    let new_store = Store::open_existing(&destination).unwrap();
++    assert_eq!(new_store.server_id, server);
++    assert_eq!(
++        new_store
++            .runtime("synthetic", "apply:pending")
++            .unwrap()
++            .unwrap(),
++        b"synthetic sealed pending projection"
++    );
++    assert_eq!(
++        new_store.account("synthetic").unwrap().profile_path,
++        std::fs::canonicalize(&destination)
++            .unwrap()
++            .join("accounts/synthetic/profile")
++    );
++    assert_eq!(
++        new_store.keys_file("synthetic").unwrap().unwrap(),
++        std::fs::canonicalize(&destination)
++            .unwrap()
++            .join("accounts/synthetic/keys.json")
++    );
++    assert!(!destination.join("api-token").exists());
++    assert_eq!(
++        std::fs::read(destination.join("storage-key")).unwrap(),
++        b"synthetic vault bytes"
++    );
++    assert!(cutover::snapshot(&source, &destination, "synthetic").is_err());
++    drop(new_store);
++    let control = source.join("accounts/synthetic/agent/control.sqlite");
++    let db = rusqlite::Connection::open(control).unwrap();
++    db.execute("INSERT INTO outbox(id,idempotency_key,payload_hash,destination,payload,state,client_id,created_at) VALUES('queued','key','hash','synthetic',x'00','queued','client','synthetic')", []).unwrap();
++    drop(db);
++    let rejected = temp.path().join("rejected");
++    assert!(cutover::snapshot(&source, &rejected, "synthetic").is_err());
++    assert!(!rejected.exists());
 +}
 diff --git a/packages/native-client-rust/crates/wechat-profile/src/writer.rs b/packages/native-client-rust/crates/wechat-profile/src/writer.rs
 index 1a30f6a..b8f6cc2 100644
@@ -6525,10 +6600,10 @@ index bf7bf70..ebac73b 100644
          let max = wechat_media::MAX_FILE_BYTES as u64;
 diff --git a/packages/native-client-rust/crates/wechat-store/src/cutover.rs b/packages/native-client-rust/crates/wechat-store/src/cutover.rs
 new file mode 100644
-index 0000000..4dcf37b
+index 0000000..63ceb75
 --- /dev/null
 +++ b/packages/native-client-rust/crates/wechat-store/src/cutover.rs
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,400 @@
 +//! Exclusive, read-only Windows view of the native control databases.
 +use anyhow::{ensure, Context, Result};
 +use fs2::FileExt;
@@ -6746,21 +6821,212 @@ index 0000000..4dcf37b
 +            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
 +    )?)
 +}
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct Snapshot {
++    state: &'static str,
++    server_id: String,
++    account_count: usize,
++    native_state_preserved: bool,
++    profile_projection: &'static str,
++}
++
++/// Relocate a stopped native store together with its encrypted recovery state.
++/// Unlike an official profile export, this retains pending projections and the
++/// original dataset. It admits no daemon and performs no protocol operation.
++pub fn snapshot(root: &Path, destination: &Path, account: &str) -> Result<Snapshot> {
++    let hold = Hold::open(root, account)?;
++    ensure!(
++        hold.status.pending_text == 0
++            && hold.status.pending_media == 0
++            && hold.status.uncertain_text == 0
++            && hold.status.uncertain_media == 0,
++        "native deliveries must be settled before relocation"
++    );
++    ensure!(
++        destination.is_absolute() && is_fixed_drive(destination),
++        "native destination must be on a fixed Windows drive"
++    );
++    for path in destination
++        .parent()
++        .context("destination needs a parent")?
++        .ancestors()
++        .filter(|p| p.has_root())
++    {
++        let metadata = fs::symlink_metadata(path)?;
++        ensure!(
++            metadata.is_dir() && metadata.file_attributes() & 0x400 == 0,
++            "native destination parent is linked or unavailable"
++        );
++    }
++    let root = fs::canonicalize(root)?;
++    let parent = fs::canonicalize(destination.parent().context("destination needs a parent")?)?;
++    check_private_dir(&parent)?;
++    let destination = parent.join(
++        destination
++            .file_name()
++            .context("destination needs a name")?,
++    );
++    ensure!(
++        !destination.starts_with(&root) && !root.starts_with(&destination),
++        "native source and destination overlap"
++    );
++    ensure!(
++        fs::symlink_metadata(&destination).is_err_and(|e| e.kind() == ErrorKind::NotFound),
++        "native destination already exists or is unavailable"
++    );
++    let registry = read_database(&root.join("registry.sqlite"))?;
++    let accounts = registry
++        .prepare("SELECT id,storage_mode,profile_path FROM accounts")?
++        .query_map([], |r| {
++            Ok((
++                r.get::<_, String>(0)?,
++                r.get::<_, String>(1)?,
++                r.get::<_, String>(2)?,
++            ))
++        })?
++        .collect::<rusqlite::Result<Vec<_>>>()?;
++    let keys = registry
++        .prepare("SELECT account_id,keys_file FROM account_settings WHERE keys_file IS NOT NULL")?
++        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
++        .collect::<rusqlite::Result<Vec<_>>>()?;
++    drop(registry);
++    for (id, mode, profile) in &accounts {
++        ensure!(
++            mode == "managed"
++                && fs::canonicalize(profile)? == root.join("accounts").join(id).join("profile"),
++            "relocation requires profiles inside their managed account directory"
++        );
++    }
++    let account_root = root.join("accounts");
++    let before = crate::copy::inventory(&account_root)?;
++    for entry in &before.entries {
++        ensure!(
++            entry.kind != "symlink",
++            "native snapshot cannot contain links"
++        );
++        if entry.kind == "file" {
++            let name = entry
++                .path
++                .file_name()
++                .and_then(|n| n.to_str())
++                .context("invalid native filename")?;
++            ensure!(
++                !name.ends_with("-wal") && !name.ends_with("-shm") && !name.ends_with("-journal"),
++                "native snapshot contains an outstanding SQLite journal"
++            );
++            if name.ends_with(".sqlite") {
++                let db = read_database(&account_root.join(&entry.path))?;
++                let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
++                ensure!(check == "ok", "native database integrity check failed");
++            }
++        }
++    }
++    let key_paths = keys
++        .iter()
++        .map(|(id, path)| {
++            let path = fs::canonicalize(path)?;
++            ensure!(
++                path.starts_with(account_root.join(id)),
++                "native key file is outside its account"
++            );
++            ensure!(
++                fs::symlink_metadata(&path)?.is_file(),
++                "native key file is not regular"
++            );
++            Ok((id, path.strip_prefix(&root)?.to_owned()))
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let stage = wechat_platform::private_tempdir_in(&parent, ".native-relocate-")?;
++    let mut root_bytes = Vec::new();
++    for name in ["registry.sqlite", "storage-key", "cursor-key"] {
++        let path = root.join(name);
++        let file = wechat_platform::OpenOptions::new()
++            .read(true)
++            .custom_flags(wechat_platform::NOFOLLOW)
++            .open(&path)?;
++        ensure!(
++            file.metadata()?.is_file() && wechat_platform::private_file(&file)?,
++            "native root file must be private and regular"
++        );
++        let bytes = fs::read(&path)?;
++        let mut output = wechat_platform::OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .mode(0o600)
++            .open(stage.path().join(name))?;
++        std::io::Write::write_all(&mut output, &bytes)?;
++        output.sync_all()?;
++        root_bytes.push((path, bytes));
++    }
++    crate::copy::copy_profile(&account_root, &stage.path().join("accounts"), true)?;
++    let mut db = Connection::open(stage.path().join("registry.sqlite"))?;
++    let tx = db.transaction()?;
++    for (id, _, _) in &accounts {
++        let path = destination.join("accounts").join(id).join("profile");
++        tx.execute(
++            "UPDATE accounts SET profile_path=?1 WHERE id=?2",
++            rusqlite::params![path.to_str().context("invalid native profile path")?, id],
++        )?;
++    }
++    for (id, relative) in key_paths {
++        let path = destination.join(relative);
++        tx.execute(
++            "UPDATE account_settings SET keys_file=?1 WHERE account_id=?2",
++            rusqlite::params![path.to_str().context("invalid native key path")?, id],
++        )?;
++    }
++    tx.commit()?;
++    let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
++    ensure!(check == "ok", "relocated registry integrity check failed");
++    drop(db);
++    fs::OpenOptions::new()
++        .write(true)
++        .open(stage.path().join("registry.sqlite"))?
++        .sync_all()?;
++    ensure!(
++        crate::copy::inventory(&account_root)? == before,
++        "native source changed during relocation"
++    );
++    for (path, bytes) in root_bytes {
++        ensure!(
++            fs::read(path)? == bytes,
++            "native root state changed during relocation"
++        );
++    }
++    crate::copy::publish(stage.path(), &destination)?;
++    Ok(Snapshot {
++        state: "copied",
++        server_id: hold.status.server_id.clone(),
++        account_count: accounts.len(),
++        native_state_preserved: true,
++        profile_projection: "preserved_without_repair",
++    })
++}
 diff --git a/packages/native-client-rust/crates/wx/src/main.rs b/packages/native-client-rust/crates/wx/src/main.rs
-index b29fdb2..e803471 100644
+index b29fdb2..128c836 100644
 --- a/packages/native-client-rust/crates/wx/src/main.rs
 +++ b/packages/native-client-rust/crates/wx/src/main.rs
-@@ -69,6 +69,9 @@ enum Command {
+@@ -69,6 +69,17 @@ enum Command {
          #[arg(long, conflicts_with = "token_file")]
          token_stdin: bool,
      },
 +    /// Hold an existing Windows data store offline until the owning pipe says stop.
 +    #[cfg(windows)]
 +    CutoverHold,
++    /// Copy a settled Windows native store, preserving encrypted recovery state.
++    #[cfg(windows)]
++    CutoverSnapshot {
++        #[arg(long)]
++        destination: PathBuf,
++        #[arg(long, required = true)]
++        source_stopped: bool,
++    },
      Daemon {
          #[command(subcommand)]
          command: daemon::DaemonCommand,
-@@ -1010,6 +1013,10 @@ fn query(path: String, values: &[(&str, Option<String>)]) -> String {
+@@ -1010,6 +1021,20 @@ fn query(path: String, values: &[(&str, Option<String>)]) -> String {
      )
  }
  async fn run(cli: Cli) -> Result<()> {
@@ -6768,15 +7034,25 @@ index b29fdb2..e803471 100644
 +    if matches!(cli.command, Command::CutoverHold) {
 +        return cutover_hold(&cli);
 +    }
++    #[cfg(windows)]
++    if let Command::CutoverSnapshot { ref destination, source_stopped: true } = cli.command {
++        anyhow::ensure!(cli.server_config.is_none() && cli.token_file.is_none() && cli.listen.is_none()
++            && cli.client_config.is_none() && cli.url.is_none() && cli.server_name.is_none()
++            && cli.local_profile.is_none(), "native snapshot accepts explicit local paths only");
++        return output(&wechat_store::cutover::snapshot(
++            cli.data_dir.as_deref().context("snapshot data-dir is required")?, destination,
++            cli.account.as_deref().context("snapshot account is required")?,
++        )?);
++    }
      if matches!(cli.command, Command::Licenses) {
          return output(
              &json!({"silkProject":include_str!("../../wechat-protocol/vendor/silk/LICENSE-MIT"),"silkSdk":include_str!("../../wechat-protocol/vendor/silk/LICENSE-SDK"),"protocol":include_str!("../../wechat-protocol/NOTICE")}),
-@@ -1713,10 +1720,42 @@ async fn run(cli: Cli) -> Result<()> {
+@@ -1713,10 +1738,42 @@ async fn run(cli: Cli) -> Result<()> {
          | Command::Daemon { .. } => {
              unreachable!()
          }
 +        #[cfg(windows)]
-+        Command::CutoverHold => unreachable!(),
++        Command::CutoverHold | Command::CutoverSnapshot { .. } => unreachable!(),
      };
      outcome::record(&result);
      output(&result)

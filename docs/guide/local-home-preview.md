@@ -393,6 +393,21 @@ $preview = .\scripts\Update-LegacyWechatLauncher.ps1 @swap | ConvertFrom-Json
 
 快照保留已登记账号的微信回复规则、Agent 投递账本、管理页发送回执和支持的记忆库。管理页回执从活跃账本及经核对的历史双索引提取，只保存发送身份、结果及分段回执。`management_delivery_record_count` 单独计数。同一平台操作可能同时出现在两份账本中。账本和记忆库可能包含原始私聊，须按宿主私有资料保存。模型凭据、管理口令、微信登录档案、声线和素材继续使用各自的独立接续流程。快照不会将旧任务加入新站的可执行队列。
 
+### 接续仍有待写回记录的原生数据
+
+官方格式的 `store export` 与原生状态迁移有不同用途。官方格式导出不包含原生端的加密登录状态、历史发送账本和未完成同步投影。Windows 原生端的 `cutover-snapshot` 可以将已停机的受管原生数据完整接续到新站，保留原数据集编号、加密恢复状态及待写回记录。它不修复投影，也不启动网络服务。目标的 API 令牌由新站启动时单独创建。
+
+先使用兼容旧启动器取得停机凭证。新站 `data/station/apps/wechat` 父目录应属于当前用户，且仅向当前用户和 SYSTEM 开放，`native` 目标必须不存在。两端程序均保持停止，运行已核验的原生程序。
+
+```powershell
+& $newWx --json --data-dir $stoppedNativeRoot --account $account `
+  cutover-snapshot --destination $stationNativeRoot --source-stopped
+```
+
+命令取得旧原生锁，检查所有账号的排队与结果未定投递、数据库完整性、SQLite 伴随文件和目录链接。账号档案及密钥文件必须位于各自受管账号目录。复制后只在目标注册表更新这两类绝对路径，源文件和账号状态保持一致。目标已有数据时拒绝覆盖，重复执行应先核对第一次的返回和实际目录。返回 `nativeStatePreserved: true` 表示原生恢复状态已接续，`profileProjection: preserved_without_repair` 表示仍按原记录保留投影进度。微信是否在线及历史是否完整继续通过新站实际接口核对。
+
+这一操作保留原生发送账本。只有旧 Agent 管理数据快照通过核对、接入归档已保存且主人确认会话授权后，才可以启动新站的自动回复。旧 Agent 队列仍使用独立归档流程。
+
 ### 文件与自编工具
 
 模型可按需发现 `server_list/read/search/write/edit`，在上述家目录内读取、搜索、新建和修改文件。相对路径以家目录为根，绝对路径也必须在家目录内。新建不会覆盖已有文件；修改需要先读取，再提交内容哈希和要替换的唯一片段。文件与 `Project Tools` 下的自编工具跨重启保留。

@@ -189,6 +189,23 @@ with sqlite3.connect(uri, uri=True) as connection:
     } finally { $duplicate.Dispose() }
     Assert-That ((Get-FileBytesDigest $ledger) -eq $beforeLedger -and (Get-FileBytesDigest (Join-Path $expectedProfile 'sentinel.txt')) -eq $beforeProfile) 'Native migration changed the old ledger or replaced the target profile.'
 
+    $nativeSnapshotParent = Join-Path $kit 'native-snapshots'
+    New-Item -ItemType Directory -Path $nativeSnapshotParent | Out-Null
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.SetOwner($owner)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @($owner, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+    }
+    Set-Acl -LiteralPath $nativeSnapshotParent -AclObject $acl
+    $nativeSnapshot = Join-Path $nativeSnapshotParent 'relocated'
+    $snapshotArgs = @('--json', '--data-dir', $data, '--account', 'synthetic', 'cutover-snapshot', '--destination', $nativeSnapshot, '--source-stopped')
+    $nativeReceipt = Invoke-JsonChild $stagedWx $snapshotArgs 'Native recovery state relocation'
+    Assert-That ($nativeReceipt.state -eq 'copied' -and $nativeReceipt.nativeStatePreserved -eq $true -and $nativeReceipt.serverId -eq $serverId) 'Native relocation lost its original dataset.'
+    Assert-That ((Get-FileBytesDigest (Join-Path $nativeSnapshot 'accounts\synthetic\agent\control.sqlite')) -eq $beforeLedger -and (Get-FileBytesDigest (Join-Path $nativeSnapshot 'accounts\synthetic\profile\sentinel.txt')) -eq $beforeProfile) 'Native relocation changed the account state or profile bytes.'
+    Assert-That (-not (Test-Path -LiteralPath (Join-Path $nativeSnapshot 'api-token')) -and (Get-FileBytesDigest $ledger) -eq $beforeLedger) 'Native relocation copied an API token or changed the source.'
+
     # An already claimed old root must be rejected before a maintenance child
     # can be admitted.  This is a deliberate error-path check in the same kit.
     Write-Utf8 (Join-Path $data 'legacy-cutover-claim.json') '{"synthetic":true}'
@@ -222,7 +239,7 @@ with sqlite3.connect(uri, uri=True) as connection:
     } finally { $queued.Dispose() }
 
     $complete = $true
-    Write-Output 'Controlled legacy WeChat cutover rehearsal passed: headless offline hold, station snapshot verification, and offline profile export/import.'
+    Write-Output 'Controlled legacy WeChat cutover rehearsal passed: offline hold, host snapshot, profile export/import, and native recovery state relocation.'
 } catch {
     Write-Warning "Synthetic controlled-cutover kit retained for inspection: $kit"
     throw
