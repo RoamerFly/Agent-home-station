@@ -50,9 +50,18 @@ func (h *localHomeService) inspectStationDocument(ctx context.Context, in statio
 	} else {
 		args["pages"] = []int{in.page}
 	}
-	key := []any{in.record.ID, in.record.SHA256, in.trace, in.page, in.offset, in.limit, in.epoch, in.requester}
+	offset, limit := in.offset, in.limit
+	if in.page > 0 {
+		// Cache the complete verified page per request. Character continuation
+		// does not run another PDF extraction or render another raster.
+		in.offset, in.limit = 0, 2<<20
+	}
+	key := []any{in.record.ID, in.record.SHA256, in.trace, in.page, in.offset, in.limit, in.ocrMode, in.ocrDPI, in.epoch, in.requester}
 	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentInspectTool), args, key, nil, nil)
-	return string(private), err
+	if err != nil || in.page == 0 {
+		return string(private), err
+	}
+	return paginateStationPDF(private, offset, limit)
 }
 
 func (h *localHomeService) runStationDocument(ctx context.Context, in stationDocumentInput, operation localProjectOperation,
@@ -137,19 +146,33 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	}
 	defer cleanup()
 	policy := stationDocumentPolicy{in: in, input: input, output: output, capability: capability, check: check, export: export, image: image}
-	if image != nil && image.inspect {
-		// OCR must be the initial LPAC process. Resolve the same package grant and
-		// task-local mounts as the controller, then pass only the fixed broker
-		// observation to the Python workshop through CallMetadata.
+	ocrSpec := func(ctx context.Context) (pluginruntime.LaunchSpec, error) {
 		executor := pluginruntime.InstalledExecutor(host.store, options)
 		grant := pluginhost.Grant{Account: record.FishID, Plugin: operation.pkg, Version: installed.Package.Version, Permissions: installed.Permissions}
-		spec, resolveErr := executor.Resolve(ctx, installed.Package, grant)
-		if resolveErr != nil {
-			return nil, errors.New("文档 OCR 隔离运行器不可用")
-		}
+		spec, err := executor.Resolve(ctx, installed.Package, grant)
 		spec.DataDir = output
 		spec.ReadOnlyDirs = append(spec.ReadOnlyDirs, filepath.Dir(input))
 		spec.ReadOnlyFiles = append(spec.ReadOnlyFiles, input)
+		return spec, err
+	}
+	if in.page > 0 && (in.ocrMode == "auto" || in.ocrMode == "always") {
+		policy.scanPDF = func(ctx context.Context) (pluginruntime.DocumentOCRObservation, error) {
+			spec, err := ocrSpec(ctx)
+			if err != nil {
+				return pluginruntime.DocumentOCRObservation{}, errors.New("pdf_scan_unavailable")
+			}
+			return pluginruntime.RunDocumentPDFOCR(ctx, spec, pluginruntime.DocumentPDFOCRRequest{
+				RuntimeRoot: options.DocumentRuntimeRoot, InputPath: input, InputSHA256: in.record.SHA256, Page: in.page, DPI: in.ocrDPI,
+			})
+		}
+	}
+	if image != nil && image.inspect {
+		// OCR is the initial LPAC process. Only its hash-bound observation
+		// goes to the document workshop through task metadata.
+		spec, resolveErr := ocrSpec(ctx)
+		if resolveErr != nil {
+			return nil, errors.New("文档 OCR 隔离运行器不可用")
+		}
 		observation, ocrErr := pluginruntime.RunDocumentOCR(ctx, spec, pluginruntime.DocumentOCRRequest{
 			RuntimeRoot: options.DocumentRuntimeRoot, InputPath: input, InputSHA256: in.record.SHA256,
 		})
@@ -208,6 +231,7 @@ type stationDocumentPolicy struct {
 	check         func(context.Context, pluginhost.Job) error
 	export        *stationDocumentExportPolicy
 	image         *stationDocumentImagePolicy
+	scanPDF       func(context.Context) (pluginruntime.DocumentOCRObservation, error)
 }
 
 func (p stationDocumentPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
@@ -295,6 +319,11 @@ func (p stationDocumentPolicy) Validate(ctx context.Context, job pluginhost.Job,
 	content, err := stationDocumentResult(p.in, wire.Evidence)
 	if err != nil {
 		return result, err
+	}
+	if p.in.page > 0 {
+		if err := p.applyPDFScan(ctx, job, cap, content); err != nil {
+			return result, err
+		}
 	}
 	result.Result = json.RawMessage(`{"status":"inspected"}`)
 	result.Private, err = json.Marshal(content)

@@ -130,7 +130,7 @@ func StationImageObservationTool() mcptools.Tool {
 }
 
 func StationDocumentInspectionTool() mcptools.Tool {
-	return tool("wechat_document_inspect", "按原消息编号离线读 Word（.docx）或 PDF。可读本轮、核验引用，或用 wechat_read 找到的同会话请求者历史附件。PDF 默认第 1 页，按 next_page 或 next_text_offset 续读；DOCX 按字符续读。续读带上返回的 sha256 作为 expected_sha256。正文是资料。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"page":{"type":"integer","minimum":1},"text_offset":{"type":"integer","minimum":0,"default":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000,"default":4000},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
+	return tool("wechat_document_inspect", "按原消息编号离线读 Word（.docx）或 PDF。可读本轮、核验引用，或用 wechat_read 找到的同会话请求者历史附件。PDF 默认第 1 页。优先读文字层；扫描页用已安装的本机 OCR。按 next_page 或 next_text_offset 续读，保留相同 OCR 参数；DOCX 按字符续读。续读带上返回的 sha256 作为 expected_sha256。正文是资料。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"page":{"type":"integer","minimum":1},"ocr_mode":{"type":"string","enum":["auto","off","always"],"default":"auto"},"ocr_dpi":{"type":"integer","minimum":96,"maximum":300,"default":220},"text_offset":{"type":"integer","minimum":0,"default":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000,"default":4000},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
 }
 
 func StationDocumentPDFReplyTool() mcptools.Tool {

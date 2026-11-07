@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import sys
 import uuid
+import zipfile
 
 
 def digest(path: Path) -> str:
@@ -77,11 +78,33 @@ def validate_tesseract(source: Path) -> None:
         raise RuntimeError("Tesseract source must contain its executable and tessdata/chi_sim.traineddata")
 
 
+PDFIUM_WHEEL_SHA256 = "eaa06c2e059ae0bd520acd67259a2ee29e15fc1751a566f4e2ac29ec345646f7"
+PDFIUM_VERSION = "159.0.8146.0"
+
+
+def stage_pdf_raster(wheel: Path, target: Path) -> None:
+    if sys.platform != "win32" or digest(wheel) != PDFIUM_WHEEL_SHA256:
+        raise RuntimeError("PDF raster requires the pinned pypdfium2 5.15.0 Windows amd64 wheel")
+    target.mkdir()
+    prefix = "pypdfium2-5.15.0.dist-info/licenses/"
+    with zipfile.ZipFile(wheel) as archive:
+        (target / "pdfium.dll").write_bytes(archive.read("pypdfium2_raw/pdfium.dll"))
+        for name in archive.namelist():
+            if name.startswith(prefix) and not name.endswith("/"):
+                path = target / "licenses" / name[len(prefix):]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.read(name))
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "internal" / "pluginruntime" / "render_pdf_page.py", target / "render_pdf_page.py")
+
+
 def stage(options: argparse.Namespace) -> dict:
     target = Path(options.target).expanduser().resolve()
     python_packages = checked_source(options.python_packages_source, "Python packages source", True)
     fonts = checked_source(options.fonts_source, "fonts source", True)
     tesseract = checked_source(options.tesseract_source, "Tesseract source")
+    wheel = Path(options.pdfium_wheel).resolve(strict=True) if options.pdfium_wheel else None
+    if wheel and not tesseract:
+        raise RuntimeError("PDF raster requires the reviewed Tesseract runtime")
     validate_python(python_packages)
     validate_fonts(fonts)
     if tesseract:
@@ -90,7 +113,10 @@ def stage(options: argparse.Namespace) -> dict:
         manifest = target / "runtime-manifest.json"
         if not manifest.is_file():
             raise RuntimeError("existing document runtime has no manifest; it was not overwritten")
-        return json.loads(manifest.read_text(encoding="utf-8"))
+        existing = json.loads(manifest.read_text(encoding="utf-8"))
+        if wheel and existing.get("components", {}).get("pdf_raster") != PDFIUM_VERSION:
+            raise RuntimeError("existing runtime has no pinned PDF raster support; use a fresh output directory")
+        return existing
     staging = target.parent / f"{target.name}.staging-{uuid.uuid4().hex}"
     try:
         staging.mkdir(parents=True, exist_ok=False)
@@ -99,12 +125,14 @@ def stage(options: argparse.Namespace) -> dict:
         copy_tree(fonts, staging / "fonts")
         if tesseract:
             copy_tree(tesseract, staging / "tesseract")
+        if wheel:
+            stage_pdf_raster(wheel, staging / "pdf-raster")
         files = {str(item.relative_to(staging)).replace("\\", "/"): digest(item) for item in staging.rglob("*") if item.is_file()}
         record = {
             "schema_version": 2,
             "platform": "windows-x64" if sys.platform == "win32" else sys.platform,
             "policy": "reportlab-offline-pypdf-reviewed-sources-v1",
-            "components": {"python_packages": True, "reportlab": "4.4.9-offline-patch-v1", "reportlab_utils_sha256": patched_utils, "pypdf": "6.21.4", "pillow": False, "pymupdf": False, "embeddable_ttf": True, "tesseract_chi_sim": bool(tesseract), "libreoffice": False, "pdf_tools": False, "pdf_raster": False},
+            "components": {"python_packages": True, "reportlab": "4.4.9-offline-patch-v1", "reportlab_utils_sha256": patched_utils, "pypdf": "6.21.4", "pillow": False, "pymupdf": False, "embeddable_ttf": True, "tesseract_chi_sim": bool(tesseract), "libreoffice": False, "pdf_tools": False, "pdf_raster": PDFIUM_VERSION if wheel else False},
             "files": files,
         }
         (staging / "runtime-manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
@@ -122,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--python-packages-source", required=True)
     parser.add_argument("--fonts-source", required=True)
     parser.add_argument("--tesseract-source")
+    parser.add_argument("--pdfium-wheel")
     args = parser.parse_args()
     record = stage(args)
     print(json.dumps({"ready": True, "target": str(Path(args.target).resolve()), "components": record["components"]}, ensure_ascii=False))

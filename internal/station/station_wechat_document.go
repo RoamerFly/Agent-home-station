@@ -47,6 +47,8 @@ type stationDocumentInput struct {
 	sourceRef           companion.SourceRef
 	history             bool
 	page, offset, limit int
+	ocrMode             string
+	ocrDPI              int
 	check               func(context.Context) error
 }
 
@@ -103,24 +105,31 @@ func (t *stationAttachmentTools) documentAccess(ctx context.Context, message str
 }
 
 func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.RawMessage) (string, error) {
-	var args struct {
+	args := struct {
 		Message string `json:"message_id"`
 		Page    *int   `json:"page"`
 		Offset  int    `json:"text_offset"`
 		Limit   *int   `json:"text_limit"`
 		Hash    string `json:"expected_sha256"`
-	}
+		OCRMode string `json:"ocr_mode"`
+		OCRDPI  *int   `json:"ocr_dpi"`
+	}{OCRMode: "auto"}
 	if !t.allowed() || t.documents.available == nil || t.documents.inspect == nil {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	if strictLocalMemoryDecode(raw, &args) != nil || args.Message == "" || len(args.Message) > 8192 || args.Offset < 0 ||
+		args.OCRMode != "auto" && args.OCRMode != "off" && args.OCRMode != "always" ||
+		args.OCRDPI != nil && (*args.OCRDPI < 96 || *args.OCRDPI > 300 || args.OCRMode == "off") ||
 		args.Page != nil && *args.Page < 1 || args.Limit != nil && (*args.Limit < 1 || *args.Limit > 100000) ||
 		args.Hash != "" && !artifactID("sha-"+args.Hash, "sha-") {
-		return "", mcptools.ArgumentError("$", "需要原消息编号，页码从 1 开始，正文偏移非负，每批可读取 1–100000 个字符")
+		return "", mcptools.ArgumentError("$", "需要原消息编号、有效页码和正文范围。OCR 支持 auto、off 或 always，识别分辨率为 96–300 DPI")
 	}
 	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, 49, func(ext string) error {
 		if ext == ".docx" && args.Page != nil {
 			return mcptools.ArgumentError("$.page", "DOCX 请按 text_offset 续读正文")
+		}
+		if ext == ".docx" && (args.OCRMode != "auto" || args.OCRDPI != nil) {
+			return mcptools.ArgumentError("$.ocr_mode", "OCR 模式和分辨率只用于 PDF 页")
 		}
 		if !t.documents.available(ctx, ext) {
 			return errors.New("当前文档格式的本地文档工坊或运行环境未启用")
@@ -133,6 +142,10 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 	defer in.file.Close()
 	in.offset, in.limit = args.Offset, 4000
 	if in.extension == ".pdf" {
+		in.ocrMode, in.ocrDPI = args.OCRMode, 220
+		if args.OCRDPI != nil {
+			in.ocrDPI = *args.OCRDPI
+		}
 		in.page = 1
 		if args.Page != nil {
 			in.page = *args.Page

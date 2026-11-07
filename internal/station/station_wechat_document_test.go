@@ -113,6 +113,15 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			Direction: "incoming", Type: 3, CreatedAt: now.Format(time.RFC3339), Body: "synthetic document image"}
 		fixtures["grid"], mimes["grid"] = image, "image/png"
 	}
+	withScan := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_DOCUMENT_SCAN_TEST") == "1"
+	if withScan {
+		data, err := os.ReadFile(filepath.Join("testdata", "synthetic-wechat-mixed.pdf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages["mixed"] = makeMessage("mixed", requester, "fixture-mixed.pdf")
+		fixtures["mixed"], mimes["mixed"] = data, "application/pdf"
+	}
 	kind := func(id string) string {
 		if id == "grid" {
 			return "image"
@@ -406,6 +415,13 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		if _, err := tools.stageReply(t.Context(), followup, selected.Kind, selected.AssetID); err == nil || uploads.Load() != 1 {
 			t.Fatal("revoked revision reached the simulated upload endpoint")
 		}
+		tools.SetTrace(current)
+	}
+	if withScan {
+		scan := current
+		scan.TraceID, scan.QuotedSource = "scan-mixed", refs["mixed"]
+		tools.SetTrace(scan)
+		verifyStationWechatPDFScan(t, tools)
 		tools.SetTrace(current)
 	}
 	// The user sends the instruction in another turn with no quote. The
