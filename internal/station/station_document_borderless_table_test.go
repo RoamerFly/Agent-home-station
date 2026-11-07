@@ -47,8 +47,8 @@ func TestStationBorderlessTableReconstructsAlignedRowsInReadingOrder(t *testing.
 				t.Fatalf("layout failed: %+v, %v", result, err)
 			}
 			if !tc.want {
-				if result.Tables != 0 {
-					t.Fatalf("invented table from ambiguous evidence: %s", result.Layout)
+				if result.Tables != 0 || result.ReadingColumns != 0 {
+					t.Fatalf("invented table or prose columns from ambiguous evidence: %s", result.Layout)
 				}
 				return
 			}

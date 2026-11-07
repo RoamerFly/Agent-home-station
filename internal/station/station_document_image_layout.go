@@ -31,6 +31,7 @@ type stationImageLayout struct {
 	Illustrations           []stationIllustrationRect `json:",omitempty"`
 	MergedCells             int
 	BorderlessTables        int
+	ReadingColumns          int
 	NeedsClarification      bool
 	Uncertain               []string
 }
@@ -155,6 +156,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 	if grid.Ambiguous {
 		return markImageLayoutReview(result, "图片表格边界不完整或相互冲突，请核对原图")
 	}
+	var columnBand *stationImageColumnBand
 	if len(page.Tables) == 0 {
 		if len(grid.Horizontal) >= 2 && len(grid.Vertical) >= 2 {
 			inferred, review := stationTableFromGrid(page, grid)
@@ -164,9 +166,14 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 			} else if inferred != nil {
 				page.Tables = append(page.Tables, *inferred)
 			}
-		} else if inferred := stationBorderlessTable(page); inferred != nil {
-			page.Tables = append(page.Tables, *inferred)
-			result.BorderlessTables = 1
+		} else {
+			rows, height := stationImageAlignedRows(page)
+			if inferred := stationBorderlessTable(rows, height); inferred != nil {
+				page.Tables = append(page.Tables, *inferred)
+				result.BorderlessTables = 1
+			} else if len(illustrations) == 0 {
+				columnBand = stationImageColumns(rows, height)
+			}
 		}
 	}
 	visual := make([]stationVisualBlock, 0, len(page.Blocks)+len(page.Tables))
@@ -225,6 +232,20 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 	for i, item := range visual {
 		separators[i] = item.bbox
 	}
+	proseMasks := tableBoxes
+	if columnBand != nil {
+		result.ReadingColumns = len(columnBand.lines)
+		separators = append(separators, columnBand.box)
+		proseMasks = append(proseMasks, columnBand.box)
+		order := 0
+		for _, column := range columnBand.lines {
+			for _, text := range column {
+				visual = append(visual, stationVisualBlock{bbox: columnBand.box, order: order,
+					block: stationLayoutBlock{Kind: "paragraph", Text: text}})
+				order++
+			}
+		}
+	}
 	appendParagraph := func(lines []string, first, second stationImageLine, order int) bool {
 		if len(lines) == 0 {
 			return true
@@ -250,7 +271,7 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 			if !line.BBox.valid() {
 				return markImageLayoutReview(result, "图片文字位置无效，请重新读取原图")
 			}
-			text, uncertain, err := stationFilteredOCRLine(line, tableBoxes)
+			text, uncertain, err := stationFilteredOCRLine(line, proseMasks)
 			if err != nil {
 				return markImageLayoutReview(result, "图片文字识别结果无效，请重新读取原图")
 			}
@@ -292,12 +313,12 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 		if stationBefore(visual[j].bbox, visual[i].bbox, visual[j].order, visual[i].order) {
 			return false
 		}
-		return visual[i].block.Kind == "table" // table wins a shared region.
+		return visual[i].block.Kind == "table" && visual[j].block.Kind != "table"
 	})
 	blocks := make([]stationLayoutBlock, 0, len(visual)+1)
 	// Tesseract can group a heading and body text into one paragraph. Its
 	// measured first line can still supply the separate Word heading style.
-	if visual[0].block.Kind == "paragraph" {
+	if visual[0].block.Kind == "paragraph" && (columnBand == nil || visual[0].bbox != columnBand.box) {
 		first := &visual[0]
 		title, rest, multiline := strings.Cut(first.block.Text, "\n")
 		if utf8.RuneCountInString(title) <= 64 {
@@ -322,6 +343,9 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 		case "paragraph":
 			result.Paragraphs++
 		}
+	}
+	if len(blocks) > stationImageMaxBlocks {
+		return markImageLayoutReview(result, "图片布局内容过多，请拆分图片后重试")
 	}
 	layout, err := json.Marshal(struct {
 		Blocks []stationLayoutBlock `json:"blocks"`

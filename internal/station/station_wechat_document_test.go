@@ -110,6 +110,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	withIllustrations := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_ILLUSTRATIONS_TEST") == "1"
 	withMerges := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_MERGED_TABLE_TEST") == "1"
 	withBorderless := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_BORDERLESS_TABLE_TEST") == "1"
+	withColumns := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_DOCUMENT_COLUMNS_TEST") == "1"
 	if imagePDFText != nil {
 		name := "synthetic-wechat-document-grid.png"
 		if withIllustrations {
@@ -120,6 +121,9 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		if withBorderless {
 			name = "synthetic-wechat-borderless-table.png"
+		}
+		if withColumns {
+			name = "synthetic-wechat-columns.png"
 		}
 		image, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
@@ -293,14 +297,19 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 				Headings, Paragraphs, Tables int
 				MergedCells                  int `json:"merged_cells"`
 				BorderlessTables             int `json:"borderless_tables"`
+				ReadingColumns               int `json:"reading_columns"`
 				Illustrations                []stationIllustrationRect
 			}
 			Word struct {
 				ID string `json:"asset_id"`
 			} `json:"editable_document"`
 		}
+		tables := 1
+		if withColumns {
+			tables = 0
+		}
 		if err != nil || json.Unmarshal([]byte(out), &prepared) != nil || prepared.Status != "prepared" ||
-			prepared.Layout.Tables != 1 || prepared.Layout.Paragraphs < 1 || prepared.Layout.Headings != 1 ||
+			prepared.Layout.Tables != tables || prepared.Layout.Paragraphs < 1 || prepared.Layout.Headings != 1 ||
 			len(prepared.Media) != 1 || prepared.Media[0].ParentAssetID != prepared.Word.ID {
 			t.Fatalf("isolated reconstruction did not yield an editable Word and its delivery PDF: %s, %v", out, err)
 		}
@@ -319,6 +328,12 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		wordBytes, pdfBytes := readProduct(prepared.Word.ID), readProduct(prepared.Media[0].AssetID)
 		wordXML := localDOCXDocumentXML(t, wordBytes)
 		cells := 4
+		if withColumns {
+			cells = 0
+			if prepared.Layout.ReadingColumns != 2 {
+				t.Fatalf("both source columns must be recognized: %#v", prepared.Layout)
+			}
+		}
 		if withMerges {
 			cells = 7
 			if prepared.Layout.MergedCells != 2 || !strings.Contains(wordXML, `<w:gridSpan w:val="3"/>`) ||
@@ -332,7 +347,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 				t.Fatalf("Word lacks an editable borderless table: %#v, %s", prepared.Layout, wordXML)
 			}
 		}
-		if strings.Count(wordXML, "<w:tc>") != cells || !strings.Contains(wordXML, "<w:tbl>") ||
+		if strings.Count(wordXML, "<w:tc>") != cells || strings.Contains(wordXML, "<w:tbl>") != (tables > 0) ||
 			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") != withIllustrations {
 			t.Fatalf("reconstructed Word did not contain editable heading and table: %s", wordXML)
 		}
@@ -347,6 +362,23 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		pdfText := imagePDFText(pdfBytes)
 		expectedWords := []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"}
+		checkColumnOrder := func(text string) {
+			t.Helper()
+			position := -1
+			for _, expected := range expectedWords {
+				next := strings.Index(text, expected)
+				if next <= position || strings.Count(text, expected) != 1 {
+					t.Fatalf("out-of-order, missing or duplicated column text %q: %s", expected, text)
+				}
+				position = next
+			}
+		}
+		if withColumns {
+			expectedWords = []string{"文件交接记录", "本次测试用于核对文档复刻结果", "先读取原图并记录文件来源", "确认标题文字和正文顺序", "最后保留可编辑的文档原稿",
+				"以下内容用于检查阅读顺序", "导出文件后检查正文文字", "完成之后保留文件和记录", "请核对以上信息"}
+			checkColumnOrder(wordXML)
+			checkColumnOrder(pdfText)
+		}
 		if withBorderless {
 			expectedWords = []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "时间", "结果", "文档", "上午", "通过", "图片", "下午", "完成", "请核对以上信息"}
 			tableStart := strings.Index(wordXML, "<w:tbl>")
@@ -449,6 +481,10 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		if withBorderless && strings.Count(revisedXML, `w:val="nil"`) != 6 {
 			t.Fatalf("title revision lost the borderless table: %s", revisedXML)
+		}
+		if withColumns {
+			checkColumnOrder(revisedXML)
+			checkColumnOrder(revisedPDF)
 		}
 		if repeated, err := resize(raw); err != nil || repeated != newReply {
 			t.Fatalf("revision retry prepared a different product: %s, %v", repeated, err)

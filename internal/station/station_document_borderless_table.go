@@ -10,30 +10,31 @@ type stationAlignedRow struct {
 	center float64
 	box    stationImageBBox
 	starts []float64
+	ends   []float64
 	cells  []string
 }
 
-// Infer a single regular table only from repeating, widely separated fields.
-// Two-column prose, ragged lists, and competing tables retain their OCR text.
-func stationBorderlessTable(page stationImagePage) *stationImageTable {
+// Restore physical text rows before deciding whether gaps are table cells or
+// a column gutter. OCR may return both columns in one line or separate blocks.
+func stationImageAlignedRows(page stationImagePage) ([]stationAlignedRow, float64) {
 	var words []stationImageWord
 	var heights []float64
 	for _, block := range page.Blocks {
 		for _, line := range block.Lines {
 			if len(line.Words) == 0 {
-				return nil // Cannot prove complete assignment from line-only evidence.
+				return nil, 0 // Cannot prove complete assignment from line-only evidence.
 			}
 			for _, word := range line.Words {
 				if !word.BBox.valid() {
-					return nil
+					return nil, 0
 				}
 				words = append(words, word)
 				heights = append(heights, word.BBox.Bottom-word.BBox.Top)
 			}
 		}
 	}
-	if len(words) < 9 {
-		return nil
+	if len(words) == 0 {
+		return nil, 0
 	}
 	sort.Float64s(heights)
 	height := heights[len(heights)/2]
@@ -47,10 +48,16 @@ func stationBorderlessTable(page stationImagePage) *stationImageTable {
 		for end < len(words) && midY(words[end])-center <= height*0.65 {
 			end++
 		}
-		rows = append(rows, stationBorderlessRow(words[start:end], center, height))
+		rows = append(rows, stationAlignedTextRow(words[start:end], center, height))
 		start = end
 	}
 
+	return rows, height
+}
+
+// Infer a single regular table only from repeating, widely separated fields.
+// Two-column prose, ragged lists, and competing tables retain their OCR text.
+func stationBorderlessTable(rows []stationAlignedRow, height float64) *stationImageTable {
 	var found *stationImageTable
 	for first := 0; first < len(rows); {
 		end := first + 1
@@ -74,7 +81,7 @@ func stationBorderlessTable(page stationImagePage) *stationImageTable {
 	return found
 }
 
-func stationBorderlessRow(words []stationImageWord, center, height float64) stationAlignedRow {
+func stationAlignedTextRow(words []stationImageWord, center, height float64) stationAlignedRow {
 	sort.SliceStable(words, func(i, j int) bool { return words[i].BBox.Left < words[j].BBox.Left })
 	row := stationAlignedRow{center: center, box: words[0].BBox}
 	right := words[0].BBox.Right
@@ -87,6 +94,7 @@ func stationBorderlessRow(words []stationImageWord, center, height float64) stat
 		if len(field) == 0 || word.BBox.Left-right >= height*1.8 {
 			if len(field) != 0 {
 				row.cells = append(row.cells, stationJoinOCRWords(field))
+				row.ends = append(row.ends, right)
 				field = field[:0]
 			}
 			row.starts = append(row.starts, word.BBox.Left)
@@ -96,6 +104,7 @@ func stationBorderlessRow(words []stationImageWord, center, height float64) stat
 		row.box = stationEncloseBoxes(row.box, word.BBox)
 	}
 	row.cells = append(row.cells, stationJoinOCRWords(field))
+	row.ends = append(row.ends, right)
 	return row
 }
 
