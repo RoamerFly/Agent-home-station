@@ -1057,7 +1057,7 @@
     const normalizeReplySettings = (settings) => {
       if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
       return {
-        mode: settings.mode === "all" ? "all" : "mention",
+        mode: ["all", "social"].includes(settings.mode) ? settings.mode : "mention",
         prefix: typeof settings.prefix === "string" ? settings.prefix : "",
         persona: typeof settings.persona === "string" ? settings.persona : "",
         force_reply_when_mentioned: settings.force_reply_when_mentioned === true
@@ -1140,7 +1140,7 @@
         actions.append(confirmed, label, apply);
         panel.replaceChildren(
           appElement("strong", "旧群触发方式"),
-          appElement("small", settings.mode === "all" ? "旧版：每条群聊文字都交给大肥鱼判断是否回应" : "旧版：仅在被提及时回应"),
+          appElement("small", settings.mode === "social" ? "旧版：允许观察本群并自主选择接话；确认后接续这项授权" : settings.mode === "all" ? "旧版：每条群聊文字都交给大肥鱼判断是否回应" : "旧版：仅在被提及时回应"),
           settings.prefix ? appElement("small", "触发前缀：" + settings.prefix) : document.createTextNode(""),
           settings.persona ? appElement("small", "角色补充：" + settings.persona) : document.createTextNode(""),
           settings.force_reply_when_mentioned ? appElement("small", "被提及时强制回复") : document.createTextNode(""),
@@ -1186,7 +1186,7 @@
         const fields = appElement("div", "", "details-grid");
         const mode = document.createElement("select");
         mode.setAttribute("aria-label", threadID + " 群聊触发方式");
-        for (const [optionValue, optionText] of [["mention", "只在提及时回复"], ["all", "每条群聊文字都交给大肥鱼判断"]]) {
+        for (const [optionValue, optionText] of [["mention", "只在提及时回复"], ["all", "每条群聊文字都交给大肥鱼判断"], ["social", "允许观察本群并自主选择接话"]]) {
           const option = document.createElement("option");
           option.value = optionValue;
           option.textContent = optionText;
@@ -1207,7 +1207,7 @@
         force.checked = effective.force_reply_when_mentioned;
         force.setAttribute("aria-label", threadID + " 被提及时强制回复");
         const writeSettings = () => updateGroupRule(threadID, { reply_settings: {
-          mode: mode.value === "all" ? "all" : "mention",
+          mode: ["all", "social"].includes(mode.value) ? mode.value : "mention",
           prefix: prefix.value,
           persona: persona.value,
           force_reply_when_mentioned: force.checked

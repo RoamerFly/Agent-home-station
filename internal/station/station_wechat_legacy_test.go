@@ -697,8 +697,21 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		req("PUT", route("one")+"/policy", body, true, 200)
 	}
 	setRule(true, nil)
-	if row := req("GET", ruleRoute("one", "125@chatroom"), nil, false, 200); row["status"] != "unsupported" || row["reply_settings"] != nil {
-		t.Fatal("social mode was treated as an active grant", row)
+	socialPreview := req("GET", ruleRoute("one", "125@chatroom"), nil, false, 200)
+	if socialPreview["status"] != "ready" || socialPreview["reply_settings"].(map[string]any)["mode"] != "social" {
+		t.Fatal("social rule was not offered for explicit confirmation", socialPreview)
+	}
+	req("POST", ruleRoute("one", "125@chatroom"), postMemory(socialPreview, false), true, 400)
+	req("POST", ruleRoute("one", "125@chatroom"), postMemory(socialPreview, true), true, 200)
+	socialWorker, err := h.chat.wechat.worker(wechatapp.ConnectionID("one"), false)
+	if err != nil || socialWorker == nil {
+		t.Fatal("could not read imported social policy", err)
+	}
+	socialWorker.mu.Lock()
+	socialMode := socialWorker.policy.GroupRules["125@chatroom"].Mode
+	socialWorker.mu.Unlock()
+	if socialMode != "social" {
+		t.Fatal("confirmed social rule was lost", socialMode)
 	}
 	if row := req("GET", ruleRoute("four", "124@chatroom"), nil, false, 200); row["status"] != "not_ready" || row["reply_settings"] != nil {
 		t.Fatal("another connection reused a group grant", row)

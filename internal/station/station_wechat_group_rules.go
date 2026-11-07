@@ -8,6 +8,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -23,6 +24,27 @@ type stationWechatGroupRule struct {
 	ReplySince time.Time `json:"reply_since,omitzero"`
 }
 
+// groupParticipation derives engine permissions only from currently granted
+// groups. Bot rules retain each group's own trigger mode within that engine.
+func (policy stationWechatPolicy) groupParticipation(config *companion.Config) ([]string, map[string]bot.GroupRule) {
+	threads := make([]string, 0, len(policy.Grants))
+	rules := make(map[string]bot.GroupRule)
+	config.Permissions.ObserveGroups, config.Permissions.AutonomousGroups = false, false
+	for thread, granted := range policy.Grants {
+		if granted.IsZero() {
+			continue
+		}
+		threads = append(threads, thread)
+		if validStationGroup(thread) {
+			rules[thread] = policy.GroupRules[thread].replyRule()
+			if rules[thread].Mode == "social" {
+				config.Permissions.ObserveGroups, config.Permissions.AutonomousGroups = true, true
+			}
+		}
+	}
+	return threads, rules
+}
+
 func (rule stationWechatGroupRule) replyRule() bot.GroupRule {
 	mode := rule.Mode
 	if mode == "" {
@@ -32,11 +54,11 @@ func (rule stationWechatGroupRule) replyRule() bot.GroupRule {
 }
 
 func (rule stationWechatGroupRule) hasReplySettings() bool {
-	return rule.Mode == "all" || rule.Prefix != "" || rule.Persona != "" || rule.ForceReplyWhenMentioned
+	return rule.Mode == "all" || rule.Mode == "social" || rule.Prefix != "" || rule.Persona != "" || rule.ForceReplyWhenMentioned
 }
 
 func validStationGroupReplyValues(mode, prefix, persona string) bool {
-	if mode != "" && mode != "mention" && mode != "all" {
+	if mode != "" && mode != "mention" && mode != "all" && mode != "social" {
 		return false
 	}
 	return len(prefix) <= 64 && utf8.ValidString(prefix) &&
@@ -59,8 +81,8 @@ func (rule *stationWechatGroupRule) setReplySettings(settings apphost.Connection
 	previous := rule.replyRule()
 	rule.Mode, rule.Prefix, rule.Persona = "", settings.Prefix, settings.Persona
 	rule.ForceReplyWhenMentioned = settings.ForceReplyWhenMentioned
-	if settings.Mode == "all" {
-		rule.Mode = "all"
+	if settings.Mode == "all" || settings.Mode == "social" {
+		rule.Mode = settings.Mode
 	}
 	if rule.replyRule() != previous {
 		rule.ReplySince = now

@@ -5,8 +5,31 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
+
+func TestStationSocialParticipationOnlyFollowsGrantedGroupRules(t *testing.T) {
+	now := time.Now().UTC()
+	policy := stationWechatPolicy{
+		Grants: map[string]time.Time{"social@chatroom": now, "mention@chatroom": now, "friend": now, "zero@chatroom": {}},
+		GroupRules: map[string]stationWechatGroupRule{
+			"social@chatroom": {Mode: "social"}, "foreign@chatroom": {Mode: "social"},
+			"friend": {Mode: "social"}, "zero@chatroom": {Mode: "social"},
+		},
+	}
+	config := companion.Defaults()
+	threads, rules := policy.groupParticipation(&config)
+	if len(threads) != 3 || len(rules) != 2 || rules["social@chatroom"].Mode != "social" || rules["mention@chatroom"].Mode != "mention" ||
+		!config.Permissions.ObserveGroups || !config.Permissions.AutonomousGroups {
+		t.Fatal("explicit social scope was not reflected in engine permissions", threads, rules, config.Permissions)
+	}
+	delete(policy.Grants, "social@chatroom")
+	_, rules = policy.groupParticipation(&config)
+	if len(rules) != 1 || config.Permissions.ObserveGroups || config.Permissions.AutonomousGroups {
+		t.Fatal("ungranted, private or zero-epoch rules retained social permission", rules, config.Permissions)
+	}
+}
 
 func TestStationGroupSharePolicyNeedsCurrentScopedOptIn(t *testing.T) {
 	const room = "synthetic-room@chatroom"
@@ -75,8 +98,21 @@ func TestStationGroupReplySettingsPreserveLegacyAndAdvanceEpoch(t *testing.T) {
 		t.Fatal(rules, err)
 	}
 
-	invalid := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "social"}}}
+	social := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "social"}}}
+	rules, err = stationGroupRules(rules, &social, replies, nil, now.Add(2*time.Second))
+	if err != nil || rules[room].Mode != "social" || !rules[room].hasReplySettings() || !rules[room].ReplySince.Equal(now.Add(2*time.Second)) {
+		t.Fatal("social rule or authorization epoch was lost", rules, err)
+	}
+	preserved, err := stationGroupRules(rules, nil, replies, nil, now.Add(3*time.Second))
+	if err != nil || preserved[room] != rules[room] {
+		t.Fatal("an older caller erased social participation", preserved, err)
+	}
+	revoked, err := stationGroupRules(rules, nil, nil, nil, now.Add(4*time.Second))
+	if err != nil || len(revoked) != 0 {
+		t.Fatal("social participation survived group revocation", revoked, err)
+	}
+	invalid := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "unsupported"}}}
 	if _, err := stationGroupRules(rules, &invalid, replies, nil, now); err != apphost.ErrInvalidConnectionPolicy {
-		t.Fatal("social mode was accepted", err)
+		t.Fatal("unknown mode was accepted", err)
 	}
 }

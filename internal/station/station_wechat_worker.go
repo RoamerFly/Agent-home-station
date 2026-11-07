@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -745,6 +744,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	config := companion.Defaults()
 	config.Enabled, config.Name = true, "大肥鱼"
 	config.Permissions = companion.Permissions{ReplyText: true, Remember: true}
+	threads, rules := policy.groupParticipation(&config)
 	mediaReplies := len(policy.MediaReplyGrants) != 0
 	config.Permissions.SendImage, config.Permissions.SendVideo, config.Permissions.SendVoice, config.Permissions.SendFile = mediaReplies, mediaReplies, mediaReplies, mediaReplies
 	character, err := companion.New(config, memory, s.model, persona)
@@ -765,14 +765,6 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	}
 	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
 		character.Tools = attachment
-	}
-	threads := make([]string, 0, len(policy.Grants))
-	rules := make(map[string]bot.GroupRule)
-	for thread := range policy.Grants {
-		threads = append(threads, thread)
-		if strings.HasSuffix(thread, "@chatroom") {
-			rules[thread] = policy.GroupRules[thread].replyRule()
-		}
 	}
 	options := bot.DefaultOptions()
 	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false

@@ -765,7 +765,7 @@ def verify(binary, output):
                     if route.request.method == "GET":
                         legacy_group_rule["gets"].append(thread)
                         fulfill_json({"status": "ready", "digest": "fixture-legacy-group-rule",
-                                      "reply_settings": {"mode": "all", "prefix": "!fish ",
+                                      "reply_settings": {"mode": "social", "prefix": "!fish ",
                                                          "persona": "旧版群角色 <原样显示>",
                                                          "force_reply_when_mentioned": True},
                                       "reason": "已找到旧版群触发方式"})(route)
@@ -775,7 +775,7 @@ def verify(binary, output):
                     legacy_group_rule["posts"].append(route.request.post_data_json)
                     assert legacy_group_rule["posts"] == [{"digest": "fixture-legacy-group-rule", "same_identity": True}]
                     worker["group_rules"] = [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
-                                              "reply_settings": {"mode": "all", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
+                                              "reply_settings": {"mode": "social", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
                                                                  "force_reply_when_mentioned": True}}]
                     fulfill_json({"status": "applied", "reason": "已接续旧版群触发方式"})(route)
 
@@ -1073,11 +1073,11 @@ def verify(binary, output):
                 page.locator("#apps-feedback").get_by_text("旧群触发方式已接续。可在本群偏好中继续调整。", exact=True).wait_for()
                 assert legacy_group_rule["gets"] == ["synthetic-room@chatroom"]
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True,
-                                                   "reply_settings": {"mode": "all", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
+                                                   "reply_settings": {"mode": "social", "prefix": "!fish ", "persona": "旧版群角色 <原样显示>",
                                                                       "force_reply_when_mentioned": True}}]
                 page.locator("#apps-list[aria-busy='false']").wait_for()
                 page.get_by_text("触发方式与角色（可选）", exact=True).click()
-                assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "all"
+                assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "social"
                 assert page.get_by_role("textbox", name="synthetic-room@chatroom 群聊触发前缀", exact=True).input_value() == "!fish "
                 page.get_by_role("button", name="恢复默认触发方式", exact=True).click()
                 expect(page.get_by_role("checkbox", name="自动读图", exact=True)).not_to_be_checked()

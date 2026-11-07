@@ -290,9 +290,7 @@ func readLegacyGroupReplySettings(root *os.Root, config, thread string, guard *l
 	switch {
 	case policy.Companion.Enabled && !policy.Companion.Permissions.ReplyText:
 		return legacyGroupSettingView{Status: "unsupported", Reason: "旧版没有开启文字回复，请在新站单独设置规则"}, ""
-	case group.Mode == "social":
-		return legacyGroupSettingView{Status: "unsupported", Reason: "旧版自主接话依赖群观察和自主接话授权，此入口暂不接续"}, ""
-	case group.Mode != "mention" && group.Mode != "all":
+	case group.Mode != "mention" && group.Mode != "all" && group.Mode != "social":
 		return invalid, ""
 	case group.Prefix == "" && policy.Prefix != "/ai ":
 		return legacyGroupSettingView{Status: "unsupported", Reason: "此群沿用旧版自定义的全局前缀，请在新站单独核对"}, ""
