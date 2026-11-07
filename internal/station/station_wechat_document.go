@@ -43,6 +43,7 @@ type stationDocumentInput struct {
 	file                *os.File
 	illustrationRegions []stationIllustrationRect
 	mergedTable         bool
+	borderlessTable     bool
 	extension, epoch    string
 	requester, trace    string
 	handoffKey          string

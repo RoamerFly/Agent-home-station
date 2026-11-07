@@ -281,7 +281,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		return view, err
 	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
-	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || item.Digest == localDocumentV012Digest || item.Digest == localDocumentV013Digest || item.Digest == localDocumentV014Digest) && s.pdfRuntimeReady()
+	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"

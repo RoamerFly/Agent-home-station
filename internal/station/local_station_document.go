@@ -90,12 +90,17 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 		s.update.Unlock()
 		return nil, err
 	}
-	if compatibleDocumentDigest(operation, installed.Digest) && (in.mergedTable || image != nil && image.originalImage != nil && image.layout.MergedCells > 0) {
+	legacy := compatibleDocumentDigest(operation, installed.Digest)
+	if legacy && (in.borderlessTable || image != nil && image.layout.BorderlessTables > 0) {
+		s.update.Unlock()
+		return nil, errors.New("保留无边框表格需要文档工坊 0.1.6 或更高版本")
+	}
+	if legacy && installed.Digest != localDocumentV015Digest && (in.mergedTable || image != nil && image.layout.MergedCells > 0) {
 		s.update.Unlock()
 		return nil, errors.New("保留合并单元格需要文档工坊 0.1.5 或更高版本")
 	}
 	if image != nil && image.originalImage != nil && len(image.layout.Illustrations) > 0 &&
-		compatibleDocumentDigest(operation, installed.Digest) && installed.Digest != localDocumentV014Digest {
+		legacy && installed.Digest != localDocumentV014Digest && installed.Digest != localDocumentV015Digest {
 		s.update.Unlock()
 		return nil, errors.New("保留插图需要文档工坊 0.1.4 或更高版本")
 	}

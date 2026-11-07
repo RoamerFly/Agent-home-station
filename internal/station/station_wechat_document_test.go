@@ -109,6 +109,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
 	withIllustrations := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_ILLUSTRATIONS_TEST") == "1"
 	withMerges := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_MERGED_TABLE_TEST") == "1"
+	withBorderless := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_BORDERLESS_TABLE_TEST") == "1"
 	if imagePDFText != nil {
 		name := "synthetic-wechat-document-grid.png"
 		if withIllustrations {
@@ -116,6 +117,9 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		if withMerges {
 			name = "synthetic-wechat-merged-table.png"
+		}
+		if withBorderless {
+			name = "synthetic-wechat-borderless-table.png"
 		}
 		image, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
@@ -288,6 +292,7 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			Layout struct {
 				Headings, Paragraphs, Tables int
 				MergedCells                  int `json:"merged_cells"`
+				BorderlessTables             int `json:"borderless_tables"`
 				Illustrations                []stationIllustrationRect
 			}
 			Word struct {
@@ -321,6 +326,12 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 				t.Fatalf("Word lacks the two native merges: %#v, %s", prepared.Layout, wordXML)
 			}
 		}
+		if withBorderless {
+			cells = 9
+			if prepared.Layout.BorderlessTables != 1 || strings.Count(wordXML, `w:val="nil"`) != 6 {
+				t.Fatalf("Word lacks an editable borderless table: %#v, %s", prepared.Layout, wordXML)
+			}
+		}
 		if strings.Count(wordXML, "<w:tc>") != cells || !strings.Contains(wordXML, "<w:tbl>") ||
 			!strings.Contains(wordXML, "Heading1") || strings.Contains(wordXML, "<w:drawing>") != withIllustrations {
 			t.Fatalf("reconstructed Word did not contain editable heading and table: %s", wordXML)
@@ -336,6 +347,14 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		pdfText := imagePDFText(pdfBytes)
 		expectedWords := []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "结果", "文档", "通过"}
+		if withBorderless {
+			expectedWords = []string{"文件交接记录", "本次测试用于核对文档复刻结果", "项目", "时间", "结果", "文档", "上午", "通过", "图片", "下午", "完成", "请核对以上信息"}
+			tableStart := strings.Index(wordXML, "<w:tbl>")
+			tableEnd := strings.Index(wordXML, "</w:tbl>")
+			if tableStart < strings.Index(wordXML, "本次测试用于核对文档复刻结果") || tableEnd > strings.Index(wordXML, "请核对以上信息") {
+				t.Fatalf("Word did not preserve text before and after the table: %s", wordXML)
+			}
+		}
 		if withMerges {
 			expectedWords = []string{"文件交接记录", "本次测试用于核对文档复刻结果", "课程计划", "活动分组", "上午", "下午", "已确认", "未完成"}
 			for _, name := range []string{"课程计划", "活动分组"} {
@@ -427,6 +446,9 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		if withMerges && (!strings.Contains(revisedXML, `<w:gridSpan w:val="3"/>`) || !strings.Contains(revisedXML, `<w:vMerge/>`)) {
 			t.Fatal("title revision discarded a native table merge")
+		}
+		if withBorderless && strings.Count(revisedXML, `w:val="nil"`) != 6 {
+			t.Fatalf("title revision lost the borderless table: %s", revisedXML)
 		}
 		if repeated, err := resize(raw); err != nil || repeated != newReply {
 			t.Fatalf("revision retry prepared a different product: %s, %v", repeated, err)

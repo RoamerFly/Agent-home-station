@@ -148,6 +148,9 @@ def _docx_block_for_table(node: ET.Element) -> dict | None:
     if not rows:
         return None
     result = {"kind": "table", "rows": rows}
+    borders = node.find(w + "tblPr/" + w + "tblBorders")
+    if borders is not None and len(borders) == 6 and all(side.get(w + "val") == "nil" for side in borders):
+        result["borderless"] = True
     merges = [merge for merge in merges if merge["row_span"] > 1 or merge["col_span"] > 1]
     if merges:
         _table_coverage(rows, merges)
@@ -404,8 +407,12 @@ def _table_coverage(rows, merges) -> dict:
     return coverage
 
 
-def _table(rows, merges=None) -> str:
-    parts = ["<w:tbl><w:tblPr><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/><w:left w:val=\"single\" w:sz=\"4\"/><w:bottom w:val=\"single\" w:sz=\"4\"/><w:right w:val=\"single\" w:sz=\"4\"/><w:insideH w:val=\"single\" w:sz=\"4\"/><w:insideV w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPr>"]
+def _table(rows, merges=None, borderless=False) -> str:
+    if type(borderless) is not bool:
+        raise DocumentError("document_table_borderless_invalid")
+    style = 'w:val="nil"' if borderless else 'w:val="single" w:sz="4"'
+    borders = "".join("<w:%s %s/>" % (side, style) for side in ("top", "left", "bottom", "right", "insideH", "insideV"))
+    parts = ["<w:tbl><w:tblPr><w:tblBorders>%s</w:tblBorders></w:tblPr>" % borders]
     coverage = _table_coverage(rows, merges) if merges is not None else {}
     if coverage:
         parts.append("<w:tblGrid>%s</w:tblGrid>" % ("<w:gridCol/>" * len(rows[0])))
@@ -450,7 +457,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             raise DocumentError("document_font_size_invalid")
         body.append(_paragraph(title[:256], "Title", title_font_size_pt))
     for block in blocks:
-        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges"}:
+        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges", "borderless"}:
             raise DocumentError("document_layout_invalid")
         kind = block.get("kind")
         if kind in ("paragraph", "heading", "title"):
@@ -469,7 +476,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             rows = block.get("rows")
             if not isinstance(rows, list) or len(rows) > 200:
                 raise DocumentError("document_layout_invalid")
-            body.append(_table(rows, block.get("merges")))
+            body.append(_table(rows, block.get("merges"), block.get("borderless", False)))
         elif kind == "image":
             image_index = block.get("image_index")
             if type(image_index) is not int or not isinstance(images, list) or not 0 <= image_index < len(images):

@@ -30,6 +30,7 @@ type stationImageLayout struct {
 	ImageWidth, ImageHeight int
 	Illustrations           []stationIllustrationRect `json:",omitempty"`
 	MergedCells             int
+	BorderlessTables        int
 	NeedsClarification      bool
 	Uncertain               []string
 }
@@ -79,13 +80,16 @@ type stationImageBBox struct {
 }
 
 type stationImageTable struct {
-	BBox stationImageBBox `json:"bbox"`
-	Rows []struct {
-		Row   int      `json:"row"`
-		Cells []string `json:"cells"`
-	} `json:"rows"`
+	BBox            stationImageBBox       `json:"bbox"`
+	Rows            []stationImageTableRow `json:"rows"`
 	Merges          []stationTableMerge
+	Borderless      bool `json:"-"`
 	CellsUnreadable bool `json:"cells_unreadable"`
+}
+
+type stationImageTableRow struct {
+	Row   int      `json:"row"`
+	Cells []string `json:"cells"`
 }
 
 type stationLayoutBlock struct {
@@ -94,6 +98,7 @@ type stationLayoutBlock struct {
 	Level      int                 `json:"level,omitempty"`
 	Rows       [][]string          `json:"rows,omitempty"`
 	Merges     []stationTableMerge `json:"merges,omitempty"`
+	Borderless bool                `json:"borderless,omitempty"`
 	ImageIndex *int                `json:"image_index,omitempty"`
 }
 
@@ -150,13 +155,18 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 	if grid.Ambiguous {
 		return markImageLayoutReview(result, "图片表格边界不完整或相互冲突，请核对原图")
 	}
-	if len(page.Tables) == 0 && len(grid.Horizontal) >= 2 && len(grid.Vertical) >= 2 {
-		inferred, review := stationTableFromGrid(page, grid)
-		if review {
-			result.NeedsClarification = true
-			result.Uncertain = append(result.Uncertain, stationTableLocation(page.SourcePage, 1))
-		} else if inferred != nil {
+	if len(page.Tables) == 0 {
+		if len(grid.Horizontal) >= 2 && len(grid.Vertical) >= 2 {
+			inferred, review := stationTableFromGrid(page, grid)
+			if review {
+				result.NeedsClarification = true
+				result.Uncertain = append(result.Uncertain, stationTableLocation(page.SourcePage, 1))
+			} else if inferred != nil {
+				page.Tables = append(page.Tables, *inferred)
+			}
+		} else if inferred := stationBorderlessTable(page); inferred != nil {
 			page.Tables = append(page.Tables, *inferred)
+			result.BorderlessTables = 1
 		}
 	}
 	visual := make([]stationVisualBlock, 0, len(page.Blocks)+len(page.Tables))
@@ -201,7 +211,8 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 			result.NeedsClarification = true
 			continue
 		}
-		visual = append(visual, stationVisualBlock{bbox: table.BBox, order: tableIndex, block: stationLayoutBlock{Kind: "table", Rows: rows, Merges: table.Merges}})
+		visual = append(visual, stationVisualBlock{bbox: table.BBox, order: tableIndex,
+			block: stationLayoutBlock{Kind: "table", Rows: rows, Merges: table.Merges, Borderless: table.Borderless}})
 	}
 
 	for i, box := range illustrations {
@@ -209,6 +220,10 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 			bbox:  stationImageBBox{Left: float64(box.Left), Top: float64(box.Top), Right: float64(box.Right), Bottom: float64(box.Bottom)},
 			order: i, block: stationLayoutBlock{Kind: "image", ImageIndex: &i},
 		})
+	}
+	separators := make([]stationImageBBox, len(visual))
+	for i, item := range visual {
+		separators[i] = item.bbox
 	}
 	appendParagraph := func(lines []string, first, second stationImageLine, order int) bool {
 		if len(lines) == 0 {
@@ -244,8 +259,8 @@ func stationImageWordLayout(evidence json.RawMessage, grid stationImageGrid, ill
 				result.Uncertain = append(result.Uncertain, stationLineLocation(page.SourcePage, blockIndex+1, lineIndex+1))
 			}
 			if text != "" {
-				for _, region := range illustrations {
-					if len(textLines) > 0 && prior.BBox.Bottom <= float64(region.Top) && line.BBox.Top >= float64(region.Bottom) {
+				for _, region := range separators {
+					if len(textLines) > 0 && prior.BBox.Bottom <= region.Top && line.BBox.Top >= region.Bottom {
 						if !appendParagraph(textLines, first, second, blockIndex) {
 							return markImageLayoutReview(result, "图片段落文字无效，请重新读取原图")
 						}
@@ -372,10 +387,7 @@ func stationTableFromGrid(page stationImagePage, grid stationImageGrid) (*statio
 	}
 	found := false
 	for row := range cellWords {
-		entry := struct {
-			Row   int      `json:"row"`
-			Cells []string `json:"cells"`
-		}{Row: row, Cells: make([]string, len(cellWords[row]))}
+		entry := stationImageTableRow{Row: row, Cells: make([]string, len(cellWords[row]))}
 		for column := range cellWords[row] {
 			measured := cellWords[row][column]
 			sort.SliceStable(measured, func(i, j int) bool {

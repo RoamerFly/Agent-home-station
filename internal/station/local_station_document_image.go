@@ -30,7 +30,7 @@ func (h *localHomeService) stationDocumentImageAvailable(ctx context.Context) bo
 func (h *localHomeService) stationDocumentIllustrationsAvailable(ctx context.Context) bool {
 	operation := projectOperation(localDocumentToolName)
 	digest, ok := h.stationDocumentToolRelease(ctx, operation, false)
-	return ok && (digest == localDocumentV014Digest || !compatibleDocumentDigest(operation, digest))
+	return ok && (digest == localDocumentV014Digest || digest == localDocumentV015Digest || !compatibleDocumentDigest(operation, digest))
 }
 
 func stationImageOCRRuntimeReady(path string) bool {

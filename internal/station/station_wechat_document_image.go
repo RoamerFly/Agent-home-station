@@ -55,7 +55,7 @@ func (t *stationAttachmentTools) prepareImageDocument(ctx context.Context, raw j
 	})
 	in.illustrationRegions = args.Illustrations
 	wordReply := t.documentReplyForInput(&in, args.Base+".docx")
-	wordReply.IllustrationKey = localCheckpointKey("image-layout-v2", args.Illustrations)
+	wordReply.IllustrationKey = localCheckpointKey("image-layout-v3", args.Illustrations)
 	in.handoffKey = wordReply.id()
 	word, wordFile, err := t.openDocumentReply(ctx, t.trace, in.handoffKey)
 	if errors.Is(err, os.ErrNotExist) {
@@ -110,6 +110,7 @@ func (t *stationAttachmentTools) prepareEditableDelivery(ctx context.Context, in
 		pdfInput.record.ID, pdfInput.record.Bytes, pdfInput.record.SHA256, pdfInput.record.MIME =
 			word.id(), word.Product.Bytes, word.Product.SHA256, localDOCXMIME
 		pdfInput.file, pdfInput.extension, pdfInput.mergedTable = wordFile, ".docx", word.Layout.MergedCells > 0
+		pdfInput.borderlessTable = word.Layout.BorderlessTables > 0
 		pdf, err := t.preparePDFHandoff(ctx, pdfReply, pdfInput)
 		if err != nil {
 			return "", err
@@ -126,5 +127,5 @@ func (t *stationAttachmentTools) prepareEditableDelivery(ctx context.Context, in
 
 func stationImageLayoutSummary(layout stationImageLayout) map[string]any {
 	return map[string]any{"headings": layout.Headings, "paragraphs": layout.Paragraphs,
-		"tables": layout.Tables, "merged_cells": layout.MergedCells, "illustrations": layout.Illustrations, "image_width": layout.ImageWidth, "image_height": layout.ImageHeight, "needs_clarification": layout.NeedsClarification, "uncertain_locations": layout.Uncertain}
+		"tables": layout.Tables, "merged_cells": layout.MergedCells, "borderless_tables": layout.BorderlessTables, "illustrations": layout.Illustrations, "image_width": layout.ImageWidth, "image_height": layout.ImageHeight, "needs_clarification": layout.NeedsClarification, "uncertain_locations": layout.Uncertain}
 }

@@ -65,6 +65,16 @@ class DocumentWorkshopTests(unittest.TestCase):
             with self.assertRaisesRegex(logic.DocumentError, "document_table_merge_invalid"):
                 logic.reconstruct({"blocks": [table]}, Path(raw), "invalid.docx")
 
+    def test_borderless_table_remains_editable_and_retains_rendering_style(self):
+        from native_pdf import _blocks
+        table = {"kind": "table", "rows": [["项目", "结果"], ["文件", "完成"]], "borderless": True}
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(logic.reconstruct({"blocks": [table]}, Path(raw), "table.docx")["path"])
+            self.assertEqual(logic._docx_flow_layout(path)["blocks"], [table])
+            self.assertEqual(_blocks(path), [("table", table["rows"], [], True)])
+            with zipfile.ZipFile(path) as zf:
+                self.assertEqual(zf.read("word/document.xml").count(b'w:val="nil"'), 6)
+
     def test_revise_title_preserves_body_tables_and_original(self):
         layout = {"blocks": [
             {"kind": "heading", "level": 1, "text": "旧文档标题"},

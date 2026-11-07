@@ -23,6 +23,7 @@ const (
 	localDocumentReviseTool  = "project_document_revise_title"
 	localDocumentRevise      = "document.revise_title"
 	localDocumentV014Digest  = "f623f5c7e52ef7fe0e65a08423db001c4ac48540a451ddfa259b0f0f2f3e3701"
+	localDocumentV015Digest  = "c69dfe52a34e2e794f771f73de282852baab4b87edc06d96479e5f3becb46592"
 	localDocumentV013Digest  = "87c54cde8a15f80582a8740da8c5c30064311b63b0c61090f8d1ed12c6946dc1"
 	localDocumentV012Digest  = "8d7dc37f6ab4651a799be98237687d626a3865b6a0b5be6935a8e9566440f0de"
 	localDocumentInspect     = "document.inspect"
