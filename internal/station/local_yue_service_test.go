@@ -146,3 +146,21 @@ func writeLocalYuEFixture(t *testing.T) (string, string, localYuERegistration) {
 }
 
 func localYuESHA(value []byte) string { sum := sha256.Sum256(value); return hex.EncodeToString(sum[:]) }
+
+func TestLocalYuEIdleDurationCannotOverflow(t *testing.T) {
+	maximum := localComfyMaxIdleSeconds
+	if int64(int(maximum+1)) != maximum+1 {
+		t.Skip("duration boundary needs a 64-bit int")
+	}
+	data, home, registration := writeLocalYuEFixture(t)
+	for _, seconds := range []int64{0, maximum, maximum + 1} {
+		registration.IdleSeconds = int(seconds)
+		err := registration.validate(data, home)
+		if (err != nil) != (seconds > maximum) {
+			t.Fatalf("idle_seconds=%d: %v", seconds, err)
+		}
+		if err == nil && registration.idleTimeout() <= 0 {
+			t.Fatal("accepted idle timeout became nonpositive")
+		}
+	}
+}

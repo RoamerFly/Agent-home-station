@@ -316,6 +316,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
 	s.visionConfigurationRoutes(owner, mux)
 	s.comfyDeploymentRoutes(owner, mux)
+	s.yueDeploymentRoutes(owner, mux)
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.Read()
 		if err != nil {

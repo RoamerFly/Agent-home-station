@@ -63,7 +63,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: { loading: false, saving: false, loaded: false, server: null, draft: null, approved: false, advancedOpen: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -2865,26 +2865,34 @@
   function comfyWorkflows(tool) {
     return Array.isArray(tool?.workflows) ? tool.workflows.filter((workflow) => workflow && typeof workflow.id === "string" && workflow.id.trim() && typeof workflow.label === "string" && workflow.label.trim()) : [];
   }
-  function defaultComfyDeployment() {
-    return {
-      schema_version: 1, enabled: true, runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py",
-      frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "",
-      port: 8190, idle_seconds: 300, device: "cpu", cuda_device: 0
-    };
+  function newDeploymentState() {
+    return { loading: false, saving: false, loaded: false, generation: 0, server: null, draft: null, dirty: false, revision: null, approved: false, advancedOpen: false, error: "", notice: "" };
   }
-  function normalizeComfyDeployment(value) {
-    const defaults = defaultComfyDeployment(), source = value && typeof value === "object" ? value : {};
+  function deploymentDescriptor(id) {
+    if (id === "comfyui") return { state: "comfyDeployment", name: "ComfyUI", prefix: "comfy", port: 8190, idle: 300, idleMinutes: 5 };
+    if (id === "yue") return { state: "yueDeployment", name: "YuE", prefix: "yue", port: 8191, idle: 0, idleMinutes: 20 };
+    return null;
+  }
+  function normalizeDeployment(value, id = "comfyui") {
+    const spec = deploymentDescriptor(id), source = value && typeof value === "object" ? value : {};
+    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", ffmpeg: "" };
     const text = (key) => typeof source[key] === "string" ? source[key] : defaults[key];
     const number = (key, fallback) => Object.hasOwn(source, key) && source[key] !== undefined && source[key] !== null ? source[key] : fallback;
-    return {
+    const configuration = {
       schema_version: 1, enabled: source.enabled !== false, runtime: text("runtime"), python: text("python"), entry: text("entry"),
       frontend: text("frontend"), manifest: text("manifest"), models: text("models"), workflows: text("workflows"),
-      port: number("port", defaults.port), idle_seconds: number("idle_seconds", defaults.idle_seconds),
-      device: source.device === "cuda" ? "cuda" : "cpu", cuda_device: number("cuda_device", defaults.cuda_device)
+      port: number("port", spec.port), idle_seconds: number("idle_seconds", spec.idle),
+      device: source.device === "cuda" ? "cuda" : "cpu", cuda_device: number("cuda_device", 0)
     };
+    if (id === "yue") {
+      configuration.ffmpeg = text("ffmpeg");
+      if (source.workflow_pins && typeof source.workflow_pins === "object" && !Array.isArray(source.workflow_pins)) configuration.workflow_pins = { ...source.workflow_pins };
+      if (typeof source.ffmpeg_sha256 === "string" && source.ffmpeg_sha256) configuration.ffmpeg_sha256 = source.ffmpeg_sha256;
+    }
+    return configuration;
   }
-  function validateComfyDeploymentDraft(draft) {
-    const configuration = normalizeComfyDeployment(draft);
+  function validateDeploymentDraft(draft, id) {
+    const configuration = normalizeDeployment(draft, id);
     const integer = (key, minimum, maximum, label) => {
       const raw = configuration[key], value = typeof raw === "string" && !raw.trim() ? NaN : Number(raw);
       if (!Number.isInteger(value) || value < minimum || value > maximum) return `${label}请输入 ${minimum}–${maximum} 的整数。`;
@@ -3002,66 +3010,86 @@
     form.append(switches); form.addEventListener("submit", (event) => { event.preventDefault(); void saveLocalVision(current); });
     section.append(form, appElement("p", "保存不会发起测试调用；仅在实际视觉任务中使用。", "local-vision-note")); return section;
   }
-  function comfyDeploymentState(current = projectTools) { return current.comfyDeployment; }
-  async function loadComfyDeployment(current = projectTools) {
-    const deployment = comfyDeploymentState(current);
-    if (current !== projectTools || current.openID !== "comfyui" || deployment.loading) return;
+  function deploymentSelected(current, id) {
+    return current === projectTools && current.openID === id && $("#tool-dialog").open && current.tools.some((tool) => tool.id === id);
+  }
+  function validDeploymentView(view) {
+    return view && typeof view.revision === "string" && view.revision.length > 0 && typeof view.configured === "boolean" && typeof view.read_only === "boolean" && (view.configuration === null || typeof view.configuration === "object" && !Array.isArray(view.configuration));
+  }
+  function updateDeploymentSave(current = projectTools) {
+    const button = $("#local-deployment-save");
+    if (!button) return;
+    const id = current.openID, spec = deploymentDescriptor(id), deployment = spec && current[spec.state];
+    button.hidden = !spec || !deploymentSelected(current, id);
+    button.textContent = deployment?.saving ? "正在保存…" : "保存部署";
+    button.disabled = !deployment || deployment.loading || deployment.saving || !deployment.server || deployment.server.read_only || !deployment.approved;
+  }
+  async function loadDeployment(id, current = projectTools) {
+    const spec = deploymentDescriptor(id), deployment = spec && current[spec.state];
+    if (!deployment || !deploymentSelected(current, id) || deployment.loading || deployment.saving) return;
+    const generation = ++deployment.generation;
     deployment.loading = true; deployment.error = "";
-    renderProjectToolDialog(current.tools.find((tool) => tool && tool.id === "comfyui"));
+    renderProjectToolDialog(current.tools.find((tool) => tool.id === id));
     try {
-      const view = await request("/api/local/project-tools/comfyui/deployment");
-      if (current !== projectTools || current.openID !== "comfyui") return;
-      deployment.server = view && typeof view === "object" ? view : null;
-      deployment.loaded = true;
-      if (!deployment.draft) deployment.draft = normalizeComfyDeployment(view?.configuration);
+      const view = await request(`/api/local/project-tools/${id}/deployment`);
+      if (!deploymentSelected(current, id) || deployment.generation !== generation) return;
+      if (!validDeploymentView(view)) throw new Error("部署登记返回格式无效，请重新读取。");
+      deployment.server = view; deployment.loaded = true;
+      if (!deployment.draft || !deployment.dirty) deployment.draft = normalizeDeployment(view.configuration, id);
+      else deployment.notice = "已读取最新登记，当前编辑已保留；请核对后重新确认保存。";
+      deployment.revision = view.revision; deployment.approved = false;
     } catch (error) {
-      if (current !== projectTools || current.openID !== "comfyui") return;
-      deployment.error = error.message || "未能读取 ComfyUI 部署登记。";
+      if (!deploymentSelected(current, id) || deployment.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      deployment.error = error.message || `未能读取 ${spec.name} 部署登记。`;
     } finally {
       if (current === projectTools) {
         deployment.loading = false;
-        if (current.openID === "comfyui") {
-        renderProjectToolDialog(current.tools.find((tool) => tool && tool.id === "comfyui"));
-        }
+        if (deploymentSelected(current, id)) renderProjectToolDialog(current.tools.find((tool) => tool.id === id));
       }
     }
   }
-  function updateComfyDeploymentDraft(key, value, current = projectTools) {
-    const deployment = comfyDeploymentState(current);
-    if (!deployment.draft) deployment.draft = normalizeComfyDeployment(deployment.server?.configuration);
-    deployment.draft[key] = value;
+  function updateDeploymentDraft(id, key, value, current = projectTools) {
+    const deployment = current[deploymentDescriptor(id).state];
+    if (!deployment.draft) deployment.draft = normalizeDeployment(deployment.server?.configuration, id);
+    if (deployment.draft[key] === value) return;
+    deployment.draft[key] = value; deployment.dirty = true; deployment.approved = false;
+    if (id === "yue" && key === "workflows") delete deployment.draft.workflow_pins;
+    if (id === "yue" && key === "ffmpeg") delete deployment.draft.ffmpeg_sha256;
     deployment.error = ""; deployment.notice = "";
+    const checkbox = $("#tool-dialog .comfy-deployment-actions input[type=checkbox]");
+    if (checkbox) checkbox.checked = false;
+    updateDeploymentSave(current);
   }
-  async function saveComfyDeployment(current = projectTools) {
-    const deployment = comfyDeploymentState(current);
-    if (current !== projectTools || deployment.saving || deployment.server?.read_only === true || deployment.approved !== true) return;
-    const checked = validateComfyDeploymentDraft(deployment.draft);
+  async function saveDeployment(id, current = projectTools) {
+    const spec = deploymentDescriptor(id), deployment = spec && current[spec.state];
+    if (!deployment || !deploymentSelected(current, id) || deployment.loading || deployment.saving || !deployment.server || !deployment.draft || deployment.server.read_only || !deployment.approved) return;
+    const checked = validateDeploymentDraft(deployment.draft, id);
     if (typeof checked === "string") {
-      deployment.error = checked;
-      if (current.openID === "comfyui") renderProjectToolDialog(current.tools.find((tool) => tool && tool.id === "comfyui"));
-      return;
+      deployment.error = checked; renderProjectToolDialog(current.tools.find((tool) => tool.id === id)); return;
     }
-    const configuration = checked;
+    const generation = ++deployment.generation;
     deployment.saving = true; deployment.error = ""; deployment.notice = "";
-    renderProjectToolDialog(current.tools.find((tool) => tool && tool.id === "comfyui"));
+    renderProjectToolDialog(current.tools.find((tool) => tool.id === id));
     try {
-      const view = await request("/api/local/project-tools/comfyui/deployment", {
-        method: "PUT", body: JSON.stringify({ revision: String(deployment.server?.revision || "unconfigured"), approve_execution: true, configuration })
+      const view = await request(`/api/local/project-tools/${id}/deployment`, {
+        method: "PUT", body: JSON.stringify({ revision: deployment.revision, approve_execution: true, configuration: checked })
       });
-      if (current !== projectTools) return;
-      deployment.server = view && typeof view === "object" ? view : deployment.server;
-      deployment.loaded = true; deployment.draft = normalizeComfyDeployment(view?.configuration || configuration);
+      if (!deploymentSelected(current, id) || deployment.generation !== generation) return;
+      if (!validDeploymentView(view)) throw new Error("部署登记返回格式无效，请重新读取核对；当前编辑已保留。");
+      deployment.server = view; deployment.revision = view.revision; deployment.loaded = true;
+      deployment.draft = normalizeDeployment(view.configuration || checked, id); deployment.dirty = false; deployment.approved = false;
       deployment.notice = "部署登记已保存；工具仍需单独启用。";
-      if (current.openID === "comfyui") void loadProjectTools();
+      void loadProjectTools();
     } catch (error) {
-      if (current !== projectTools) return;
+      if (!deploymentSelected(current, id) || deployment.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
       deployment.error = error.status === 409
-        ? (error.message || "登记已在别处更新。当前编辑已保留，请重新读取后确认再保存。")
+        ? `${error.message || "登记已在别处更新。"} 当前编辑已保留，请重新读取后核对并确认保存。`
         : (error.message || "保存部署登记未完成。");
+      if (error.status === 409) deployment.approved = false;
     } finally {
       if (current === projectTools) {
         deployment.saving = false;
-        if (current.openID === "comfyui") renderProjectToolDialog(current.tools.find((tool) => tool && tool.id === "comfyui"));
+        if (deploymentSelected(current, id)) renderProjectToolDialog(current.tools.find((tool) => tool.id === id));
       }
     }
   }
@@ -3084,11 +3112,11 @@
     const labelNode = document.createElement("label"); labelNode.htmlFor = input.id; labelNode.textContent = label; labelNode.append(input);
     return { label: labelNode, input };
   }
-  function renderComfyDeployment(tool) {
-    const current = projectTools, deployment = comfyDeploymentState(current);
+  function renderDeployment(tool) {
+    const current = projectTools, id = tool.id, spec = deploymentDescriptor(id), deployment = current[spec.state];
     const section = appElement("section", "", "comfy-deployment");
     const heading = appElement("div", "", "comfy-deployment-heading");
-    heading.append(appElement("strong", "本机部署登记"), appElement("span", "只登记已经准备好的本机目录；不会下载环境或运行安装脚本。审核清单可按本机预览指南生成。"));
+    heading.append(appElement("strong", "本机部署登记"), appElement("span", id === "yue" ? "登记已准备好的独立 YuE 运行环境。审核清单可留空，由宿主在确认保存时生成。" : "只登记已经准备好的本机目录；不会下载环境或运行安装脚本。审核清单可按本机预览指南生成。"));
     section.append(heading);
     if (deployment.loading && !deployment.loaded) {
       section.append(appElement("p", "正在读取已保存的部署登记…", "comfy-deployment-note"));
@@ -3101,21 +3129,23 @@
       section.append(appElement("p", "部署登记暂时不可读取。关闭后重新打开此工具即可重试。", "comfy-deployment-note"));
       return section;
     }
-    const draft = deployment.draft || (deployment.draft = normalizeComfyDeployment(server.configuration));
+    const draft = deployment.draft || (deployment.draft = normalizeDeployment(server.configuration, id));
     const readOnly = server.read_only === true, fieldsDisabled = readOnly || deployment.saving || deployment.loading;
     if (readOnly) section.append(appElement("p", server.reason || "请先停用工具并处理未完成任务，再修改部署登记。", "comfy-deployment-readonly"));
     else if (server.reason) section.append(appElement("p", server.reason, "comfy-deployment-note"));
     const form = document.createElement("form"); form.className = "comfy-deployment-form"; form.noValidate = true;
     const primary = appElement("div", "", "comfy-deployment-primary");
     const fields = [
-      ["ComfyUI 安装目录", "runtime", { placeholder: "例如 E:\\Tools\\ComfyUI" }],
-      ["模型目录", "models", { placeholder: "例如 E:\\Models\\ComfyUI" }],
+      [`${spec.name} 安装目录`, "runtime", { placeholder: `例如 E:\\Tools\\${spec.name}` }],
+      ["模型目录", "models", { placeholder: `例如 E:\\Models\\${spec.name}` }],
       ["工作流目录", "workflows", { placeholder: "包含 registry.json 的目录" }],
-      ["审核清单", "manifest", { placeholder: "相对安装目录或宿主私有绝对路径" }]
+      [id === "yue" ? "审核清单（选填，留空由宿主生成）" : "审核清单", "manifest", { placeholder: id === "yue" ? "已有清单可填写；留空自动生成" : "相对安装目录或宿主私有绝对路径" }]
     ];
+    if (id === "yue") fields.push(["FFmpeg 程序", "ffmpeg", { placeholder: "已审核的 ffmpeg.exe 绝对路径" }]);
     fields.forEach(([label, key, options]) => {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: fieldsDisabled });
-      field.input.addEventListener("input", () => updateComfyDeploymentDraft(key, field.input.value)); primary.append(field.label);
+      field.input.id = `${spec.prefix}-deployment-${key}`; field.label.htmlFor = field.input.id;
+      field.input.addEventListener("input", () => updateDeploymentDraft(id, key, field.input.value, current)); primary.append(field.label);
     });
     form.append(primary);
     const advanced = document.createElement("details"); advanced.className = "comfy-deployment-advanced"; advanced.open = deployment.advancedOpen === true;
@@ -3131,26 +3161,26 @@
     secondaryFields.forEach(([label, key, options]) => {
       const hidden = key === "cuda_device" && draft.device !== "cuda";
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: fieldsDisabled });
+      field.input.id = `${spec.prefix}-deployment-${key}`; field.label.htmlFor = field.input.id;
       field.label.hidden = hidden;
-      field.input.addEventListener("input", () => updateComfyDeploymentDraft(key, options.type === "number" ? field.input.value : field.input.value));
+      field.input.addEventListener("input", () => updateDeploymentDraft(id, key, field.input.value, current));
       field.input.addEventListener("change", () => {
-        if (key === "device") { deployment.advancedOpen = true; updateComfyDeploymentDraft(key, field.input.value); renderProjectToolDialog(tool); }
+        if (key === "device") { deployment.advancedOpen = true; updateDeploymentDraft(id, key, field.input.value, current); renderProjectToolDialog(tool); }
       });
       secondary.append(field.label);
     });
-    advanced.append(secondary, appElement("p", "闲置停止秒数填 0 时，沿用默认 5 分钟。", "comfy-deployment-note")); form.append(advanced);
+    advanced.append(secondary, appElement("p", `闲置停止秒数填 0 时，沿用默认 ${spec.idleMinutes} 分钟。`, "comfy-deployment-note")); form.append(advanced);
     const actions = appElement("div", "", "project-tool-actions comfy-deployment-actions");
     const reload = appElement("button", deployment.loading ? "正在读取…" : "重新读取", "button compact secondary");
     reload.type = "button"; reload.disabled = deployment.loading || deployment.saving;
-    reload.addEventListener("click", () => void loadComfyDeployment(current));
+    reload.addEventListener("click", () => void loadDeployment(id, current));
     const approval = document.createElement("label"), checkbox = document.createElement("input"), approvalCopy = appElement("span", "确认这些运行文件和工作流已审核");
     approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.checked = deployment.approved === true; checkbox.disabled = fieldsDisabled;
     approval.append(checkbox, approvalCopy);
-    const save = appElement("button", deployment.saving ? "正在保存…" : "保存部署", "button compact primary");
-    save.type = "submit"; save.disabled = readOnly || deployment.saving || deployment.loading || !checkbox.checked;
-    checkbox.addEventListener("change", () => { deployment.approved = checkbox.checked; save.disabled = readOnly || deployment.saving || deployment.loading || !checkbox.checked; });
-    form.addEventListener("submit", (event) => { event.preventDefault(); void saveComfyDeployment(current); });
-    actions.append(reload, approval, save); form.append(actions); section.append(form);
+    checkbox.addEventListener("change", () => { deployment.approved = checkbox.checked; updateDeploymentSave(current); });
+    form.addEventListener("submit", (event) => { event.preventDefault(); void saveDeployment(id, current); });
+    actions.append(reload, approval); form.append(actions); section.append(form);
+    section.append(appElement("p", id === "yue" ? "保存仅登记部署；由宿主核验工作流和 FFmpeg 摘要，不启动后端、不启用工具。路径仅供本机主人管理。" : "保存仅登记部署，不启动后端、不启用工具。路径仅供本机主人管理。", "comfy-deployment-note"));
     return section;
   }
   function renderRVCProfiles(tool) {
@@ -3423,7 +3453,7 @@
       card.addEventListener("click", () => {
         current.openID = tool.id; renderProjectToolDialog(tool);
         $("#tool-dialog").showModal();
-        if (tool.id === "comfyui") void loadComfyDeployment(current);
+        if (deploymentDescriptor(tool.id)) void loadDeployment(tool.id, current);
         if (tool.id === "media-understanding" && tool.installed) void loadLocalVision(current);
       });
       return card;
@@ -3441,6 +3471,13 @@
       $("#tool-dialog .app-dialog-actions").append(visionSave);
     }
     updateLocalVisionSave(current);
+    let deploymentSave = $("#local-deployment-save");
+    if (!deploymentSave) {
+      deploymentSave = appElement("button", "保存部署", "button compact primary"); deploymentSave.id = "local-deployment-save"; deploymentSave.type = "button";
+      deploymentSave.addEventListener("click", () => { if (deploymentDescriptor(projectTools.openID)) void saveDeployment(projectTools.openID); });
+      $("#tool-dialog .app-dialog-actions").append(deploymentSave);
+    }
+    updateDeploymentSave(current);
     $("#tool-dialog-feedback").append($("#project-tools-feedback"));
     body.replaceChildren(projectToolDetails(tool, current));
     body.scrollTop = scroll;
@@ -3466,12 +3503,12 @@
       if (tool.id === "comfyui") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "图像任务"), appElement("span", "运行获准的工作流，使用本机计算资源并登记 PNG 成品。"));
-        detail.append(permissions, renderComfyDeployment(tool), renderComfyWorkflows(tool));
+        detail.append(permissions, renderDeployment(tool), renderComfyWorkflows(tool));
       }
       if (tool.id === "yue") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "作曲任务"), appElement("span", "仅读取本次获准的参考素材，使用本机 GPU，核验后登记音乐成品。不会自动发送。"));
-        detail.append(permissions, renderYuEBackend(tool));
+        detail.append(permissions, renderDeployment(tool), renderYuEBackend(tool));
       }
       if (tool.id === "station-speech") {
         const permissions = appElement("div", "", "project-tool-permissions");
@@ -3830,11 +3867,13 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
-  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); });
+  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
     const id = projectTools.openID;
     if (id === "media-understanding") { projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false; }
+    const spec = deploymentDescriptor(id);
+    if (spec) { projectTools[spec.state].generation += 1; projectTools[spec.state].approved = false; }
     if (id === "obs-preview") stopOBSPreviewOnLeave();
     projectTools.openID = "";
     $("#project-tools-view").insertBefore($("#project-tools-feedback"), $("#project-tools-list"));

@@ -257,7 +257,7 @@ func (r localYuERegistration) pins() map[stationyue.Mode]string {
 }
 
 func (r localYuERegistration) validate(dataDir, editableRoot string) error {
-	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) || !localComfySafeRegular(r.FFmpeg) || !localComfyHexDigest.MatchString(r.FFmpegSHA256) {
+	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || int64(r.IdleSeconds) > localComfyMaxIdleSeconds || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) || !localComfySafeRegular(r.FFmpeg) || !localComfyHexDigest.MatchString(r.FFmpegSHA256) {
 		return errors.New("station_yue_registration_invalid")
 	}
 	if localComfyInside(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || localComfyPathsOverlap(r.Workflows, dataDir) || localComfyPathsOverlap(r.Workflows, editableRoot) || localComfyPathsOverlap(r.FFmpeg, dataDir) || localComfyPathsOverlap(r.FFmpeg, editableRoot) || localComfyPathsOverlap(r.manifestPath(), editableRoot) {
