@@ -47,6 +47,7 @@ type localChatService struct {
 	live         *apphost.LiveController
 	liveFish     string
 	liveOutput   apphost.LiveOutput
+	liveSource   apphost.LiveSourceOutput
 	liveEncoder  string
 	liveRunDone  chan struct{}
 	livePrograms *localLivePrograms
