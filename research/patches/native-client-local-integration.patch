@@ -5513,12 +5513,33 @@ index 7a647dd..402d47d 100644
  }
 diff --git a/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
 new file mode 100644
-index 0000000..8d69ce7
+index 0000000..c2a095d
 --- /dev/null
 +++ b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,42 @@
 +#![cfg(windows)]
 +use wechat_store::Store;
++
++#[test]
++fn offline_profile_copy_preserves_nested_bytes_and_rejects_replacement() {
++    use wechat_store::copy::{copy_profile, inventory};
++    let temp = tempfile::tempdir().unwrap();
++    let source = temp.path().join("source");
++    std::fs::create_dir_all(source.join("nested/empty")).unwrap();
++    std::fs::write(source.join("nested/data.bin"), [0, 255, 7, 1]).unwrap();
++    std::fs::write(source.join("中文.txt"), "synthetic profile").unwrap();
++    let before = inventory(&source).unwrap();
++    let exported = temp.path().join("exported");
++    copy_profile(&source, &exported, true).unwrap();
++    assert_eq!(inventory(&exported).unwrap(), before);
++    let store = Store::open(&temp.path().join("data")).unwrap();
++    let account = store.import("synthetic", &exported, true).unwrap();
++    assert_eq!(inventory(&account.profile_path).unwrap(), before);
++    assert!(store.import("synthetic", &exported, true).is_err());
++    assert!(copy_profile(&source, &exported, true).is_err());
++    assert_eq!(inventory(&source).unwrap(), before);
++    assert_eq!(inventory(&account.profile_path).unwrap(), before);
++}
 +
 +#[test]
 +fn interrupted_managed_bootstrap_restores_only_recorded_empty_reservation() {
@@ -6793,3 +6814,77 @@ index b29fdb2..e803471 100644
  async fn stdin_token() -> Result<String> {
      use std::io::IsTerminal;
      use tokio::io::AsyncReadExt;
+diff --git a/packages/native-client-rust/crates/wechat-store/src/copy.rs b/packages/native-client-rust/crates/wechat-store/src/copy.rs
+index bd8c173..1f378e2 100644
+--- a/packages/native-client-rust/crates/wechat-store/src/copy.rs
++++ b/packages/native-client-rust/crates/wechat-store/src/copy.rs
+@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
+ #[cfg(unix)]
+ use std::os::unix::fs::PermissionsExt;
+ use std::{
+-    fs::{self, File},
++    fs,
+     io::Read,
+     path::{Path, PathBuf},
+ };
+@@ -205,9 +205,10 @@ fn copy_inner(
+     if fs::symlink_metadata(&destination).is_ok() {
+         bail!("destination already exists");
+     }
+-    let _lease = crate::profile_lease(&source)?;
+-    let before = inventory_inner(&source, official_home)?;
+-    let stage = wechat_platform::private_tempdir_in(&parent, ".wx-copy-")?;
++    let _lease = crate::profile_lease(&source).context("cannot lease source profile")?;
++    let before = inventory_inner(&source, official_home).context("cannot inventory source profile")?;
++    let stage = wechat_platform::private_tempdir_in(&parent, ".wx-copy-")
++        .context("cannot create private profile stage")?;
+     for entry in &before.entries {
+         let target = stage.path().join(&entry.path);
+         match entry.kind.as_str() {
+@@ -264,18 +265,27 @@ fn copy_inner(
+             #[cfg(unix)]
+             fs::set_permissions(&target, fs::Permissions::from_mode(entry.mode))?;
+             #[cfg(windows)]
+-            wechat_platform::protect_path(&target, target.is_dir())?;
++            if !wechat_platform::private_path(&target)? {
++                bail!("copied profile entry must remain private");
++            }
+             filetime::set_file_mtime(
+                 &target,
+                 filetime::FileTime::from_unix_time(
+                     entry.modified_seconds,
+                     entry.modified_nanos as u32,
+                 ),
+-            )?;
++            )
++            .context("cannot restore profile modification time")?;
+             if target.is_dir() {
+                 wechat_platform::sync_dir(&target)?;
+             } else {
+-                File::open(&target)?.sync_all()?;
++                // Windows FlushFileBuffers requires a handle opened for write.
++                fs::OpenOptions::new()
++                    .write(true)
++                    .open(&target)
++                    .context("cannot open copied profile for flush")?
++                    .sync_all()
++                    .context("cannot flush copied profile")?;
+             }
+         }
+     }
+diff --git a/packages/native-client-rust/crates/wx/src/profile_export.rs b/packages/native-client-rust/crates/wx/src/profile_export.rs
+index 7706ac2..7ad8f2a 100644
+--- a/packages/native-client-rust/crates/wx/src/profile_export.rs
++++ b/packages/native-client-rust/crates/wx/src/profile_export.rs
+@@ -103,7 +103,10 @@ impl ProjectionState {
+             return Err(failure(
+                 9,
+                 "profile_projection_pending",
+-                "official profile updates remain pending; --allow-incomplete copies only current official files",
++                &format!(
++                    "official profile updates remain pending: {}; --allow-incomplete copies only current official files",
++                    serde_json::to_string(self)?
++                ),
+             ));
+         }
+         Ok(())

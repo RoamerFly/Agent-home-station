@@ -151,6 +151,44 @@ try {
     Assert-That ($captured.state -eq 'created' -and $verified.state -eq 'verified' -and $captured.manifest_digest -eq $verified.manifest_digest) 'Station snapshot apply/verify did not agree on the manifest.'
     Assert-That ((Get-FileBytesDigest $registry) -eq $beforeRegistry -and (Get-FileBytesDigest $ledger) -eq $beforeLedger -and (Get-FileBytesDigest $wake) -eq $beforeWake -and (Get-FileBytesDigest (Join-Path $profile 'sentinel.txt')) -eq $beforeProfile) 'Station snapshot changed a legacy source file.'
 
+    # A stopped host snapshot and a native profile export carry different data.
+    # Run the actual offline import into the path the station owns, using a
+    # disposable profile that has never logged in to WeChat.
+    $export = Join-Path $snapshotParent 'synthetic-native-profile'
+    $target = Join-Path $kit 'station-data\apps\wechat\native'
+    $accountArgs = @('--json', '--account', 'synthetic')
+    $copied = Invoke-JsonChild $stagedWx ($accountArgs + @('--data-dir', $data, 'store', 'export', '--destination', $export, '--source-stopped')) 'Native profile export'
+    Assert-That ($copied.state -eq 'copied' -and $copied.incompleteCopy -eq $false -and $copied.daemonSidecarIncluded -eq $false -and $copied.daemonActiveCredentialsIncluded -eq $false) 'Native export did not distinguish profile bytes from daemon state.'
+    Assert-That ((Get-FileBytesDigest (Join-Path $export 'sentinel.txt')) -eq $beforeProfile) 'Export changed the synthetic profile bytes.'
+    $importArgs = $accountArgs + @('--data-dir', $target, 'store', 'import', '--source', $export, '--source-stopped')
+    $imported = Invoke-JsonChild $stagedWx $importArgs 'Native profile import'
+    $expectedProfile = Join-Path $target 'accounts\synthetic\profile'
+    $receiptPath = ([string]$imported.profilePath).Replace('\\?\', '')
+    Assert-That ($imported.id -eq 'synthetic' -and $imported.storageMode -eq 'managed' -and $receiptPath -eq $expectedProfile) 'Native import receipt did not bind the original account to the new managed path.'
+    Assert-That ((Get-FileBytesDigest (Join-Path $expectedProfile 'sentinel.txt')) -eq $beforeProfile) 'Native import changed the profile.'
+    $newLedger = Join-Path $target 'accounts\synthetic\agent\control.sqlite'
+    $python = (Get-Command python -ErrorAction Stop).Source
+    $inspect = @'
+import pathlib
+import sqlite3
+import sys
+
+uri = pathlib.Path(sys.argv[1]).as_uri() + "?mode=ro"
+with sqlite3.connect(uri, uri=True) as connection:
+    tables = {row[0] for row in connection.execute("select name from sqlite_schema where type='table'")}
+    for name in ("outbox", "media_jobs"):
+        if name in tables:
+            assert connection.execute("select count(*) from " + name).fetchone()[0] == 0
+'@
+    & $python -B -c $inspect $newLedger
+    Assert-That ($LASTEXITCODE -eq 0) 'Imported profile has an executable native delivery queue.'
+    $duplicate = Start-Child $stagedWx $importArgs
+    try {
+        $duplicate.StandardInput.Close()
+        Assert-That ($duplicate.WaitForExit(15000) -and $duplicate.ExitCode -ne 0) 'A second native import replaced an existing account.'
+    } finally { $duplicate.Dispose() }
+    Assert-That ((Get-FileBytesDigest $ledger) -eq $beforeLedger -and (Get-FileBytesDigest (Join-Path $expectedProfile 'sentinel.txt')) -eq $beforeProfile) 'Native migration changed the old ledger or replaced the target profile.'
+
     # An already claimed old root must be rejected before a maintenance child
     # can be admitted.  This is a deliberate error-path check in the same kit.
     Write-Utf8 (Join-Path $data 'legacy-cutover-claim.json') '{"synthetic":true}'
@@ -184,7 +222,7 @@ try {
     } finally { $queued.Dispose() }
 
     $complete = $true
-    Write-Output 'Controlled legacy WeChat cutover rehearsal passed: isolated native data, headless offline hold, and station snapshot verification.'
+    Write-Output 'Controlled legacy WeChat cutover rehearsal passed: headless offline hold, station snapshot verification, and offline profile export/import.'
 } catch {
     Write-Warning "Synthetic controlled-cutover kit retained for inspection: $kit"
     throw
