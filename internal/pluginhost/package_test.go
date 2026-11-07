@@ -103,7 +103,7 @@ func TestOfficialContracts(t *testing.T) {
 						}
 					}
 					if d.Name() == "document-workshop" {
-						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.export_pdf": true, "document.verify": true}
+						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.revise_title": true, "document.export_pdf": true, "document.verify": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
 							t.Fatal("document workshop must use only artifact read/write permissions")
 						}

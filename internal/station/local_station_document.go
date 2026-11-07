@@ -40,7 +40,7 @@ func (h *localHomeService) stationDocumentToolAvailable(ctx context.Context, ope
 
 func stationDocumentPermission(installed pluginhost.InstalledPackage, capability string) bool {
 	return slices.Contains(installed.Permissions, "artifact.read") &&
-		(capability != localDocumentExport || slices.Contains(installed.Permissions, "artifact.write"))
+		(capability == localDocumentInspect || slices.Contains(installed.Permissions, "artifact.write"))
 }
 
 func (h *localHomeService) inspectStationDocument(ctx context.Context, in stationDocumentInput) (string, error) {
@@ -87,6 +87,8 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	purpose := "inspect authorized incoming WeChat document"
 	if export != nil {
 		purpose = "export authorized incoming WeChat document to PDF"
+	} else if capability == localDocumentRevise {
+		purpose = "resize title of authorized WeChat document"
 	} else if image != nil {
 		purpose = "reconstruct authorized incoming WeChat image as editable document"
 	}
@@ -171,6 +173,9 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	if job.State == "failed" {
 		var reason struct{ Reason string }
 		if json.Unmarshal(job.Result, &reason) == nil && pluginruntime.SafeDocumentResultCode(reason.Reason) {
+			if reason.Reason == "document_title_missing" {
+				return nil, errors.New("这份 Word 没有标记为主标题的段落，请先确认标题")
+			}
 			return nil, errors.New("文档工坊处理失败（" + reason.Reason + "）")
 		}
 	}
@@ -272,7 +277,7 @@ func (p stationDocumentPolicy) Validate(ctx context.Context, job pluginhost.Job,
 	}
 	if p.image != nil {
 		if p.image.reconstruct {
-			return p.validateImageDOCX(ctx, job, cap, wire)
+			return p.validatePreparedDOCX(ctx, job, cap, wire)
 		}
 		if len(wire.Outputs) != 0 {
 			return result, errors.New("图片识别返回了意外成品")

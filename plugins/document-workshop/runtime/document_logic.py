@@ -16,7 +16,9 @@ import re
 import shutil
 import struct
 import zipfile
+from xml.dom import minidom
 from xml.etree import ElementTree as ET
+from xml.parsers.expat import ExpatError
 
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_TEXT = 250_000
@@ -442,3 +444,59 @@ def basic_verify(path: Path, expected_text=None) -> dict:
             break
     result["ok"] = not result["quality_failures"]
     return result
+
+
+def revise_title(source: Path, output: Path, filename: str, font_size_pt: float) -> dict:
+    """Change only the runs of the existing main title in a workshop DOCX."""
+    if type(font_size_pt) not in (int, float) or not 8 <= font_size_pt <= 48 or font_size_pt * 2 % 1:
+        raise DocumentError("document_font_size_invalid")
+    target = output / safe_filename(filename, ".docx")
+    member = "word/document.xml"
+    try:
+        with zipfile.ZipFile(source) as original:
+            _verify_docx_container(original)
+            if original.namelist().count(member) != 1:
+                raise DocumentError("document_docx_invalid")
+            xml = original.read(member)
+            if b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
+                raise DocumentError("document_docx_invalid")
+            with minidom.parseString(xml) as doc:
+                def children(node, kind):
+                    return [child for child in node.childNodes if child.namespaceURI == WORD_NS and child.localName == kind]
+
+                bodies = children(doc.documentElement, "body")
+                if len(bodies) != 1:
+                    raise DocumentError("document_docx_invalid")
+                title = None
+                for paragraph in children(bodies[0], "p"):
+                    properties = children(paragraph, "pPr")
+                    styles = children(properties[0], "pStyle") if properties else []
+                    if styles and styles[0].getAttributeNS(WORD_NS, "val") in ("Title", "Heading1"):
+                        title = paragraph
+                        break
+                if title is None:
+                    raise DocumentError("document_title_missing")
+                runs = [run for run in children(title, "r") if children(run, "t")]
+                if not runs:
+                    raise DocumentError("document_title_missing")
+                for run in runs:
+                    prefix = run.prefix or "w"
+                    properties = children(run, "rPr")
+                    props = properties[0] if properties else doc.createElementNS(WORD_NS, prefix + ":rPr")
+                    if not properties:
+                        run.insertBefore(props, run.firstChild)
+                    sizes = children(props, "sz")
+                    if not sizes:
+                        size = doc.createElementNS(WORD_NS, prefix + ":sz")
+                        following = next(iter(children(props, "szCs")), None)
+                        props.insertBefore(size, following)
+                        sizes.append(size)
+                    for size in sizes + children(props, "szCs"):
+                        size.setAttributeNS(WORD_NS, prefix + ":val", str(int(font_size_pt * 2)))
+                changed = doc.toxml(encoding="utf-8")
+            with zipfile.ZipFile(target, "x") as revised:
+                for entry in original.infolist():
+                    revised.writestr(entry, changed if entry.filename == member else original.read(entry))
+    except (KeyError, OSError, ExpatError, zipfile.BadZipFile):
+        raise DocumentError("document_title_revision_failed")
+    return {"path": str(target), "sha256": file_digest(target), "font_size_pt": font_size_pt}

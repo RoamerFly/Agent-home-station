@@ -141,6 +141,10 @@ func StationImageDocumentTool() mcptools.Tool {
 	return tool("wechat_document_reconstruct_image", "从获准的 PNG/JPEG 原图用本机 OCR 重建可编辑 Word，并按请求准备 PDF、Word 或两者。默认只准备 PDF，保留可编辑原稿。识别不可靠时先核对对应位置。成功后仅选中用户要求交付的 media.id，程序才会发送。适合正文、标题和有边框表格。", `{"type":"object","properties":{"message_id":{"type":"string","minLength":1,"maxLength":8192},"base_name":{"type":"string","minLength":1,"maxLength":110,"description":"可选文件名主体，不含后缀。"},"format":{"type":"string","enum":["pdf","docx","both"],"default":"pdf"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["message_id"],"additionalProperties":false}`)
 }
 
+func StationDocumentRevisionTool() mcptools.Tool {
+	return tool("wechat_document_revision", "用户追问修改上一份文档时，先 list 查本会话该请求者的原稿。选定后用 resize_title、asset_id、expected_sha256 和字号生成新版本，默认交付 PDF。选中用户要的 media.id 后才发送。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","resize_title"]},"asset_id":{"type":"string"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"font_size_pt":{"type":"number","minimum":8,"maximum":48,"multipleOf":0.5},"format":{"type":"string","enum":["pdf","docx","both"]},"filename_contains":{"type":"string","maxLength":120},"after":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":10}},"required":["action"],"additionalProperties":false}`)
+}
+
 func StationAttachmentReplyTool() mcptools.Tool {
 	return tool("wechat_attachment_reply_prepare", "为本会话的当前消息或核验引用准备原附件回复。只准备，尚未上传或发送。用返回的 media.id 放进最终 reply 的 media_ids。默认按原媒体类型发送；用户明确要原文件时用 format=file。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"format":{"type":"string","enum":["original","file"]}},"required":["message_id"],"additionalProperties":false}`)
 }

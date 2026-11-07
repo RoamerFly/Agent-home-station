@@ -70,6 +70,7 @@ func TestLiveStationWechatDocumentLPAC(t *testing.T) {
 	home := f.handler.chat.projectTools.home
 	testStationWechatDocument(t, stationDocumentTools{available: home.stationDocumentAvailable, inspect: home.inspectStationDocument,
 		imageAvailable: home.stationDocumentImageAvailable, reconstructImage: home.reconstructStationDocumentImage,
+		reviseAvailable: home.stationDocumentRevisionAvailable, reviseTitle: home.reviseStationDocumentTitle,
 		exportAvailable: home.stationDocumentExportAvailable, exportPDF: home.exportStationDocumentPDF}, true,
 		func(data []byte) string { return localPDFExtractText(t, options, data) })
 	entries, err := os.ReadDir(filepath.Join(home.dataDir, "project-tool-tasks"))
@@ -118,11 +119,29 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		}
 		return "file"
 	}
-	var transfers atomic.Int32
+	var transfers, uploads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		write := func(value any) { _ = json.NewEncoder(w).Encode(value) }
 		if r.URL.Path == "/v1/status" {
 			write(map[string]any{"pid": 1234, "dataDir": root, "serverId": "document-fixture", "ownershipGeneration": "fixture"})
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/v1/accounts/one/uploads" {
+			uploads.Add(1)
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			data, err := io.ReadAll(file)
+			_ = file.Close()
+			if err != nil || header.Filename != "复刻文档.pdf" || !bytes.HasPrefix(data, []byte("%PDF-")) {
+				t.Error("unexpected revision upload")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			write(map[string]any{"id": "revised-pdf-upload", "name": header.Filename, "byteLength": len(data),
+				"sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
 			return
 		}
 		if r.URL.Path == "/v1/accounts/one/threads/"+thread+"/messages" {
@@ -277,6 +296,115 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 			if !strings.Contains(wordXML, expected) || !strings.Contains(pdfText, expected) {
 				t.Fatalf("missing %q from Word or PDF text: Word=%s PDF=%s", expected, wordXML, pdfText)
 			}
+		}
+		followup := request
+		followup.TraceID, followup.MessageTime, followup.QuotedSource = "resize-title-later", now.Add(3*time.Minute).Format(time.RFC3339), nil
+		tools.SetTrace(followup)
+		resize := func(raw string) (string, error) {
+			return tools.Call(t.Context(), "wechat_document_revision", json.RawMessage(raw))
+		}
+		if _, err := resize(`{"action":"list"}`); !errors.Is(err, wechatapp.ErrAttachmentDenied) {
+			t.Fatalf("follow-up did not require history grant: %v", err)
+		}
+		tools.reads = map[string]time.Time{thread: now.Add(-time.Minute)}
+		caps, err := tools.List(t.Context())
+		if err != nil || !slices.ContainsFunc(caps, func(tool mcptools.Tool) bool { return tool.Name == "wechat_document_revision" }) {
+			t.Fatalf("follow-up could not discover revision tool: %v, %v", caps, err)
+		}
+		prior, err := tools.readDocumentReply(prepared.Word.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wordList, err := resize(`{"action":"list","limit":1}`)
+		if err != nil || !strings.Contains(wordList, prepared.Word.ID) || !strings.Contains(wordList, prior.Product.SHA256) {
+			t.Fatalf("follow-up could not locate the exact original Word version: %s, %v", wordList, err)
+		}
+		raw := fmt.Sprintf(`{"action":"resize_title","asset_id":%q,"expected_sha256":%q,"font_size_pt":26.5}`, prepared.Word.ID, prior.Product.SHA256)
+		other := followup
+		other.Sender = "another-member"
+		tools.SetTrace(other)
+		if list, err := resize(`{"action":"list"}`); err != nil || strings.Contains(list, prepared.Word.ID) {
+			t.Fatalf("other requester saw prior Word: %s, %v", list, err)
+		}
+		if _, err := resize(raw); !errors.Is(err, wechatapp.ErrAttachmentDenied) {
+			t.Fatalf("other requester edited prior Word: %v", err)
+		}
+		tools.SetTrace(followup)
+		if _, ok := tools.Media("reply-" + prepared.Word.ID); ok {
+			t.Fatal("prior handoff was selectable for delivery in the follow-up")
+		}
+		if _, err := resize(strings.Replace(raw, prior.Product.SHA256, strings.Repeat("a", 64), 1)); err == nil || !strings.Contains(err.Error(), "摘要") {
+			t.Fatalf("incorrect version was not rejected: %v", err)
+		}
+		downloadCount := transfers.Load()
+		newReply, err := resize(raw)
+		var revised struct {
+			Status string
+			Parent string `json:"revised_from"`
+			Media  []companion.GeneratedMedia
+			Word   struct {
+				ID string `json:"asset_id"`
+			} `json:"editable_document"`
+		}
+		if err != nil || json.Unmarshal([]byte(newReply), &revised) != nil || revised.Status != "prepared" ||
+			revised.Parent != prepared.Word.ID || revised.Word.ID == prepared.Word.ID || len(revised.Media) != 1 ||
+			revised.Media[0].ParentAssetID != revised.Word.ID || transfers.Load() != downloadCount {
+			t.Fatalf("title edit did not reuse Word and prepare new PDF: %s, %v", newReply, err)
+		}
+		readRevision := func(id string) []byte {
+			_, file, err := tools.openDocumentReply(t.Context(), followup, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return data
+		}
+		revisedXML := localDOCXDocumentXML(t, readRevision(revised.Word.ID))
+		revisedPDF := imagePDFText(readRevision(revised.Media[0].AssetID))
+		if !strings.Contains(revisedXML, `<w:sz w:val="53"/>`) || strings.Count(revisedXML, "<w:tc>") != 4 ||
+			!strings.Contains(revisedXML, "本次测试用于核对文档复刻结果") || !strings.Contains(revisedPDF, "文件交接记录") {
+			t.Fatalf("title, table and Chinese text verification failed: %s, %s", revisedXML, revisedPDF)
+		}
+		if repeated, err := resize(raw); err != nil || repeated != newReply {
+			t.Fatalf("revision retry prepared a different product: %s, %v", repeated, err)
+		}
+		if uploads.Load() != 0 {
+			t.Fatal("preparing a revision uploaded without a selected final reply")
+		}
+		selected, ok := tools.Media(revised.Media[0].ID)
+		if !ok || selected.AssetID != revised.Media[0].AssetID {
+			t.Fatal("verified new PDF could not be selected for delivery")
+		}
+		if upload, err := tools.stageReply(t.Context(), followup, selected.Kind, selected.AssetID); err != nil ||
+			upload != "revised-pdf-upload" || uploads.Load() != 1 {
+			t.Fatalf("selected PDF did not reach the simulated native endpoint: %q, %v", upload, err)
+		}
+		later := followup
+		later.TraceID, later.MessageTime = "later-version-list", now.Add(4*time.Minute).Format(time.RFC3339)
+		tools.SetTrace(later)
+		firstPage, err := resize(`{"action":"list","limit":1}`)
+		var page struct {
+			Items []stationEditableDocument
+			After string `json:"next_after"`
+		}
+		if err != nil || json.Unmarshal([]byte(firstPage), &page) != nil || len(page.Items) != 1 || page.Items[0].AssetID != revised.Word.ID || page.After != revised.Word.ID {
+			t.Fatalf("latest edition not listed first: %s, %v", firstPage, err)
+		}
+		nextPage, err := resize(fmt.Sprintf(`{"action":"list","limit":1,"after":%q}`, page.After))
+		if err != nil || json.Unmarshal([]byte(nextPage), &page) != nil || len(page.Items) != 1 || page.Items[0].AssetID != prepared.Word.ID {
+			t.Fatalf("old edition not available on the next page: %s, %v", nextPage, err)
+		}
+		tools.SetTrace(followup)
+		tools.reads = nil
+		if _, ok := tools.Media(revised.Media[0].ID); ok {
+			t.Fatal("revised PDF remained selectable after history revocation")
+		}
+		if _, err := tools.stageReply(t.Context(), followup, selected.Kind, selected.AssetID); err == nil || uploads.Load() != 1 {
+			t.Fatal("revoked revision reached the simulated upload endpoint")
 		}
 		tools.SetTrace(current)
 	}

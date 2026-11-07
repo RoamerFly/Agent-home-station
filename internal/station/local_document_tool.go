@@ -20,6 +20,9 @@ const (
 	localDocumentCapability  = "document.reconstruct"
 	localDocumentInspectTool = "project_document_inspect"
 	localDocumentExportTool  = "project_document_export_pdf"
+	localDocumentReviseTool  = "project_document_revise_title"
+	localDocumentRevise      = "document.revise_title"
+	localDocumentV012Digest  = "8d7dc37f6ab4651a799be98237687d626a3865b6a0b5be6935a8e9566440f0de"
 	localDocumentInspect     = "document.inspect"
 	localDocumentExport      = "document.export_pdf"
 	// Official release bundled with 5.E.1. Existing installations retain
@@ -48,6 +51,8 @@ func documentToolCapability(name string) string {
 		return localDocumentInspect
 	case localDocumentExportTool:
 		return localDocumentExport
+	case localDocumentReviseTool:
+		return localDocumentRevise
 	}
 	return ""
 }

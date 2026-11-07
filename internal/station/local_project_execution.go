@@ -60,10 +60,23 @@ func (t *localToolSet) projectHostForDiscovery() *localProjectToolHost {
 func installedLocalProject(ctx context.Context, host *localProjectToolHost, operation localProjectOperation) (pluginhost.InstalledPackage, error) {
 	item, err := host.store.Installed(ctx, operation.pkg)
 	contract, contractErr := catalog.ContractFor(operation.pkg)
-	if err != nil || contractErr != nil || !item.Enabled || item.Removed || item.Digest != contract.ManifestSHA256 && (operation.capability != localDocumentCapability || item.Digest != localDocumentLegacyDigest) {
+	if err != nil || contractErr != nil || !item.Enabled || item.Removed || item.Digest != contract.ManifestSHA256 && !compatibleDocumentDigest(operation, item.Digest) {
 		return item, errors.New("项目工具未启用或安装版本待核对")
 	}
 	return item, nil
+}
+
+func compatibleDocumentDigest(operation localProjectOperation, digest string) bool {
+	if operation.pkg != pluginruntime.DocumentWorkshopID {
+		return false
+	}
+	switch operation.capability {
+	case localDocumentCapability:
+		return digest == localDocumentLegacyDigest || digest == localDocumentV012Digest
+	case localDocumentInspect, localDocumentExport:
+		return digest == localDocumentV012Digest
+	}
+	return false
 }
 
 func (t *localToolSet) invokeLocalProjectTool(ctx context.Context, tool string, arguments json.RawMessage, inputID string) (string, error) {

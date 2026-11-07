@@ -41,6 +41,8 @@ type stationDocumentReply struct {
 	OriginalSHA, Epoch, Trace, User string
 	MediaGrant, HistoryGrant        time.Time
 	Name                            string
+	RequestAt                       string              `json:",omitempty"`
+	TitleHalfPoints                 int                 `json:",omitempty"`
 	ParentAsset                     string              `json:",omitempty"`
 	Layout                          *stationImageLayout `json:",omitempty"`
 	Product                         stationDocumentProduct
@@ -55,6 +57,9 @@ func (r stationDocumentReply) id() string {
 		r.OriginalSHA, r.Epoch, r.Trace, r.User, r.MediaGrant, r.HistoryGrant, r.Name}
 	if r.ParentAsset != "" {
 		key = append(key, r.ParentAsset)
+	}
+	if r.TitleHalfPoints != 0 {
+		key = append(key, r.TitleHalfPoints)
 	}
 	return prefix + localCheckpointKey(key...)
 }
@@ -135,7 +140,7 @@ func (t *stationAttachmentTools) prepareDocumentReply(ctx context.Context, raw j
 
 func (t *stationAttachmentTools) documentReplyForInput(in *stationDocumentInput, name string) stationDocumentReply {
 	reply := stationDocumentReply{Source: in.record.Source, Reference: in.sourceRef, OriginalSHA: in.record.SHA256,
-		Epoch: in.epoch, Trace: t.trace.TraceID, User: t.trace.Sender, MediaGrant: t.replies[t.trace.Thread], Name: name}
+		Epoch: in.epoch, Trace: t.trace.TraceID, User: t.trace.Sender, RequestAt: t.trace.MessageTime, MediaGrant: t.replies[t.trace.Thread], Name: name}
 	if in.history {
 		reply.HistoryGrant = t.reads[t.trace.Thread]
 	}
@@ -176,15 +181,19 @@ func (t *stationAttachmentTools) preparePDFHandoff(ctx context.Context, reply st
 }
 
 func (t *stationAttachmentTools) documentReplyAccess(ctx context.Context, in companion.Input, r stationDocumentReply) (stationAttachmentAccess, error) {
+	return t.documentSourceAccess(ctx, in, r, false)
+}
+
+func (t *stationAttachmentTools) documentSourceAccess(ctx context.Context, in companion.Input, r stationDocumentReply, followup bool) (stationAttachmentAccess, error) {
 	denied := wechatapp.ErrAttachmentDenied
-	if !t.replyAllowed(in) || !t.scopeAllowed(in, t.grants) || in.TraceID == "" || in.TraceID != r.Trace || in.Sender != r.User ||
+	if !t.replyAllowed(in) || !t.scopeAllowed(in, t.grants) || in.TraceID == "" || !followup && in.TraceID != r.Trace || in.Sender != r.User ||
 		in.Account != r.Source.Account || in.Thread != r.Source.Thread || !t.grants[in.Thread].Equal(r.Source.Grant) ||
 		!t.replies[in.Thread].Equal(r.MediaGrant) {
 		return stationAttachmentAccess{}, denied
 	}
 	allowed := func() bool {
 		return t.replyAllowed(in) && t.scopeAllowed(in, t.grants) &&
-			(r.HistoryGrant.IsZero() || t.reads[in.Thread].Equal(r.HistoryGrant) && t.scopeAllowed(in, t.reads))
+			(!followup || t.scopeAllowed(in, t.reads)) && (r.HistoryGrant.IsZero() || t.reads[in.Thread].Equal(r.HistoryGrant) && t.scopeAllowed(in, t.reads))
 	}
 	epoch, err := t.store.RecallEpoch(ctx)
 	if err != nil || r.Epoch != epoch || !allowed() {
@@ -224,7 +233,8 @@ func (t *stationAttachmentTools) readDocumentReply(id string) (stationDocumentRe
 	raw, err := io.ReadAll(io.LimitReader(file, 64<<10))
 	if err != nil || len(raw) >= 64<<10 || json.Unmarshal(raw, &r) != nil || r.id() != id ||
 		!validStationDocumentName(r.Name, r.extension()) || !validStationDocumentProduct(r.Product, r.extension()) ||
-		!artifactID("sha-"+r.OriginalSHA, "sha-") || r.ParentAsset != "" && !artifactID(r.ParentAsset, stationDOCXPrefix) {
+		!artifactID("sha-"+r.OriginalSHA, "sha-") || r.ParentAsset != "" && !artifactID(r.ParentAsset, stationDOCXPrefix) ||
+		r.TitleHalfPoints != 0 && (r.extension() != ".docx" || r.ParentAsset == "" || r.TitleHalfPoints < 16 || r.TitleHalfPoints > 96) {
 		return stationDocumentReply{}, errors.New("文档回复记录无效")
 	}
 	return r, nil
@@ -292,27 +302,32 @@ func (t *stationAttachmentTools) openDocumentReply(ctx context.Context, in compa
 	if _, err := t.documentReplyAccess(ctx, in, r); err != nil {
 		return r, nil, err
 	}
-	root, err := workspacefs.OpenPath(filepath.Join(t.dir, "document-replies", id))
+	file, err := t.openDocumentProduct(ctx, in, r)
+	return r, file, err
+}
+
+func (t *stationAttachmentTools) openDocumentProduct(ctx context.Context, in companion.Input, r stationDocumentReply) (*os.File, error) {
+	root, err := workspacefs.OpenPath(filepath.Join(t.dir, "document-replies", r.id()))
 	if err != nil {
-		return r, nil, errors.New("文档回复目录不可用")
+		return nil, errors.New("文档回复目录不可用")
 	}
 	defer root.Close()
 	file, err := workspacefs.OpenRegular(root, "content"+r.extension())
 	if err != nil {
-		return r, nil, errors.New("文档成品不可用")
+		return nil, errors.New("文档成品不可用")
 	}
 	hash := sha256.New()
 	reader := attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil && t.replyAllowed(in) }, out: hash}
 	n, err := io.Copy(reader, io.LimitReader(file, r.Product.Bytes+1))
 	if err != nil || n != r.Product.Bytes || hex.EncodeToString(hash.Sum(nil)) != r.Product.SHA256 {
 		file.Close()
-		return r, nil, errors.New("文档成品长度或摘要不匹配")
+		return nil, errors.New("文档成品长度或摘要不匹配")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		file.Close()
-		return r, nil, err
+		return nil, err
 	}
-	return r, file, nil
+	return file, nil
 }
 
 func (t *stationAttachmentTools) verifyDocumentReplySource(ctx context.Context, in companion.Input, r stationDocumentReply) error {

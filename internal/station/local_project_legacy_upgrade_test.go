@@ -17,7 +17,7 @@ import (
 func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 	legacy := os.Getenv("AHS_LOCAL_PROJECT_DOCUMENT_LEGACY_CATALOG")
 	if runtime.GOOS != "windows" || os.Getenv("AHS_LOCAL_PROJECT_DOCUMENT_LPAC_TEST") != "1" || legacy == "" {
-		t.Skip("set the Windows LPAC fixture and the 5.E.1 official catalog path")
+		t.Skip("set the Windows LPAC fixture and an earlier official document catalog path")
 	}
 	options := localProjectToolWindowsOptions(t)
 	base := t.TempDir()
@@ -36,7 +36,8 @@ func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared, err := host.store.Prepare(t.Context(), filepath.Join(legacy, pluginruntime.DocumentWorkshopID))
-	if err != nil || prepared.Digest != localDocumentLegacyDigest {
+	previousMinor := prepared.Digest == localDocumentV012Digest
+	if err != nil || !previousMinor && prepared.Digest != localDocumentLegacyDigest {
 		t.Fatalf("legacy official catalog not verified: %v", err)
 	}
 	old, err := host.store.Install(t.Context(), prepared.Token, prepared.Digest, []string{"artifact.read", "artifact.write"})
@@ -48,7 +49,7 @@ func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 		t.Fatalf("legacy enable: %d %#v", code, out)
 	}
 	before := localProjectToolsView(t, f)
-	if before["update_available"] != true || before["pdf_ready"] != false {
+	if before["update_available"] != true || before["pdf_ready"] != previousMinor {
 		t.Fatal("legacy package advertised unsupported PDF", before)
 	}
 	var artifact string
@@ -57,8 +58,9 @@ func TestLiveLocalProjectDocumentLegacyUpgrade(t *testing.T) {
 		return localModelFunc(func(_ context.Context, system string, turns []map[string]string) (string, error) {
 			round++
 			if round == 1 {
-				if !strings.Contains(system, localDocumentToolName) || strings.Contains(system, localDocumentInspectTool) || strings.Contains(system, localDocumentExportTool) {
-					t.Error("legacy discovery did not keep only document creation")
+				if !strings.Contains(system, localDocumentToolName) || strings.Contains(system, localDocumentInspectTool) != previousMinor ||
+					strings.Contains(system, localDocumentExportTool) != previousMinor {
+					t.Error("legacy discovery did not preserve the capabilities of the installed release")
 				}
 				return localToolCall(localDocumentToolName, map[string]any{
 					"layout": map[string]any{"blocks": []any{map[string]string{"kind": "paragraph", "text": "保留的旧版成品"}}},

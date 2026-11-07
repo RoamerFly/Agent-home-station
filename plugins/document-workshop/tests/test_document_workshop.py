@@ -49,6 +49,37 @@ class DocumentWorkshopTests(unittest.TestCase):
             self.assertTrue(verified["ok"])
             self.assertTrue(verified["editable"])
 
+    def test_revise_title_preserves_body_tables_and_original(self):
+        layout = {"blocks": [
+            {"kind": "heading", "level": 1, "text": "旧文档标题"},
+            {"kind": "paragraph", "text": "合成正文", "font_size_pt": 11},
+            {"kind": "table", "rows": [["项目", "结果"], ["修改", "通过"]]},
+        ]}
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            original = Path(logic.reconstruct(layout, root, "original.docx")["path"])
+            digest = logic.file_digest(original)
+            revised = Path(logic.revise_title(original, root, "revision.docx", 26.5)["path"])
+            self.assertEqual(logic.file_digest(original), digest)
+            self.assertNotEqual(logic.file_digest(revised), digest)
+            self.assertEqual(logic.text_content(original), logic.text_content(revised))
+            member = "word/document.xml"
+            with zipfile.ZipFile(original) as before, zipfile.ZipFile(revised) as after:
+                self.assertEqual(before.namelist(), after.namelist())
+                for name in before.namelist():
+                    if name != member:
+                        self.assertEqual(before.read(name), after.read(name))
+                new_xml = after.read(member)
+                self.assertIn(b'<w:sz w:val="53"/>', new_xml)
+                self.assertIn(b'<w:sz w:val="22"/>', new_xml)
+                self.assertIn(b"<w:tbl>", new_xml)
+            with self.assertRaisesRegex(logic.DocumentError, "document_font_size_invalid"):
+                logic.revise_title(original, root, "invalid.docx", 22.2)
+            no_title = Path(logic.reconstruct({"blocks": [{"kind": "paragraph", "text": "正文"}]}, root, "no-title.docx")["path"])
+            with self.assertRaisesRegex(logic.DocumentError, "document_title_missing"):
+                logic.revise_title(no_title, root, "not-created.docx", 24)
+            self.assertFalse((root / "not-created.docx").exists())
+
     def test_docx_inspection_returns_editable_flow_layout_when_requested(self):
         layout = {
             "blocks": [

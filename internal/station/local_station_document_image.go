@@ -128,12 +128,39 @@ func (h *localHomeService) reconstructStationDocumentImage(ctx context.Context, 
 	return layout, nil
 }
 
+func (h *localHomeService) stationDocumentRevisionAvailable(ctx context.Context) bool {
+	return h.stationDocumentToolAvailable(ctx, projectOperation(localDocumentReviseTool), false)
+}
+
+func (h *localHomeService) reviseStationDocumentTitle(ctx context.Context, in stationDocumentInput, halfPoints int,
+	persist func(context.Context, *os.File, stationDocumentProduct) error) error {
+	if in.extension != ".docx" || in.file == nil || in.check == nil || persist == nil || in.handoffKey == "" || halfPoints < 16 || halfPoints > 96 {
+		return errors.New("Word 修订缺少已核验原稿或有效字号")
+	}
+	policy := &stationDocumentImagePolicy{reconstruct: true, filename: stationDOCXRuntimeName, titleHalfPoints: halfPoints,
+		persist: func(ctx context.Context, f *os.File, p stationDocumentProduct, _ stationImageLayout) error {
+			return persist(ctx, f, p)
+		}}
+	args := map[string]any{"artifact_id": in.record.ID, "filename": stationDOCXRuntimeName, "font_size_pt": float64(halfPoints) / 2}
+	key := []any{"docx-title-revision", in.record.ID, in.record.SHA256, in.handoffKey}
+	private, err := h.runStationDocument(ctx, in, projectOperation(localDocumentReviseTool), args, key, nil, policy)
+	if err != nil {
+		return err
+	}
+	var product stationDocumentProduct
+	if json.Unmarshal(private, &product) != nil || !validStationDocumentProduct(product, ".docx") {
+		return errors.New("Word 修订结果不完整")
+	}
+	return nil
+}
+
 type stationDocumentImagePolicy struct {
 	inspect, reconstruct bool
 	filename             string
 	layout               stationImageLayout
 	persist              func(context.Context, *os.File, stationDocumentProduct, stationImageLayout) error
 	ocrObservation       *pluginruntime.DocumentOCRObservation
+	titleHalfPoints      int
 }
 
 func stationImageInspectionEvidence(in stationDocumentInput, evidence json.RawMessage) error {
@@ -156,23 +183,28 @@ func stationImageInspectionEvidence(in stationDocumentInput, evidence json.RawMe
 	return nil
 }
 
-func (p stationDocumentPolicy) validateImageDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, wire stationDocumentResultEnvelope) (pluginruntime.VerifiedResult, error) {
+func (p stationDocumentPolicy) validatePreparedDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, wire stationDocumentResultEnvelope) (pluginruntime.VerifiedResult, error) {
 	var verified pluginruntime.VerifiedResult
 	if p.image == nil || !p.image.reconstruct || p.image.persist == nil || p.image.filename != stationDOCXRuntimeName ||
 		len(wire.Outputs) != 1 {
-		return verified, errors.New("图片 Word 复刻未返回可核对的成品")
+		return verified, errors.New("Word 成品未返回可核对的成品")
 	}
 	var evidence struct {
-		SHA256 string `json:"sha256"`
+		SHA256      string  `json:"sha256"`
+		InputSHA256 string  `json:"input_sha256"`
+		FontSize    float64 `json:"font_size_pt"`
 	}
 	if json.Unmarshal(wire.Evidence, &evidence) != nil || !artifactID("sha-"+evidence.SHA256, "sha-") {
-		return verified, errors.New("图片 Word 复刻回执无效")
+		return verified, errors.New("Word 成品回执无效")
+	}
+	if p.image.titleHalfPoints != 0 && (evidence.InputSHA256 != p.in.record.SHA256 || evidence.FontSize*2 != float64(p.image.titleHalfPoints)) {
+		return verified, errors.New("Word 修订回执的原稿摘要或字号不匹配")
 	}
 	entry := wire.Outputs[0]
 	if entry.Role != "editable_source" || entry.MIMEType != localDOCXMIME || entry.DisplayName != p.image.filename {
-		return verified, errors.New("图片 Word 复刻输出格式不符合任务范围")
+		return verified, errors.New("Word 成品输出格式不符合任务范围")
 	}
-	product, err := p.persistVerifiedImageDOCX(ctx, job, cap, entry.Path, evidence.SHA256)
+	product, err := p.persistVerifiedDOCX(ctx, job, cap, entry.Path, evidence.SHA256)
 	if err != nil {
 		return verified, err
 	}
@@ -184,52 +216,52 @@ func (p stationDocumentPolicy) validateImageDOCX(ctx context.Context, job plugin
 	return verified, nil
 }
 
-func (p stationDocumentPolicy) persistVerifiedImageDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, returned, evidenceSHA string) (stationDocumentProduct, error) {
+func (p stationDocumentPolicy) persistVerifiedDOCX(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, returned, evidenceSHA string) (stationDocumentProduct, error) {
 	var empty stationDocumentProduct
 	if p.image == nil || p.image.persist == nil {
-		return empty, errors.New("图片 Word 成品登记不可用")
+		return empty, errors.New("Word 成品登记不可用")
 	}
 	rel, err := filepath.Rel(windowsProjectToolPath(p.output), windowsProjectToolPath(returned))
 	if err != nil || !filepath.IsAbs(returned) || rel != p.image.filename || !filepath.IsLocal(rel) ||
 		!validStationDocumentName(rel, ".docx") || rel != filepath.Base(rel) {
-		return empty, errors.New("图片 Word 输出路径不符合任务范围")
+		return empty, errors.New("Word 输出路径不符合任务范围")
 	}
 	root, err := workspacefs.OpenPath(p.output)
 	if err != nil {
-		return empty, errors.New("图片 Word 输出目录不可用")
+		return empty, errors.New("Word 输出目录不可用")
 	}
 	defer root.Close()
 	file, err := workspacefs.OpenRegular(root, rel)
 	if err != nil {
-		return empty, errors.New("图片 Word 输出文件不可用")
+		return empty, errors.New("Word 输出文件不可用")
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > stationDocumentLimit ||
 		validateLocalDOCX(file, info.Size()) != nil {
-		return empty, errors.New("图片 Word 输出文件结构无效")
+		return empty, errors.New("Word 输出文件结构无效")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return empty, errors.New("图片 Word 输出文件无法校验")
+		return empty, errors.New("Word 输出文件无法校验")
 	}
 	hash := sha256.New()
 	size, err := io.Copy(hash, file)
 	actualSHA := hex.EncodeToString(hash.Sum(nil))
 	if err != nil || size != info.Size() || actualSHA != evidenceSHA {
-		return empty, errors.New("图片 Word 输出文件摘要不符合验证回执")
+		return empty, errors.New("Word 输出文件摘要不符合验证回执")
 	}
 	product := stationDocumentProduct{Filename: p.image.filename, SHA256: actualSHA, Bytes: size}
 	if !validStationDocumentProduct(product, ".docx") {
-		return empty, errors.New("图片 Word 成品信息无效")
+		return empty, errors.New("Word 成品信息无效")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return empty, errors.New("图片 Word 输出文件无法交付")
+		return empty, errors.New("Word 输出文件无法交付")
 	}
 	if err := p.Check(ctx, job, cap); err != nil {
 		return empty, err
 	}
 	if err := p.image.persist(ctx, file, product, p.image.layout); err != nil {
-		return empty, errors.New("图片 Word 成品登记失败")
+		return empty, errors.New("Word 成品登记失败")
 	}
 	return product, nil
 }

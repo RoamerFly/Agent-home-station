@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
@@ -72,16 +73,25 @@ func (t *stationAttachmentTools) prepareImageDocument(ctx context.Context, raw j
 	if word.Layout == nil || word.Layout.NeedsClarification {
 		return "", errors.New("缺少可核对的 Word 版式记录")
 	}
+	return t.prepareEditableDelivery(ctx, in, word, wordFile, args.Format)
+}
+
+func (t *stationAttachmentTools) prepareEditableDelivery(ctx context.Context, in stationDocumentInput, word stationDocumentReply, wordFile *os.File, format string) (string, error) {
 	files := make([]companion.GeneratedMedia, 0, 2)
-	if args.Format == "docx" || args.Format == "both" {
+	if format == "docx" || format == "both" {
 		files = append(files, word.media())
 	}
-	result := map[string]any{"status": "prepared", "message_id": args.Message, "source_sha256": in.record.SHA256,
+	result := map[string]any{"status": "prepared", "message_id": word.Source.Message, "source_sha256": word.OriginalSHA,
 		"editable_document": map[string]any{"asset_id": word.id(), "sha256": word.Product.SHA256, "filename": word.Name},
 		"layout":            stationImageLayoutSummary(*word.Layout)}
-	if args.Format != "docx" {
-		pdfReply := wordReply
-		pdfReply.Name, pdfReply.ParentAsset, pdfReply.Layout = args.Base+".pdf", word.id(), nil
+	if word.TitleHalfPoints != 0 {
+		result["revised_from"] = word.ParentAsset
+		result["title_font_size_pt"] = float64(word.TitleHalfPoints) / 2
+	}
+	if format != "docx" {
+		pdfReply := word
+		pdfReply.Name, pdfReply.ParentAsset, pdfReply.Layout = strings.TrimSuffix(word.Name, ".docx")+".pdf", word.id(), nil
+		pdfReply.TitleHalfPoints = 0
 		pdfInput := in
 		pdfInput.record.ID, pdfInput.record.Bytes, pdfInput.record.SHA256, pdfInput.record.MIME =
 			word.id(), word.Product.Bytes, word.Product.SHA256, localDOCXMIME

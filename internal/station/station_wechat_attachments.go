@@ -399,6 +399,11 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if (len(t.documentRefs(3)) != 0 || t.historyAllowed(ctx)) && t.replyAllowed(t.trace) && t.canReconstructImage(ctx) {
 		tools = append(tools, wechatapp.StationImageDocumentTool())
 	}
+	if t.canReviseDocument(ctx) {
+		if info, err := os.Stat(filepath.Join(t.dir, "document-replies")); err == nil && info.IsDir() {
+			tools = append(tools, wechatapp.StationDocumentRevisionTool())
+		}
+	}
 	if stationAttachmentRef(t.trace.Source) || stationAttachmentRef(t.trace.QuotedSource) {
 		tools = append(tools, wechatapp.StationAttachmentTool())
 		if t.replyAllowed(t.trace) {
@@ -445,6 +450,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_document_export_pdf" {
 		return t.prepareDocumentReply(ctx, raw)
+	}
+	if name == "wechat_document_revision" {
+		return t.documentRevision(ctx, raw)
 	}
 	if name == "wechat_document_reconstruct_image" {
 		return t.prepareImageDocument(ctx, raw)

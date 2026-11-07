@@ -19,7 +19,8 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 		stationLocalASR{version: h.home.localStationASRVersion, transcribe: h.home.transcribeLocalStationAudio},
 		stationDocumentTools{available: h.home.stationDocumentAvailable, inspect: h.home.inspectStationDocument,
 			exportAvailable: h.home.stationDocumentExportAvailable, exportPDF: h.home.exportStationDocumentPDF,
-			imageAvailable: h.home.stationDocumentImageAvailable, reconstructImage: h.home.reconstructStationDocumentImage})
+			imageAvailable: h.home.stationDocumentImageAvailable, reconstructImage: h.home.reconstructStationDocumentImage,
+			reviseAvailable: h.home.stationDocumentRevisionAvailable, reviseTitle: h.home.reviseStationDocumentTitle})
 	if err != nil {
 		return apphost.Registry{}, nil, err
 	}
