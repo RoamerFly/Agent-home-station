@@ -220,6 +220,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	}
 	if id == localComfyPackage {
 		view.RuntimeReady = false
+		view.Reason = "comfyui_backend_not_configured"
 		if host != nil && s.comfy != nil {
 			info, workflows, err := s.comfySetup(ctx, host.store.Account())
 			view.RuntimeReady = err == nil
@@ -228,7 +229,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			if errors.Is(err, errLocalComfyWorkflowSetup) {
 				view.Reason = "comfyui_workflows_missing"
 			} else if err != nil {
-				view.Reason = "comfyui_backend_not_configured"
+				view.Reason = err.Error() // comfySetup returns only public setup messages.
 			}
 		}
 	}
@@ -239,6 +240,8 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			info, err := s.yue.Info(ctx, host.store.Account())
 			if err == nil {
 				view.RuntimeReady, backendBusy, view.Reason = true, info.Busy, ""
+			} else {
+				view.Reason = localComputeSetupReason(localYuEPackage, err)
 			}
 		}
 	}
@@ -480,7 +483,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 				if _, err := s.yue.Info(ctx, record.FishID); err != nil {
-					websession.Fail(w, 409, "请核对本机 YuE 部署、工作流和 FFmpeg 登记")
+					websession.Fail(w, 409, localComputeSetupReason(localYuEPackage, err))
 					return
 				}
 			}

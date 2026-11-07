@@ -384,13 +384,16 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	if err := ctx.Err(); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
-	data, err := localComfyServiceReadRegular(filepath.Join(s.dataDir, localComfyRegistrationFile), localComfyMaxManifest)
-	if err != nil || len(data) == 0 {
-		return localComfyRegistration{}, localComfyManifest{}, errors.New("station_comfyui_not_installed_or_authorized")
+	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+	if err != nil {
+		return localComfyRegistration{}, localComfyManifest{}, err
 	}
 	var registration localComfyRegistration
 	var fields map[string]json.RawMessage
-	if localComfyStrictDecode(data, &registration) != nil || json.Unmarshal(data, &fields) != nil || !localComfyRegistrationFields(fields) || registration.SchemaVersion != 1 || !registration.Enabled {
+	if localComfyStrictDecode(data, &registration) != nil || json.Unmarshal(data, &fields) != nil || !localComfyRegistrationFields(fields) || registration.SchemaVersion != 1 {
+		return localComfyRegistration{}, localComfyManifest{}, errors.New("station_comfyui_registration_invalid")
+	}
+	if !registration.Enabled {
 		return localComfyRegistration{}, localComfyManifest{}, errors.New("station_comfyui_not_installed_or_authorized")
 	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {

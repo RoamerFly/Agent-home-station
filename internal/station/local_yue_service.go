@@ -200,13 +200,16 @@ func (s *localYuEService) loadRegistration(ctx context.Context) (localYuERegistr
 	if err := ctx.Err(); err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err
 	}
-	data, err := localComfyServiceReadRegular(filepath.Join(s.dataDir, localYuERegistrationFile), localYuEMaxManifest)
-	if err != nil || len(data) == 0 {
-		return localYuERegistration{}, localYuEManifest{}, errors.New("station_yue_not_installed_or_authorized")
+	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localYuERegistrationFile), "station_yue_", localYuEMaxManifest)
+	if err != nil {
+		return localYuERegistration{}, localYuEManifest{}, err
 	}
 	var r localYuERegistration
 	var fields map[string]json.RawMessage
-	if localComfyStrictDecode(data, &r) != nil || json.Unmarshal(data, &fields) != nil || !localYuERegistrationFields(fields) || r.SchemaVersion != 1 || !r.Enabled {
+	if localComfyStrictDecode(data, &r) != nil || json.Unmarshal(data, &fields) != nil || !localYuERegistrationFields(fields) || r.SchemaVersion != 1 {
+		return localYuERegistration{}, localYuEManifest{}, errors.New("station_yue_registration_invalid")
+	}
+	if !r.Enabled {
 		return localYuERegistration{}, localYuEManifest{}, errors.New("station_yue_not_installed_or_authorized")
 	}
 	if err := r.validate(s.dataDir, s.editableRoot); err != nil {

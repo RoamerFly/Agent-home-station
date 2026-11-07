@@ -32,7 +32,7 @@ func (s *localProjectTools) comfySetup(ctx context.Context, fish string) (localC
 	}
 	deployment, err := s.comfy.Info(ctx, fish)
 	if err != nil || deployment.Binding == "" {
-		return localComfyDeployment{}, nil, errors.New("请检查本机 ComfyUI 运行环境和宿主私有部署登记")
+		return localComfyDeployment{}, nil, errors.New(localComputeSetupReason(localComfyPackage, err))
 	}
 	workflows, err := loadLocalComfyWorkflows(deployment.WorkflowRoot)
 	if err != nil || len(workflows) == 0 {
