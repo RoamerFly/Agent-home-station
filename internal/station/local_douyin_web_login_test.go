@@ -48,7 +48,41 @@ func newLocalDouyinWebFixture(t *testing.T) (*localHomeFixture, *localDouyinWebL
 		context.AfterFunc(ctx, func() { w.active.Store(false) })
 		return w, nil
 	}
+	m.openCreator = func(ctx context.Context, _ string) (localDouyinLoginWindow, error) {
+		w := new(syntheticDouyinLoginWindow)
+		w.active.Store(true)
+		context.AfterFunc(ctx, func() { w.active.Store(false) })
+		return w, nil
+	}
 	return f, m
+}
+
+func TestLocalDouyinWebCreatorLifecycleKeepsPublishGrant(t *testing.T) {
+	f, m := newLocalDouyinWebFixture(t)
+	initializeDouyinWeb(t, f)
+	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": view["revision"], "allow_publish": true}, true); code != 200 {
+		t.Fatal(code)
+	}
+	_, view = f.request("GET", localDouyinWebRoute, nil, false)
+	if view["publish_enabled"] != true {
+		t.Fatal("publish grant was not saved")
+	}
+	code, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin_creator", "revision": view["revision"]}, true)
+	if code != 200 || view["state"] != "login_open" || view["attempt_id"] == nil {
+		t.Fatalf("creator begin: %d %v", code, view)
+	}
+	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true); code != 200 {
+		t.Fatal(code)
+	}
+	_, final := f.request("GET", localDouyinWebRoute, nil, false)
+	if final["state"] != "saved" || final["publish_enabled"] != false || m.window != nil {
+		t.Fatalf("creator confirmation did not revoke old grant: %v", final)
+	}
+	if code, final := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": final["revision"], "allow_publish": true}, true); code != 200 || final["publish_enabled"] != true {
+		t.Fatalf("re-enable publish: %d %v", code, final)
+	}
 }
 
 func initializeDouyinWeb(t *testing.T, f *localHomeFixture) {

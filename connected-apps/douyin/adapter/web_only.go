@@ -9,11 +9,21 @@ import (
 // WebApp exposes the ordinary signed-in website connection. Its public method
 // set deliberately contains no developer authorization or publication API.
 type WebApp struct {
-	reader *SearchApp
+	reader      *SearchApp
+	publication WebPublicationBridge
 }
 
 func NewWebOnly(web WebReadConnection) *WebApp {
 	return &WebApp{reader: &SearchApp{webRead: web}}
+}
+
+// WithWebPublication attaches the host-owned ordinary-web creator bridge.
+// The bridge receives a verified artifact stream through apphost, rather than
+// a caller-provided file path.  Keeping it optional preserves a read-only
+// ordinary web connection when the station has not enabled creator tools.
+func (p *WebApp) WithWebPublication(bridge WebPublicationBridge) *WebApp {
+	p.publication = bridge
+	return p
 }
 
 func (p *WebApp) Registration() apphost.Registration {

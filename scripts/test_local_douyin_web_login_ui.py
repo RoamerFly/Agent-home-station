@@ -75,11 +75,21 @@ def verify(binary, output):
                             assert body == {"action": "begin", "revision": revision, "approve_profile": True}
                             begin_count += 1
                             revision += 1
-                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False}
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "publish_enabled": False}
                         elif action == "confirm":
                             assert body == {"action": "confirm", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home"}
+                            view = {"revision": revision, "state": "saved", "active": False, "available": True, "confirmed_at": "2030-01-02T03:04:05Z", "read_enabled": False, "read_scope": "home", "publish_enabled": False}
+                        elif action == "set_publish":
+                            assert body == {"action": "set_publish", "revision": revision, "allow_publish": True}
+                            assert view["state"] == "saved" and not view["active"] and "attempt_id" not in view
+                            revision += 1
+                            view = {**view, "revision": revision, "publish_enabled": True}
+                        elif action == "begin_creator":
+                            assert body == {"action": "begin_creator", "revision": revision, "approve_profile": True}
+                            begin_count += 1
+                            revision += 1
+                            view = {"revision": revision, "state": "login_open", "active": True, "available": True, "attempt_id": f"attempt-{begin_count}", "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "publish_enabled": False}
                         elif action == "set_read":
                             assert set(body) <= {"action", "revision", "allow_read", "read_scope", "allow_playback", "allow_audio", "allow_visual"}
                             assert isinstance(body["allow_read"], bool)
@@ -116,11 +126,11 @@ def verify(binary, output):
                         elif action == "clear":
                             assert body == {"action": "clear", "revision": revision, "approve_profile": True}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "publish_enabled": False}
                         elif action == "cancel":
                             assert body == {"action": "cancel", "revision": revision, "attempt_id": view["attempt_id"]}
                             revision += 1
-                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False}
+                            view = {"revision": revision, "state": "unconfigured", "active": False, "available": True, "read_enabled": False, "read_scope": "home", "playback_enabled": False, "audio_enabled": False, "visual_enabled": False, "publish_enabled": False}
                         else:
                             raise AssertionError(f"unexpected web-login action: {action}")
                         fulfill_json(view)(route)
@@ -166,6 +176,13 @@ def verify(binary, output):
                     page.get_by_text("网页登录资料已保存", exact=True).wait_for()
                     page.get_by_text("最近主人确认：", exact=False).wait_for()
                     assert page.get_by_text("登录状态以网页为准，保存后可用于本软件已支持的抖音功能。", exact=True).count() == 1
+                    page.get_by_text("普通账号发布许可未开启。", exact=True).wait_for()
+                    assert page.get_by_role("button", name="登录创作者中心", exact=True).is_disabled()
+                    page.get_by_role("checkbox", name="允许普通账号发布", exact=True).check()
+                    page.get_by_text("已允许普通账号发布。", exact=True).wait_for()
+                    page.get_by_text("已保存普通账号发布许可。", exact=True).wait_for()
+                    assert view["publish_enabled"] is True and view["read_enabled"] is False, "发布许可不能悄悄开启网页文字读取"
+                    assert page.get_by_role("button", name="登录创作者中心", exact=True).is_enabled()
                     page.get_by_role("button", name="允许读取首页文字", exact=True).click()
                     page.get_by_role("button", name="停止网页读取", exact=True).wait_for()
                     page.get_by_text("已允许读取实际网页文字。", exact=False).wait_for()
@@ -299,14 +316,15 @@ def verify(binary, output):
                     assert playback.is_checked()
                     assert audio.is_checked()
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
-                    # A saved profile can be opened again for a later re-login.
-                    page.get_by_role("button", name="重新打开登录窗口", exact=True).click()
+                    # Re-entering Creator Center starts a fresh login and revokes its old publish grant.
+                    page.get_by_role("button", name="登录创作者中心", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
                     assert view["read_scope"] == "home", "重新登录必须恢复默认读取范围"
                     assert view["playback_enabled"] is False, "重新登录必须撤销播放许可"
                     assert view["audio_enabled"] is False, "重新登录必须撤销音轨许可"
                     assert view["visual_enabled"] is False, "重新登录必须撤销画面分析许可"
+                    assert view["publish_enabled"] is False, "重新登录必须撤销普通账号发布许可"
                     assert playback.count() == 0
                     assert audio.count() == 0
                     assert visual.count() == 0
@@ -322,7 +340,7 @@ def verify(binary, output):
                     page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
-                    assert len(requests) == 29, f"unexpected web-login request count: {len(requests)}"
+                    assert len(requests) == 30, f"unexpected web-login request count: {len(requests)}"
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
                     page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))

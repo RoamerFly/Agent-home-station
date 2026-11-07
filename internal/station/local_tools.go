@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/stationruntime"
 )
 
 type localToolSet struct {
@@ -183,6 +185,26 @@ func (t *localToolSet) AgentContext(ctx context.Context) string {
 		data = map[string]any{"kind": "local_workspace", "authorized": false, "note": "家目录操作已暂停或尚未授权；文字聊天和本机对话读取仍可用。"}
 	} else {
 		data = map[string]any{"kind": "local_workspace", "authorized": true, "home": grant.Directory, "python_executable": t.python, "tool_directory": "Project Tools", "note": "家目录内可保存、修改、读取自己的项目与工具。先按需发现准确工具schema；只有实际进程结果能证明程序已运行成功。指定Python仅在运行器已配置时可用；无应用接入，不代表具有平台外发能力。"}
+		// Publish only host-selected, present command dependencies. Without this
+		// small index the model has to guess executable locations, which produces
+		// avoidable denied launches before it can write its own processing tool.
+		if t.process != nil {
+			programs := map[string]string{}
+			for _, root := range stationruntime.PackagedCommandRuntimeRoots(t.process.cfg) {
+				for _, name := range []string{"ffmpeg", "ffprobe"} {
+					for _, relative := range []string{name + ".exe", filepath.Join("bin", name+".exe")} {
+						path := filepath.Join(root, relative)
+						if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+							programs[name] = path
+							break
+						}
+					}
+				}
+			}
+			if len(programs) > 0 {
+				data["media_executables"] = programs
+			}
+		}
 	}
 	if t.run != nil && t.inspectOnly && t.run.CheckSource(ctx) == nil {
 		const preview = 8

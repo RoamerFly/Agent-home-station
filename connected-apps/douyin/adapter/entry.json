@@ -50,6 +50,15 @@
     "pagination": "host-owned",
     "profile": "host-owned"
   },
+  "web_publication": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "creator_center": "host-owned",
+    "owner_opt_in": "explicit-owner-web-publish",
+    "checkpoint": "host-owned-task-and-manifest",
+    "media": "host-verified-staged-artifact",
+    "reconcile": "query-only-after-submission"
+  },
   "connection": "web-page-text",
   "authentication": "host-owned-saved-web-login",
   "observation_fields": [

@@ -46,7 +46,7 @@ func (h *localHomeService) bindBundledObservationApps(registry apphost.Registry)
 	// resolves the login manager lazily after routes finish mounting.
 	for i, entry := range entries {
 		if entry.ID == douyinapp.ID {
-			entry.Provider = douyinapp.NewWebOnly(&localDouyinWebObservation{home: h, installation: entry.InstallationID})
+			entry.Provider = douyinapp.NewWebOnly(&localDouyinWebObservation{home: h, installation: entry.InstallationID}).WithWebPublication(&localDouyinWebPublication{home: h, installation: entry.InstallationID})
 			entry.Registration = "ordinary-web-v1"
 			entries[i] = entry
 		}

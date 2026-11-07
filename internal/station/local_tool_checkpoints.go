@@ -53,9 +53,6 @@ func (t *localToolSet) writeCheckpointed(ctx context.Context, name string, raw j
 }
 
 func (t *localToolSet) startCheckpointed(ctx context.Context, in localProcessInput) (string, error) {
-	if in.Path == "" || len(in.Argv) == 0 {
-		return "", errors.New("启动程序需要path和argv")
-	}
 	grant, err := t.access.resolve()
 	if err != nil {
 		return "", err
@@ -66,8 +63,28 @@ func (t *localToolSet) startCheckpointed(ctx context.Context, in localProcessInp
 		Tool: localProcessTool, Grant: scope,
 	}
 	in.Key = "local-" + op.Key
+	// An existing reservation is already an uncertain operation. Preserve the
+	// recovery path before validating current runtime configuration; otherwise
+	// a restarted host with a missing runner could hide the durable process.
+	for _, previous := range t.run.Operations {
+		if previous.Key == op.Key {
+			return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
+				return "", "", errors.New("已存在的进程操作不应再次启动")
+			})
+		}
+	}
+	// Validate before Reserve.  A malformed start is a repairable model
+	// argument error, not an uncertain side effect, so it must not put the
+	// remainder of this turn into inspect-only recovery.
+	cfg, known, err := t.process.preflight(in, grant)
+	if err != nil {
+		return "", err
+	}
+	if known != "" {
+		return known, nil
+	}
 	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
-		result, err := t.process.start(ctx, in, grant)
+		result, err := t.process.startPrepared(ctx, in, grant, cfg)
 		if err != nil {
 			return "", "", err
 		}

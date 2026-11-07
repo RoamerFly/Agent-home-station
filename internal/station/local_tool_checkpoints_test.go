@@ -161,6 +161,75 @@ func TestLocalToolCheckpointFindsInterruptedProcessBeforeModelRetry(t *testing.T
 	}
 }
 
+func TestLocalToolCheckpointRejectsInvalidProcessBeforeReserveAndContinuesTurn(t *testing.T) {
+	f := localChatFixture(t)
+	_, home := f.request("GET", "/api/local/home", nil, true)
+	dir := home["directory"].(string)
+	runtime := t.TempDir()
+	// The files need not exist for this preflight-only test; the config is
+	// syntactically valid so argv authorization is reached before any launch.
+	f.handler.chat.windows = &agenthost.WindowsConfig{
+		Pythonw: filepath.Join(runtime, "windows-python-cli", "pythonw.exe"),
+		Helper:  filepath.Join(runtime, "windows_agent_host.pyw"),
+		Spool:   filepath.Join(runtime, "spool"),
+	}
+	path := filepath.Join(dir, "works", "after-preflight.txt")
+	invalid := localToolCall(localProcessTool, map[string]any{
+		"action": "start", "path": "not-an-absolute-home-directory",
+		"argv": []string{filepath.Join(dir, "tool.exe")},
+	})
+	invalidExe := localToolCall(localProcessTool, map[string]any{
+		"action": "start", "path": dir,
+		"argv": []string{"not-an-authorized-absolute-exe"},
+	})
+	write := localToolCall("server_write", map[string]string{"path": path, "content": "still-writable"})
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		calls := 0
+		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+			calls++
+			history := localModelHistory(turns)
+			switch calls {
+			case 1:
+				return invalid, nil
+			case 2:
+				if !strings.Contains(history, "参数 $.path") || !strings.Contains(history, "校验阶段未执行工具") || strings.Contains(history, "新增写入和启动需要主人发起新请求") {
+					t.Error("invalid start was not exposed as a repairable preflight failure", history)
+				}
+				return invalidExe, nil
+			case 3:
+				if !strings.Contains(history, "参数 $.argv[0]") || !strings.Contains(history, "校验阶段未执行工具") || strings.Contains(history, "新增写入和启动需要主人发起新请求") {
+					t.Error("invalid executable was not exposed as a repairable preflight failure", history)
+				}
+				return write, nil
+			default:
+				if strings.Contains(history, "inspect-only") {
+					t.Error("known invalid start incorrectly made the turn inspect-only", history)
+				}
+				return `{"action":"reply","messages":["已写入。"]}`, nil
+			}
+		}), nil
+	}
+	if code, out := localChatSend(f, "invalid-process-then-write", "先试运行，再写文件"); code != 200 || out["status"] != "completed" {
+		t.Fatalf("same-turn repair failed: %d %#v", code, out)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "still-writable" {
+		t.Fatalf("write after rejected process did not complete: %q, %v", data, err)
+	}
+	store, in, err := f.handler.chat.conversation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := "先试运行，再写文件"
+	in.TraceID, in.Text, in.OriginalText = "invalid-process-then-write", original, &original
+	run, err := store.OpenLocalToolRun(t.Context(), in, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Operations) != 1 || run.Operations[0].Tool != "server_write" {
+		t.Fatalf("invalid process start was reserved: %#v", run.Operations)
+	}
+}
+
 func TestLocalToolCheckpointUncertainWriteAndLegacyRequestStayReadOnly(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		name := "reserved without result"

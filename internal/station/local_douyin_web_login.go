@@ -38,6 +38,7 @@ type localDouyinWebView struct {
 	VisualEnabled   bool   `json:"visual_enabled"`
 	VisualReady     bool   `json:"visual_ready"`
 	VisualReason    string `json:"visual_reason,omitempty"`
+	PublishEnabled  bool   `json:"publish_enabled"`
 }
 
 type localDouyinWebInput struct {
@@ -50,19 +51,25 @@ type localDouyinWebInput struct {
 	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
 	AllowAudio     *bool   `json:"allow_audio,omitempty"`
 	AllowVisual    *bool   `json:"allow_visual,omitempty"`
+	AllowPublish   *bool   `json:"allow_publish,omitempty"`
 }
 
 type localDouyinWebRecord struct {
-	Version         int    `json:"schema_version"`
-	FishID          string `json:"fish_id"`
-	Revision        uint64 `json:"revision"`
-	Profile         string `json:"profile,omitempty"`
+	Version  int    `json:"schema_version"`
+	FishID   string `json:"fish_id"`
+	Revision uint64 `json:"revision"`
+	Profile  string `json:"profile,omitempty"`
+	// ProfileEpoch changes before any browser login/creator re-login. It is
+	// part of the host connection identity so a possibly changed platform
+	// account cannot inherit an earlier task's target reference.
+	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
 	ConfirmedAt     string `json:"confirmed_at,omitempty"`
 	ReadEnabled     bool   `json:"read_enabled,omitempty"`
 	ReadScope       string `json:"read_scope,omitempty"`
 	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
 	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
 	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
+	PublishEnabled  bool   `json:"publish_enabled,omitempty"`
 }
 
 type localDouyinLoginWindow interface {
@@ -75,6 +82,7 @@ type localDouyinWebLogin struct {
 	home          *localHomeService
 	ctx           context.Context
 	open          func(context.Context, string) (localDouyinLoginWindow, error)
+	openCreator   func(context.Context, string) (localDouyinLoginWindow, error)
 	available     func() bool
 	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
@@ -93,6 +101,9 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
+		},
+		openCreator: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
+			return stationbrowser.OpenDouyinCreatorLogin(ctx, profile)
 		}}
 	h.douyinWeb = m
 	handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +191,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.VisualEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("画面分析许可缺少有效的视频页读取范围，原资料保留")
 	}
+	if record.PublishEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
+		return record, errors.New("网页发布授权没有已确认的登录资料，原资料保留")
+	}
 	if record.ConfirmedAt != "" {
 		if _, err := time.Parse(time.RFC3339, record.ConfirmedAt); err != nil {
 			return record, errors.New("网页登录登记时间无效，原资料保留")
@@ -218,6 +232,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
+	v.PublishEnabled = record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
 }
 
@@ -275,6 +290,66 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
 	}
 	switch in.Action {
+	case "set_publish":
+		if in.AllowPublish == nil {
+			return fail(400, "请明确是否允许大肥鱼通过该网页登录资料发布作品")
+		}
+		view := m.view(record)
+		if *in.AllowPublish && (view.State != "saved" || view.AttemptID != "" || !view.Available) {
+			return fail(409, "请先完成网页登录并确认保存，再开启作品发布")
+		}
+		record.PublishEnabled = *in.AllowPublish
+		if save() != nil {
+			return fail(503, "网页发布授权未保存，请重新读取后核对")
+		}
+	case "begin_creator":
+		view := m.view(record)
+		if !record.PublishEnabled || view.State != "saved" || view.AttemptID != "" || !view.Available {
+			return fail(409, "请先完成网页登录并开启作品发布")
+		}
+		if m.window != nil && m.window.Active() {
+			return fail(409, "登录窗口已打开，请先完成或取消本次登录")
+		}
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
+		m.window, m.attempt, m.fish = nil, "", ""
+		profile := filepath.Join(dir, record.Profile)
+		probe, err := lockLocalDouyinWebProfile(profile)
+		if err != nil {
+			return fail(409, "网页登录资料仍在使用，请先关闭原登录窗口")
+		}
+		probe()
+		// Opening creator login can switch the account inside this profile.
+		// Revoke every old side-effect/read grant before the browser opens; the
+		// owner explicitly confirms and re-enables what they want afterwards.
+		record.ProfileEpoch++
+		record.ConfirmedAt = ""
+		record.ReadEnabled = false
+		record.ReadScope = ""
+		record.PlaybackEnabled = false
+		record.AudioEnabled = false
+		record.VisualEnabled = false
+		record.PublishEnabled = false
+		if save() != nil {
+			return fail(503, "无法保存创作者中心登录前的授权撤销，未启动浏览器")
+		}
+		attempt, err := localDouyinWebID()
+		if err != nil {
+			return fail(503, "无法创建本次创作者中心编号")
+		}
+		browserCtx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
+		window, err := m.openCreator(browserCtx, profile)
+		if err != nil {
+			cancel()
+			return fail(503, "创作者中心无法打开或网页登录资料正在使用")
+		}
+		if window == nil {
+			cancel()
+			return fail(503, "创作者中心无法打开或网页登录资料正在使用")
+		}
+		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
 	case "set_read":
 		if in.AllowRead == nil {
 			return fail(400, "请明确是否允许大肥鱼读取抖音首页网页文字")
@@ -365,12 +440,14 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		probe()
 		// Beginning a new login never carries forward an old confirmation.
+		record.ProfileEpoch++
 		record.ConfirmedAt = ""
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
 		record.AudioEnabled = false
 		record.VisualEnabled = false
+		record.PublishEnabled = false
 		if save() != nil {
 			return fail(503, "无法保存网页登录登记，未启动浏览器")
 		}
@@ -414,12 +491,13 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		// Revoke pending reads before trying to close/delete profile files.
 		// Another browser may still own the profile lock during that cleanup.
-		if record.ReadEnabled {
+		if record.ReadEnabled || record.PublishEnabled {
 			record.ReadEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false
 			record.VisualEnabled = false
+			record.PublishEnabled = false
 			if save() != nil {
 				return fail(503, "网页读取授权未能撤销，尚未清理资料")
 			}

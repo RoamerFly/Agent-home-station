@@ -77,7 +77,11 @@ func (p *localDouyinWebObservation) state(ctx context.Context) (localDouyinWebAc
 
 func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebRecord, v localDouyinWebView) localDouyinWebAccess {
 	// This identifies a host-owned profile scope, never a verified Douyin user.
-	account := sha256.Sum256([]byte(fish + "\x00" + r.Profile))
+	accountKey := fish + "\x00" + r.Profile
+	if r.ProfileEpoch > 0 {
+		accountKey += fmt.Sprintf("\x00%d", r.ProfileEpoch)
+	}
+	account := sha256.Sum256([]byte(accountKey))
 	state := "unconfigured"
 	if r.Profile != "" {
 		state = "disabled"

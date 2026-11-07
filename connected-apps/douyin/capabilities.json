@@ -32,6 +32,14 @@
       "permissions": [],
       "discoverable": true,
       "requires_owner_setting": "web-inspect-visual"
+    },
+    {
+      "id": "publication.web-creator",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人明确保存网页登录资料并单独开启发布许可后，通过创作者中心上传已核验的作品；提交前持久登记，重启后只查询回执，不会自动重复发布",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-web-publish"
     }
   ]
 }

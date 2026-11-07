@@ -1332,6 +1332,7 @@
       (typeof value.visual_enabled === "undefined" || typeof value.visual_enabled === "boolean") &&
       (typeof value.visual_ready === "undefined" || typeof value.visual_ready === "boolean") &&
       (typeof value.visual_reason === "undefined" || typeof value.visual_reason === "string") &&
+      (typeof value.publish_enabled === "undefined" || typeof value.publish_enabled === "boolean") &&
       (typeof value.reason === "undefined" || typeof value.reason === "string");
   }
   function douyinWebReadEnabled(value) { return value?.read_enabled === true; }
@@ -1339,6 +1340,7 @@
   function douyinWebPlaybackEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.playback_enabled === true; }
   function douyinWebAudioEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.audio_enabled === true; }
   function douyinWebVisualEnabled(value) { return douyinWebReadEnabled(value) && douyinWebReadScope(value) === "home_and_videos" && value?.visual_enabled === true; }
+  function douyinWebPublishEnabled(value) { return value?.state === "saved" && value?.publish_enabled === true; }
   function stopDouyinWebLoginPolling(current = apps) {
     const web = current?.douyinWebLogin;
     if (!web) return;
@@ -1395,7 +1397,7 @@
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
-  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio, allowVisual) {
+  async function updateDouyinWebLogin(current, action, allowRead, readScope, explicitReadScope, allowPlayback, allowAudio, allowVisual, allowPublish) {
     const web = current?.douyinWebLogin, value = web?.value;
     if (!web || !value || current !== apps || web.applying || !Number.isFinite(Number(value.revision))) return;
     if ((action === "confirm" || action === "cancel") && !value.attempt_id) return;
@@ -1404,7 +1406,7 @@
     web.applying = action; web.error = "";
     renderApps();
     const body = { action, revision: value.revision };
-    if (action === "begin" || action === "clear") body.approve_profile = true;
+    if (action === "begin" || action === "clear" || action === "begin_creator") body.approve_profile = true;
     if (action === "confirm" || action === "cancel") body.attempt_id = value.attempt_id;
     if (action === "set_read") {
       body.allow_read = allowRead === true;
@@ -1413,6 +1415,7 @@
       if (typeof allowAudio === "boolean") body.allow_audio = allowAudio;
       if (typeof allowVisual === "boolean") body.allow_visual = allowVisual;
     }
+    if (action === "set_publish") body.allow_publish = allowPublish === true;
     let reloadAfterConflict = false;
     try {
       const updated = await request("/api/local/apps/douyin/web-login", { method: "POST", body: JSON.stringify(body) });
@@ -1420,13 +1423,14 @@
       if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
       web.value = updated;
       web.loaded = true;
-      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : "已打开网页登录窗口。";
+      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "begin_creator" ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
       if (action === "set_read") {
         if (typeof allowAudio === "boolean") feedback = allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
         else if (typeof allowVisual === "boolean") feedback = allowVisual ? "已允许使用本机视觉分析视频画面。" : "已停止视频画面分析。";
         else if (typeof allowPlayback === "boolean") feedback = allowPlayback ? "已允许静音观察视频播放。" : "已停止静音播放观察。";
         else feedback = allowRead ? (readScope === "home_and_videos" ? "已允许读取首页及视频页文字。" : "已允许读取抖音首页网页文字。") : "已停止网页读取。";
       }
+      if (action === "set_publish") feedback = allowPublish ? "已允许普通账号发布。" : "已停止普通账号发布。";
       appFeedback(feedback);
     } catch (error) {
       if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -1487,6 +1491,24 @@
         clear.addEventListener("click", () => { void updateDouyinWebLogin(current, "clear"); }); actions.append(clear);
       }
       if (value.state === "saved" && !value.active && !value.attempt_id) {
+        const publishEnabled = douyinWebPublishEnabled(value);
+        const publish = document.createElement("input");
+        publish.type = "checkbox";
+        publish.checked = publishEnabled;
+        publish.disabled = busy || (!publishEnabled && !available);
+        publish.setAttribute("aria-label", "允许普通账号发布");
+        publish.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_publish", undefined, undefined, undefined, undefined, undefined, undefined, publish.checked); });
+        const publishLabel = appElement("label", "", "switch-row");
+        publishLabel.append(publish, appElement("span", web.applying === "set_publish" ? "正在保存发布许可…" : "允许普通账号发布"));
+        const creator = appElement("button", web.applying === "begin_creator" ? "正在打开…" : "登录创作者中心", "button compact secondary");
+        creator.type = "button";
+        creator.disabled = busy || !publishEnabled || !available;
+        creator.addEventListener("click", () => { void updateDouyinWebLogin(current, "begin_creator"); });
+        detail.append(
+          appElement("p", publishEnabled ? "已保存普通账号发布许可。" : "普通账号发布许可未开启。", "publication-authorization-note"),
+          appElement("p", "发布许可独立于网页文字读取。每次创作任务都要单独填写可见范围、作品内容和素材；发布回执未知时只核对原任务，不会重复发布。", "publication-authorization-note")
+        );
+        actions.append(publishLabel, creator);
         const readEnabled = douyinWebReadEnabled(value);
         const read = appElement("button", web.applying === "set_read" ? "正在保存…" : readEnabled ? "停止网页读取" : "允许读取首页文字", "button compact quiet");
         read.type = "button";

@@ -112,26 +112,58 @@ func (t *localProcessTools) Call(ctx context.Context, name string, raw json.RawM
 }
 
 func (t *localProcessTools) start(ctx context.Context, in localProcessInput, grant localWorkspaceGrant) (string, error) {
-	if strings.TrimSpace(in.Key) == "" || len(in.Key) > 128 || len(in.Argv) == 0 || strings.TrimSpace(in.Path) == "" {
-		return "", errors.New("启动程序需要path、argv和request_key")
-	}
-	if err := localProcessPath(grant.Directory, in.Path); err != nil {
+	cfg, known, err := t.preflight(in, grant)
+	if err != nil {
 		return "", err
 	}
+	if known != "" {
+		return known, nil
+	}
+	return t.startPrepared(ctx, in, grant, cfg)
+}
+
+// preflight contains only checks whose failure proves no launch was attempted.
+// It is deliberately shared by direct calls and checkpointed calls: known bad
+// arguments must not reserve a durable operation and turn the remainder of a
+// normal chat into inspect-only recovery.
+func (t *localProcessTools) preflight(in localProcessInput, grant localWorkspaceGrant) (agenthost.Config, string, error) {
+	if strings.TrimSpace(in.Key) == "" {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.request_key", "请提供 1 到 128 个字符的 request_key")
+	}
+	if len(in.Key) > 128 {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.request_key", "长度不能超过 128 个字符")
+	}
+	if strings.TrimSpace(in.Path) == "" {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.path", "请提供大肥鱼家目录内的绝对工作目录")
+	}
+	if err := localProcessPath(grant.Directory, in.Path); err != nil {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.path", err.Error())
+	}
+	if len(in.Argv) == 0 {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.argv", "请提供以已授权绝对 exe 文件开头的 argv")
+	}
+	if in.Seconds < 0 {
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.timeout_seconds", "不能小于 0")
+	}
 	if t.cfg == nil || t.cfg.Validate() != nil {
-		return localProcessJSON(map[string]any{
+		known, err := localProcessJSON(map[string]any{
 			"status": "not_started", "code": "windows_runtime_not_configured",
 			"message":      "本机 Windows 隔离运行器尚未配置；程序未启动",
 			"continuation": "由宿主配置受管 pythonw.exe、windows_agent_host.pyw 和私有暂存目录后重试；不要改用宿主 shell。",
 		})
+		return agenthost.Config{}, known, err
 	}
 	cfg, err := t.config(grant.Directory)
 	if err != nil {
-		return "", err
+		return agenthost.Config{}, "", err
 	}
 	if err = localProcessArgv(cfg, in.Argv); err != nil {
-		return "", err
+		return agenthost.Config{}, "", mcptools.ArgumentError("$.argv[0]", err.Error())
 	}
+	return cfg, "", nil
+}
+
+func (t *localProcessTools) startPrepared(ctx context.Context, in localProcessInput, grant localWorkspaceGrant, cfg agenthost.Config) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
