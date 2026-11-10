@@ -14,7 +14,9 @@ const (
 	WebReadConnectionID = "web-page-text"
 	// WebReadContentID is the fixed home-page text target offered by that
 	// connection.
-	WebReadContentID = "home"
+	WebReadContentID     = "home"
+	WebWorksContentID    = "account-works"
+	WebCreatorWorkPrefix = "creator-work-"
 	// WebVideoContentPrefix identifies an opaque video-page target minted by
 	// the host from a link actually discovered on the owner's home page.
 	WebVideoContentPrefix = "web-video-"
@@ -24,13 +26,16 @@ const (
 // syntactically valid video ID has no authority by itself: the trusted host
 // must still verify its origin, owner scope, and grant in WebReadConnection.
 func IsWebReadContentID(contentID string) bool {
-	if contentID == WebReadContentID {
+	if contentID == WebReadContentID || contentID == WebWorksContentID {
 		return true
 	}
-	if !strings.HasPrefix(contentID, WebVideoContentPrefix) {
+	encoded, found := strings.CutPrefix(contentID, WebVideoContentPrefix)
+	if !found {
+		encoded, found = strings.CutPrefix(contentID, WebCreatorWorkPrefix)
+	}
+	if !found {
 		return false
 	}
-	encoded := contentID[len(WebVideoContentPrefix):]
 	if len(encoded) < 1 || len(encoded) > 220 {
 		return false
 	}
@@ -107,6 +112,9 @@ func (p *SearchApp) validWebReadAccess(ref apphost.ConnectionRef, contentID stri
 	// The homepage is text-only. Playback, audio and visual analysis each
 	// require a host-minted video target and their own current grant checked by
 	// the trusted callback.
+	if contentID == WebWorksContentID {
+		return field == apphost.ObservationAccountWorks
+	}
 	return field == apphost.ObservationPageText || contentID != WebReadContentID && (field == apphost.ObservationPlayback || field == apphost.ObservationAudio || field == apphost.ObservationVisual || field == apphost.ObservationComments)
 }
 
@@ -123,7 +131,9 @@ func (p *SearchApp) webReadTargets(ctx context.Context) ([]apphost.ObservationTa
 		return nil, err
 	}
 	for _, target := range targets {
-		if target.ConnectionRef != ref || target.ContentID != WebReadContentID || len(target.Fields) != 1 || target.Fields[0] != apphost.ObservationPageText {
+		if target.ConnectionRef != ref || len(target.Fields) != 1 ||
+			!(target.ContentID == WebReadContentID && target.Fields[0] == apphost.ObservationPageText ||
+				target.ContentID == WebWorksContentID && target.Fields[0] == apphost.ObservationAccountWorks) {
 			return nil, apphost.ErrObservationForbidden
 		}
 	}

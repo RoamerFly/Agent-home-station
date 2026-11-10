@@ -5,6 +5,16 @@
   const visibleLogin = [...document.querySelectorAll('input[type=password],form[action*="login"],iframe[src*="captcha"],iframe[src*="verify"]')].some(visible);
   if (visibleLogin || /\/login(?:\/|$)/u.test(location.pathname) ||
     [...document.querySelectorAll('h1,h2,h3')].some(e => visible(e) && /(?:扫码登录|登录创作者中心)/u.test(e.textContent))) return { login: true };
+  if (input.action === "works-check" || input.action === "works-next") {
+    if (location.pathname !== "/creator-micro/content/manage") return { invalid: true };
+    if (input.action === "works-check") return {};
+    const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(e =>
+      visible(e) && !e.disabled && e.getAttribute("aria-disabled") !== "true" &&
+      [e.getAttribute("aria-label"), e.getAttribute("title"), e.textContent.trim()].includes("下一页"));
+    if (buttons.length !== 1) return { clicked: false };
+    buttons[0].click();
+    return { clicked: true };
+  }
   if (input.action === "query") {
     if (!location.pathname.startsWith("/creator-micro/content/manage")) return { invalid: true };
     const matches = [...document.querySelectorAll("a[href]")].filter(visible).filter(e => { try {

@@ -8,6 +8,10 @@ func OpenDouyinCreatorLogin(context.Context, string) (*LoginWindow, error) {
 	return nil, ErrBrowserUnavailable
 }
 
+func OpenDouyinCreatorWorksLogin(ctx context.Context, profile string) (*LoginWindow, error) {
+	return nil, ErrBrowserUnavailable
+}
+
 func ContinueDouyinPublication(context.Context, string, CreatorPublicationRequest, func() error) (CreatorPublicationResult, error) {
 	return CreatorPublicationResult{}, ErrBrowserUnavailable
 }
@@ -17,4 +21,8 @@ func QueryDouyinPublication(context.Context, string, string, func() error) (Crea
 
 func FindDouyinPublication(context.Context, string, CreatorPublicationQuery, func() error) (CreatorPublicationResult, error) {
 	return CreatorPublicationResult{}, ErrBrowserUnavailable
+}
+
+func ReadDouyinCreatorWorks(context.Context, string, DouyinCreatorWorksRequest, func() error) (DouyinCreatorWorksPage, error) {
+	return DouyinCreatorWorksPage{}, ErrBrowserUnavailable
 }

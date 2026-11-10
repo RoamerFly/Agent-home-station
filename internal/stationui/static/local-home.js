@@ -1608,7 +1608,7 @@
     web.applying = action; web.error = "";
     renderApps();
     const body = { action, revision: value.revision };
-    if (action === "begin" || action === "clear" || action === "begin_creator") body.approve_profile = true;
+    if (action === "begin" || action === "clear" || action === "begin_creator" || action === "begin_creator_works") body.approve_profile = true;
     if (action === "confirm" || action === "cancel") body.attempt_id = value.attempt_id;
     if (action === "set_read") {
       body.allow_read = options.allowRead === true;
@@ -1618,6 +1618,7 @@
       if (typeof options.allowVisual === "boolean") body.allow_visual = options.allowVisual;
       if (typeof options.allowComments === "boolean") body.allow_comments = options.allowComments;
     }
+    if (action === "set_works") body.allow_works = options.allowWorks === true;
     if (action === "set_publish") body.allow_publish = options.allowPublish === true;
     if (action === "set_interactions") {
       if (typeof options.allowLikes === "boolean") body.allow_likes = options.allowLikes;
@@ -1630,13 +1631,14 @@
       if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
       web.value = updated;
       web.loaded = true;
-      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "begin_creator" ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
+      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : ["begin_creator", "begin_creator_works"].includes(action) ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
       if (action === "pause" || action === "resume") feedback = updated.paused ? "已暂停抖音网页能力。" : "已恢复抖音网页能力。";
       if (action === "detach" || action === "attach") {
         feedback = updated.detached ? "已撤下抖音。" : "已重新登记抖音，网页能力仍暂停。";
         await loadApps();
         if (current !== apps || web.generation !== generation) return;
       }
+      if (action === "set_works") feedback = updated.works_enabled ? "已允许读取本人作品。" : "已停止读取本人作品。";
       if (action === "set_read") {
         if (typeof options.allowComments === "boolean") feedback = options.allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
         else if (typeof options.allowAudio === "boolean") feedback = options.allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
@@ -1732,6 +1734,22 @@
         actions.append(detach);
       }
       if (!value.paused && value.state === "saved" && !value.active && !value.attempt_id) {
+        if (!section || section === "browse") {
+          const works = document.createElement("input");
+          works.type = "checkbox";
+          works.checked = value.works_enabled === true;
+          works.disabled = busy || (!works.checked && !available);
+          works.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_works", { allowWorks: works.checked }); });
+          const worksLabel = appElement("label", "", "switch-row");
+          worksLabel.append(works, appElement("span", "允许读取本人作品"));
+          readActions.append(worksLabel);
+          if (works.checked) {
+            const creator = memoryButton("登录创作者中心以读取本人作品", "button compact quiet", () => void updateDouyinWebLogin(current, "begin_creator_works"));
+            creator.disabled = busy || !available;
+            creator.title = "重新核对账号时撤销旧授权，保存登录后可重新开启";
+            readActions.append(creator);
+          }
+        }
         const publishEnabled = douyinWebPublishEnabled(value);
         const publish = document.createElement("input");
         publish.type = "checkbox";
@@ -1832,7 +1850,7 @@
       }
     }
     for (const [id, group] of [["account", actions], ["publications", publishActions], ["browse", readActions], ["interactions", interactionActions]]) {
-      if (section && section !== id) continue;
+      if (section && section !== id && !(section === "browse" && id === "account" && value?.attempt_id)) continue;
       if (group.childElementCount) detail.append(group);
       else if (section && section !== "account") detail.append(appElement("p", id === "interactions" ? "互动许可需要已确认的登录资料和视频页读取授权。" : "请先在「账号与授权」确认网页登录并恢复网页能力。"));
     }
@@ -2153,7 +2171,7 @@
       const value = apps.douyinWebLogin.value;
       const paused = value?.paused || value?.detached;
       const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
-      const actions = [read, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
+      const actions = [read, value?.works_enabled === true, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
       const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
       return {
         service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "不可用",
@@ -2453,7 +2471,8 @@
       if (!connection || !content || !Array.isArray(fields)) return;
       for (const field of fields) {
         if (!Object.hasOwn(douyinReadLabels, field)) continue;
-        const name = label ? label + " · " + douyinReadLabels[field] : douyinReadLabels[field];
+        const kind = field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field];
+        const name = label ? label + " · " + kind : kind;
         area.append(memoryButton(name, "button compact secondary", () => void read(connection, content, field)));
       }
     }
@@ -2468,7 +2487,7 @@
         const chunks = Array.isArray(result.chunks) ? result.chunks : [];
         const page = appElement("section", "", "memory-detail-section douyin-read-result");
         const header = appElement("div", "", "publication-actions");
-        header.append(appElement("strong", douyinReadLabels[field]),
+        header.append(appElement("strong", field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]),
           appElement("span", result.complete ? "本次读取无后续页" : "仍有后续页", "station-label"));
         if (result.resumed && !result.cached) header.append(appElement("span", "从已保存进度续读", "station-label"));
         if (result.visual_proof) {
@@ -2577,6 +2596,12 @@
         break;
       case "browse":
         if (record.id === "douyin") {
+          const revision = apps.douyinWebLogin.value?.revision;
+          if (view.douyinReadRevision !== revision) {
+            view.douyinReadAbort?.abort();
+            view.douyinReadPanel = null;
+            view.douyinReadRevision = revision;
+          }
           view.douyinReadPanel ||= douyinReadPanel(view);
           controls.push(douyinWebLoginRow(apps, listing, section), view.douyinReadPanel);
         } else controls.push(bilibiliPublicRow(record));

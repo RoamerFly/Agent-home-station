@@ -587,7 +587,7 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 }
 
 func validObservationFollowUp(field, next ObservationField) bool {
-	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || field == ObservationPageText && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual || next == ObservationComments) || field == ObservationVisual && next == ObservationVisual
+	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || (field == ObservationPageText || field == ObservationAccountWorks) && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual || next == ObservationComments) || field == ObservationVisual && next == ObservationVisual
 }
 
 func validVisualProof(proof VisualFrameProof, page ObservationPage) bool {

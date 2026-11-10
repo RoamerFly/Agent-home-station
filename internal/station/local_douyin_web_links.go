@@ -39,7 +39,28 @@ func (p *localDouyinWebObservation) snapshotDirectory(a localDouyinWebAccess) st
 
 // A guessed video ID is insufficient. The exact video must be present in an
 // immutable, host-created home-page link index under the current owner grant.
+func (p *localDouyinWebObservation) webObservationAllowed(a localDouyinWebAccess, id string, field apphost.ObservationField) bool {
+	if id == douyinapp.WebWorksContentID {
+		return a.record.WorksEnabled && field == apphost.ObservationAccountWorks
+	}
+	if strings.HasPrefix(id, douyinapp.WebCreatorWorkPrefix) {
+		row, ok := p.creatorWorks.get(id, a.version)
+		return a.record.WorksEnabled && ok && (field == apphost.ObservationPageText ||
+			a.record.ReadEnabled && row.work.Video && row.work.Visibility == "公开" && !row.work.Reviewing &&
+				localDouyinWebFieldAllowed(a.record, id, field))
+	}
+	return a.record.ReadEnabled && localDouyinWebFieldAllowed(a.record, id, field)
+}
+
 func (p *localDouyinWebObservation) resolveTarget(a localDouyinWebAccess, id string) (localDouyinWebTarget, bool) {
+	if strings.HasPrefix(id, douyinapp.WebCreatorWorkPrefix) {
+		row, ok := p.creatorWorks.get(id, a.version)
+		if !ok {
+			return localDouyinWebTarget{}, false
+		}
+		url, _ := stationbrowser.DouyinVideoURL(row.work.ID)
+		return localDouyinWebTarget{url: url, videoID: row.work.ID}, true
+	}
 	if id == douyinapp.WebReadContentID {
 		return localDouyinWebTarget{url: localDouyinWebHomeURL}, true
 	}

@@ -35,6 +35,7 @@ type localDouyinWebView struct {
 	Available       bool   `json:"available"`
 	Reason          string `json:"reason,omitempty"`
 	ReadEnabled     bool   `json:"read_enabled"`
+	WorksEnabled    bool   `json:"works_enabled"`
 	ReadScope       string `json:"read_scope"`
 	PlaybackEnabled bool   `json:"playback_enabled"`
 	AudioEnabled    bool   `json:"audio_enabled"`
@@ -53,6 +54,7 @@ type localDouyinWebInput struct {
 	AttemptID      string  `json:"attempt_id,omitempty"`
 	ApproveProfile bool    `json:"approve_profile"`
 	AllowRead      *bool   `json:"allow_read,omitempty"`
+	AllowWorks     *bool   `json:"allow_works,omitempty"`
 	ReadScope      *string `json:"read_scope,omitempty"`
 	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
 	AllowAudio     *bool   `json:"allow_audio,omitempty"`
@@ -76,6 +78,7 @@ type localDouyinWebRecord struct {
 	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
 	ConfirmedAt     string `json:"confirmed_at,omitempty"`
 	ReadEnabled     bool   `json:"read_enabled,omitempty"`
+	WorksEnabled    bool   `json:"works_enabled,omitempty"`
 	ReadScope       string `json:"read_scope,omitempty"`
 	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
 	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
@@ -92,31 +95,36 @@ type localDouyinLoginWindow interface {
 }
 
 type localDouyinWebLogin struct {
-	mu            sync.Mutex
-	home          *localHomeService
-	ctx           context.Context
-	open          func(context.Context, string) (localDouyinLoginWindow, error)
-	openCreator   func(context.Context, string) (localDouyinLoginWindow, error)
-	available     func() bool
-	readPage      func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
-	readVideo     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
-	readComments  func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
-	interact      func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
-	sampleVideo   func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
-	readMedia     func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)
-	audio         stationLocalASR
-	visual        stationLocalVision
-	window        localDouyinLoginWindow
-	cancel        context.CancelFunc
-	attempt, fish string
+	mu               sync.Mutex
+	home             *localHomeService
+	ctx              context.Context
+	open             func(context.Context, string) (localDouyinLoginWindow, error)
+	openCreatorWorks func(context.Context, string) (localDouyinLoginWindow, error)
+	openCreator      func(context.Context, string) (localDouyinLoginWindow, error)
+	available        func() bool
+	readPage         func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
+	readWorks        func(context.Context, string, stationbrowser.DouyinCreatorWorksRequest, func() error) (stationbrowser.DouyinCreatorWorksPage, error)
+	readVideo        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
+	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
+	interact         func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
+	sampleVideo      func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
+	readMedia        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)
+	audio            stationLocalASR
+	visual           stationLocalVision
+	window           localDouyinLoginWindow
+	cancel           context.CancelFunc
+	attempt, fish    string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readComments: stationbrowser.ReadDouyinComments, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readWorks: stationbrowser.ReadDouyinCreatorWorks, readComments: stationbrowser.ReadDouyinComments, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
+		},
+		openCreatorWorks: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
+			return stationbrowser.OpenDouyinCreatorWorksLogin(ctx, profile)
 		},
 		openCreator: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinCreatorLogin(ctx, profile)
@@ -189,7 +197,7 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 		(record.Profile != "" && !validLocalDouyinWebID(record.Profile)) || (record.Profile == "" && record.ConfirmedAt != "") {
 		return record, errors.New("网页登录登记无效，原资料保留")
 	}
-	if record.ReadEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
+	if (record.ReadEnabled || record.WorksEnabled) && (record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("网页读取授权没有已确认的登录资料，原资料保留")
 	}
 	if record.Detached && !record.Paused {
@@ -288,6 +296,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 		v.Reason = "未找到可用的 Microsoft Edge，已有网页登录资料保留"
 	}
 	v.ReadEnabled = !record.Paused && record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
+	v.WorksEnabled = !record.Paused && record.WorksEnabled && v.State == "saved" && v.AttemptID == ""
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
@@ -325,6 +334,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return true
 	case "clear":
 		return in.ApproveProfile
+	case "set_works":
+		return in.AllowWorks != nil && !*in.AllowWorks
 	case "set_publish":
 		return in.AllowPublish != nil && !*in.AllowPublish
 	case "set_interactions":
@@ -375,7 +386,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if record.Detached && in.Action != "attach" && in.Action != "detach" {
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
-	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" {
+	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
 		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
 	}
 	save := func() error {
@@ -411,6 +422,18 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if save() != nil {
 			return fail(503, "抖音网页能力状态未保存，请重新读取后核对")
 		}
+	case "set_works":
+		if in.AllowWorks == nil {
+			return fail(400, "请明确是否允许读取本人作品")
+		}
+		view := m.view(record)
+		if *in.AllowWorks && (view.State != "saved" || view.AttemptID != "" || !view.Available) {
+			return fail(409, "请先完成网页登录并确认保存")
+		}
+		record.WorksEnabled = *in.AllowWorks
+		if save() != nil {
+			return fail(503, "本人作品读取授权未保存")
+		}
 	case "set_publish":
 		if in.AllowPublish == nil {
 			return fail(400, "请明确是否允许大肥鱼通过该网页登录资料发布作品")
@@ -423,10 +446,10 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if save() != nil {
 			return fail(503, "网页发布授权未保存，请重新读取后核对")
 		}
-	case "begin_creator":
+	case "begin_creator", "begin_creator_works":
 		view := m.view(record)
-		if !record.PublishEnabled || view.State != "saved" || view.AttemptID != "" || !view.Available {
-			return fail(409, "请先完成网页登录并开启作品发布")
+		if in.Action == "begin_creator" && !record.PublishEnabled || in.Action == "begin_creator_works" && !record.WorksEnabled || view.State != "saved" || view.AttemptID != "" || !view.Available {
+			return fail(409, "请先完成网页登录并开启对应的本人作品读取或发布权限")
 		}
 		if m.window != nil && m.window.Active() {
 			return fail(409, "登录窗口已打开，请先完成或取消本次登录")
@@ -447,6 +470,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// owner explicitly confirms and re-enables what they want afterwards.
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
+		record.WorksEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
@@ -464,7 +488,15 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			return fail(503, "无法创建本次创作者中心编号")
 		}
 		browserCtx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
-		window, err := m.openCreator(browserCtx, profile)
+		open := m.openCreator
+		if in.Action == "begin_creator_works" {
+			open = m.openCreatorWorks
+		}
+		if open == nil {
+			cancel()
+			return fail(503, "创作者中心登录入口不可用")
+		}
+		window, err := open(browserCtx, profile)
 		if err != nil {
 			cancel()
 			return fail(503, "创作者中心无法打开或网页登录资料正在使用")
@@ -601,6 +633,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// Beginning a new login never carries forward an old confirmation.
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
+		record.WorksEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
@@ -653,8 +686,9 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		// Revoke pending reads before trying to close/delete profile files.
 		// Another browser may still own the profile lock during that cleanup.
-		if record.ReadEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled {
+		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled {
 			record.ReadEnabled = false
+			record.WorksEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false

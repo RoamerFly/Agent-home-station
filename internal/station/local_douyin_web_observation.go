@@ -28,6 +28,7 @@ type localDouyinWebObservation struct {
 	home         *localHomeService
 	installation string
 	mu           sync.Mutex
+	creatorWorks localCreatorWorksIndex
 }
 
 type localDouyinWebAccess struct {
@@ -69,7 +70,7 @@ func (p *localDouyinWebObservation) state(ctx context.Context) (localDouyinWebAc
 		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
 	}
 	view := m.view(record)
-	if !record.Paused && record.ReadEnabled && view.State != "saved" {
+	if !record.Paused && (record.ReadEnabled || record.WorksEnabled) && view.State != "saved" {
 		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
 	}
 	return p.access(identity.FishID, identity.LocalOwner.ID, record, view), nil
@@ -86,7 +87,7 @@ func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebR
 	if r.Profile != "" {
 		state = "disabled"
 	}
-	if v.ReadEnabled && v.Available {
+	if (v.ReadEnabled || v.WorksEnabled) && v.Available {
 		state = "ready"
 	}
 	raw, _ := json.Marshal(r)
@@ -122,8 +123,16 @@ func (p *localDouyinWebObservation) Targets(ctx context.Context) ([]apphost.Obse
 	if err != nil || a.connection.Configuration != "ready" {
 		return []apphost.ObservationTarget{}, nil
 	}
-	return []apphost.ObservationTarget{{ConnectionRef: p.ref(a), ContentID: douyinapp.WebReadContentID,
-		Fields: []apphost.ObservationField{apphost.ObservationPageText}}}, nil
+	targets := []apphost.ObservationTarget{}
+	if a.record.ReadEnabled {
+		targets = append(targets, apphost.ObservationTarget{ConnectionRef: p.ref(a), ContentID: douyinapp.WebReadContentID,
+			Fields: []apphost.ObservationField{apphost.ObservationPageText}})
+	}
+	if a.record.WorksEnabled {
+		targets = append(targets, apphost.ObservationTarget{ConnectionRef: p.ref(a), ContentID: douyinapp.WebWorksContentID,
+			Fields: []apphost.ObservationField{apphost.ObservationAccountWorks}})
+	}
+	return targets, nil
 }
 
 func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.ObservationAccess) (apphost.ObservationGrant, error) {
@@ -131,11 +140,13 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 	if err != nil {
 		return apphost.ObservationGrant{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !localDouyinWebFieldAllowed(a.record, in.ContentID, in.Field) {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !p.webObservationAllowed(a, in.ContentID, in.Field) {
 		return apphost.ObservationGrant{Allowed: false}, nil
 	}
-	if _, ok := p.resolveTarget(a, in.ContentID); !ok {
-		return apphost.ObservationGrant{Allowed: false}, nil
+	if in.ContentID != douyinapp.WebWorksContentID {
+		if _, ok := p.resolveTarget(a, in.ContentID); !ok {
+			return apphost.ObservationGrant{Allowed: false}, nil
+		}
 	}
 	version := p.pageObservationVersion(ctx, a, in.Field)
 	if in.Field == apphost.ObservationAudio {
@@ -155,7 +166,7 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 		}
 		version += "/" + visualVersion
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: version}, nil
+	return apphost.ObservationGrant{Allowed: true, Version: version, Fresh: in.Field == apphost.ObservationPageText && strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix)}, nil
 }
 
 type localDouyinWebSnapshot struct {
@@ -184,11 +195,11 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !localDouyinWebFieldAllowed(a.record, in.ContentID, in.Field) {
+	if a.connection.Configuration != "ready" || in.ConnectionRef != p.ref(a) || !p.webObservationAllowed(a, in.ContentID, in.Field) {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	target, ok := p.resolveTarget(a, in.ContentID)
-	if !ok {
+	if !ok && in.ContentID != douyinapp.WebWorksContentID {
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	expectedVersion := p.pageObservationVersion(ctx, a, in.Field)
@@ -211,6 +222,16 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 			return apphost.ErrObservationForbidden
 		}
 		return nil
+	}
+	if in.Field == apphost.ObservationAccountWorks {
+		return p.readCreatorWorks(ctx, a, in, authorize)
+	}
+	if in.Field == apphost.ObservationPageText && strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix) {
+		work, ok := p.creatorWorks.get(in.ContentID, a.version)
+		if !ok || authorize() != nil {
+			return apphost.ObservationPage{}, apphost.ErrObservationForbidden
+		}
+		return creatorWorkPage(work, in.Limit), nil
 	}
 	if in.Field == apphost.ObservationPlayback {
 		return p.readPlayback(ctx, a, in, target, authorize)

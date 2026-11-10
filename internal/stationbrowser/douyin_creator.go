@@ -13,6 +13,8 @@ type CreatorPublicationRequest struct {
 	Submitted               bool
 	RemoteID                string
 	Query                   *CreatorPublicationQuery
+	worksRequest            *DouyinCreatorWorksRequest
+	worksPage               *DouyinCreatorWorksPage
 	BeforeSubmit            func(context.Context) error
 	Progress                func(context.Context, string) error
 }

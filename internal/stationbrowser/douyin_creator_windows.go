@@ -21,7 +21,7 @@ import (
 
 const douyinCreatorOrigin = "https://creator.douyin.com"
 const douyinCreatorUpload = douyinCreatorOrigin + "/creator-micro/content/upload"
-const douyinCreatorManage = douyinCreatorOrigin + "/creator-micro/content/manage"
+const douyinCreatorManage = DouyinCreatorManageURL
 
 //go:embed douyin_creator_ui.js
 var douyinCreatorUI string
@@ -30,6 +30,10 @@ var douyinCreatorUI string
 // ordinary login. Its target is fixed by the host, never by an Agent argument.
 func OpenDouyinCreatorLogin(ctx context.Context, profile string) (*LoginWindow, error) {
 	return openDouyinLogin(ctx, profile, douyinCreatorUpload, true)
+}
+
+func OpenDouyinCreatorWorksLogin(ctx context.Context, profile string) (*LoginWindow, error) {
+	return openDouyinLogin(ctx, profile, douyinCreatorManage, true)
 }
 
 func ContinueDouyinPublication(ctx context.Context, profile string, in CreatorPublicationRequest, authorize func() error) (CreatorPublicationResult, error) {
@@ -58,6 +62,23 @@ func FindDouyinPublication(ctx context.Context, profile string, query CreatorPub
 		return CreatorPublicationResult{}, ErrCreatorPublicationInput
 	}
 	return runDouyinCreator(ctx, profile, douyinCreatorManage, CreatorPublicationRequest{Submitted: true, Query: &query}, authorize, false)
+}
+
+// ReadDouyinCreatorWorks navigates the saved profile's creator management
+// page and follows only the visible pagination control. It never opens the uploader.
+func ReadDouyinCreatorWorks(ctx context.Context, profile string, input DouyinCreatorWorksRequest, authorize func() error) (DouyinCreatorWorksPage, error) {
+	return readDouyinCreatorWorks(ctx, profile, douyinCreatorManage, input, authorize, false)
+}
+
+func readDouyinCreatorWorks(ctx context.Context, profile, target string, input DouyinCreatorWorksRequest, authorize func() error, fixture bool) (DouyinCreatorWorksPage, error) {
+	var page DouyinCreatorWorksPage
+	if input.Page < 0 || input.Page > 0 && (input.PreviousAccount == "" || input.PreviousPageKey == "") {
+		return page, ErrCreatorWorksChanged
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	_, err := runDouyinCreator(ctx, profile, target, CreatorPublicationRequest{Submitted: true, worksRequest: &input, worksPage: &page}, authorize, fixture)
+	return page, err
 }
 
 func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPublicationRequest, authorize func() error, fixture bool) (CreatorPublicationResult, error) {
@@ -199,6 +220,11 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": 512 << 10, "maxTotalBufferSize": 2 << 20}, nil); err != nil {
 		return result, err
 	}
+	if in.worksRequest != nil {
+		if err := session.Call(ctx, id, "Network.setCacheDisabled", map[string]any{"cacheDisabled": true}, nil); err != nil {
+			return result, err
+		}
+	}
 	// Activate only this invisible browser's target, so Chromium loads its
 	// upload preview rather than suspending media as a background tab.
 	if err := session.Call(ctx, id, "Page.bringToFront", map[string]any{}, nil); err != nil {
@@ -207,7 +233,7 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	// Drain network events from navigation onward. Waiting until submit can
 	// overflow the private CDP queue on a resource-heavy creator page.
 	listener := newCreatorReceiptListener(target, id)
-	listener.query, listener.knownID = in.Query, in.RemoteID
+	listener.query, listener.knownID, listener.readWorks = in.Query, in.RemoteID, in.worksRequest != nil
 	listener.start(ctx, session)
 	defer listener.stop()
 	if err := session.Call(ctx, id, "Network.setBypassServiceWorker", map[string]any{"bypass": true}, nil); err != nil {
@@ -241,6 +267,10 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 			return result, err
 		}
 	}
+	if in.worksRequest != nil {
+		return result, awaitCreatorWorks(ctx, session, id, world, target, in, authorize, listener)
+	}
+
 	if in.Submitted {
 		result.Stage = "awaiting_receipt"
 		for {
@@ -398,6 +428,73 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 	}
 }
 
+func awaitCreatorWorks(ctx context.Context, session readerSession, id string, world int64, target string, in CreatorPublicationRequest, authorize func() error, listener *creatorReceiptListener) error {
+	request := *in.worksRequest
+	seen := map[string]bool{}
+	var serial uint64
+	owner := request.PreviousAccount
+	for position := 0; ; {
+		if err := authorize(); err != nil {
+			return err
+		}
+		page, nextSerial, parseErr := listener.worksResult()
+		if nextSerial == serial {
+			// A sign-in redirect can prevent the first work response entirely.
+			if _, err := creatorPage(ctx, session, id, world, target, "works-check", in); err != nil {
+				return err
+			}
+			if err := creatorWait(ctx); err != nil {
+				return errors.Join(ErrCreatorWorksUnavailable, err)
+			}
+			continue
+		}
+		serial = nextSerial
+		if parseErr != nil {
+			return parseErr
+		}
+		if owner != "" && owner != page.Account || seen[page.PageKey] {
+			return ErrCreatorWorksChanged
+		}
+		owner, seen[page.PageKey] = page.Account, true
+		if position == request.Page {
+			if _, err := creatorPage(ctx, session, id, world, target, "works-check", in); err != nil {
+				return err
+			}
+			if err := authorize(); err != nil {
+				return err
+			}
+			*in.worksPage = page
+			return nil
+		}
+		if position == request.Page-1 && request.PreviousPageKey != page.PageKey {
+			return ErrCreatorWorksChanged
+		}
+		if !page.HasMore {
+			return ErrCreatorWorksChanged
+		}
+		availableUntil := time.Now().Add(2 * time.Second)
+		for {
+			if err := authorize(); err != nil {
+				return err
+			}
+			state, err := creatorPage(ctx, session, id, world, target, "works-next", in)
+			if err != nil {
+				return err
+			}
+			if state.Clicked {
+				break
+			}
+			if time.Now().After(availableUntil) {
+				return ErrCreatorWorksNextUnavailable
+			}
+			if err := creatorWait(ctx); err != nil {
+				return err
+			}
+		}
+		position++
+	}
+}
+
 func waitCreatorState(ctx context.Context, session readerSession, id string, world int64, target, action string, in CreatorPublicationRequest, authorize func() error, ready func(creatorPageState) bool) (creatorPageState, error) {
 	for {
 		if err := authorize(); err != nil {
@@ -446,6 +543,10 @@ type creatorReceiptListener struct {
 	knownID         string
 	listLoaded      bool
 	listReceipt     CreatorPublicationResult
+	readWorks       bool
+	worksPage       DouyinCreatorWorksPage
+	worksSerial     uint64
+	worksError      error
 }
 
 func newCreatorReceiptListener(target, session string) *creatorReceiptListener {
@@ -457,6 +558,11 @@ func (l *creatorReceiptListener) listResult() (CreatorPublicationResult, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.listReceipt, l.listLoaded
+}
+func (l *creatorReceiptListener) worksResult() (DouyinCreatorWorksPage, uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.worksPage, l.worksSerial, l.worksError
 }
 func (l *creatorReceiptListener) manageEndpoint(raw string) bool {
 	u, err := url.Parse(raw)
@@ -512,7 +618,7 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						delete(requests, p.RequestID)
 						delete(accepted, p.RequestID)
 						delete(manage, p.RequestID)
-						if (l.query != nil || l.knownID != "") && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST") {
+						if (l.query != nil || l.knownID != "" || l.readWorks) && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST") {
 							requests[p.RequestID] = true
 							manage[p.RequestID] = true
 						}
@@ -561,6 +667,14 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						if err != nil {
 							continue
 						}
+					}
+					if isManage && l.readWorks {
+						page, err := creatorWorksPage(raw)
+						l.mu.Lock()
+						l.worksPage, l.worksError = page, err
+						l.worksSerial++
+						l.mu.Unlock()
+						continue
 					}
 					if isManage {
 						found := creatorManageReceipt(raw, l.query, l.knownID)

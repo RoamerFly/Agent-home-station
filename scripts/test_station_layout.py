@@ -112,18 +112,31 @@ def verify_douyin_read_controls(page, panel, nav):
             assert parse_qs(urlparse(req.url).query) == {"app_id": ["douyin"]}
             observed.append("discover")
             route.fulfill(json={"items": [{"app_id": "douyin", "connection_id": "synthetic-web",
-                                           "content_id": "home", "fields": ["page_text"]}]})
+                                           "content_id": "home", "fields": ["page_text"]},
+                                          {"app_id": "douyin", "connection_id": "synthetic-web",
+                                           "content_id": "account-works", "fields": ["account_works"]}]})
             return
         payload = req.post_data_json
         field = payload["field"]
         assert payload["app_id"] == "douyin" and payload["connection_id"] == "synthetic-web"
         observed.append(field)
-        if field == "page_text":
-            assert payload["content_id"] == "home"
-            route.fulfill(json={"coverage": "首页文字样本", "complete": True, "chunks": [
-                {"text": "合成视频候选", "follow_up_content_id": "synthetic-video",
-                 "follow_up_fields": ["comments", "visual"]},
+        if field == "account_works":
+            assert payload["content_id"] == "account-works"
+            route.fulfill(json={"coverage": "已登录创作者管理页", "complete": True, "chunks": [
+                {"text": "合成本人作品", "follow_up_content_id": "creator-work-synthetic",
+                 "follow_up_fields": ["page_text"]},
             ]})
+        elif field == "page_text":
+            if payload["content_id"] == "creator-work-synthetic":
+                route.fulfill(json={"coverage": "创作者管理页快照", "complete": True, "chunks": [
+                    {"text": "合成本人作品简介"},
+                ]})
+            else:
+                assert payload["content_id"] == "home"
+                route.fulfill(json={"coverage": "首页文字样本", "complete": True, "chunks": [
+                    {"text": "合成视频候选", "follow_up_content_id": "synthetic-video",
+                     "follow_up_fields": ["comments", "visual"]},
+                ]})
         else:
             assert payload["content_id"] == "synthetic-video"
             if field == "comments":
@@ -145,7 +158,10 @@ def verify_douyin_read_controls(page, panel, nav):
     panel.get_by_role("button", name="视频画面", exact=True).click()
     expect(panel.get_by_text("采样不代表完整观看", exact=True)).to_be_visible()
     expect(panel.get_by_text("合成画面分析", exact=True)).to_be_visible()
-    assert observed == ["discover", "page_text", "comments", "visual"]
+    panel.get_by_role("button", name="本人作品列表", exact=True).click()
+    panel.get_by_role("button", name="本人作品信息", exact=True).click()
+    expect(panel.get_by_text("合成本人作品简介", exact=True)).to_be_visible()
+    assert observed == ["discover", "page_text", "comments", "visual", "account_works", "page_text"]
     page.unroute(pattern, observation)
 
 
