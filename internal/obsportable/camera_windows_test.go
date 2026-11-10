@@ -219,6 +219,7 @@ func TestCameraStartRequiresFreshLogAndAdvancingQueueAndCleansProfile(t *testing
 	}
 	t.Cleanup(func() { _ = camera.Stop(context.Background()) })
 	camera.mappingName = randomCameraMapping(t)
+	camera.checkRegistration = func() error { return nil }
 	writeCameraLog(t, install.studio, "12:00:00.000: Virtual output started\n")
 	process := &fakeCameraProcess{}
 	process.running.Store(true)
@@ -335,6 +336,7 @@ func TestCameraReadinessRejectsFrozenQueueAndMissingFreshLog(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = camera.Stop(context.Background()) })
 			camera.mappingName = randomCameraMapping(t)
+			camera.checkRegistration = func() error { return nil }
 			process := &fakeCameraProcess{}
 			process.running.Store(true)
 			camera.launch = func(context.Context, obspreview.EncoderLaunch) (cameraProcess, error) {
@@ -418,6 +420,35 @@ func TestCameraRefusesExistingMappingBeforeMutatingProfile(t *testing.T) {
 		t.Fatalf("external queue touched: %d %v", sample, err)
 	}
 	queue.close()
+}
+
+func TestCameraDoesNotLaunchOrRewriteProfileWithoutRegistration(t *testing.T) {
+	install := syntheticCameraInstallation(t)
+	camera, err := install.CameraWithMedia(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	camera.mappingName = randomCameraMapping(t)
+	camera.checkRegistration = func() error { return ErrCameraNotRegistered }
+	camera.launch = func(context.Context, obspreview.EncoderLaunch) (cameraProcess, error) {
+		t.Fatal("started OBS without a registered camera")
+		return nil, nil
+	}
+	writeCameraLog(t, install.studio, "prior session")
+	if err := camera.Start(t.Context()); !errors.Is(err, ErrCameraNotRegistered) {
+		t.Fatalf("registration error lost: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(install.studio, "config", "obs-studio", "logs", "current.txt"))
+	if err != nil || string(raw) != "prior session" {
+		t.Fatalf("previous profile modified: %q, %v", raw, err)
+	}
+	encoder, err := install.Encoder(t.Context())
+	if err != nil {
+		t.Fatalf("camera failure retained the independent encoder lock: %v", err)
+	}
+	if err := encoder.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCameraLogParserBoundsAndRejectsPartialMarker(t *testing.T) {

@@ -64,7 +64,8 @@ def verify(binary, output):
                             fulfill(route, {"error": "synthetic forbidden"}, 403)
                         else:
                             server = {**initial, "revision": "present", "state": "installed", "installed": True,
-                                      "read_only": True, "restart_required": True, "reason": "已安装，重启应用后启用专用节目输出；不会自动开播。"}
+                                      "read_only": True, "restart_required": True, "virtual_camera_registration": "missing",
+                                      "reason": "已安装，重启应用后启用专用节目输出；不会自动开播。"}
                             fulfill(route, server)
                     else:
                         route.continue_()
@@ -140,7 +141,8 @@ def verify(binary, output):
                 page.evaluate("window.fixtureRelease()")
                 expect(save).to_be_disabled()
                 page.locator("#tool-dialog-refresh").click()
-                expect(dialog.get_by_text("OBS 33.0.1 已安装 · 重启应用后启用专用输出。", exact=True)).to_be_visible()
+                expect(dialog.get_by_text("OBS 33.0.1 已安装 · 重启应用后可启动专用输出。", exact=True)).to_be_visible()
+                expect(dialog.get_by_text("Windows 尚未登记 OBS 虚拟摄像头", exact=False)).to_be_visible()
                 expect(save).to_be_hidden()
                 assert len(writes) == 3 and not errors and not unexpected, (writes, errors, unexpected)
                 browser.close()

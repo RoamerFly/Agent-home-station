@@ -76,6 +76,11 @@ func TestLocalOBSDeploymentOwnerInstallAndRestartBoundary(t *testing.T) {
 	if code != 200 || calls != 1 || view["installed"] != true || view["state"] != "installed" || view["restart_required"] != true || view["read_only"] != true {
 		t.Fatal(code, view, calls)
 	}
+	switch view["virtual_camera_registration"] {
+	case "registered", "missing", "unknown":
+	default:
+		t.Fatal("camera registration was not reported separately", view)
+	}
 	if f.handler.chat.liveEncoder == "ready" {
 		t.Fatal("installation hot-swapped the running encoder")
 	}

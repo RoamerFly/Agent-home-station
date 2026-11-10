@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 
 	"wechat-bot/internal/obspreview"
 	"wechat-bot/internal/workspacefs"
@@ -24,8 +25,10 @@ import (
 
 const cameraPlugin = "core/win-dshow/win-dshow.dll"
 const cameraMapping = "OBSVirtualCamVideo"
+const cameraClass = `CLSID\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}`
 
 var ErrCameraConsumerBusy = errors.New("OBS virtual camera shared memory remains held by another consumer")
+var ErrCameraNotRegistered = errors.New("OBS virtual camera is not registered in Windows")
 var errCameraNotReady = errors.New("virtual camera queue is not ready")
 var cameraOpenFileMapping = windows.NewLazySystemDLL("kernel32.dll").NewProc("OpenFileMappingW")
 
@@ -44,6 +47,7 @@ type Camera struct {
 	started, profileOwned bool
 	consumerPending       bool
 	mappingName           string
+	checkRegistration     func() error
 	launch                func(context.Context, obspreview.EncoderLaunch) (cameraProcess, error)
 }
 
@@ -60,9 +64,24 @@ func (i *Installation) CameraWithMedia(ctx context.Context, media *Media) (*Came
 		return nil, errors.Join(ErrInvalid, lease.Stop(ctx))
 	}
 	return &Camera{lease: lease, mappingName: cameraMapping,
+		checkRegistration: CheckCameraRegistration,
 		launch: func(ctx context.Context, launch obspreview.EncoderLaunch) (cameraProcess, error) {
 			return obspreview.LaunchPortableEncoderProcess(ctx, launch)
 		}}, nil
+}
+
+// CheckCameraRegistration matches the read-only 32-bit CLSID check used by
+// the pinned OBS win-dshow module before registering its camera output.
+// A class entry alone does not establish that a consumer can use the device.
+func CheckCameraRegistration() error {
+	key, err := registry.OpenKey(registry.CLASSES_ROOT, cameraClass, registry.READ|registry.WOW64_32KEY)
+	if errors.Is(err, registry.ErrNotExist) {
+		return ErrCameraNotRegistered
+	}
+	if err != nil {
+		return fmt.Errorf("check OBS virtual camera registration: %w", err)
+	}
+	return key.Close()
 }
 
 func cameraArguments() []string {
@@ -96,6 +115,9 @@ func (c *Camera) Start(ctx context.Context) (result error) {
 	}
 	defer root.Close()
 	if err := c.lease.installation.verify(ctx, root); err != nil {
+		return err
+	}
+	if err := c.checkRegistration(); err != nil {
 		return err
 	}
 	// Own config before writing so partial profile/media failures are cleaned.

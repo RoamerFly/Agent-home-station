@@ -3566,6 +3566,7 @@
       && view.version === "33.0.1" && view.archive_sha256 === "0d9436451c2d772b33428e3fdae9776f071895c335de17283176306fb72651d3"
       && ["missing", "installed", "invalid"].includes(view.state) && typeof view.installed === "boolean"
       && view.installed === (view.state === "installed") && typeof view.read_only === "boolean" && typeof view.restart_required === "boolean"
+      && (view.virtual_camera_registration === undefined || ["registered", "missing", "unknown"].includes(view.virtual_camera_registration))
       && (view.reason === undefined || typeof view.reason === "string");
   }
   function renderCurrentOBSDeployment(current) {
@@ -3628,7 +3629,13 @@
     if (deployment.needsRefresh) section.append(appElement("p", "安装操作已返回，请使用顶栏“刷新”核对最新状态；当前路径草稿已保留。", "comfy-deployment-note"));
     if (!server) { section.append(appElement("p", "等待主人读取安装状态。读取失败时可用顶栏“刷新”重试。", "comfy-deployment-note")); return section; }
     if (server.installed) {
-      section.append(appElement("p", server.restart_required ? "OBS 33.0.1 已安装 · 重启应用后启用专用输出。" : "OBS 33.0.1 已安装 · 专用输出环境已就绪。", "comfy-deployment-note"));
+      section.append(appElement("p", server.restart_required ? "OBS 33.0.1 已安装 · 重启应用后可启动专用输出。" : "OBS 33.0.1 已安装 · 专用输出文件已核验。", "comfy-deployment-note"));
+      const cameraStatus = {
+        registered: "Windows 已登记 OBS 虚拟摄像头。直播伴侣接收画面与音频需单独核对。",
+        missing: "Windows 尚未登记 OBS 虚拟摄像头。需按 OBS 官方方式安装虚拟摄像头后再连接直播伴侣。",
+        unknown: "暂时无法核对 Windows 中的 OBS 虚拟摄像头登记。"
+      }[server.virtual_camera_registration];
+      if (cameraStatus) section.append(appElement("p", cameraStatus, "comfy-deployment-note"));
       return section;
     }
     const version = appElement("p", "仅接受官方 Windows x64 ZIP · OBS 33.0.1，由宿主核验固定 SHA-256。", "comfy-deployment-note");

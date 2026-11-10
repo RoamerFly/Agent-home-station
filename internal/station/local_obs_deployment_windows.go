@@ -18,14 +18,15 @@ import (
 const localOBSDeploymentRoute = "/api/local/project-tools/obs-preview/deployment"
 
 type localOBSDeploymentView struct {
-	Revision        string `json:"revision"`
-	Version         string `json:"version"`
-	ArchiveSHA256   string `json:"archive_sha256"`
-	State           string `json:"state"`
-	Installed       bool   `json:"installed"`
-	ReadOnly        bool   `json:"read_only"`
-	RestartRequired bool   `json:"restart_required"`
-	Reason          string `json:"reason,omitempty"`
+	Revision           string `json:"revision"`
+	Version            string `json:"version"`
+	ArchiveSHA256      string `json:"archive_sha256"`
+	State              string `json:"state"`
+	Installed          bool   `json:"installed"`
+	ReadOnly           bool   `json:"read_only"`
+	RestartRequired    bool   `json:"restart_required"`
+	Reason             string `json:"reason,omitempty"`
+	CameraRegistration string `json:"virtual_camera_registration,omitempty"`
 }
 
 func (h *localChatService) obsDeploymentRoutes(owner *websession.Store, mux *http.ServeMux) {
@@ -47,6 +48,14 @@ func (h *localChatService) obsDeploymentView(ctx context.Context) (localOBSDeplo
 		return v, nil
 	}
 	v.Installed, v.State = true, "installed"
+	switch err := obsportable.CheckCameraRegistration(); {
+	case err == nil:
+		v.CameraRegistration = "registered"
+	case errors.Is(err, obsportable.ErrCameraNotRegistered):
+		v.CameraRegistration = "missing"
+	default:
+		v.CameraRegistration = "unknown"
+	}
 	v.RestartRequired = h.liveEncoder != "ready"
 	if v.RestartRequired {
 		v.Reason = "已安装，重启应用后启用专用节目输出；不会自动开播。"
