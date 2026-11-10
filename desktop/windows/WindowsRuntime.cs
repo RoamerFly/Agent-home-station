@@ -219,21 +219,31 @@ namespace WechatAgent.Desktop {
             for (var item = new DirectoryInfo(Path.GetFullPath(path)); item != null; item = item.Parent)
                 if (item.Exists && (item.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("数据和程序路径不能穿过链接或重解析点。");
         }
-        internal static void PrivateDirectory(string path) {
+        internal static bool CanUsePrivateDirectoryOwner(SecurityIdentifier owner, SecurityIdentifier user, bool portable) {
+            return user.Equals(owner) || (portable && owner != null &&
+                (owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(WellKnownSidType.LocalSystemSid)));
+        }
+        internal static void PrivateDirectory(string path, bool portable = false) {
             NoLinks(path);
-            var user = WindowsIdentity.GetCurrent().User;
+            SecurityIdentifier user;
+            using (var identity = WindowsIdentity.GetCurrent()) user = identity.User;
             // Elevated Windows tokens may default new ownership to Administrators.
             // Explicit ownership must agree with the native backend's user SID.
             var exists = Directory.Exists(path);
-            if (exists && !user.Equals(Directory.GetAccessControl(path, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier))))
-                throw new InvalidOperationException("数据目录不属于当前用户，拒绝接管或自动更改所有者。");
+            var owner = exists ? (SecurityIdentifier)Directory.GetAccessControl(path, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)) : null;
+            if (exists && !CanUsePrivateDirectoryOwner(owner, user, portable))
+                throw new InvalidOperationException("数据目录属于其他 Windows 账号，请将应用资料复制到当前账号拥有的目录：" + path);
             var acl = new DirectorySecurity();
-            if (!exists) acl.SetOwner(user);
+            if (!exists || !user.Equals(owner)) acl.SetOwner(user);
             acl.SetAccessRuleProtection(true, false);
             var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
             acl.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
-            if (!exists) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
+            try {
+                if (!exists) Directory.CreateDirectory(path, acl); else Directory.SetAccessControl(path, acl);
+            } catch (UnauthorizedAccessException error) {
+                throw new InvalidOperationException("无法设置私有目录权限，请把程序包解压到当前账号可管理的目录：" + path, error);
+            }
         }
         static string NativeFileHash(string path) {
             using (var stream = File.OpenRead(path)) using (var sha = SHA256.Create())

@@ -353,6 +353,10 @@ namespace WechatAgent.Desktop {
                 var local = Deployment.Load(root);
                 Assert(local.LocalStationNative && local.StationNativeUrl.EndsWith(":18174") && local.StationNativeExe == Path.Combine(root, "runtimes", "windows-x64", "wx.exe"), "local station native runtime is explicit and package local");
                 Assert(local.StationNativeRoot == Path.Combine(root, "data", "station", "apps", "wechat", "native"), "local station native data is private and separate");
+                Assert(local.UsesPortableStationData(root), "default data follows the relocated launcher package");
+                Assert(!local.UsesPortableStationData(Path.Combine(root, "different launcher")), "a launcher pointed at another directory cannot adopt its data");
+                local.Root = Path.Combine(root, "custom-data");
+                Assert(!local.UsesPortableStationData(root), "custom data cannot use portable owner repair");
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"admin_url\":\"http://127.0.0.1:18082\",\"wechat_native_url\":\"http://127.0.0.1:18082\"}");
                 await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"native_url\":\"http://127.0.0.1:18174\"}");
@@ -363,8 +367,17 @@ namespace WechatAgent.Desktop {
                 var privateDir = Path.Combine(root, "private ownership");
                 WindowsRuntime.PrivateDirectory(privateDir);
                 Assert(System.Security.Principal.WindowsIdentity.GetCurrent().User.Equals(Directory.GetAccessControl(privateDir).GetOwner(typeof(System.Security.Principal.SecurityIdentifier))), "private directory owner matches native user identity");
+                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent()) {
+                    var administrators = new System.Security.Principal.SecurityIdentifier("S-1-5-32-544");
+                    var system = new System.Security.Principal.SecurityIdentifier("S-1-5-18");
+                    var foreign = new System.Security.Principal.SecurityIdentifier("S-1-5-21-333-444-555-1001");
+                    Assert(WindowsRuntime.CanUsePrivateDirectoryOwner(administrators, identity.User, true), "portable copy can be initialized under Administrators ownership");
+                    Assert(WindowsRuntime.CanUsePrivateDirectoryOwner(system, identity.User, true), "portable copy can be initialized under SYSTEM ownership");
+                    Assert(!WindowsRuntime.CanUsePrivateDirectoryOwner(administrators, identity.User, false), "external data retains strict owner verification");
+                    Assert(!WindowsRuntime.CanUsePrivateDirectoryOwner(foreign, identity.User, true), "a portable installation cannot adopt another user's private data");
+                }
                 File.WriteAllText(Path.Combine(privateDir, "preserve"), "synthetic");
-                WindowsRuntime.PrivateDirectory(privateDir);
+                WindowsRuntime.PrivateDirectory(privateDir, true);
                 Assert(File.ReadAllText(Path.Combine(privateDir, "preserve")) == "synthetic", "private directory admission preserves existing contents");
                 var markerRoot = Path.Combine(root, "cutover evidence");
                 WindowsRuntime.PrivateDirectory(markerRoot);

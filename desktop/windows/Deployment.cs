@@ -23,6 +23,14 @@ namespace WechatAgent.Desktop {
         // explicitly opts in through wechat_native_url.
         internal bool LocalStationNative { get { return LocalStation && StationNativeUrl != ""; } }
         internal string StationNativeRoot { get { return Path.Combine(Root, "apps", "wechat", "native"); } }
+        internal bool UsesPortableStationData(string launcherDirectory) {
+            if (!LocalStation) return false;
+            var package = LocalStationDefault(launcherDirectory);
+            return SamePath(Workspace, package.Workspace) && SamePath(Root, package.Root) && SamePath(StationExe, package.StationExe);
+        }
+        static bool SamePath(string left, string right) {
+            return String.Equals(WindowsRuntime.ComparablePath(left), WindowsRuntime.ComparablePath(right), StringComparison.OrdinalIgnoreCase);
+        }
         internal string Url = "http://127.0.0.1:8081";
         internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
         internal static Deployment Load(string workspace) {

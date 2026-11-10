@@ -24,6 +24,7 @@ namespace WechatAgent.Desktop {
         string nativeStopEpoch;
         bool nativeAdmitted, stationAdmitted;
         internal LocalStationRuntime(Deployment deployment) { d = deployment; }
+        bool UsesPortableData { get { return d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory); } }
         internal bool Running { get { return server != null && server.Alive; } }
         internal int PID { get { return server == null ? 0 : server.ID; } }
         internal int NativePID { get { return native == null ? 0 : native.ID; } }
@@ -51,9 +52,9 @@ namespace WechatAgent.Desktop {
         }
         void AdmitNativeDirectories() {
             var nativeRoot = d.StationNativeRoot;
-            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps"));
-            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps", "wechat"));
-            WindowsRuntime.PrivateDirectory(nativeRoot);
+            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps"), UsesPortableData);
+            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps", "wechat"), UsesPortableData);
+            WindowsRuntime.PrivateDirectory(nativeRoot, UsesPortableData);
         }
         void RejectOfflineNativeRelease() {
             var marker = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-release.json");
@@ -206,7 +207,7 @@ namespace WechatAgent.Desktop {
                 WindowsRuntime.VerifyNativeBundle(d.StationNativeExe, true); ValidateNativeLayout();
             }
             // All potentially destructive validation has completed above.
-            WindowsRuntime.PrivateDirectory(d.Root); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
+            WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
             WindowsRuntime.FreePort(d.Url);
             if (d.LocalStationNative) { AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot); WindowsRuntime.FreePort(d.StationNativeUrl); }
             job = new ProcessJob(); nativeServerId = nativeGeneration = nativeToken = null;

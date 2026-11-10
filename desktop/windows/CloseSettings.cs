@@ -6,9 +6,11 @@ using System.Text;
 namespace WechatAgent.Desktop {
     internal sealed class CloseSettings {
         readonly string path;
+        readonly bool portable;
         internal string Behavior { get; private set; }
-        internal CloseSettings(string workspace) {
+        internal CloseSettings(string workspace, bool portable = false) {
             path = Path.Combine(workspace, "secrets", "desktop-settings.json");
+            this.portable = portable;
             Behavior = "ask";
             if (!File.Exists(path)) return;
             try {
@@ -21,7 +23,7 @@ namespace WechatAgent.Desktop {
         internal static bool Valid(string value) { return value == "ask" || value == "tray" || value == "exit"; }
         internal void Save(string value) {
             if (!Valid(value)) throw new ArgumentException("关闭方式无效。");
-            var directory = Path.GetDirectoryName(path); WindowsRuntime.PrivateDirectory(directory);
+            var directory = Path.GetDirectoryName(path); WindowsRuntime.PrivateDirectory(directory, portable);
             string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try {
                 File.WriteAllText(temporary, Deployment.Json.Serialize(new { close_behavior = value }), new UTF8Encoding(false));
