@@ -2309,11 +2309,12 @@
   function selectAppConfiguration(view, section) {
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
     view.douyinReadAbort?.abort();
-    view.roundPanel = null; view.archivePanel = null; view.douyinReadPanel = null;
+    view.douyinNoticeAbort?.abort();
+    view.roundPanel = null; view.archivePanel = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
-      if (section === "account" || section === "browse") void loadDouyinWebLogin(apps);
+      if (["account", "browse", "interactions"].includes(section)) void loadDouyinWebLogin(apps);
       if (section === "interactions") {
         apps.douyinActivityTab = "interactions";
         void loadDouyinInteractionWork(apps, apps.douyinInteractions.cursors);
@@ -2548,6 +2549,75 @@
     return panel;
   }
 
+  function douyinNoticePanel(view, login) {
+    const panel = appElement("section", "", "memory-detail-section");
+    panel.append(appElement("h4", "平台互动通知"));
+    const ready = login?.state === "saved" && login.available && !login.paused && !login.detached && !login.attempt_id;
+    const bound = login?.notice_bound === true;
+    const note = !login ? "正在核对网页登录状态。" : ready
+      ? (bound ? "已绑定当前账号。每次读取都需要确认，抖音网页可能同时标记通知为已读。" : "先核对并绑定已保存的抖音账号。绑定时只核对身份。")
+      : "请在「账号与授权」确认网页登录并恢复网页能力。";
+    panel.append(appElement("p", note, "app-scope-note"));
+    const actions = appElement("div", "", "publication-actions");
+    const status = appElement("p", "", "apps-feedback");
+    status.setAttribute("role", "status");
+    const output = appElement("div", "", "configuration-round-records");
+    if (ready && !bound) actions.append(memoryButton("绑定当前抖音账号", "button compact secondary", () => void run("bind")));
+    if (ready && bound) actions.append(memoryButton("读取并标记已读", "button compact secondary", () => void run("read")));
+    if (bound) actions.append(memoryButton("撤销通知绑定", "button compact quiet", () => void run("revoke")));
+    panel.append(actions, status, output);
+    async function run(action) {
+      if (!panel.isConnected || appConfiguration !== view || view.section !== "interactions") return;
+      view.douyinNoticeAbort?.abort();
+      const controller = new AbortController();
+      view.douyinNoticeAbort = controller;
+      const active = () => appConfiguration === view && view.section === "interactions" &&
+        view.douyinNoticePanel === panel && !controller.signal.aborted;
+      const buttons = [...actions.querySelectorAll("button")];
+      for (const button of buttons) button.disabled = true;
+      status.textContent = action === "read" ? "正在核对并读取互动通知…" : action === "bind" ? "正在核对抖音账号…" : "正在撤销通知绑定…";
+      const post = (body) => request("/api/local/apps/douyin/web-notice", {
+        method: "POST", body: JSON.stringify({ revision: login.revision, ...body }), signal: controller.signal,
+      });
+      let readRequested = false;
+      try {
+        if (action !== "read") {
+          const result = await post({ action });
+          if (!active()) return;
+          if (typeof result.notice_bound !== "boolean" || !Number.isSafeInteger(result.revision)) throw new Error("通知绑定状态返回格式无效。");
+          if (apps.douyinWebLogin.value === login) {
+            apps.douyinWebLogin.value = { ...login, ...result };
+            renderAppConfiguration();
+          }
+          return;
+        }
+        output.replaceChildren();
+        const prepared = await post({ action: "prepare", allow_mark_read: true });
+        if (!active()) return;
+        if (typeof prepared.ticket !== "string" || !prepared.ticket) throw new Error("通知读取许可返回格式无效。");
+        readRequested = true;
+        const page = await post({ action: "read", allow_mark_read: true, ticket: prepared.ticket });
+        if (!active()) return;
+        if (!Array.isArray(page.items) || typeof page.has_more !== "boolean") throw new Error("互动通知返回格式无效。");
+        for (const row of page.items) {
+          const card = appElement("div", "", "douyin-read-chunk");
+          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type));
+          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "作品 " + row.work_id : ""].filter(Boolean);
+          if (details.length) card.append(appElement("p", details.join(" · "), "publication-reference"));
+          output.append(card);
+        }
+        const coverage = page.has_more ? "。平台报告还有后续通知。" : "。";
+        status.textContent = "本次返回 " + page.items.length + " 条通知" + coverage;
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          status.textContent = error.message + (readRequested ? " 若平台已接受读取请求，相关通知可能已经标记已读。" : "");
+        }
+      } finally {
+        if (active()) for (const button of buttons) button.disabled = false;
+      }
+    }
+    return panel;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -2625,6 +2695,16 @@
       case "publications":
       case "interactions":
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        if (record.id === "douyin" && section === "interactions") {
+          const login = apps.douyinWebLogin.value;
+          if (view.douyinNoticeLogin !== login) {
+            view.douyinNoticeAbort?.abort();
+            view.douyinNoticeLogin = login;
+            view.douyinNoticePanel = null;
+          }
+          view.douyinNoticePanel ||= douyinNoticePanel(view, login);
+          controls.push(view.douyinNoticePanel);
+        }
         controls.push(record.id === "douyin" ? douyinPublicationRow(apps, section) : bilibiliPublicationRow(apps));
         break;
       case "live":
@@ -5080,6 +5160,7 @@
     if ($("#app-configuration").open) return;
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
+    appConfiguration?.douyinNoticeAbort?.abort();
     appConfiguration = null;
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();

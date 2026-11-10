@@ -175,6 +175,52 @@ def verify_douyin_read_controls(page, panel, nav):
     page.unroute(pattern, observation)
 
 
+def verify_douyin_notice(page, panel, nav):
+    status_path = "**/api/local/apps/douyin/web-login"
+    notice_path = "**/api/local/apps/douyin/web-notice"
+    observed = []
+    login = {"revision": 7, "state": "saved", "active": False, "available": True, "notice_bound": False}
+
+    def notice(route):
+        data = route.request.post_data_json
+        action = data["action"]
+        observed.append(action)
+        assert data["revision"] == login["revision"]
+        if action in ("bind", "revoke"):
+            assert "allow_mark_read" not in data
+            login["notice_bound"] = action == "bind"
+            login["revision"] += 1
+            route.fulfill(json={"revision": login["revision"], "notice_bound": login["notice_bound"]})
+        elif action == "prepare":
+            assert data["allow_mark_read"] is True
+            route.fulfill(json={"ticket": "synthetic-single-use"})
+        else:
+            assert action == "read" and data["allow_mark_read"] is True and data["ticket"] == "synthetic-single-use"
+            route.fulfill(json={"items": [{"id": "1234", "type": 2, "work_id": "5678"}], "has_more": True})
+
+    page.route(status_path, lambda route: route.fulfill(json=login))
+    page.route(notice_path, notice)
+    nav.get_by_role("button", name="互动任务", exact=True).click()
+    bind = panel.get_by_role("button", name="绑定当前抖音账号", exact=True)
+    expect(bind).to_be_visible()
+    assert not observed
+    expect(panel.get_by_role("button", name="读取并标记已读", exact=True)).to_have_count(0)
+    bind.click()
+    read = panel.get_by_role("button", name="读取并标记已读", exact=True)
+    expect(read).to_be_visible()
+    assert observed == ["bind"]
+    read.click()
+    expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_be_visible()
+    expect(panel.get_by_text("本次返回 1 条通知。平台报告还有后续通知。")).to_be_visible()
+    assert observed == ["bind", "prepare", "read"]
+    panel.get_by_role("button", name="撤销通知绑定", exact=True).click()
+    expect(bind).to_be_visible()
+    expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_have_count(0)
+    assert observed[-1] == "revoke"
+    page.unroute(status_path)
+    page.unroute(notice_path)
+
+
 def verify_application_configuration(page, output):
     reads = []
     page.on("request", lambda request: reads.append((request.method, urlparse(request.url).path)))
@@ -202,6 +248,7 @@ def verify_application_configuration(page, output):
     opener.click()
     expect(nav.get_by_role("button", name="直播与本机预览")).to_be_visible()
     verify_douyin_read_controls(page, panel, nav)
+    verify_douyin_notice(page, panel, nav)
     nav.get_by_role("button", name="直播与本机预览").click()
     expect(panel.get_by_role("button", name="打开 OBS 本机预览")).to_be_visible()
     expect(panel.get_by_role("button", name="开始直播", exact=True)).to_have_count(0)

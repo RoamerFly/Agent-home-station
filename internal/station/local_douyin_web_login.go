@@ -45,6 +45,7 @@ type localDouyinWebView struct {
 	CommentsEnabled bool   `json:"comments_enabled"`
 	LikesEnabled    bool   `json:"likes_enabled"`
 	RepliesEnabled  bool   `json:"replies_enabled"`
+	NoticeBound     bool   `json:"notice_bound"`
 	VisualReady     bool   `json:"visual_ready"`
 	VisualReason    string `json:"visual_reason,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled"`
@@ -66,6 +67,7 @@ type localDouyinWebInput struct {
 	AllowPublish   *bool   `json:"allow_publish,omitempty"`
 	AllowLikes     *bool   `json:"allow_likes,omitempty"`
 	AllowReplies   *bool   `json:"allow_replies,omitempty"`
+	noticeAccount  *string
 }
 
 type localDouyinWebRecord struct {
@@ -90,6 +92,7 @@ type localDouyinWebRecord struct {
 	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
 	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
 	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
+	NoticeAccount   string `json:"notice_account,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled,omitempty"`
 }
 
@@ -112,6 +115,9 @@ type localDouyinWebLogin struct {
 	imageVision      stationLocalVision
 	readVideo        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
+	probeNotice      func(context.Context, string, func() error) (string, error)
+	readNotice       func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error)
+	noticeTicket     localDouyinNoticeTicket
 	interact         func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
 	sampleVideo      func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	readMedia        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)
@@ -126,6 +132,7 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readWorks: stationbrowser.ReadDouyinCreatorWorks, readComments: stationbrowser.ReadDouyinComments, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		readImages: stationbrowser.ReadDouyinCreatorImages, imageVision: stationLocalVision{version: h.localStationVisionVersion, observe: h.observeLocalStationImages},
+		probeNotice: stationbrowser.DouyinNoticeAccount, readNotice: stationbrowser.ReadDouyinNotice,
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
@@ -162,6 +169,7 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 	})
 	mux.HandleFunc("GET /api/local/apps/douyin/web-login", handler)
 	mux.HandleFunc("POST /api/local/apps/douyin/web-login", handler)
+	m.noticeRoutes(owner, mux)
 }
 
 func localDouyinWebID() (string, error) {
@@ -206,6 +214,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	}
 	if (record.ReadEnabled || record.WorksEnabled) && (record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("网页读取授权没有已确认的登录资料，原资料保留")
+	}
+	if record.NoticeAccount != "" && (!validDouyinNoticeAccount(record.NoticeAccount) || record.Profile == "" || record.ConfirmedAt == "") {
+		return record, errors.New("互动通知授权的账号登记无效，原资料保留")
 	}
 	if record.Detached && !record.Paused {
 		return record, errors.New("抖音接入状态无效，原资料保留")
@@ -281,6 +292,7 @@ func (h *localHomeService) douyinRegistrationDetached() (bool, error) {
 
 func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
 	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, Detached: record.Detached, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
+	v.NoticeBound = record.NoticeAccount != ""
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -353,6 +365,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return in.AllowWorks != nil && !*in.AllowWorks
 	case "set_images":
 		return in.AllowImages != nil && !*in.AllowImages
+	case "set_notice":
+		return in.noticeAccount != nil && *in.noticeAccount == ""
 	case "set_publish":
 		return in.AllowPublish != nil && !*in.AllowPublish
 	case "set_interactions":
@@ -400,10 +414,11 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
-	if record.Detached && in.Action != "attach" && in.Action != "detach" {
+	noticeRevocation := in.Action == "set_notice" && localDouyinWebRevokesOnly(in)
+	if record.Detached && in.Action != "attach" && in.Action != "detach" && !noticeRevocation {
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
-	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
+	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !noticeRevocation && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
 		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
 	}
 	save := func() error {
@@ -424,6 +439,9 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			return fail(409, "请先保存或取消本次登录")
 		}
 		record.Detached, record.Paused = detached, true
+		if detached {
+			record.NoticeAccount = ""
+		}
 		if save() != nil {
 			return fail(503, "抖音接入状态未保存，请重新读取后核对")
 		}
@@ -483,6 +501,23 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if save() != nil {
 			return fail(503, "网页发布授权未保存，请重新读取后核对")
 		}
+	case "set_notice":
+		if in.noticeAccount == nil {
+			return fail(400, "请使用互动通知授权入口")
+		}
+		account := *in.noticeAccount
+		if account != "" {
+			view := m.view(record)
+			if !validDouyinNoticeAccount(account) || view.State != "saved" || view.AttemptID != "" || !view.Available {
+				return fail(409, "请先确认网页登录，再绑定互动通知账号")
+			}
+		}
+		if account != record.NoticeAccount {
+			record.NoticeAccount = account
+			if save() != nil {
+				return fail(503, "互动通知授权未保存，请重新读取后核对")
+			}
+		}
 	case "begin_creator", "begin_creator_works":
 		view := m.view(record)
 		if in.Action == "begin_creator" && !record.PublishEnabled || in.Action == "begin_creator_works" && !record.WorksEnabled || view.State != "saved" || view.AttemptID != "" || !view.Available {
@@ -507,6 +542,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// owner explicitly confirms and re-enables what they want afterwards.
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
+		record.NoticeAccount = ""
 		record.WorksEnabled = false
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
@@ -671,6 +707,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// Beginning a new login never carries forward an old confirmation.
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
+		record.NoticeAccount = ""
 		record.WorksEnabled = false
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
@@ -725,7 +762,8 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		// Revoke pending reads before trying to close/delete profile files.
 		// Another browser may still own the profile lock during that cleanup.
-		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled {
+		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled || record.NoticeAccount != "" {
+			record.NoticeAccount = ""
 			record.ReadEnabled = false
 			record.WorksEnabled = false
 			record.ImagesEnabled = false
