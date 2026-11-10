@@ -21,7 +21,14 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 	if runtime.GOOS != "windows" || file == "" {
 		t.Skip("opt-in synthetic local-home LPAC integration")
 	}
-	f := localChatFixture(t)
+	packages := t.TempDir()
+	original := filepath.Join(packages, "original package")
+	privateRoot := filepath.Join(original, "data", "station")
+	f := newLocalHomeFixture(t, privateRoot, filepath.Join(privateRoot, "managed-workspaces"))
+	f.login()
+	if status, out := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); status != 200 {
+		t.Fatalf("initialize synthetic installation: %d %#v", status, out)
+	}
 	windows, err := stationruntime.LoadWindowsRunner("", f.dir, f.root, file)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +111,8 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 	}
 	running := start("cancel-probe", "wait")
 	wait(running.ID, false)
-	if status, _ := f.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": state["revision"]}, true); status != 200 {
+	status, paused := f.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": state["revision"]}, true)
+	if status != 200 {
 		t.Fatal(status)
 	}
 	cancelled := wait(running.ID, true)
@@ -116,9 +124,29 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 	}
 	f.server.Close()
 	f.handler.Close()
-	restart := newLocalHomeFixture(t, f.dir, f.root)
+	// Copy files into a new package using the destination's Windows ACLs.
+	// This deliberately does not copy ACLs from a previous Windows account.
+	moved := filepath.Join(packages, "relocated package")
+	if err := os.CopyFS(moved, os.DirFS(original)); err != nil {
+		t.Fatal(err)
+	}
+	newPrivate := filepath.Join(moved, "data", "station")
+	restart := newLocalHomeFixture(t, newPrivate, filepath.Join(newPrivate, "managed-workspaces"))
 	restart.login()
-	restart.handler.chat.windows = windows
+	newWindows, err := stationruntime.LoadWindowsRunner("", restart.dir, restart.root, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart.handler.chat.windows = newWindows
+	_, copied := restart.request("GET", "/api/local/home", nil, true)
+	newHome, _ := copied["directory"].(string)
+	if copied["fish_id"] != state["fish_id"] || copied["owner_id"] != state["owner_id"] ||
+		copied["home_access"] != false || copied["revision"] != paused["revision"] || newHome == "" || newHome == home {
+		t.Fatalf("relocation lost identity, pause or new home: %#v", copied)
+	}
+	if status, out := restart.request("POST", "/api/local/home", map[string]any{"action": "authorize", "revision": copied["revision"]}, true); status != 200 {
+		t.Fatalf("authorize relocated home: %d %#v", status, out)
+	}
 	s, i, err := restart.handler.chat.conversation()
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +155,20 @@ func TestLiveLocalHomeWindowsPersistentToolAndRevocation(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"action": "status", "id": first.ID})
 	out, err := retained.Call(context.Background(), "server_windows_process", raw)
 	if err != nil || !strings.Contains(out, first.ID) || !strings.Contains(out, "completed") {
-		t.Fatal("restart lost finished job", out, err)
+		t.Fatal("relocation lost finished job", out, err)
+	}
+	if data := localWorkspaceToolCall(t, retained, "server_read", map[string]any{"path": "Project Tools/legacy-probe/probe.py"}); !strings.Contains(data, "host-secret-readable") {
+		t.Fatal("relocation lost the saved tool")
+	}
+	tools, home = retained, newHome
+	script = filepath.Join(home, "Project Tools", "legacy-probe", "probe.py")
+	private = filepath.Join(newPrivate, "synthetic-secret.txt")
+	relocated := start("relocated-probe", "inspect")
+	if relocated.ID == first.ID {
+		t.Fatal("new request reused the old process")
+	}
+	if done := wait(relocated.ID, true); done.State != "completed" || !strings.Contains(done.Output, "boundaries-preserved") {
+		t.Fatalf("relocated LPAC could not write inside home or could read private data: %#v", done)
 	}
 }
 
