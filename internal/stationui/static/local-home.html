@@ -177,7 +177,7 @@
                 <dialog id="app-dialog" class="app-dialog" aria-labelledby="app-dialog-title">
                   <header class="app-dialog-header">
                     <div><p class="app-detail-kicker">应用详情</p><h2 id="app-dialog-title" tabindex="-1">应用设置</h2></div>
-                    <div class="app-dialog-actions"><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+                    <div class="app-dialog-actions"><button id="app-configuration-open" class="button compact primary" type="button">详细配置</button><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
                   </header>
                   <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用详情分区"></nav>
                   <div id="app-dialog-feedback" class="app-dialog-feedback"></div>
@@ -276,6 +276,23 @@
       </div>
     </section>
   </main>
+  <dialog id="app-configuration" class="app-dialog app-configuration" aria-labelledby="app-configuration-title">
+    <header class="app-dialog-header">
+      <div>
+        <h2 id="app-configuration-title" tabindex="-1">详细配置</h2>
+        <p id="app-configuration-status"></p>
+      </div>
+      <div class="app-dialog-actions">
+        <button id="app-configuration-refresh" class="button compact secondary" type="button">刷新</button>
+        <button id="app-configuration-close" class="button compact quiet" type="button">返回应用</button>
+      </div>
+    </header>
+    <div id="app-configuration-feedback" class="app-dialog-feedback"></div>
+    <div class="app-configuration-layout">
+      <nav id="app-configuration-nav" aria-label="应用配置分区"></nav>
+      <section id="app-configuration-body" class="app-dialog-body" aria-label="当前分区"></section>
+    </div>
+  </dialog>
   <dialog id="tool-dialog" class="app-dialog tool-dialog" aria-labelledby="tool-dialog-title">
     <header class="app-dialog-header">
       <h2 id="tool-dialog-title">项目工具</h2>

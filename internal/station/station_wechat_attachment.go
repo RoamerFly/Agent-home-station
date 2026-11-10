@@ -40,6 +40,8 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 				Archive: s.archiveManagementHandlers(),
 			}
 			routes.Mount(mux, owner.Protect)
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/conversations/{thread}/imported-memory", owner.Protect(s.readImportedConversation(owner)))
 		},
 		Restore:   s.restore,
 		Lifecycle: s.lifecycle,

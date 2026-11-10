@@ -101,6 +101,66 @@ def verify_glass_views(page, output):
     page.keyboard.press("Escape")
     expect(page.get_by_role("button", name="管理抖音", exact=True)).to_be_focused()
 
+
+def verify_application_configuration(page, output):
+    reads = []
+    page.on("request", lambda request: reads.append((request.method, urlparse(request.url).path)))
+    home_tab(page, "apps")
+    page.get_by_role("button", name="管理微信", exact=True).click()
+    opener = page.locator("#app-configuration-open")
+    start = len(reads)
+    opener.click()
+    panel = page.locator("#app-configuration")
+    expect(panel).to_be_visible()
+    nav = panel.get_by_role("navigation", name="应用配置分区")
+    expect(nav.get_by_role("button", name="会话与记忆")).to_be_visible()
+    expect(nav.get_by_role("button", name="投递与回执")).to_be_visible()
+    assert ("GET", "/api/local/apps/wechat/configuration") in reads[start:]
+    assert all(method == "GET" for method, _ in reads[start:])
+    page.screenshot(path=str(output/"wechat-configuration.png"))
+    nav.get_by_role("button", name="会话与记忆").click()
+    expect(panel.get_by_text("当前连接没有可展示的配置或资料。")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(panel).not_to_be_visible()
+    expect(opener).to_be_focused()
+
+    page.get_by_role("button", name="管理抖音", exact=True).click()
+    page.set_viewport_size({"width": 375, "height": 740})
+    opener.click()
+    expect(nav.get_by_role("button", name="直播与本机预览")).to_be_visible()
+    nav.get_by_role("button", name="直播与本机预览").click()
+    expect(panel.get_by_role("button", name="打开 OBS 本机预览")).to_be_visible()
+    expect(panel.get_by_role("button", name="开始直播", exact=True)).to_have_count(0)
+    assert panel.evaluate("node => node.getBoundingClientRect().width === innerWidth")
+    assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    page.screenshot(path=str(output/"douyin-configuration-narrow.png"))
+    panel.get_by_role("button", name="打开 OBS 本机预览").click()
+    expect(page.locator("#tool-dialog")).to_be_visible()
+    expect(page.locator("#tool-dialog-title")).to_contain_text("OBS")
+    page.keyboard.press("Escape")
+    expect(page.locator("#tool-dialog")).not_to_be_visible()
+    page.set_viewport_size({"width": 1440, "height": 900})
+
+    generic = {"id": "synthetic-configuration", "name": "合成应用", "registration": "synthetic"}
+    page.route("**/api/apps", lambda route: route.fulfill(json={"items": [generic]}))
+    page.route("**/api/apps/synthetic-configuration/connections", lambda route: route.fulfill(json={"items": []}))
+    page.route("**/api/local/apps/synthetic-configuration/configuration", lambda route: route.fulfill(json={
+        "id": generic["id"], "registered": True, "sections": [
+            {"id": "overview", "title": "概览"}, {"id": "account", "title": "账号与授权"}, {"id": "source", "title": "资料与版本"},
+        ],
+    }))
+    home_tab(page, "apps")
+    page.get_by_role("button", name="管理合成应用", exact=True).click()
+    opener.click()
+    expect(nav.get_by_role("button")).to_have_text(["概览", "账号与授权", "资料与版本"])
+    panel.get_by_role("button", name="返回应用").click()
+    expect(panel).not_to_be_visible()
+    close_application(page)
+    page.unroute("**/api/apps")
+    page.unroute("**/api/apps/synthetic-configuration/connections")
+    page.unroute("**/api/local/apps/synthetic-configuration/configuration")
+
+
 def verify(binary, output):
     output.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='synthetic-layout-',dir=output) as temporary:
@@ -121,6 +181,7 @@ def verify(binary, output):
                 page.locator('#chat-view').wait_for(state='visible')
                 initial=fixed_shell(page)
                 verify_glass_views(page,output)
+                verify_application_configuration(page,output)
                 main=context.request.get(origin+'/api/local/model').json()['persona']
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
                 assert page.get_by_role('button',name='安装接入版本',exact=True).count()==0
@@ -198,7 +259,7 @@ def verify(binary, output):
                 assert not errors, errors
                 browser.close()
         finally:stop(process)
-    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['chat and memory palace','shared application details','viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and narrow light dark']},ensure_ascii=False))
+    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['chat and memory palace','shared application details', 'registered application configuration','viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and narrow light dark']},ensure_ascii=False))
 
 
 if __name__=='__main__':

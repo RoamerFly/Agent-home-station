@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
@@ -88,6 +90,8 @@ func (policy stationWechatPolicy) groupPolicy() wechatapp.GroupPolicy {
 const stationWechatPolicyLimit = 128 << 10
 
 type stationWechatWorker struct {
+	connectionID    string
+	roundMu         sync.Mutex
 	mu              sync.Mutex
 	deliveryMu      sync.Mutex
 	rollbackAuditMu sync.Mutex
@@ -229,7 +233,7 @@ func (s *stationWechat) worker(id string, create bool) (*stationWechatWorker, er
 	if err != nil {
 		return nil, err
 	}
-	w := &stationWechatWorker{dir: dir, runtimeDir: runtimeDir, policy: policy}
+	w := &stationWechatWorker{connectionID: id, dir: dir, runtimeDir: runtimeDir, policy: policy}
 	s.workers[id] = w
 	return w, nil
 }
@@ -733,7 +737,16 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
 		tools = attachment
 	}
+	var roundErrorLogged atomic.Bool
 	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
+		Record: func(entry bot.Record) {
+			if entry.ThreadID != "" && policy.Grants[entry.ThreadID].IsZero() {
+				return
+			}
+			if err := station.recordRound(station.connectionID, native.Account(), time.Now(), entry); err != nil && roundErrorLogged.CompareAndSwap(false, true) {
+				log.Print("WeChat execution journal is unavailable")
+			}
+		},
 		StateDir: station.queueDir(), Groups: policy.groupPolicy(), AllowMediaReplies: len(policy.MediaReplyGrants) != 0,
 		Memory: memory, Model: s.model, Persona: persona, Tools: tools,
 		MediaObserver:     stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},

@@ -286,7 +286,7 @@
     const entry = { busy: digest ? "confirm" : "read", controller: new AbortController(), digest: "" };
     current.wechatRelocation.set(id, entry);
     const visible = () => current === apps && activeView === "apps" && $("#app-dialog").open &&
-      current.openID === "wechat" && current.detailTab === "account" && current.wechatRelocation.get(id) === entry;
+      appAccountVisible("wechat") && current.wechatRelocation.get(id) === entry;
     const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/relocation/readiness";
     renderApps();
     try {
@@ -1446,7 +1446,7 @@
     if (wechat?.registration !== "station-native") return "offline";
     return apps.connections.get("wechat") ? "ready" : "unavailable";
   }
-  function appConnectionRow(record) {
+  function appConnectionRow(record, selected = "") {
     const row = appElement("div", "", "app-layer app-connection-layer");
     const detail = appElement("div", "");
     const connection = apps.connections.get(record.id);
@@ -1467,6 +1467,7 @@
       if (archiveOnly) detail.append(appElement("p", "微信原生服务未启动，登录状态待重新连接后核对。"));
       const list = appElement("ul", "", "app-accounts");
       for (const [index, account] of connection.entries()) {
+        if (selected && account.id !== selected) continue;
         const item = appElement("li", "");
         item.append(appElement("span", account.label || (archiveOnly && account.account_id) || `账号 ${index + 1}`));
         if (account.primary) item.append(appElement("small", "主连接"));
@@ -1547,7 +1548,7 @@
   }
   function shouldPollDouyinWebLogin(current, value) {
     return current === apps && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" &&
-      current.detailTab === "account" && value?.active === true;
+      (appAccountVisible("douyin") || appConfiguration?.section === "browse") && value?.active === true;
   }
   function scheduleDouyinWebLoginPoll(current) {
     const web = current?.douyinWebLogin;
@@ -1669,7 +1670,7 @@
       }
     }
   }
-  function douyinWebLoginRow(current, listing) {
+  function douyinWebLoginRow(current, listing, section = "") {
     if (!listing?.source_available && !current.registered?.some((item) => item.id === "douyin")) return null;
     const web = current.douyinWebLogin, value = web.value;
     const [title, note] = douyinWebLoginSummary(value);
@@ -1683,6 +1684,9 @@
     if (value?.reason) detail.append(appElement("p", value.reason, "publication-authorization-note"));
     if (web.error) detail.append(appElement("p", web.error, "publication-feedback is-warn"));
     const actions = appElement("div", "", "publication-actions douyin-web-login-actions");
+    const publishActions = appElement("div", "", "publication-actions");
+    const readActions = appElement("div", "", "publication-actions");
+    const interactionActions = appElement("div", "", "publication-actions");
     const busy = Boolean(web.loading || web.applying);
     const available = value?.available !== false;
     if (!web.loaded && !web.loading) {
@@ -1741,11 +1745,11 @@
         creator.type = "button";
         creator.disabled = busy || !publishEnabled || !available;
         creator.addEventListener("click", () => { void updateDouyinWebLogin(current, "begin_creator", {}); });
-        detail.append(
+        if (!section || section === "publications") detail.append(
           appElement("p", publishEnabled ? "已保存普通账号发布许可。" : "普通账号发布许可未开启。", "publication-authorization-note"),
           appElement("p", "发布许可独立于网页文字读取。每次创作任务都要单独填写可见范围、作品内容和素材；发布回执未知时只核对原任务，不会重复发布。", "publication-authorization-note")
         );
-        actions.append(publishLabel, creator);
+        publishActions.append(publishLabel, creator);
         const readEnabled = douyinWebReadEnabled(value);
         const read = appElement("button", web.applying === "set_read" ? "正在保存…" : readEnabled ? "停止网页读取" : "允许读取首页文字", "button compact quiet");
         read.type = "button";
@@ -1755,8 +1759,8 @@
         readNote.append(readEnabled && douyinWebReadScope(value) === "home_and_videos"
           ? " 视频页文字不等于音轨或完整观看，也不授予点赞、评论或发布权限。"
           : " 不代表完整观看视频，也不授予点赞、评论或发布权限。");
-        detail.append(readNote);
-        actions.append(read);
+        if (!section || section === "browse") detail.append(readNote);
+        readActions.append(read);
         if (readEnabled) {
           const scope = document.createElement("select");
           scope.className = "douyin-web-read-scope";
@@ -1767,7 +1771,7 @@
           scope.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", { allowRead: true, readScope: scope.value, explicitReadScope: true }); });
           const scopeLabel = appElement("label", "读取范围", "douyin-web-read-scope-label");
           scopeLabel.append(scope);
-          actions.append(scopeLabel);
+          readActions.append(scopeLabel);
           if (douyinWebReadScope(value) === "home_and_videos") {
             const playbackLabel = appElement("label", "", "douyin-web-media-label douyin-web-playback-label");
             const playback = document.createElement("input");
@@ -1776,7 +1780,7 @@
             playback.disabled = busy || (!playback.checked && !available);
             playback.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", { allowRead: true, readScope: "home_and_videos", explicitReadScope: true, allowPlayback: playback.checked }); });
             playbackLabel.append(playback, document.createTextNode("允许静音观察视频播放"));
-            actions.append(playbackLabel);
+            readActions.append(playbackLabel);
             const audioLabel = appElement("label", "", "douyin-web-media-label douyin-web-audio-label");
             const audio = document.createElement("input");
             audio.type = "checkbox";
@@ -1784,7 +1788,7 @@
             audio.disabled = busy || (!audio.checked && !available);
             audio.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", { allowRead: true, readScope: "home_and_videos", explicitReadScope: true, allowAudio: audio.checked }); });
             audioLabel.append(audio, document.createTextNode("允许本机转写视频音轨"));
-            actions.append(audioLabel);
+            readActions.append(audioLabel);
             const visualLabel = appElement("label", "", "douyin-web-media-label douyin-web-visual-label");
             const visual = document.createElement("input");
             visual.type = "checkbox";
@@ -1792,7 +1796,7 @@
             visual.disabled = busy || (!visual.checked && (!available || value.visual_ready !== true));
             visual.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", { allowRead: true, readScope: "home_and_videos", explicitReadScope: true, allowVisual: visual.checked }); });
             visualLabel.append(visual, document.createTextNode("允许本机分析视频画面"));
-            actions.append(visualLabel);
+            readActions.append(visualLabel);
             const commentsLabel = appElement("label", "", "douyin-web-media-label douyin-web-comments-label");
             const comments = document.createElement("input");
             comments.type = "checkbox";
@@ -1800,7 +1804,7 @@
             comments.disabled = busy || (!comments.checked && !available);
             comments.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_read", { allowRead: true, readScope: "home_and_videos", explicitReadScope: true, allowComments: comments.checked }); });
             commentsLabel.append(comments, document.createTextNode("允许读取视频评论"));
-            actions.append(commentsLabel);
+            readActions.append(commentsLabel);
             const likesLabel = appElement("label", "", "douyin-web-media-label douyin-web-likes-label");
             const likes = document.createElement("input");
             likes.type = "checkbox";
@@ -1809,7 +1813,7 @@
             likes.setAttribute("aria-label", "允许点赞");
             likes.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowLikes: likes.checked }); });
             likesLabel.append(likes, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许点赞"));
-            actions.append(likesLabel);
+            interactionActions.append(likesLabel);
             const repliesLabel = appElement("label", "", "douyin-web-media-label douyin-web-replies-label");
             const replies = document.createElement("input");
             replies.type = "checkbox";
@@ -1818,16 +1822,20 @@
             replies.setAttribute("aria-label", "允许回复评论");
             replies.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowReplies: replies.checked }); });
             repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许回复评论"));
-            actions.append(repliesLabel);
+            interactionActions.append(repliesLabel);
             const interactionNote = douyinWebCommentsEnabled(value)
               ? "点赞需要首页及视频页文字读取；回复评论还依赖视频评论读取。两项互动都单独保存。"
               : "点赞需要首页及视频页文字读取；回复评论还需先允许读取视频评论。";
-            detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。` : `${value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。"} ${interactionNote}`, "publication-authorization-note"));
+            if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。` : `${value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
       }
     }
-    if (actions.childElementCount) detail.append(actions);
+    for (const [id, group] of [["account", actions], ["publications", publishActions], ["browse", readActions], ["interactions", interactionActions]]) {
+      if (section && section !== id) continue;
+      if (group.childElementCount) detail.append(group);
+      else if (section && section !== "account") detail.append(appElement("p", id === "interactions" ? "互动许可需要已确认的登录资料和视频页读取授权。" : "请先在「账号与授权」确认网页登录并恢复网页能力。"));
+    }
     row.append(appElement("h5", "网页登录"), detail);
     return row;
   }
@@ -2230,7 +2238,298 @@
     if (focused) [...list.querySelectorAll("[data-app]")].find((button) => button.dataset.app === focused)?.focus({ preventScroll: true });
     if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
   }
+  let appConfiguration = null;
+  function appAccountVisible(id) {
+    if (activeView !== "apps" || !$("#app-dialog").open || apps.openID !== id) return false;
+    if (!$("#app-configuration").open) return apps.detailTab === "account";
+    const section = appConfiguration?.section;
+    return section === "account" || (id === "wechat" && section === "conversations");
+  }
+  function appConfigurationConnections(view) {
+    return apps.connections.get(view.record.id) || [];
+  }
+  function stopAppConfigurationReads() {
+    clearWechatRelocation(apps);
+    stopDouyinWebLoginPolling(apps);
+    stopDouyinInteractionWork(apps);
+    stopDouyinLiveInspection(apps);
+  }
+  async function readAppConfiguration(view) {
+    const sequence = ++view.sequence;
+    const id = view.record.id;
+    try {
+      const result = await request("/api/local/apps/" + encodeURIComponent(id) + "/configuration", { signal: view.controller.signal });
+      if (appConfiguration !== view || sequence !== view.sequence) return;
+      if (result.id !== id || !Array.isArray(result.sections) || !result.sections.some((section) => section.id === "overview")) {
+        throw new Error("应用分区返回无效，请刷新后重试。");
+      }
+      view.sections = result.sections;
+      view.error = "";
+    } catch (error) {
+      if (appConfiguration !== view || sequence !== view.sequence || view.controller.signal.aborted) return;
+      if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+      view.error = error.message;
+    }
+    renderAppConfiguration();
+  }
+  function selectAppConfiguration(view, section) {
+    if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
+    view.roundPanel = null; view.archivePanel = null;
+    stopAppConfigurationReads();
+    view.section = section;
+    if (view.record.id === "douyin") {
+      if (section === "account" || section === "browse") void loadDouyinWebLogin(apps);
+      if (section === "interactions") {
+        apps.douyinActivityTab = "interactions";
+        void loadDouyinInteractionWork(apps, apps.douyinInteractions.cursors);
+      } else if (section === "publications") {
+        apps.douyinActivityTab = "publications";
+        void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
+      }
+    }
+    if (view.record.id === "bilibili" && section === "publications") void loadBilibiliWork(apps, apps.bilibiliWork.cursors);
+    renderAppConfiguration();
+    $("#app-configuration-body").scrollTop = 0;
+  }
+  function appConfigurationRounds(view, connection) {
+    const panel = appElement("section", "", "configuration-rounds");
+    const form = appElement("form", "", "configuration-round-filters");
+    const date = document.createElement("input"), thread = document.createElement("input");
+    const status = document.createElement("input"), errors = document.createElement("input");
+    date.type = "date"; thread.placeholder = "会话 ID"; status.placeholder = "状态代码"; errors.type = "checkbox";
+    const filters = view.roundFilters.get(connection) || {};
+    date.value = filters.date || ""; thread.value = filters.thread || ""; status.value = filters.status || ""; errors.checked = filters.errors === true;
+    for (const [label, field] of [["北京时间", date], ["会话", thread], ["状态", status], ["只看异常", errors]]) {
+      const item = appElement("label", label);
+      item.append(field); form.append(item);
+    }
+    const submit = appElement("button", "查询回合", "button compact secondary"); submit.type = "submit";
+    form.append(submit);
+    const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
+    const records = appElement("div", "", "configuration-round-records");
+    const groups = new Map();
+    let next = "", serial = 0, lastFilters = "";
+    const more = memoryButton("继续读取", "button compact secondary", () => void load(true)); more.hidden = true;
+    function appendSteps(steps) {
+      for (const step of steps) {
+        const key = JSON.stringify([step.thread || "", step.message || ""]);
+        let group = groups.get(key);
+        if (!group) {
+          group = appElement("details", "", "identity-details");
+          group.append(appElement("summary", step.message ? [step.thread || "会话", step.message].join(" · ") : "系统事件"),
+            appElement("ul", "", "configuration-round-steps"));
+          groups.set(key, group);
+          records.append(group);
+        }
+        const time = new Date(step.at).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+        group.lastElementChild.append(appElement("li", [time, step.event, step.status, step.tool, step.receipt].filter(Boolean).join(" · ")));
+      }
+    }
+    async function load(append = false) {
+      const generation = ++serial;
+      const query = new URLSearchParams({ date: date.value, thread: thread.value.trim(), status: status.value.trim(), errors: String(errors.checked) });
+      if (append && query.toString() === lastFilters) query.set("before", next);
+      else { groups.clear(); records.replaceChildren(); next = ""; }
+      more.hidden = true; feedback.textContent = "正在读取执行回合…";
+      try {
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
+        if (appConfiguration !== view || !panel.isConnected || generation !== serial) return;
+        if (!Array.isArray(result.steps)) throw new Error("执行回合返回格式无效。");
+        if (!query.get("date") && !date.value) date.value = result.date;
+        query.set("date", result.date); query.delete("before");
+        lastFilters = query.toString();
+        view.roundFilters.set(connection, { date: date.value, thread: thread.value, status: status.value, errors: errors.checked });
+        appendSteps(result.steps);
+        next = result.next_before || "";
+        more.hidden = !next;
+        feedback.textContent = result.truncated ? "当日较早步骤超出本机保留范围。" : groups.size ? "" : "该范围暂无工作站运行记录。";
+      } catch (error) {
+        if (appConfiguration !== view || !panel.isConnected || generation !== serial) return;
+        if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+        feedback.textContent = error.message;
+        more.hidden = !next;
+      }
+    }
+    form.addEventListener("input", () => {
+      view.roundFilters.set(connection, { date: date.value, thread: thread.value, status: status.value, errors: errors.checked });
+    });
+    form.addEventListener("submit", (event) => { event.preventDefault(); void load(); });
+    panel.append(form, appElement("p", "这里显示工作站运行时记录的步骤。平台结果请到「投递与回执」核对。", "app-scope-note"), feedback, records, more);
+    void load();
+    return panel;
+  }
+
+  function appImportedConversation(view, connection, allowed) {
+    const panel = appElement("section", "", "configuration-rounds");
+    const form = appElement("form", "", "configuration-round-filters");
+    const thread = document.createElement("select"), kind = document.createElement("select");
+    for (const id of allowed) thread.add(new Option(id, id));
+    kind.add(new Option("提炼记忆", "memories")); kind.add(new Option("原话", "events"));
+    const submit = appElement("button", "读取旧档案", "button compact secondary"); submit.type = "submit";
+    for (const [label, field] of [["已授权会话", thread], ["记录类别", kind]]) {
+      const item = appElement("label", label);
+      item.append(field); form.append(item);
+    }
+    form.append(submit);
+    const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
+    const records = appElement("div", "", "configuration-round-records");
+    const more = memoryButton("继续读取旧档案", "button compact secondary", () => void load(true)); more.hidden = true;
+    let cursor = "", generation = 0;
+    function clear() {
+      generation++; cursor = ""; more.hidden = true;
+      submit.disabled = false;
+      records.replaceChildren(); feedback.textContent = "";
+    }
+    async function load(append = false) {
+      if (!append) clear();
+      const serial = ++generation;
+      const path = [connection, thread.value].map(encodeURIComponent);
+      const query = new URLSearchParams({ kind: kind.value, cursor });
+      submit.disabled = true; more.hidden = true;
+      try {
+        const result = await request("/api/apps/wechat/connections/" + path[0] + "/conversations/" + path[1] + "/imported-memory?" + query, { signal: view.controller.signal });
+        if (appConfiguration !== view || serial !== generation || !panel.isConnected) return;
+        if (!Array.isArray(result.items)) throw new Error("旧档案页面格式无效");
+        for (const item of result.items) {
+          const card = appElement("article", "", "memory-detail-section");
+          const title = item.occurred_at ? new Date(item.occurred_at).toLocaleString("zh-CN") :
+            (item.kind || "旧记忆") + " · 版本 " + item.version;
+          card.append(appElement("strong", title), appElement("p", item.text || ""));
+          const sources = Array.isArray(item.sources) ? item.sources.map((ref) => ref.message_id).filter(Boolean) : [item.message_id].filter(Boolean);
+          if (sources.length) card.append(appElement("small", "来源消息 " + sources.join("、")));
+          records.append(card);
+        }
+        cursor = result.next_cursor || ""; more.hidden = !cursor;
+        feedback.textContent = records.childElementCount ? "" : "当前范围内暂无可读取记录。";
+      } catch (error) {
+        if (appConfiguration !== view || serial !== generation || !panel.isConnected) return;
+        if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+        clear(); feedback.textContent = error.message;
+      } finally {
+        if (serial === generation) submit.disabled = false;
+      }
+    }
+    thread.addEventListener("change", clear); kind.addEventListener("change", clear);
+    form.addEventListener("submit", (event) => { event.preventDefault(); void load(); });
+    panel.append(appElement("h4", "已接续的旧会话档案"), form,
+      appElement("p", "旧档案按账号和会话核对，原话及旧提炼记忆按页读取。", "app-scope-note"), feedback, records, more);
+    return panel;
+  }
+
+  function renderAppConfiguration() {
+    const view = appConfiguration;
+    if (!view || !$("#app-configuration").open) return;
+    const { record, section } = view;
+    const body = $("#app-configuration-body"), nav = $("#app-configuration-nav");
+    const scroll = body.scrollTop, focused = document.activeElement;
+    const focusSection = nav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
+    const evidence = appEvidence(record.id);
+    const connections = appConfigurationConnections(view);
+    if (!connections.some((row) => row.id === view.connection)) view.connection = connections.find((row) => row.primary)?.id || connections[0]?.id || "";
+    const selected = connections.find((row) => row.id === view.connection);
+    $("#app-configuration-status").textContent = [evidence.service, selected?.label || evidence.account, evidence.grant].join(" · ");
+    $("#app-configuration-feedback").append($("#apps-feedback"));
+    nav.replaceChildren(...view.sections.map((item) => {
+      const button = memoryButton(item.title, "local-tab" + (item.id === section ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
+      button.setAttribute("aria-pressed", String(item.id === section));
+      return button;
+    }));
+    if (focusSection) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    const listing = apps.catalog?.find((row) => row.id === record.id);
+    const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
+    const controls = [heading];
+    if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
+    if (connections.length && ["account", "conversations", "rounds", "delivery"].includes(section)) {
+      const label = appElement("label", "当前连接", "configuration-connection");
+      const select = document.createElement("select");
+      select.id = "app-configuration-connection";
+      for (const [index, item] of connections.entries()) select.add(new Option(item.label || "连接 " + (index + 1), item.id));
+      select.value = view.connection;
+      select.addEventListener("change", () => { stopAppConfigurationReads(); view.roundPanel = null; view.archivePanel = null; view.connection = select.value; renderAppConfiguration(); });
+      label.append(select); controls.push(label);
+    }
+    switch (section) {
+      case "overview":
+        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
+        if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
+        break;
+      case "account":
+        controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : appConnectionRow(record, view.connection));
+        break;
+      case "conversations": {
+        const status = selected && apps.accountStatuses.get(selected.id);
+        if (status?.configured_policy && appWorkerLabels[status.worker]) {
+          const allowed = status.configured_policy.history_threads || [];
+          if (allowed.length) {
+            const key = JSON.stringify([selected.id, allowed]);
+            if (view.archivePanel?.key !== key) view.archivePanel = { key, node: appImportedConversation(view, selected.id, allowed) };
+            controls.push(view.archivePanel.node);
+          } else view.archivePanel = null;
+          controls.push(appWorkerControls(selected.id, status));
+        }
+        break;
+      }
+      case "rounds":
+        if (selected) {
+          if (view.roundPanel?.connection !== selected.id) view.roundPanel = { connection: selected.id, node: appConfigurationRounds(view, selected.id) };
+          controls.push(view.roundPanel.node);
+        }
+        break;
+      case "delivery":
+        if (selected) controls.push(deliveryRecords(selected.id, wechatServiceState() !== "ready"));
+        break;
+      case "browse":
+        controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : bilibiliPublicRow(record));
+        break;
+      case "publications":
+      case "interactions":
+        if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        controls.push(record.id === "douyin" ? douyinPublicationRow(apps, section) : bilibiliPublicationRow(apps));
+        break;
+      case "live":
+        if (!douyinIsDetached(apps)) controls.push(douyinLiveClientRow(apps));
+        controls.push(appElement("p", "直播伴侣程序检查、本机预览和平台直播分别核对。", "app-scope-note"),
+          memoryButton("打开 OBS 本机预览", "button compact secondary", async () => {
+            await loadProjectTools();
+            if (appConfiguration !== view || !$("#app-configuration").open) return;
+            const button = $("#project-tools-list").querySelector('[data-tool="obs-preview"]');
+            if (!button) { appFeedback("当前发行包未提供 OBS 预览工具。", true); return; }
+            $("#app-configuration").close();
+            $("#app-dialog").close();
+            setActiveView("project-tools");
+            button.click();
+          }));
+        break;
+      case "source":
+        controls.push(appSourceRow(record, listing));
+        break;
+    }
+    if (!controls.slice(1).some((element) => element && !element.matches("label"))) {
+      controls.push(appElement("p", "当前连接没有可展示的配置或资料。", "app-scope-note"));
+    }
+    body.replaceChildren(...controls.filter(Boolean));
+    body.scrollTop = scroll;
+    if (focusConnection) $("#app-configuration-connection")?.focus({ preventScroll: true });
+  }
+  function openAppConfiguration() {
+    const id = apps.openID;
+    const record = apps.catalog?.find((row) => row.id === id) || apps.registered?.find((row) => row.id === id);
+    const dialog = $("#app-configuration");
+    if (!record || dialog.open) return;
+    stopAppConfigurationReads();
+    const view = { record, section: "overview", sections: [], connection: "", roundFilters: new Map(), roundPanel: null, archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
+    appConfiguration = view;
+    $("#app-dialog-body").replaceChildren();
+    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 详细配置"));
+    dialog.showModal();
+    renderAppConfiguration();
+    $("#app-configuration-title").focus({ preventScroll: true });
+    renderLiveSafety();
+    void readAppConfiguration(view);
+  }
+
   function renderAppDialog(record, listing) {
+    if ($("#app-configuration").open) { renderAppConfiguration(); return; }
     const body = $("#app-dialog-body"), scroll = body.scrollTop;
     $("#app-dialog-feedback").append($("#apps-feedback"));
     const label = record.name || record.id, title = $("#app-dialog-title");
@@ -2327,7 +2626,7 @@
       const generation = ++draft.generation;
       const controller = new AbortController(); draft.controller = controller; draft.busy = true; draft.error = ""; draft.result = null;
       renderApps();
-      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && current.detailTab === "account";
+      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
       try {
         const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify({ executable: draft.path }), signal: controller.signal });
         if (!selected()) return;
@@ -2778,7 +3077,7 @@
     row.append(heading, detail);
     return row;
   }
-  function douyinPublicationRow(current) {
+  function douyinPublicationRow(current, section = "") {
     if (!current.registered?.some((item) => item.id === "douyin") && !douyinIsDetached(current)) return null;
     const tab = current.douyinActivityTab === "interactions" ? "interactions" : "publications";
     const work = tab === "interactions" ? current.douyinInteractions : current.douyinWork;
@@ -2806,7 +3105,8 @@
       tabs.append(button);
     }
     const note = tab === "interactions" ? "查看已有互动任务及结果。" : "查看已有发布任务及结果。";
-    detail.append(appElement("strong", "应用活动"), appElement("p", note), tabs);
+    detail.append(appElement("strong", "应用活动"), appElement("p", note));
+    if (!section) detail.append(tabs);
     detail.append(tab === "interactions" ? douyinInteractionTasksPanel(current) : publicationTasksPanel(current, "douyin", "抖音"));
     row.append(heading, detail);
     return row;
@@ -3115,7 +3415,7 @@
     const focusedJob = row.contains(active) ? active.closest("[data-job]")?.dataset.job : "";
     const focusedAction = active?.dataset.action;
     const focusedPage = row.contains(active) ? active.dataset.page : "";
-    let next = appID === "douyin" ? douyinPublicationRow(current) : bilibiliPublicationRow(current);
+    let next = appID === "douyin" ? douyinPublicationRow(current, $("#app-configuration").open ? appConfiguration.section : "") : bilibiliPublicationRow(current);
     if (!next) return;
     if (appID === "bilibili" && row.querySelector(".publication-authorization[open], .publication-oauth[open]")) {
       // Refresh tasks without touching the open credential form.
@@ -4219,6 +4519,7 @@
   function renderLiveSafety() {
     const panel = $("#live-safety"), session = liveSafety.active;
     const slot = $("#tool-dialog").open ? $("#tool-dialog-feedback") :
+      $("#app-configuration").open ? $("#app-configuration-feedback") :
       activeView === "apps" && $("#app-dialog").open ? $("#app-dialog-feedback") : $("#local-tabs");
     if (panel.parentElement !== slot) slot.append(panel);
     panel.hidden = !session && !liveSafety.note;
@@ -4297,6 +4598,7 @@
     clearWechatRelocation(apps);
     stopDouyinLiveInspection(apps);
     $("#tool-dialog").close();
+    $("#app-configuration").close();
     $("#app-dialog").close();
     state.home = null; state.model = null; window.clearTimeout(state.chat.poll); state.chat = newChatView(); renderChat();
     window.clearTimeout(apps.loginTimer);
@@ -4615,6 +4917,27 @@
     $("#tool-dialog-body").replaceChildren(); $("#tool-dialog-body").scrollTop = 0;
     const opener = [...$("#project-tools-list").querySelectorAll("button")].find((button) => button.dataset.tool === id);
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
+  });
+  $("#app-configuration-open").addEventListener("click", openAppConfiguration);
+  $("#app-configuration-close").addEventListener("click", () => $("#app-configuration").close());
+  $("#app-configuration-refresh").addEventListener("click", async () => {
+    const view = appConfiguration;
+    if (!view) return;
+    await Promise.all([readAppConfiguration(view), loadApps()]);
+    if (appConfiguration === view) selectAppConfiguration(view, view.section);
+  });
+  $("#app-configuration").addEventListener("close", () => {
+    if ($("#app-configuration").open) return;
+    appConfiguration?.controller.abort();
+    appConfiguration = null;
+    stopAppConfigurationReads();
+    $("#app-configuration-body").replaceChildren();
+    renderLiveSafety();
+    if (activeView === "apps" && $("#app-dialog").open) {
+      renderApps();
+      $("#app-configuration-open").focus({ preventScroll: true });
+      if (apps.openID === "douyin" && apps.detailTab === "account") void loadDouyinWebLogin(apps);
+    }
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
   $("#app-dialog").addEventListener("keydown", (event) => {

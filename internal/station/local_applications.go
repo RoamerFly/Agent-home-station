@@ -39,5 +39,9 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 			return apphost.Registry{}, nil, err
 		}
 	}
-	return registry.WithVisibility(h.home.applicationVisible), apps, nil
+	visible := registry.WithVisibility(h.home.applicationVisible)
+	apps = append(apps, stationhost.Attachment{Mount: func(owner *websession.Store, mux *http.ServeMux) {
+		applicationConfigurationRoutes(owner, mux, visible)
+	}})
+	return visible, apps, nil
 }
