@@ -1507,6 +1507,8 @@
       (typeof value.playback_enabled === "undefined" || typeof value.playback_enabled === "boolean") &&
       (typeof value.audio_enabled === "undefined" || typeof value.audio_enabled === "boolean") &&
       (typeof value.visual_enabled === "undefined" || typeof value.visual_enabled === "boolean") &&
+      (typeof value.images_enabled === "undefined" || typeof value.images_enabled === "boolean") &&
+      (typeof value.images_ready === "undefined" || typeof value.images_ready === "boolean") &&
       (typeof value.comments_enabled === "undefined" || typeof value.comments_enabled === "boolean") &&
       (typeof value.likes_enabled === "undefined" || typeof value.likes_enabled === "boolean") &&
       (typeof value.replies_enabled === "undefined" || typeof value.replies_enabled === "boolean") &&
@@ -1619,6 +1621,7 @@
       if (typeof options.allowComments === "boolean") body.allow_comments = options.allowComments;
     }
     if (action === "set_works") body.allow_works = options.allowWorks === true;
+    if (action === "set_images") body.allow_images = options.allowImages === true;
     if (action === "set_publish") body.allow_publish = options.allowPublish === true;
     if (action === "set_interactions") {
       if (typeof options.allowLikes === "boolean") body.allow_likes = options.allowLikes;
@@ -1639,6 +1642,7 @@
         if (current !== apps || web.generation !== generation) return;
       }
       if (action === "set_works") feedback = updated.works_enabled ? "已允许读取本人作品。" : "已停止读取本人作品。";
+      if (action === "set_images") feedback = updated.images_enabled ? "已允许分析本人公开图文图片。" : "已停止本人图文图片分析。";
       if (action === "set_read") {
         if (typeof options.allowComments === "boolean") feedback = options.allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
         else if (typeof options.allowAudio === "boolean") feedback = options.allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
@@ -1748,6 +1752,18 @@
             creator.disabled = busy || !available;
             creator.title = "重新核对账号时撤销旧授权，保存登录后可重新开启";
             readActions.append(creator);
+            const images = document.createElement("input");
+            images.type = "checkbox";
+            images.checked = value.images_enabled === true;
+            images.disabled = busy || (!images.checked && (!available || value.images_ready !== true));
+            images.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_images", { allowImages: images.checked }); });
+            const imagesLabel = appElement("label", "", "switch-row");
+            imagesLabel.append(images, appElement("span", "允许分析本人公开图文图片"));
+            readActions.append(imagesLabel);
+            const imagesNote = value.images_ready === true
+              ? "按需将选中的公开图文图片交给工作站已配置的视觉服务。"
+              : "请先在项目工具中启用并配置工作站视觉服务。";
+            detail.append(appElement("p", imagesNote, "publication-authorization-note"));
           }
         }
         const publishEnabled = douyinWebPublishEnabled(value);
@@ -2437,7 +2453,7 @@
 
   const douyinReadLabels = {
     page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
-    account_works: "本人作品列表", own_video: "本人作品信息",
+    account_works: "本人作品列表", own_video: "本人作品信息", images: "图文图片",
   };
   function douyinReadPanel(view) {
     const panel = appElement("section", "", "douyin-read-panel");
@@ -2506,7 +2522,7 @@
         if (!chunks.length) page.append(appElement("p", "这页没有返回文本，可查看本次覆盖状态。"));
         const controls = appElement("div", "", "publication-actions douyin-read-pagination");
         if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field)));
-        if (["page_text", "comments", "visual", "audio", "playback", "account_works"].includes(field))
+        if (["page_text", "comments", "visual", "audio", "playback", "account_works", "images"].includes(field))
           controls.append(memoryButton("从头刷新", "button compact quiet", () => void read(connection, content, field, true)));
         page.append(controls);
         const key = JSON.stringify([content, field]);

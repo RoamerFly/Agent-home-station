@@ -23,6 +23,9 @@ var (
 type DouyinCreatorWork struct {
 	ID, Title, Caption, CreatedAt, Visibility string
 	Reviewing, Video                          bool
+	// Images contains the ordered image candidates from the creator
+	// response. These CDN URLs are private to the host.
+	Images []string
 }
 
 type DouyinCreatorWorksPage struct {
@@ -52,7 +55,10 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 			Description string          `json:"desc"`
 			Created     int64           `json:"create_time"`
 			Video       json.RawMessage `json:"video"`
-			Author      struct {
+			Images      []struct {
+				URLs []string `json:"url_list"`
+			} `json:"images"`
+			Author struct {
 				UID string `json:"uid"`
 			} `json:"author"`
 			Status struct {
@@ -111,8 +117,25 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 			Duration int64 `json:"duration"`
 		}
 		videoConfirmed := json.Unmarshal(item.Video, &video) == nil && video.Duration > 0
-		result.Works = append(result.Works, DouyinCreatorWork{ID: item.ID, Title: title, Caption: caption, CreatedAt: created,
-			Visibility: visibility, Reviewing: *status.Reviewing, Video: videoConfirmed})
+		work := DouyinCreatorWork{ID: item.ID, Title: title, Caption: caption, CreatedAt: created,
+			Visibility: visibility, Reviewing: *status.Reviewing, Video: videoConfirmed}
+		if visibility == "公开" && !work.Reviewing && !videoConfirmed {
+			for _, image := range item.Images {
+				url := ""
+				for _, candidate := range image.URLs {
+					if validDouyinCreatorImageURL(candidate) {
+						url = candidate
+						break
+					}
+				}
+				if url == "" {
+					work.Images = nil
+					break
+				}
+				work.Images = append(work.Images, url)
+			}
+		}
+		result.Works = append(result.Works, work)
 	}
 	result.Account = creatorWorksDigest(owner)
 	result.PageKey = creatorWorksDigest(strings.Join(keys, ","))

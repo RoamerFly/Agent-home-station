@@ -36,11 +36,12 @@ const (
 	ObservationSearch       ObservationField = "search"
 	ObservationOwnVideo     ObservationField = "own_video"
 	ObservationAccountWorks ObservationField = "account_works"
+	ObservationImages       ObservationField = "images"
 	ObservationPlayerEntry  ObservationField = "player_entry"
 )
 
 func (f ObservationField) valid() bool {
-	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationVisual || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry || f == ObservationAccountWorks
+	return f == ObservationTitle || f == ObservationBody || f == ObservationComments || f == ObservationAudio || f == ObservationVisual || f == ObservationPlayback || f == ObservationPageText || f == ObservationSearch || f == ObservationOwnVideo || f == ObservationPlayerEntry || f == ObservationAccountWorks || f == ObservationImages
 }
 
 type ObservationTarget struct {
@@ -217,6 +218,10 @@ var (
 	ErrObservationVisualAnalysis           = errors.New("本机视觉分析失败，可检查媒体理解工具配置后从原位置重试；模型画面结论不作为指令")
 	ErrObservationAccountWorksPageSize     = errors.New("作品列表页大小须为正整数并符合平台整数范围，续读时请省略 limit 或沿用首页条数")
 	ErrObservationAccountWorksResponseSize = errors.New("作品列表响应超出本机读取大小，请使用较小的 limit 并从首页重新查询")
+	ErrObservationImagesUnavailable        = errors.New("请在项目工具中启用并配置工作站视觉服务")
+	ErrObservationImagesLimit              = errors.New("图文图片每次可读取 1–6 张，省略时使用 2 张")
+	ErrObservationImagesMedia              = errors.New("未取得可核对的公开图文图片。支持 JPEG、PNG 和 WebP，单张上限 2 MiB")
+	ErrObservationImagesSourceChanged      = errors.New("创作者账号、作品或图文图片已变化，请重新读取本人作品列表")
 	ErrObservationSearchPageSize           = errors.New("抖音搜索每页支持 1–50 条，续读请省略 limit 或沿用首页条数")
 	ErrObservationCredentialExpired        = errors.New("抖音令牌无效或已过期，请由主人更新本机配置")
 	ErrObservationCapabilityDenied         = errors.New("当前连接缺少所需的抖音开放平台权限，请核对授权")
@@ -347,13 +352,16 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if err := ctx.Err(); err != nil {
 		return ObservationResult{}, err
 	}
-	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio && in.Field != ObservationVisual && in.Field != ObservationComments {
+	if o == nil || !in.Field.valid() || strings.TrimSpace(in.AppID) == "" || strings.TrimSpace(in.ConnectionID) == "" || strings.TrimSpace(in.ContentID) == "" || in.Limit < 0 || in.Refresh && in.Field != ObservationSearch && in.Field != ObservationAccountWorks && in.Field != ObservationPageText && in.Field != ObservationPlayback && in.Field != ObservationAudio && in.Field != ObservationVisual && in.Field != ObservationComments && in.Field != ObservationImages {
 		return ObservationResult{}, ErrObservationInvalid
 	}
 	// Check an explicit frame batch size before consulting a checkpoint. A
 	// cached result must not turn an invalid request into a successful read.
 	if in.Field == ObservationVisual && in.Limit != 0 && (in.Limit < 1 || in.Limit > 12) {
 		return ObservationResult{}, ErrObservationVisualLimit
+	}
+	if in.Field == ObservationImages && in.Limit > 6 {
+		return ObservationResult{}, ErrObservationImagesLimit
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -385,6 +393,9 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if existed && (!checkpoint.matches(ref, in.ContentID, in.Field, grant.Version) || checkpoint.PlaybackLimit != playbackLimit) {
 		return ObservationResult{}, errors.New("应用观察进度与当前授权不一致")
 	}
+	if checkpoint.Complete && in.Field == ObservationImages {
+		checkpoint, existed = observationCheckpoint{}, false
+	}
 	if checkpoint.Complete {
 		if err := o.Check(ctx, checkpoint.result(false, false)); err != nil {
 			return ObservationResult{}, err
@@ -407,6 +418,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationAudioDecode, ErrObservationAudioTranscription, ErrObservationAudioSourceChanged,
 			ErrObservationVisualUnavailable, ErrObservationVisualLimit, ErrObservationVisualDecode,
 			ErrObservationVisualSourceChanged, ErrObservationVisualAnalysis,
+			ErrObservationImagesUnavailable, ErrObservationImagesLimit, ErrObservationImagesMedia, ErrObservationImagesSourceChanged,
 			ErrObservationSearchPageSize, ErrObservationAccountWorksPageSize, ErrObservationAccountWorksResponseSize, ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
 		} {
 			if errors.Is(err, known) {
@@ -479,6 +491,11 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 		return checkpoint.result(false, false), nil
 	}
 	stored := checkpoint
+	if in.Field == ObservationImages {
+		// The revalidated images and vision output are transient. Save only
+		// the continuation position so stale analysis can never be replayed.
+		stored.Chunks = nil
+	}
 	if in.Field == ObservationAccountWorks {
 		// Account lists may describe non-public works. Persist only progress.
 		stored.Chunks = nil
@@ -587,7 +604,7 @@ func validateObservationPage(field ObservationField, page ObservationPage) error
 }
 
 func validObservationFollowUp(field, next ObservationField) bool {
-	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || (field == ObservationPageText || field == ObservationAccountWorks) && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual || next == ObservationComments) || field == ObservationVisual && next == ObservationVisual
+	return field == ObservationSearch && next == ObservationPlayerEntry || field == ObservationPlayerEntry && next == ObservationPlayback || (field == ObservationPageText || field == ObservationAccountWorks) && (next == ObservationPageText || next == ObservationPlayback || next == ObservationAudio || next == ObservationVisual || next == ObservationComments || next == ObservationImages) || field == ObservationVisual && next == ObservationVisual
 }
 
 func validVisualProof(proof VisualFrameProof, page ObservationPage) bool {

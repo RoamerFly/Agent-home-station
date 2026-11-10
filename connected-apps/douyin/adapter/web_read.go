@@ -115,6 +115,9 @@ func (p *SearchApp) validWebReadAccess(ref apphost.ConnectionRef, contentID stri
 	if contentID == WebWorksContentID {
 		return field == apphost.ObservationAccountWorks
 	}
+	if field == apphost.ObservationImages {
+		return strings.HasPrefix(contentID, WebCreatorWorkPrefix)
+	}
 	return field == apphost.ObservationPageText || contentID != WebReadContentID && (field == apphost.ObservationPlayback || field == apphost.ObservationAudio || field == apphost.ObservationVisual || field == apphost.ObservationComments)
 }
 

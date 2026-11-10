@@ -124,7 +124,7 @@ def verify_douyin_read_controls(page, panel, nav):
             assert payload["content_id"] == "account-works"
             route.fulfill(json={"coverage": "已登录创作者管理页", "complete": True, "chunks": [
                 {"text": "合成本人作品", "follow_up_content_id": "creator-work-synthetic",
-                 "follow_up_fields": ["page_text"]},
+                 "follow_up_fields": ["page_text", "images"]},
             ]})
         elif field == "page_text":
             if payload["content_id"] == "creator-work-synthetic":
@@ -137,6 +137,12 @@ def verify_douyin_read_controls(page, panel, nav):
                     {"text": "合成视频候选", "follow_up_content_id": "synthetic-video",
                      "follow_up_fields": ["comments", "visual"]},
                 ]})
+        elif field == "images":
+            assert payload["content_id"] == "creator-work-synthetic"
+            second = observed.count("images") == 2
+            route.fulfill(json={"coverage": "第 3 张，共 3 张" if second else "第 1–2 张，共 3 张",
+                                "complete": second, "resumed": second,
+                                "chunks": [{"text": "合成第三张图" if second else "合成图文描述"}]})
         else:
             assert payload["content_id"] == "synthetic-video"
             if field == "comments":
@@ -161,7 +167,11 @@ def verify_douyin_read_controls(page, panel, nav):
     panel.get_by_role("button", name="本人作品列表", exact=True).click()
     panel.get_by_role("button", name="本人作品信息", exact=True).click()
     expect(panel.get_by_text("合成本人作品简介", exact=True)).to_be_visible()
-    assert observed == ["discover", "page_text", "comments", "visual", "account_works", "page_text"]
+    panel.get_by_role("button", name="图文图片", exact=True).click()
+    expect(panel.get_by_text("合成图文描述", exact=True)).to_be_visible()
+    panel.get_by_role("button", name="继续读取", exact=True).click()
+    expect(panel.get_by_text("合成第三张图", exact=True)).to_be_visible()
+    assert observed == ["discover", "page_text", "comments", "visual", "account_works", "page_text", "images", "images"]
     page.unroute(pattern, observation)
 
 

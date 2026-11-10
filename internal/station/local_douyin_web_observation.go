@@ -165,6 +165,13 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 			return apphost.ObservationGrant{}, err
 		}
 		version += "/" + visualVersion
+	} else if in.Field == apphost.ObservationImages {
+		vision, download := p.creatorImageBinding()
+		visionVersion, err := vision.ready(ctx)
+		if err != nil || download == nil {
+			return apphost.ObservationGrant{}, apphost.ErrObservationImagesUnavailable
+		}
+		version += "/" + visionVersion
 	}
 	return apphost.ObservationGrant{Allowed: true, Version: version, Fresh: in.Field == apphost.ObservationPageText && strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix)}, nil
 }
@@ -203,7 +210,7 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	expectedVersion := p.pageObservationVersion(ctx, a, in.Field)
-	if in.Field == apphost.ObservationAudio || in.Field == apphost.ObservationVisual {
+	if in.Field == apphost.ObservationAudio || in.Field == apphost.ObservationVisual || in.Field == apphost.ObservationImages {
 		grant, err := p.Grant(ctx, in.ObservationAccess)
 		if err != nil {
 			return apphost.ObservationPage{}, err
@@ -226,12 +233,20 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 	if in.Field == apphost.ObservationAccountWorks {
 		return p.readCreatorWorks(ctx, a, in, authorize)
 	}
+	if in.Field == apphost.ObservationImages {
+		return p.readCreatorImages(ctx, a, in, authorize)
+	}
 	if in.Field == apphost.ObservationPageText && strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix) {
 		work, ok := p.creatorWorks.get(in.ContentID, a.version)
 		if !ok || authorize() != nil {
 			return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 		}
-		return creatorWorkPage(work, in.Limit), nil
+		page := creatorWorkPage(work, in.Limit)
+		if a.record.ImagesEnabled && work.imageKey != "" && p.creatorImagesReady(ctx) {
+			page.Chunks[0].FollowUpContentID = in.ContentID
+			page.Chunks[0].FollowUpField = apphost.ObservationImages
+		}
+		return page, nil
 	}
 	if in.Field == apphost.ObservationPlayback {
 		return p.readPlayback(ctx, a, in, target, authorize)

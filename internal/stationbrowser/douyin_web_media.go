@@ -41,7 +41,11 @@ func validDouyinWebMediaURL(raw string) bool {
 // addresses and pins the actual dial. Redirects are followed explicitly below
 // so every destination is checked before a request and gets fresh fixed headers.
 func newDouyinWebMediaClient(ctx context.Context) (*http.Client, func(), error) {
-	proxy, err := openPlayerProxy(ctx, isDouyinWebMediaHost)
+	return newDouyinCDNClient(ctx, isDouyinWebMediaHost)
+}
+
+func newDouyinCDNClient(ctx context.Context, allowedHost func(string) bool) (*http.Client, func(), error) {
+	proxy, err := openPlayerProxy(ctx, allowedHost)
 	if err != nil {
 		return nil, nil, ErrDouyinWebMediaUnavailable
 	}
@@ -56,6 +60,21 @@ func newDouyinWebMediaClient(ctx context.Context) (*http.Client, func(), error) 
 }
 
 func fetchDouyinWebMedia(ctx context.Context, raw string, client *http.Client, authorize func() error, allowURL func(string) bool) (DouyinWebMedia, error) {
+	return fetchDouyinCDNMedia(ctx, raw, client, authorize, allowURL, douyinDownloadFormat{
+		accept: "video/*, audio/*, application/octet-stream", maxBytes: maxPlaybackMediaBytes,
+		validType: func(typ string) bool { return safeMediaType(typ) && !strings.Contains(typ, "mpegurl") },
+		detect:    douyinMediaContainerType,
+	})
+}
+
+type douyinDownloadFormat struct {
+	accept    string
+	maxBytes  int
+	validType func(string) bool
+	detect    func([]byte) string
+}
+
+func fetchDouyinCDNMedia(ctx context.Context, raw string, client *http.Client, authorize func() error, allowURL func(string) bool, format douyinDownloadFormat) (DouyinWebMedia, error) {
 	if client == nil || authorize == nil || allowURL == nil {
 		return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 	}
@@ -85,7 +104,7 @@ func fetchDouyinWebMedia(ctx context.Context, raw string, client *http.Client, a
 			}
 		}
 	}()
-	media, err := fetchDouyinWebMediaGuarded(guardCtx, raw, client, authorize, allowURL)
+	media, err := fetchDouyinWebMediaGuarded(guardCtx, raw, client, authorize, allowURL, format)
 	cancel()
 	<-done
 	mu.Lock()
@@ -97,7 +116,7 @@ func fetchDouyinWebMedia(ctx context.Context, raw string, client *http.Client, a
 	return media, err
 }
 
-func fetchDouyinWebMediaGuarded(ctx context.Context, raw string, client *http.Client, authorize func() error, allowURL func(string) bool) (DouyinWebMedia, error) {
+func fetchDouyinWebMediaGuarded(ctx context.Context, raw string, client *http.Client, authorize func() error, allowURL func(string) bool, format douyinDownloadFormat) (DouyinWebMedia, error) {
 	// Do not let a fixture or a future caller accidentally enable automatic
 	// redirects/cookie propagation inside this narrowly scoped downloader.
 	localClient := *client
@@ -118,7 +137,7 @@ func fetchDouyinWebMediaGuarded(ctx context.Context, raw string, client *http.Cl
 			return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 		}
 		req.Header.Set("Referer", "https://www.douyin.com/")
-		req.Header.Set("Accept", "video/*, audio/*, application/octet-stream")
+		req.Header.Set("Accept", format.accept)
 		req.Header.Set("Accept-Encoding", "identity")
 		resp, err := localClient.Do(req)
 		if err != nil {
@@ -143,18 +162,18 @@ func fetchDouyinWebMediaGuarded(ctx context.Context, raw string, client *http.Cl
 			raw = next.String()
 			continue
 		}
-		media, err := readDouyinWebMediaBody(ctx, resp, authorize)
+		media, err := readDouyinWebMediaBody(ctx, resp, authorize, format)
 		_ = resp.Body.Close()
 		return media, err
 	}
 	return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 }
 
-func readDouyinWebMediaBody(ctx context.Context, resp *http.Response, authorize func() error) (DouyinWebMedia, error) {
+func readDouyinWebMediaBody(ctx context.Context, resp *http.Response, authorize func() error, format douyinDownloadFormat) (DouyinWebMedia, error) {
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Range") != "" || resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
 		return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 	}
-	if resp.ContentLength > maxPlaybackMediaBytes {
+	if resp.ContentLength > int64(format.maxBytes) {
 		return DouyinWebMedia{}, ErrDouyinWebMediaTooLarge
 	}
 	declared := ""
@@ -165,11 +184,11 @@ func readDouyinWebMediaBody(ctx context.Context, resp *http.Response, authorize 
 			return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 		}
 		declared = strings.ToLower(declared)
-		if declared != "application/octet-stream" && (!safeMediaType(declared) || strings.Contains(declared, "mpegurl")) {
+		if declared != "application/octet-stream" && !format.validType(declared) {
 			return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 		}
 	}
-	reader := io.LimitReader(resp.Body, maxPlaybackMediaBytes+1)
+	reader := io.LimitReader(resp.Body, int64(format.maxBytes)+1)
 	var out bytes.Buffer
 	buffer := make([]byte, 64<<10)
 	lastCheck, unchecked := time.Now(), 0
@@ -188,7 +207,7 @@ func readDouyinWebMediaBody(ctx context.Context, resp *http.Response, authorize 
 			out.Write(buffer[:n])
 			unchecked += n
 		}
-		if out.Len() > maxPlaybackMediaBytes {
+		if out.Len() > format.maxBytes {
 			return DouyinWebMedia{}, ErrDouyinWebMediaTooLarge
 		}
 		if errors.Is(err, io.EOF) {
@@ -208,8 +227,8 @@ func readDouyinWebMediaBody(ctx context.Context, resp *http.Response, authorize 
 		return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 	}
 	data := out.Bytes()
-	detected := douyinMediaContainerType(data)
-	if detected == "" {
+	detected := format.detect(data)
+	if !format.validType(detected) {
 		return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 	}
 	if declared == "" || declared == "application/octet-stream" {

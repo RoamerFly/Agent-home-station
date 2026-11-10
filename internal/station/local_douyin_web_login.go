@@ -36,6 +36,8 @@ type localDouyinWebView struct {
 	Reason          string `json:"reason,omitempty"`
 	ReadEnabled     bool   `json:"read_enabled"`
 	WorksEnabled    bool   `json:"works_enabled"`
+	ImagesEnabled   bool   `json:"images_enabled"`
+	ImagesReady     bool   `json:"images_ready"`
 	ReadScope       string `json:"read_scope"`
 	PlaybackEnabled bool   `json:"playback_enabled"`
 	AudioEnabled    bool   `json:"audio_enabled"`
@@ -55,6 +57,7 @@ type localDouyinWebInput struct {
 	ApproveProfile bool    `json:"approve_profile"`
 	AllowRead      *bool   `json:"allow_read,omitempty"`
 	AllowWorks     *bool   `json:"allow_works,omitempty"`
+	AllowImages    *bool   `json:"allow_images,omitempty"`
 	ReadScope      *string `json:"read_scope,omitempty"`
 	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
 	AllowAudio     *bool   `json:"allow_audio,omitempty"`
@@ -79,6 +82,7 @@ type localDouyinWebRecord struct {
 	ConfirmedAt     string `json:"confirmed_at,omitempty"`
 	ReadEnabled     bool   `json:"read_enabled,omitempty"`
 	WorksEnabled    bool   `json:"works_enabled,omitempty"`
+	ImagesEnabled   bool   `json:"images_enabled,omitempty"`
 	ReadScope       string `json:"read_scope,omitempty"`
 	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
 	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
@@ -104,6 +108,8 @@ type localDouyinWebLogin struct {
 	available        func() bool
 	readPage         func(context.Context, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readWorks        func(context.Context, string, stationbrowser.DouyinCreatorWorksRequest, func() error) (stationbrowser.DouyinCreatorWorksPage, error)
+	readImages       func(context.Context, []string, func() error) ([]stationbrowser.DouyinWebMedia, error)
+	imageVision      stationLocalVision
 	readVideo        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
 	interact         func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
@@ -119,6 +125,7 @@ type localDouyinWebLogin struct {
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
 	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readWorks: stationbrowser.ReadDouyinCreatorWorks, readComments: stationbrowser.ReadDouyinComments, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
+		readImages: stationbrowser.ReadDouyinCreatorImages, imageVision: stationLocalVision{version: h.localStationVisionVersion, observe: h.observeLocalStationImages},
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)
@@ -215,6 +222,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.AudioEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("音轨读取许可缺少有效的视频页读取范围，原资料保留")
 	}
+	if record.ImagesEnabled && !record.WorksEnabled {
+		return localDouyinWebRecord{}, errors.New("图文图片授权缺少本人作品读取范围")
+	}
 	if record.VisualEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("画面分析许可缺少有效的视频页读取范围，原资料保留")
 	}
@@ -297,6 +307,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	}
 	v.ReadEnabled = !record.Paused && record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
 	v.WorksEnabled = !record.Paused && record.WorksEnabled && v.State == "saved" && v.AttemptID == ""
+	v.ImagesEnabled = v.WorksEnabled && record.ImagesEnabled
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
@@ -311,6 +322,10 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 // response. Runtime grants independently call visual.ready immediately before
 // an observation, so a stale UI state can never authorize a visual request.
 func (m *localDouyinWebLogin) withVisualReadiness(ctx context.Context, view localDouyinWebView) localDouyinWebView {
+	if view.WorksEnabled && m.readImages != nil {
+		_, err := m.imageVision.ready(ctx)
+		view.ImagesReady = err == nil
+	}
 	if !view.ReadEnabled || view.ReadScope != "home_and_videos" {
 		return view
 	}
@@ -336,6 +351,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return in.ApproveProfile
 	case "set_works":
 		return in.AllowWorks != nil && !*in.AllowWorks
+	case "set_images":
+		return in.AllowImages != nil && !*in.AllowImages
 	case "set_publish":
 		return in.AllowPublish != nil && !*in.AllowPublish
 	case "set_interactions":
@@ -431,8 +448,28 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			return fail(409, "请先完成网页登录并确认保存")
 		}
 		record.WorksEnabled = *in.AllowWorks
+		if !record.WorksEnabled {
+			record.ImagesEnabled = false
+		}
 		if save() != nil {
 			return fail(503, "本人作品读取授权未保存")
+		}
+	case "set_images":
+		if in.AllowImages == nil {
+			return fail(400, "请明确是否允许分析本人公开图文图片")
+		}
+		if *in.AllowImages {
+			view := m.view(record)
+			if !view.WorksEnabled || !view.Available {
+				return fail(409, "请先保存网页登录并允许读取本人作品")
+			}
+			if _, err := m.imageVision.ready(ctx); err != nil || m.readImages == nil {
+				return fail(503, "请先在项目工具中启用并配置工作站视觉服务")
+			}
+		}
+		record.ImagesEnabled = *in.AllowImages
+		if save() != nil {
+			return fail(503, "图文图片读取授权未保存")
 		}
 	case "set_publish":
 		if in.AllowPublish == nil {
@@ -471,6 +508,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
 		record.WorksEnabled = false
+		record.ImagesEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
@@ -634,6 +672,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
 		record.WorksEnabled = false
+		record.ImagesEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
 		record.PlaybackEnabled = false
@@ -689,6 +728,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled {
 			record.ReadEnabled = false
 			record.WorksEnabled = false
+			record.ImagesEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false

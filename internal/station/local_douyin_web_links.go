@@ -51,6 +51,9 @@ func (p *localDouyinWebObservation) webObservationAllowed(a localDouyinWebAccess
 		if field == apphost.ObservationPageText {
 			return ok
 		}
+		if field == apphost.ObservationImages {
+			return a.record.ImagesEnabled && ok && row.imageKey != ""
+		}
 		if !a.record.ReadEnabled || !localDouyinWebFieldAllowed(a.record, id, field) {
 			return false
 		}

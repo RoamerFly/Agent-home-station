@@ -105,7 +105,14 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 	_, next := syntheticCreatorWork(t)
 	next["aweme_id"] = "7391234567890123457"
 	next["status"].(map[string]any)["aweme_id"] = next["aweme_id"]
+	next["status"].(map[string]any)["is_private"] = false
+	next["status"].(map[string]any)["private_status"] = 0
 	next["author"] = first["author"]
+	first["images"] = []any{map[string]any{"url_list": []string{"https://fixture.douyinpic.com/private.png"}}}
+	next["images"] = []any{
+		map[string]any{"url_list": []string{"https://invalid.example/01.png", "https://fixture.douyinpic.com/01.png"}},
+		map[string]any{"url_list": []string{"https://fixture.douyinpic.com/02.webp"}},
+	}
 	var changes atomic.Int32
 	var wrongAccount atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,13 +147,16 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 		return readDouyinCreatorWorks(t.Context(), filepath.Join(t.TempDir(), "profile"), server.URL+"/creator-micro/content/manage", input, func() error { return nil }, true)
 	}
 	page, err := read(DouyinCreatorWorksRequest{})
-	if err != nil || !page.HasMore || len(page.Works) != 1 || page.Works[0].ID != first["aweme_id"] {
+	if err != nil || !page.HasMore || len(page.Works) != 1 || page.Works[0].ID != first["aweme_id"] || len(page.Works[0].Images) != 0 {
 		t.Fatalf("first page: %+v %v", page, err)
 	}
 	continuation := DouyinCreatorWorksRequest{Page: 1, PreviousAccount: page.Account, PreviousPageKey: page.PageKey}
 	page, err = read(continuation)
 	if err != nil || page.HasMore || len(page.Works) != 1 || page.Works[0].ID != next["aweme_id"] {
 		t.Fatalf("second page: %+v %v", page, err)
+	}
+	if strings.Join(page.Works[0].Images, ",") != "https://fixture.douyinpic.com/01.png,https://fixture.douyinpic.com/02.webp" {
+		t.Fatal("public image candidates lost their source order or used an untrusted host")
 	}
 	wrongAccount.Store(true)
 	if _, err := read(continuation); !errors.Is(err, ErrCreatorWorksChanged) {

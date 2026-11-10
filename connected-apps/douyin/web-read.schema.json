@@ -8,12 +8,17 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["begin", "begin_creator", "confirm", "cancel", "clear", "set_read", "set_publish", "set_interactions"]
+      "enum": ["begin", "begin_creator", "begin_creator_works", "confirm", "cancel", "clear", "set_read", "set_works", "set_images", "set_publish", "set_interactions"]
     },
     "revision": {"type": "integer", "minimum": 0},
     "attempt_id": {"type": "string"},
     "approve_profile": {"type": "boolean"},
     "allow_read": {"type": "boolean"},
+    "allow_works": {"type": "boolean"},
+    "allow_images": {
+      "type": "boolean",
+      "description": "仅分析本人已核对的公开图文图片。须已允许读取本人作品并已配置工作站视觉服务。默认关闭，撤销本人作品许可时同时撤销。"
+    },
     "read_scope": {"type": "string", "enum": ["home", "home_and_videos"]},
     "allow_playback": {
       "type": "boolean",
@@ -46,7 +51,7 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"action": {"enum": ["begin", "clear"]}}},
+      "if": {"properties": {"action": {"enum": ["begin", "begin_creator", "begin_creator_works", "clear"]}}},
       "then": {"required": ["approve_profile"], "properties": {"approve_profile": {"const": true}}}
     },
     {
@@ -56,6 +61,14 @@
     {
       "if": {"properties": {"action": {"const": "set_read"}}},
       "then": {"required": ["allow_read"]}
+    },
+    {
+      "if": {"properties": {"action": {"const": "set_works"}}},
+      "then": {"required": ["allow_works"]}
+    },
+    {
+      "if": {"properties": {"action": {"const": "set_images"}}},
+      "then": {"required": ["allow_images"]}
     },
     {
       "if": {"properties": {"action": {"const": "set_publish"}}},

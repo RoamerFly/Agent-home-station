@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,14 @@ type localCreatorWorksCursor struct {
 }
 
 type localCreatorWorkSnapshot struct {
-	work     stationbrowser.DouyinCreatorWork
-	grant    string
-	captured time.Time
+	work       stationbrowser.DouyinCreatorWork
+	grant      string
+	captured   time.Time
+	request    stationbrowser.DouyinCreatorWorksRequest
+	account    string
+	pageKey    string
+	imageKey   string
+	imageCount int
 }
 
 type localCreatorWorksIndex struct {
@@ -33,16 +39,16 @@ type localCreatorWorksIndex struct {
 	profileAccount, platformAccount string
 }
 
-func (i *localCreatorWorksIndex) add(profileAccount, platformAccount, grant string, rows []stationbrowser.DouyinCreatorWork, now time.Time) ([]string, error) {
+func (i *localCreatorWorksIndex) add(profileAccount, grant string, request stationbrowser.DouyinCreatorWorksRequest, page stationbrowser.DouyinCreatorWorksPage, rows []stationbrowser.DouyinCreatorWork, now time.Time) ([]string, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.profileAccount == profileAccount && i.platformAccount != platformAccount {
+	if i.profileAccount == profileAccount && i.platformAccount != page.Account {
 		clear(i.items)
 		return nil, apphost.ErrObservationWebSnapshotChanged
 	}
 	if i.items == nil || i.profileAccount != profileAccount {
 		i.items = map[string]localCreatorWorkSnapshot{}
-		i.profileAccount, i.platformAccount = profileAccount, platformAccount
+		i.profileAccount, i.platformAccount = profileAccount, page.Account
 	}
 	if len(rows) > 1000 {
 		return nil, apphost.ErrObservationAccountWorksResponseSize
@@ -69,7 +75,10 @@ func (i *localCreatorWorksIndex) add(profileAccount, platformAccount, grant stri
 		}
 		id := douyinapp.WebCreatorWorkPrefix + token
 		ids = append(ids, id)
-		i.items[id] = localCreatorWorkSnapshot{work: row, grant: grant, captured: now}
+		key, count := creatorImageFingerprint(row), len(row.Images)
+		row.Images = nil
+		i.items[id] = localCreatorWorkSnapshot{work: row, grant: grant, captured: now, request: request,
+			account: page.Account, pageKey: page.PageKey, imageKey: key, imageCount: count}
 	}
 	return ids, nil
 }
@@ -127,7 +136,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	}
 	end := cursor.Offset + min(cursor.Limit, len(result.Works)-cursor.Offset)
 	works := result.Works[cursor.Offset:end]
-	ids, err := p.creatorWorks.add(access.connection.AccountID, result.Account, access.version, works, time.Now().UTC())
+	ids, err := p.creatorWorks.add(access.connection.AccountID, access.version, cursor.Request, result, works, time.Now().UTC())
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
@@ -137,6 +146,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	}
 	page := apphost.ObservationPage{Coverage: coverage, Complete: end == len(result.Works) && !result.HasMore}
 	mediaFields := p.mediaFollowUps(ctx, access.record)
+	imagesReady := access.record.ImagesEnabled && slices.ContainsFunc(works, validCreatorImageWork) && p.creatorImagesReady(ctx)
 	for index, work := range works {
 		title := work.Title
 		if len([]rune(title)) > 160 {
@@ -150,6 +160,9 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 			if p.webObservationAllowed(access, ids[index], field) {
 				fields = append(fields, field)
 			}
+		}
+		if imagesReady && p.webObservationAllowed(access, ids[index], apphost.ObservationImages) {
+			fields = append(fields, apphost.ObservationImages)
 		}
 		page.Chunks = append(page.Chunks, apphost.ObservationChunk{Position: cursor.Offset + index, Text: title + " · " + work.Visibility,
 			SourceID: work.ID, SourceURL: stationbrowser.DouyinCreatorManageURL,
