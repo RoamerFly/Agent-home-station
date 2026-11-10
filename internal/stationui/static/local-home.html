@@ -56,7 +56,7 @@
           </div>
 
           <section id="local-workspace" class="local-workspace" hidden aria-label="大肥鱼工作台">
-            <nav class="local-tabs" aria-label="本地功能">
+            <nav id="local-tabs" class="local-tabs" aria-label="本地功能">
               <div class="local-tab-list" role="tablist" aria-label="工作台页面">
                 <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true">聊天</button>
                 <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1">应用</button>
@@ -64,6 +64,10 @@
                 <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">设置</button>
               </div>
               <button id="local-logout-button" class="text-action" type="button">退出</button>
+              <section id="live-safety" class="live-safety" aria-label="直播控制" hidden>
+                <span id="live-safety-status" role="status"></span>
+                <button id="live-safety-stop" class="button compact secondary" type="button">停止直播</button>
+              </section>
             </nav>
 
             <section id="chat-view" class="chat-view" role="tabpanel" aria-labelledby="chat-tab">

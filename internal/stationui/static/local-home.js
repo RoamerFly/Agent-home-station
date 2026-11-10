@@ -6,6 +6,7 @@
   let activeView = "chat";
   let apps = newAppView();
   let projectTools = newProjectToolsView();
+  let liveSafety = newLiveSafety();
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
   const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
@@ -1905,6 +1906,7 @@
       open.append(head, summary, foot); card.append(open);
       open.addEventListener("click", () => {
         apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal();
+        renderLiveSafety();
         if (record.id === "douyin") {
           void loadDouyinWebLogin(apps);
           if (apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
@@ -3696,6 +3698,7 @@
         if (current.openID === "obs-preview") invalidateOBSDeploymentView(current);
         current.openID = tool.id; renderProjectToolDialog(tool);
         $("#tool-dialog").showModal();
+        renderLiveSafety();
         updateDeploymentSave(current);
         if (deploymentDescriptor(tool.id)) void loadDeployment(tool.id, current);
         if (tool.id === "obs-preview") void loadOBSDeployment(current);
@@ -3844,7 +3847,87 @@
       if (current === projectTools) { current.applying = ""; renderProjectTools(); }
     }
   }
+  function newLiveSafety() {
+    return { active: null, busy: false, reading: null, timer: 0, note: "" };
+  }
+  function renderLiveSafety() {
+    const panel = $("#live-safety"), session = liveSafety.active;
+    const slot = $("#tool-dialog").open ? $("#tool-dialog-feedback") :
+      $("#app-dialog").open ? $("#app-dialog-feedback") : $("#local-tabs");
+    if (panel.parentElement !== slot) slot.append(panel);
+    panel.hidden = !session && !liveSafety.note;
+    $("#live-safety-status").textContent = liveSafety.note || (liveSafety.busy ? "正在停止直播…" :
+      session?.local_stopped ? "本机输出已停止，等待平台确认结束。" :
+      session?.state === "stopping" ? "正在停止直播，本机输出尚待确认。" :
+      session?.state === "live" ? "直播进行中" : "正在准备直播");
+    const button = $("#live-safety-stop");
+    button.hidden = !session || session.local_stopped;
+    button.disabled = liveSafety.busy;
+  }
+  function validLiveSafetySession(session) {
+    return session && typeof session.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(session.id) &&
+      ["starting", "live", "stopping", "ended"].includes(session.state) && typeof session.local_stopped === "boolean" &&
+      typeof session.remote_ended === "boolean" && (session.state !== "ended" || session.local_stopped && session.remote_ended);
+  }
+  function scheduleLiveSafety(current) {
+    window.clearTimeout(current.timer);
+    if (current === liveSafety && state.home?.initialized && !document.hidden)
+      current.timer = window.setTimeout(refreshLiveSafety, current.active ? 2000 : 5000);
+  }
+  async function refreshLiveSafety() {
+    const current = liveSafety;
+    if (!state.home?.initialized || document.hidden || current.reading || current.busy) return;
+    window.clearTimeout(current.timer);
+    const controller = new AbortController();
+    current.reading = controller;
+    try {
+      const { active } = await request("/api/local/live/active", { signal: controller.signal });
+      if (current !== liveSafety || current.reading !== controller) return;
+      if (active !== null && !validLiveSafetySession(active)) throw new Error("暂时无法核对直播状态。");
+      current.note = !active && current.active ? "当前没有进行中的直播。" : "";
+      current.active = active;
+    } catch (error) {
+      if (current === liveSafety && current.reading === controller && !appSessionExpired([{ status: "rejected", reason: error }]) && current.active)
+        current.note = current.active.local_stopped ? "本机输出已停止，平台状态暂不可核对。" : "暂时无法读取直播状态，可继续尝试停止原会话。";
+    } finally {
+      if (current === liveSafety && current.reading === controller) {
+        current.reading = null;
+        renderLiveSafety();
+        scheduleLiveSafety(current);
+      }
+    }
+  }
+  async function stopActiveLive() {
+    const current = liveSafety, original = current.active;
+    if (!original || original.local_stopped || current.busy) return;
+    current.busy = true;
+    current.note = "";
+    current.reading?.abort();
+    current.reading = null;
+    renderLiveSafety();
+    try {
+      const result = await request("/api/local/live", { method: "POST", body: JSON.stringify({ action: "stop", id: original.id }) });
+      if (current !== liveSafety) return;
+      if (!validLiveSafetySession(result) || result.id !== original.id) throw new Error("停止结果待核对，可重试原会话。");
+      if (result.state === "ended") {
+        current.active = null;
+        current.note = "直播已结束，本机输出已停止。";
+      } else current.active = result;
+    } catch (error) {
+      if (current === liveSafety) current.note = error.message;
+    } finally {
+      if (current === liveSafety) {
+        current.busy = false;
+        renderLiveSafety();
+        scheduleLiveSafety(current);
+      }
+    }
+  }
   function showLogin() {
+    window.clearTimeout(liveSafety.timer);
+    liveSafety.reading?.abort();
+    liveSafety = newLiveSafety();
+    renderLiveSafety();
     clearWechatRelocation(apps);
     stopDouyinLiveInspection(apps);
     $("#tool-dialog").close();
@@ -3894,6 +3977,7 @@
     const home = await request("/api/local/home");
     showHome(home);
     if (home.initialized && home.chat_available !== false) {
+      void refreshLiveSafety();
       await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
@@ -4140,20 +4224,25 @@
     if (spec) { projectTools[spec.state].generation += 1; projectTools[spec.state].approved = false; }
     if (id === "obs-preview") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     projectTools.openID = "";
+    renderLiveSafety();
     $("#project-tools-view").insertBefore($("#project-tools-feedback"), $("#project-tools-list"));
     $("#tool-dialog-body").replaceChildren(); $("#tool-dialog-body").scrollTop = 0;
     const opener = [...$("#project-tools-list").querySelectorAll("button")].find((button) => button.dataset.tool === id);
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("close", () => { clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; renderLiveSafety(); $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
-    else if (activeView === "chat" && state.home?.initialized) void loadChat(true);
+    if (document.hidden) { window.clearTimeout(state.chat.poll); state.chat.poll = 0; window.clearTimeout(liveSafety.timer); }
+    else {
+      void refreshLiveSafety();
+      if (activeView === "chat" && state.home?.initialized) void loadChat(true);
+    }
   });
+  $("#live-safety-stop").addEventListener("click", stopActiveLive);
   loadSession();
 })();

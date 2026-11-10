@@ -77,6 +77,7 @@ func (h *localChatService) startLiveRecovery() {
 
 func (h *localChatService) liveRoutes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/live", s.Protect(h.liveView))
+	mux.HandleFunc("GET /api/local/live/active", s.Protect(h.liveActiveView))
 	mux.HandleFunc("POST /api/local/live", s.Protect(h.liveAction))
 }
 
@@ -97,6 +98,27 @@ func (h *localChatService) liveView(w http.ResponseWriter, r *http.Request) {
 	}
 	targets := live.Targets(r.Context())
 	websession.Respond(w, http.StatusOK, map[string]any{"targets": targets, "active": active, "available": len(targets) > 0, "encoder": h.liveEncoder, "reason": liveAvailabilityReason(targets, h.liveEncoder)})
+}
+
+// The emergency control must stay usable while provider discovery is offline.
+func (h *localChatService) liveActiveView(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	live, owner, err := h.liveController()
+	if err != nil {
+		websession.Fail(w, http.StatusServiceUnavailable, "暂时无法读取本机直播会话")
+		return
+	}
+	active, err := live.Active(r.Context(), owner)
+	if errors.Is(err, apphost.ErrNotFound) {
+		websession.Respond(w, http.StatusOK, map[string]any{"active": nil})
+		return
+	}
+	if err != nil {
+		status, message := localLiveFailure(err)
+		websession.Fail(w, status, message)
+		return
+	}
+	websession.Respond(w, http.StatusOK, map[string]any{"active": active})
 }
 
 func (h *localChatService) liveAction(w http.ResponseWriter, r *http.Request) {

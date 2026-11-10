@@ -2,8 +2,10 @@ package station
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ func TestLocalLiveEmptyProductionBoundary(t *testing.T) {
 	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
 	if code, _ := f.request(http.MethodGet, "/api/local/live", nil, false); code != http.StatusUnauthorized {
 		t.Fatalf("live targets exposed without a local owner session: %d", code)
+	}
+	if code, _ := f.request(http.MethodGet, "/api/local/live/active", nil, false); code != http.StatusUnauthorized {
+		t.Fatalf("active live state exposed without owner: %d", code)
 	}
 	f.login()
 	if code, out := f.request(http.MethodGet, "/api/local/live", nil, false); code != http.StatusOK || out["available"] != false || out["reason"] != localLiveUnavailable {
@@ -98,10 +103,24 @@ func TestLocalLiveOwnerRouteSyntheticLifecycle(t *testing.T) {
 	if code, status := f.request(http.MethodPost, "/api/local/live", map[string]string{"action": "status", "id": id}, true); code != http.StatusOK || status["id"] != id || status["state"] != "live" {
 		t.Fatalf("route status: %d %#v", code, status)
 	}
+	provider.offline.Store(true)
+	discoveries := provider.discoveries.Load()
+	if code, view := f.request(http.MethodGet, "/api/local/live/active", nil, false); code != 200 ||
+		view["active"].(map[string]any)["id"] != id || provider.discoveries.Load() != discoveries {
+		t.Fatalf("active read must use only local state during a platform outage: %d %#v", code, view)
+	}
+	if code, _ := f.request(http.MethodPost, "/api/local/live", map[string]string{"action": "stop", "id": id}, false); code != 403 {
+		t.Fatalf("emergency stop bypassed CSRF: %d", code)
+	}
 	code, stopped := f.request(http.MethodPost, "/api/local/live", map[string]string{"action": "stop", "id": id}, true)
-	if code != http.StatusOK || stopped["local_stopped"] != true || (stopped["state"] != "ended" && stopped["state"] != "stopping") {
+	if code != http.StatusOK || stopped["local_stopped"] != true || stopped["state"] != "stopping" || stopped["remote_ended"] != false {
 		t.Fatalf("route stop: %d %#v", code, stopped)
 	}
+	if code, view := f.request(http.MethodGet, "/api/local/live/active", nil, false); code != 200 ||
+		view["active"].(map[string]any)["local_stopped"] != true || provider.discoveries.Load() != discoveries {
+		t.Fatalf("local stop lost the pending remote result: %d %#v", code, view)
+	}
+	provider.offline.Store(false)
 	// A concurrent supervisor may own the provider lock while an emergency stop
 	// has already stopped local output. Reconcile the exact durable session
 	// rather than assuming that the remote receipt is synchronous.
@@ -115,11 +134,22 @@ func TestLocalLiveOwnerRouteSyntheticLifecycle(t *testing.T) {
 	if stopped["state"] != "ended" || stopped["local_stopped"] != true || stopped["remote_ended"] != true {
 		t.Fatalf("route stop did not settle: %#v", stopped)
 	}
+	if code, view := f.request(http.MethodGet, "/api/local/live/active", nil, false); code != 200 || view["active"] != nil {
+		t.Fatalf("ended live session occupied the active slot: %d %#v", code, view)
+	}
 }
 
-type localLiveRouteProvider struct{ connection apphost.Connection }
+type localLiveRouteProvider struct {
+	connection  apphost.Connection
+	offline     atomic.Bool
+	discoveries atomic.Int32
+}
 
 func (p *localLiveRouteProvider) Connections(context.Context) ([]apphost.Connection, error) {
+	p.discoveries.Add(1)
+	if p.offline.Load() {
+		return nil, errors.New("synthetic platform offline")
+	}
 	return []apphost.Connection{p.connection}, nil
 }
 func (p *localLiveRouteProvider) Inspect(context.Context, string) (apphost.ConnectionStatus, error) {
@@ -133,9 +163,15 @@ func (p *localLiveRouteProvider) StartLive(_ context.Context, ref apphost.LiveRe
 	return apphost.LiveStartResult{Receipt: apphost.LiveReceipt{Reference: ref, State: "live", RoomID: "room-1"}}, nil
 }
 func (p *localLiveRouteProvider) QueryLive(_ context.Context, ref apphost.LiveReference) (apphost.LiveReceipt, error) {
+	if p.offline.Load() {
+		return apphost.LiveReceipt{}, errors.New("synthetic platform offline")
+	}
 	return apphost.LiveReceipt{Reference: ref, State: "live", RoomID: "room-1"}, nil
 }
 func (p *localLiveRouteProvider) StopLive(_ context.Context, ref apphost.LiveReference) (apphost.LiveReceipt, error) {
+	if p.offline.Load() {
+		return apphost.LiveReceipt{}, errors.New("synthetic platform offline")
+	}
 	return apphost.LiveReceipt{Reference: ref, State: "ended", RoomID: "room-1"}, nil
 }
 

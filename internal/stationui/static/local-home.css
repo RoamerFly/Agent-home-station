@@ -159,6 +159,11 @@ body.is-home-ready .page-message { flex: 0 0 auto; margin-top: 8px; }
 body.is-home-ready .page-message:empty { display: none; }
 
 .local-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); flex: 1; min-height: 0; gap: 14px; margin-top: 2px; }
+.live-safety { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); font-size: .84rem; }
+.local-tabs:has(.live-safety:not([hidden])) { flex-wrap: wrap; }
+.local-tabs > .live-safety { flex: 0 0 100%; }
+.app-dialog-feedback > .live-safety { margin: 8px 14px; }
+.live-safety button:not(:disabled) { font-weight: 700; }
 .local-tabs { display: flex; align-items: center; gap: 4px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
 .local-tab-list { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .local-tab, .text-action { border: 0; background: transparent; color: var(--muted); font-weight: 750; }
