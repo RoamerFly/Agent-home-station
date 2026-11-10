@@ -243,7 +243,7 @@ type stationAttachmentTools struct {
 	grants             map[string]time.Time
 	replies            map[string]time.Time
 	reads              map[string]time.Time
-	readCursors        map[string]stationReadCursor
+	readCursors        wechatapp.HistoryCursors
 	legacyReadCursors  map[string]stationLegacyReadCursor
 	blocked            func() bool
 	trace              companion.Input
@@ -265,13 +265,13 @@ func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy := *t
 	copy.trace = companion.Input{}
 	copy.prepared = nil
-	copy.readCursors = nil
+	copy.readCursors = wechatapp.HistoryCursors{}
 	copy.legacyReadCursors = nil
 	return &copy
 }
 
 func (t *stationAttachmentTools) SetTrace(in companion.Input) {
-	t.trace, t.prepared, t.readCursors, t.legacyReadCursors = in, nil, nil, nil
+	t.trace, t.prepared, t.readCursors, t.legacyReadCursors = in, nil, wechatapp.HistoryCursors{}, nil
 }
 
 func (t *stationAttachmentTools) allowed() bool {

@@ -41,7 +41,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	}
 	defer store.Close()
 	var calls, writes atomic.Int32
-	var blocked, forgetDuringRead atomic.Bool
+	var blocked, forgetDuringRead, advanceNativeCursor atomic.Bool
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method != "GET" {
@@ -61,6 +61,10 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 			}
 			if r.URL.Query().Get("cursor") != "" && r.URL.Query().Get("cursor") != "native-next" {
 				t.Error("native cursor changed")
+			}
+			if r.URL.Query().Get("cursor") == "native-next" && advanceNativeCursor.Load() {
+				out(map[string]any{"items": []linuxnative.Message{messages["share"]}, "coverage": "native-last-page"})
+				return
 			}
 			out(map[string]any{"items": []linuxnative.Message{messages["new"], messages["old"]}, "nextCursor": "native-next", "coverage": "native-page"})
 		case "/v1/accounts/one/groups/" + thread + "/members":
@@ -132,6 +136,13 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	deny("wechat_read", `{"kind":"messages","thread_id":"another-room@chatroom"}`)
 	// Returning the same native cursor cannot produce an endless valid continuation.
 	deny("wechat_read", `{"kind":"messages","cursor":"`+next+`","limit":75}`)
+	deny("wechat_read", `{"kind":"messages","search":"different","cursor":"`+next+`","limit":75}`)
+	advanceNativeCursor.Store(true)
+	last := call("wechat_read", `{"kind":"messages","cursor":"`+next+`","limit":75}`)
+	if last["next_cursor"] != "" || last["coverage"] != "native-last-page" || last["items"].([]any)[0].(map[string]any)["message_id"] != "share" {
+		t.Fatal("native continuation lost its scope or terminal coverage", last)
+	}
+	advanceNativeCursor.Store(false)
 	full := call("wechat_message_read", `{"message_id":"old","length":7}`)
 	if full["text"] != "中文" || full["next_offset"] != float64(6) || full["total_bytes"] != float64(48) {
 		t.Fatal(full)
@@ -181,6 +192,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	}
 	forgetDuringRead.Store(true)
 	deny("wechat_read", `{"kind":"messages","limit":75}`)
+	deny("wechat_message_read", `{"message_id":"new"}`)
 	forgetDuringRead.Store(false)
 	blocked.Store(true)
 	before := calls.Load()
