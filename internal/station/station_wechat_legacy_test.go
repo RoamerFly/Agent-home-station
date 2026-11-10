@@ -896,6 +896,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if tools.MemoryResultAuthorized(stamp) {
 		t.Fatal("a queued reply can still use the cleared evidence authority")
 	}
+	if err := liveMemory.Close(); err != nil {
+		t.Fatal(err)
+	}
 	setHistory("filehelper")
 	req("POST", selectedRoute, postMemory(selected, true), true, 409)
 	setHistory("123@chatroom", "filehelper")
@@ -1601,6 +1604,73 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reset only the isolated target fixture for the offline tamper cases.
+	write(receiverPolicyPath, receiverPolicy)
+	write(receiverStop, copiedStop)
+	verifyReq.DetachSource = true
+	verifyReq.ApplyDigest = ""
+	if _, err := verify(); err == nil {
+		t.Fatal("source detachment accepted a preview without its apply digest")
+	}
+	verifyReq.ApplyDigest = verified.ApplyDigest
+	for range 2 {
+		if detached, err := verify(); err != nil || detached.State != "archive_prepared" || !detached.DetachedSource {
+			t.Fatal("source detachment did not persist idempotently", detached, err)
+		}
+	}
+	fenceFile := filepath.Join(receiverWorker, legacyDetachedFenceFile)
+	fenceBytes, err := os.ReadFile(fenceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// These are only synthetic roots under t.TempDir. Detach both paths
+	// without changing the original bytes, then complete the owner's flow.
+	park := func(dir string) func() {
+		t.Helper()
+		aside := dir + "-detached"
+		if err := os.Rename(dir, aside); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			t.Helper()
+			if err := os.Rename(aside, dir); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	bringBackSource := park(host)
+	bringBackOld := park(legacyHost)
+	write(receiverStop, j(freshStop))
+	detached, detachedFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), receiverApps)
+	detachedFixture.login()
+	write(fenceFile, j([]byte("synthetic-corrupt-seal")))
+	if code, row := detachedFixture.request("GET", readinessPath, nil, false); code != 200 || row["state"] != "blocked" || row["source_fence"] != "unverified" {
+		t.Fatal("detached receiver accepted a corrupt seal", code, row)
+	}
+	write(fenceFile, fenceBytes)
+	code, row = detachedFixture.request("GET", readinessPath, nil, false)
+	if code != 200 || row["state"] != "owner_identity_check" || row["source_fence"] != "verified" {
+		t.Fatal("receiver cannot validate the detached source", code, row)
+	}
+	confirmDetached := map[string]any{"digest": row["digest"], "same_identity": true}
+	if code, row := detachedFixture.request("POST", readinessPath, confirmDetached, true); code != 200 || row["state"] != "confirmed" {
+		t.Fatal("receiver could not confirm with both source paths detached", code, row)
+	}
+	startReceiver(detached)
+	checkWrite(detached, 3, true, "detached-source")
+	detachedFixture.server.Close()
+	if err := detached.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bringBackOld()
+	bringBackSource()
+	remounted, remountedFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), receiverApps)
+	write(intentPath, j(legacyReleaseIntent{}))
+	checkWrite(remounted, 3, false, "detached-but-conflicting-source-remounted")
+	write(intentPath, relocationIntent)
+	remountedFixture.server.Close()
+	if err := remounted.Close(); err != nil {
+		t.Fatal(err)
+	}
 	write(receiverPolicyPath, receiverPolicy)
 	write(receiverStop, copiedStop)
 	write(copiedQueue, []byte(newQueue+"\n"))

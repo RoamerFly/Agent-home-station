@@ -21,7 +21,7 @@ const legacyRelocationTargetFile = "legacy-relocation-target.json"
 type LegacyWechatRelocationRequest struct {
 	DataDir, SourceDir, ConnectionID, AuditDigest string
 	ApplyDigest                                   string
-	AcceptUnknown                                 bool
+	AcceptUnknown, DetachSource                   bool
 }
 
 type LegacyWechatRelocationResult struct {
@@ -31,6 +31,7 @@ type LegacyWechatRelocationResult struct {
 	SourceFence      string `json:"source_fence_digest,omitempty"`
 	TargetProfile    string `json:"target_profile_digest,omitempty"`
 	ApplyDigest      string `json:"apply_digest,omitempty"`
+	DetachedSource   bool   `json:"detached_source,omitempty"`
 }
 
 type legacyRelocationTarget struct {
@@ -55,6 +56,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 	if !sameCutoverPath(dir, dir) || !artifactID(req.ConnectionID, "wechat-") ||
 		req.SourceDir == "" && (req.AuditDigest != "" || req.ApplyDigest != "" || req.AcceptUnknown) ||
 		req.ApplyDigest != "" && !legacyMemoryDigestValid(req.ApplyDigest) ||
+		req.DetachSource && (source == "" || req.ApplyDigest == "") ||
 		req.SourceDir != "" && (!sameCutoverPath(source, source) || legacyImportOverlap(dir, source) || !legacyMemoryDigestValid(req.AuditDigest)) {
 		return out, errors.New("目标目录、源站目录、微信连接或核对摘要无效")
 	}
@@ -194,6 +196,14 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		}
 		if err := prepareLegacyRelocationRuntime(worker, evidence.ApplyDigest); err != nil {
 			return err
+		}
+		if req.DetachSource {
+			// releaseLegacyWechat still holds both source leases, and the
+			// target lease was acquired before reading the copied records.
+			if err := saveLegacyDetachedFence(worker, evidence, *proof); err != nil {
+				return err
+			}
+			out.DetachedSource = true
 		}
 		out.State = "archive_prepared"
 		return nil

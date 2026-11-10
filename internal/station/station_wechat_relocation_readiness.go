@@ -123,7 +123,7 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmatio
 	if _, err := readRollbackAudit(root, evidence.AuditDigest); err != nil {
 		return blocked("原投递核对报告缺失或已变化")
 	}
-	if !s.relocationSourceStillFenced(evidence, *proof) {
+	if !s.relocationSourceStillFenced(root, evidence, *proof) {
 		return blocked("源站封存或旧微信桌面交接记录无法核对")
 	}
 	view.SourceFence = "verified"
@@ -176,7 +176,7 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmatio
 		return view, nil
 	}
 	if confirmation != digest || localCheckpointKey(worker.policy) != localCheckpointKey(policy) ||
-		worker.runtimeDir == "" || worker.run != nil || !s.relocationSourceStillFenced(evidence, *proof) ||
+		worker.runtimeDir == "" || worker.run != nil || !s.relocationSourceStillFenced(root, evidence, *proof) ||
 		checkLegacyRelocationRuntime(root, evidence.ApplyDigest) != nil {
 		return blocked("接收站启用条件已变化，请重新核对")
 	}
@@ -192,15 +192,38 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmatio
 	return view, nil
 }
 
-func (s *stationWechat) relocationSourceStillFenced(evidence legacyRelocationEvidence, proof legacyActivation) bool {
+func (s *stationWechat) relocationSourceStillFenced(worker *os.Root, evidence legacyRelocationEvidence, proof legacyActivation) bool {
+	sealed, err := readLegacyImportFile(worker, legacyDetachedFenceFile, legacyDetachedFenceLimit)
+	detached := err == nil && legacyDetachedFenceMatches(worker, sealed, evidence, proof)
+	if !detached && !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
 	if legacyImportOverlap(s.dataDir, evidence.SourceDir) {
 		return false
 	}
 	source, err := workspacefs.OpenPath(evidence.SourceDir)
-	if err != nil {
+	if err == nil {
+		defer source.Close()
+		if !matchesLiveRelocationFence(source, evidence, proof) {
+			return false
+		}
+	} else if !detached || !relocationSourceAbsent(err) {
 		return false
 	}
-	defer source.Close()
+	if detached {
+		// When a source directory is visible, continue to check it. Missing
+		// roots can be detached, but a missing marker inside an existing root
+		// or a permission failure is never evidence of a detached source.
+		old, err := workspacefs.OpenPath(proof.OldRoot)
+		if err != nil {
+			return relocationSourceAbsent(err)
+		}
+		old.Close()
+	}
+	return s.legacyHandover(proof, handoverActive) == ""
+}
+
+func matchesLiveRelocationFence(source *os.Root, evidence legacyRelocationEvidence, proof legacyActivation) bool {
 	raw, err := readLegacyImportFile(source, stationNativeReleaseFile, 4096)
 	var intent legacyReleaseIntent
 	if err != nil || json.Unmarshal(raw, &intent) != nil || intent.Version != 1 ||
@@ -212,8 +235,7 @@ func (s *stationWechat) relocationSourceStillFenced(evidence legacyRelocationEvi
 	claim, _ := json.Marshal(legacyHandoverKey(proof))
 	return err == nil && hexDigest(stop) == evidence.Target.SourceStop && intent.ClaimDigest == hexDigest(claim) &&
 		intent.ApplyDigest == localCheckpointKey("wechat-relocation-fence-v1", proof, intent.AuditDigest,
-			evidence.Target.SourceStop, intent.ClaimDigest, intent.AcceptUnknown, intent.RelocationTarget) &&
-		s.legacyHandover(proof, handoverActive) == ""
+			evidence.Target.SourceStop, intent.ClaimDigest, intent.AcceptUnknown, intent.RelocationTarget)
 }
 
 func (s *stationWechat) relocationActivationGuard(ctx context.Context, id string, native *linuxnative.Sender, root *os.Root, policy stationWechatPolicy) (func() bool, error) {
@@ -254,7 +276,7 @@ func (s *stationWechat) relocationActivationEvidence(root *os.Root, id string, p
 		proof.ArchiveDigest != evidence.Target.Archive || proof.TargetDataset != evidence.SourceDataset ||
 		proof.Connection != s.connectionRef(id, proof.Connection.AccountID) ||
 		checkLegacyRelocationRuntime(root, approval.ArchiveBinding) != nil ||
-		!s.relocationSourceStillFenced(evidence, *proof) {
+		!s.relocationSourceStillFenced(root, evidence, *proof) {
 		return false
 	}
 	profile, digest := s.nativeImportReceipt(id, proof.Connection.AccountID)
