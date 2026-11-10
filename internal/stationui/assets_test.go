@@ -10,7 +10,7 @@ import (
 func TestStandaloneAllowsOnlyStationAssets(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
-	for _, path := range []string{"/", "/assets/local-home.js", "/assets/local-home.css", "/assets/whale-girl-cutout.png", "/assets/night-sea.webp"} {
+	for _, path := range []string{"/", "/assets/local-home.js", "/assets/local-home.css", "/assets/whale-girl-cutout.png", "/assets/night-sea.webp", "/assets/tide-atlas.webp"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		res := httptest.NewRecorder()
 		mux.ServeHTTP(res, req)

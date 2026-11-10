@@ -70,8 +70,11 @@ def home_tab(page, tab):
     page.locator(f"#{tab}-tab").click()
 
 
-def open_application(page, name="微信", section="账号与使用"):
-    if not page.locator("#app-dialog").evaluate("node => node.open"):
+def open_application(page, name="微信", section="账号与权限"):
+    dialog = page.locator("#app-dialog")
+    if dialog.evaluate("node => node.open") and page.locator("#app-dialog-title").inner_text() != name:
+        close_application(page)
+    if not dialog.evaluate("node => node.open"):
         page.get_by_role("button", name=f"管理{name}", exact=True).click()
     page.locator("#app-dialog-tabs").get_by_role("button", name=section, exact=True).click()
 
@@ -79,7 +82,7 @@ def open_application(page, name="微信", section="账号与使用"):
 def refresh_application(page):
     node = "#app-dialog-refresh" if page.locator("#app-dialog").evaluate("node => node.open") else "#apps-refresh"
     page.locator(node).click()
-    page.locator("#apps-list[aria-busy='false']").wait_for()
+    page.locator("#apps-list[aria-busy='false']").wait_for(state="attached")
     open_application(page)
 
 
@@ -160,6 +163,8 @@ def verify_missing_source(binary, output):
                 assert_station_without_device_controls(context, page, origin)
                 close_application(page)
                 page.locator("#chat-tab").focus()
+                page.keyboard.press("ArrowRight")
+                expect(page.locator("#memory-tab")).to_be_focused()
                 page.keyboard.press("ArrowRight")
                 page.locator("#apps-view").wait_for(state="visible")
                 assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
@@ -435,6 +440,8 @@ def verify(binary, output):
                 close_application(page)
                 page.locator("#chat-tab").focus()
                 page.keyboard.press("ArrowRight")
+                expect(page.locator("#memory-tab")).to_be_focused()
+                page.keyboard.press("ArrowRight")
                 page.locator("#apps-view").wait_for(state="visible")
                 assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
                 page.locator("#apps-list[aria-busy='false']").wait_for()
@@ -445,7 +452,7 @@ def verify(binary, output):
                 source_available = wechat[0]["source_available"]
                 if source_available:
                     assert "有可用版本" in source_state, source_state
-                    open_application(page, section="接入版本管理")
+                    open_application(page, section="资料与版本")
                     page.get_by_role("button", name="安装接入版本").click()
                     page.get_by_text("已安装", exact=True).wait_for()
                     page.locator("#apps-feedback").get_by_text(re.compile("接入版本已.*家目录")).wait_for()
@@ -455,7 +462,7 @@ def verify(binary, output):
                     assert page.get_by_role("button", name="安装接入版本").count() == 0
 
                 close_application(page)
-                page.locator("#apps-list").get_by_text("微信服务不可用", exact=True).wait_for()
+                page.get_by_role("button", name="管理微信", exact=True).get_by_text("未运行", exact=True).wait_for()
                 if source_available:
                     page.locator("#apps-list").get_by_text("接入版本已安装", exact=True).wait_for()
                 open_application(page)

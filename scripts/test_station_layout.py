@@ -1,9 +1,10 @@
 """Station layout and application persona replay, synthetic data and no model calls."""
 import argparse
 import json
-import os
+import re
 from pathlib import Path
 import tempfile
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright, expect
 from test_local_home_ui import start, stop, open_application, close_application, home_tab
@@ -27,6 +28,79 @@ def fixed_shell(page, expected=None):
     return value
 
 
+
+def verify_glass_views(page, output):
+    # Only this visual fixture intercepts reads. The owner API itself is
+    # exercised separately by TestLocalMemoryPalaceOwnerScopeAndSources.
+    entries = [
+        {"id": "meeting", "title": "周日画明信片", "kind": "episode", "commitment": "open"},
+        {"id": "diary", "title": "海边日记", "kind": "episode"},
+        {"id": "sea", "title": "夜海", "kind": "preference"},
+        {"id": "fish", "title": "大肥鱼", "kind": "fact"},
+    ]
+
+    def palace_response(route):
+        request = urlparse(route.request.url)
+        if request.path.endswith("/palace"):
+            kind = parse_qs(request.query).get("kind", [""])[0]
+            items = [entry for entry in entries if not kind or
+                     (entry.get("commitment") if kind == "commitment" else entry["kind"] == kind)]
+            route.fulfill(json={"items": items})
+        else:
+            item = next(entry for entry in entries if request.path.endswith("/" + entry["id"]))
+            route.fulfill(json={"memory": item, "detail": item["title"], "version": 2,
+                                "sources": [{"quote": "周日一起画明信片。", "at": "2026-11-07T12:00:00Z"}],
+                                "revisions": [{"version": 1, "title": "一起画明信片"}]})
+
+    palace = re.compile(r"/api/local/memory/palace(?:[/?]|$)")
+    chat = "**/api/local/chat?*"
+    page.route(palace, palace_response)
+    page.route(chat, lambda route: route.fulfill(json={"items": [
+        {"id": "synthetic-owner", "role": "user", "text": "今晚整理海边日记。", "time": "2026-11-07T12:00:00Z"},
+        {"id": "synthetic-fish", "role": "assistant", "text": "我把那段经历留在记忆宫殿里了。", "time": "2026-11-07T12:01:00Z"},
+    ]}))
+    home_tab(page, "chat")
+    expect(page.locator(".chat-bubble")).to_have_count(2)
+    expect(page.locator("#recent-memory-items")).to_contain_text("海边日记")
+    page.screenshot(path=str(output/"01-chat.png"))
+
+    page.locator("#open-memory-button").click()
+    expect(page.locator("#memory-graph .memory-node")).to_have_count(4)
+    expect(page.locator("#memory-detail")).to_contain_text("周日一起画明信片。")
+    expect(page.locator("#memory-detail")).to_contain_text("版本 1")
+    page.screenshot(path=str(output/"02-memory-palace.png"))
+    page.locator("#memory-graph").get_by_role("button", name="夜海 兴趣").click()
+    page.get_by_role("button", name="列表", exact=True).click()
+    expect(page.locator("#memory-list [aria-pressed=true]")).to_contain_text("夜海")
+    page.locator("#memory-filters").get_by_role("button", name="约定", exact=True).click()
+    expect(page.locator("#memory-list .memory-row")).to_have_count(1)
+    page.set_viewport_size({"width": 375, "height": 740})
+    fixed_shell(page)
+    expect(page.locator("#memory-detail")).to_contain_text("周日一起画明信片。")
+    page.screenshot(path=str(output/"memory-narrow.png"))
+    page.get_by_role("button", name="返回原会话", exact=True).click()
+    page.set_viewport_size({"width": 1440, "height": 900})
+    expect(page.locator("#chat-tab")).to_be_focused()
+    page.unroute(palace)
+    page.unroute(chat)
+
+    home_tab(page, "apps")
+    expect(page.locator("#apps-list .app-record")).to_have_count(2)
+    page.locator("#apps-search").fill("抖音")
+    expect(page.locator("#apps-list .app-record")).to_have_count(1)
+    page.locator("#apps-search").clear()
+    page.get_by_role("button", name="管理微信", exact=True).click()
+    expect(page.locator("#app-dialog-tabs button")).to_have_text(["概览", "账号与权限", "应用能力", "资料与版本"])
+    expect(page.locator("#app-dialog-body")).to_contain_text("记忆接续")
+    page.screenshot(path=str(output/"03-app-center-wechat.png"))
+    page.get_by_role("button", name="管理抖音", exact=True).click()
+    expect(page.locator("#app-dialog-tabs [aria-pressed=true]")).to_have_text("应用能力")
+    expect(page.locator("#app-dialog-body")).to_contain_text("直播控制")
+    expect(page.locator("#app-dialog-body")).to_contain_text("待验证")
+    page.screenshot(path=str(output/"04-app-center-douyin.png"))
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("button", name="管理抖音", exact=True)).to_be_focused()
+
 def verify(binary, output):
     output.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='synthetic-layout-',dir=output) as temporary:
@@ -46,12 +120,13 @@ def verify(binary, output):
                 page.locator('#initialize-button').click()
                 page.locator('#chat-view').wait_for(state='visible')
                 initial=fixed_shell(page)
+                verify_glass_views(page,output)
                 main=context.request.get(origin+'/api/local/model').json()['persona']
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
                 assert page.get_by_role('button',name='安装接入版本',exact=True).count()==0
                 page.screenshot(path=str(output/'applications-desktop.png'))
                 for app,text in [('微信','合成微信偏好：喜欢音乐和简洁表达。'),('抖音','合成抖音偏好：喜欢旅行和摄影。')]:
-                    open_application(page,app,'应用子角色')
+                    open_application(page,app,'概览')
                     form=page.get_by_role('form',name=app+'子角色',exact=True)
                     form.get_by_role('button',name='编辑',exact=True).click()
                     field=form.get_by_role('textbox',name=app+'子角色设定',exact=True)
@@ -68,7 +143,7 @@ def verify(binary, output):
                 fixed_shell(page,initial)
                 cards=page.locator('.project-tool-card')
                 sizes=cards.evaluate_all('nodes => nodes.map(node => ({w:node.getBoundingClientRect().width,h:node.getBoundingClientRect().height}))')
-                assert sizes and len({round(x['h']) for x in sizes})==1 and len({round(x['w']) for x in sizes})==1,sizes
+                assert sizes and all(abs(card[axis]-sizes[0][axis]) < 1 for card in sizes for axis in ('w','h')),sizes
                 page.get_by_role('button',name='管理本机语音',exact=True).click()
                 expect(page.locator('#tool-dialog')).to_be_visible()
                 assert page.locator('#tool-dialog-body').evaluate('node => node.scrollWidth<=node.clientWidth+1')
@@ -84,13 +159,13 @@ def verify(binary, output):
                 fixed_shell(page,initial)
                 page.screenshot(path=str(output/'settings-desktop-scrolled.png'))
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
-                open_application(page,'微信','应用子角色')
+                open_application(page,'微信','概览')
                 form=page.get_by_role('form',name='微信子角色',exact=True)
                 form.get_by_role('button',name='编辑',exact=True).click()
                 field=form.get_by_role('textbox',name='微信子角色设定',exact=True)
                 field.fill('暂未保存的应用草稿')
-                page.locator('#app-dialog-tabs').get_by_role('button',name='接入版本管理',exact=True).click()
-                page.locator('#app-dialog-tabs').get_by_role('button',name='应用子角色',exact=True).click()
+                page.locator('#app-dialog-tabs').get_by_role('button',name='资料与版本',exact=True).click()
+                page.locator('#app-dialog-tabs').get_by_role('button',name='概览',exact=True).click()
                 assert field.input_value()=='暂未保存的应用草稿'
                 # Force a long form body to verify the dialog scrolls and the fixed header stays usable.
                 field.evaluate('node => node.style.minHeight="1000px"')
@@ -108,7 +183,7 @@ def verify(binary, output):
                     fixed_shell(page)
                     home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
                     page.screenshot(path=str(output/f'applications-{width}-{height}-{theme}.png'))
-                    open_application(page,'抖音','应用子角色')
+                    open_application(page,'抖音','概览')
                     form=page.get_by_role('form',name='抖音子角色',exact=True)
                     form.get_by_role('button',name='编辑',exact=True).click()
                     field=form.get_by_role('textbox',name='抖音子角色设定',exact=True)
@@ -123,7 +198,7 @@ def verify(binary, output):
                 assert not errors, errors
                 browser.close()
         finally:stop(process)
-    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and narrow light dark']},ensure_ascii=False))
+    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['chat and memory palace','shared application details','viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and narrow light dark']},ensure_ascii=False))
 
 
 if __name__=='__main__':

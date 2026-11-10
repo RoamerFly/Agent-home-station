@@ -165,11 +165,11 @@ def verify(binary, output):
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
                     assert page.get_by_text("API 接入（可选）", exact=True).count() == 0
                     assert page.get_by_label("抖音 Client Key", exact=True).count() == 0
-                    page.get_by_role("button", name="接入版本管理", exact=True).click()
+                    page.get_by_role("button", name="资料与版本", exact=True).click()
                     page.get_by_text("接入版本", exact=True).wait_for()
                     assert page.get_by_text("源码", exact=False).count() == 0
                     page.screenshot(path=str(output / f"douyin-integration-version-{suffix}.png"), full_page=True)
-                    page.get_by_role("button", name="账号与使用", exact=True).click()
+                    page.get_by_role("button", name="账号与权限", exact=True).click()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
                     assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0

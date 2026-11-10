@@ -2,9 +2,10 @@
   "use strict";
   const $ = (selector) => document.querySelector(selector);
   const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView() };
-  const tabs = ["chat", "apps", "project-tools", "settings"];
+  const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
+  let memory = newMemoryView();
   let projectTools = newProjectToolsView();
   let liveSafety = newLiveSafety();
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
@@ -53,7 +54,9 @@
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") loadProjectTools();
-    if (view === "chat" && state.home?.initialized && !document.hidden) void loadChat(true);
+    renderLiveSafety();
+    if (view === "memory") void loadMemoryPage();
+    if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
     return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), poll: 0 };
@@ -110,7 +113,7 @@
       if (listing.install_state === "installed") {
         title = "已安装";
         note = `随包版本 ${bundledVersion}；工作区版本 ${workspaceVersion}。接入版本用于本软件连接应用和更新接入功能，可在家目录的 Connected Apps 中维护。`;
-        if (record.id === "wechat") note += " 本次安装只写入家目录；微信服务状态见「账号与使用」。";
+        if (record.id === "wechat") note += " 本次安装只写入家目录；微信服务状态见「账号与权限」。";
       } else if (listing.install_state === "conflict") {
         title = "应用目录待整理";
         note = listing.installed_version ? `已有版本 ${listing.installed_version}，请先保留现有修改。` : "家目录已有同名内容，请先保留并整理该目录。";
@@ -1982,7 +1985,198 @@
     row.append(appElement("h5", "公开读取"), detail);
     return row;
   }
-  function renderApps() {
+  function newMemoryView() {
+    return { kind: "", mode: "graph", cursor: "", next: "", selected: "", items: [], error: "", loading: false, generation: 0, detailGeneration: 0, recentGeneration: 0 };
+  }
+  function memoryKind(item) {
+    return item.commitment ? "约定" : ({ fact: "人物与事实", episode: "经历", preference: "兴趣", lesson: "经验" }[item.kind] || "记忆");
+  }
+  function memoryButton(text, style, action) {
+    const button = appElement("button", text, style);
+    button.type = "button";
+    button.addEventListener("click", action);
+    return button;
+  }
+  async function loadRecentMemory() {
+    const current = memory, generation = ++current.recentGeneration;
+    const container = $("#recent-memory-items");
+    try {
+      const { items } = await request("/api/local/memory/palace");
+      if (current !== memory || generation !== current.recentGeneration) return;
+      container.replaceChildren(...items.slice(0, 2).map((item) => memoryButton(item.title, "recent-memory-link", () => {
+        current.kind = ""; current.cursor = ""; current.selected = item.id;
+        setActiveView("memory");
+      })));
+      if (!items.length) container.append(appElement("p", "本机会话还没有可展示的记忆。"));
+    } catch (_) {
+      if (current === memory && generation === current.recentGeneration) container.replaceChildren(appElement("p", "暂时无法读取最近记忆。"));
+    }
+  }
+  function memoryChoice(item, graph, index) {
+    const button = memoryButton("", graph ? "memory-node memory-node-" + (index + 1) : "memory-row", () => {
+      memory.selected = item.id;
+      syncMemorySelection();
+      void readMemoryDetail();
+    });
+    button.dataset.id = item.id;
+    button.append(appElement("span", item.title, "memory-node-title"), appElement("small", memoryKind(item)));
+    return button;
+  }
+  function syncMemorySelection() {
+    for (const button of $("#memory-canvas").querySelectorAll("[data-id]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.id === memory.selected));
+    }
+  }
+  function renderMemoryPage() {
+    const graph = $("#memory-graph"), list = $("#memory-list");
+    graph.hidden = memory.mode !== "graph" || !memory.items.length;
+    list.hidden = memory.mode !== "list" || !memory.items.length;
+    $("#memory-canvas").setAttribute("aria-busy", String(memory.loading));
+    $("#memory-feedback").textContent = memory.loading ? "正在读取本机会话记忆…" : memory.error || (memory.items.length ? "" : "这个范围里还没有可展示的记忆。");
+    $("#memory-next").hidden = !memory.next || memory.loading;
+    $("#memory-first").hidden = !memory.cursor || memory.loading;
+    for (const button of $("#memory-filters").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.kind === memory.kind));
+    for (const button of $("#memory-modes").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.mode === memory.mode));
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-hidden", "true");
+    const positions = [[50, 16], [22, 36], [78, 36], [27, 77], [73, 77]];
+    for (const [x, y] of positions.slice(0, memory.items.length)) {
+      const line = document.createElementNS(svg.namespaceURI, "line");
+      for (const [name, value] of Object.entries({ x1: 50, y1: 52, x2: x, y2: y })) line.setAttribute(name, value);
+      svg.append(line);
+    }
+    graph.replaceChildren(svg, appElement("strong", "本机会话", "memory-anchor"), ...memory.items.map((item, index) => memoryChoice(item, true, index)));
+    list.replaceChildren(...memory.items.map((item, index) => memoryChoice(item, false, index)));
+    syncMemorySelection();
+  }
+  async function loadMemoryPage() {
+    const current = memory, generation = ++current.generation;
+    current.detailGeneration++;
+    current.items = []; current.next = ""; current.error = ""; current.loading = true;
+    renderMemoryPage();
+    $("#memory-detail").replaceChildren(appElement("h4", "记忆详情"), appElement("p", "选择一个节点查看原话和来源。"));
+    try {
+      const query = new URLSearchParams({ kind: current.kind, cursor: current.cursor });
+      const { items, next_cursor } = await request("/api/local/memory/palace?" + query);
+      if (current !== memory || generation !== current.generation) return;
+      current.items = items; current.next = next_cursor || "";
+      if (!items.some((item) => item.id === current.selected)) current.selected = items[0]?.id || "";
+      if (current.selected) void readMemoryDetail();
+    } catch (error) {
+      if (current !== memory || generation !== current.generation) return;
+      if (error.status === 401) { showLogin(); return; }
+      current.error = error.message;
+    } finally {
+      if (current === memory && generation === current.generation) { current.loading = false; renderMemoryPage(); }
+    }
+  }
+  async function readMemoryDetail() {
+    const current = memory, generation = ++current.detailGeneration;
+    const panel = $("#memory-detail");
+    panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", "正在核对来源…"));
+    try {
+      const result = await request("/api/local/memory/palace/" + encodeURIComponent(current.selected));
+      if (current !== memory || generation !== current.detailGeneration) return;
+      const item = result.memory;
+      panel.replaceChildren(appElement("h4", item.title), appElement("span", memoryKind(item), "station-label"));
+      if (item.status === "conflicted") panel.append(appElement("p", "这条记忆有冲突，待核对。", "memory-conflict"));
+      if (result.detail && result.detail !== item.title) panel.append(appElement("p", result.detail));
+      const section = (label, rows, empty) => {
+        const block = appElement("section", "", "memory-detail-section");
+        block.append(appElement("h5", label), ...(rows.length ? rows : [appElement("p", empty)]));
+        panel.append(block);
+      };
+      section("原话", result.sources.map((source) => appElement("blockquote", source.quote)), "暂无可读取的引用");
+      section("来源", result.sources.map((source) => appElement("p", ["本机会话", messageTime(source.at)].filter(Boolean).join(" · "))), "本机会话");
+      section("更正记录", result.revisions.map((revision) => appElement("p", "版本 " + revision.version + " · " + revision.title)), "当前版本 " + result.version + "，暂无可读的旧版本");
+      panel.append(memoryButton("返回原会话", "button compact secondary", () => { setActiveView("chat"); $("#chat-tab").focus(); }));
+    } catch (error) {
+      if (current !== memory || generation !== current.detailGeneration) return;
+      if (error.status === 401) { showLogin(); return; }
+      panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message), memoryButton("重新读取", "button compact secondary", () => void readMemoryDetail()));
+    }
+  }
+
+
+  const appPriority = new Map([["wechat", 0], ["douyin", 1]]);
+  const appTabs = [["overview", "概览"], ["account", "账号与权限"], ["capabilities", "应用能力"], ["source", "资料与版本"]];
+  function appMark(id, label) {
+    const mark = appElement("span", "", "app-mark");
+    mark.setAttribute("aria-hidden", "true");
+    const paths = {
+      wechat: "M12.7 13.2C11.5 14.4 9.8 15 8 15l-3.7 1.6.7-2.5A5 5 0 0 1 2 9.6C2 6.5 5 4 8.8 4c3.4 0 6.2 2 6.7 4.7a7 7 0 0 0-2.8 4.5ZM22 15c0 1.5-.8 2.9-2.2 3.8l.6 2.2-2.8-1.2c-.5.1-1 .2-1.6.2-3.3 0-6-2.2-6-5s2.7-5 6-5 6 2.2 6 5Z",
+      douyin: "M14 3h3c.3 2.5 1.7 4 4 4.4v3.2a8 8 0 0 1-4-1.5v6.7a5.9 5.9 0 1 1-6-5.9v3.3a2.7 2.7 0 1 0 3 2.6V3Z",
+    };
+    if (!Object.hasOwn(paths, id)) { mark.textContent = Array.from(label)[0]; return mark; }
+    mark.classList.add("app-mark-" + id);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", paths[id]);
+    svg.append(path); mark.append(svg);
+    return mark;
+  }
+  function appEvidence(id) {
+    const unknown = "待核对";
+    if (id === "wechat") {
+      const service = wechatServiceState();
+      const accounts = apps.connections.get(id) || [];
+      const statuses = accounts.map((account) => apps.accountStatuses.get(account.id));
+      const authenticated = statuses.filter((entry) => entry?.login === "authenticated");
+      const policies = statuses.map((entry) => entry?.configured_policy).filter(Boolean);
+      const histories = policies.some((policy) => policy.history_threads?.length);
+      const replies = policies.some((policy) => policy.reply_threads?.length);
+      const known = service === "ready" && policies.length === accounts.length;
+      return {
+        service: { ready: "已运行", archive: "仅可查看归档", offline: "未运行", unavailable: "不可用" }[service] || unknown,
+        account: authenticated.length ? authenticated.length + " 个已登录" : service === "ready" && statuses.every(Boolean) ? (accounts.length ? "待登录" : "待添加") : unknown,
+        grant: histories || replies ? "按会话授权" : known ? "待授权" : unknown,
+        connected: authenticated.length > 0,
+        capabilities: [
+          ["聊天记录", histories ? "有会话授权" : known ? "未授权" : unknown, "原话读取仍按账号和会话核对。"],
+          ["记忆接续", unknown, "可在账号资料中核对各会话的旧档案接续状态。"],
+          ["消息发送", replies ? "有回复范围" : known ? "未授权" : unknown, "每次发送仍由原有授权及运行条件判定。"],
+        ],
+      };
+    }
+    if (id === "douyin") {
+      const value = apps.douyinWebLogin.value;
+      const paused = value?.paused || value?.detached;
+      const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
+      const actions = [read, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
+      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
+      return {
+        service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "不可用",
+        account: !value ? unknown : value.state === "saved" ? "登录资料已保存" : ["login_open", "unconfirmed"].includes(value.state) ? "待确认" : "待登录",
+        grant: !value ? unknown : paused ? "已暂停" : actions.some(Boolean) ? (read && actions.filter(Boolean).length === 1 ? "浏览范围已授权" : "按能力授权") : "未授权",
+        connected: !paused && value?.state === "saved",
+        capabilities: [
+          ["内容浏览", auth(read), "依据本机保存的浏览范围，实际可读性以网页为准。"],
+          ["作品发布", auth(publish), "作品提交及发布结果按各任务单独核对。"],
+          ["直播控制", "待验证", "程序检查可读取本机状态，直播控制仍需单独验证。"],
+        ],
+      };
+    }
+    const registered = apps.registered?.some((item) => item.id === id);
+    const authorization = id === "bilibili" ? apps.bilibiliAuthorization : null;
+    return {
+      service: registered ? "已登记" : apps.registered ? "待登记" : unknown,
+      account: authorization?.state === "ready" ? "授权资料可用" : unknown,
+      grant: authorization ? publicationAuthorizationSummary(authorization)[0] : unknown,
+      connected: authorization?.state === "ready",
+      capabilities: id === "bilibili" ? [["作品发布", authorization ? publicationAuthorizationSummary(authorization)[0] : unknown, "发布结果按任务核对。"]] : [],
+    };
+  }
+  function appEvidenceRows(evidence) {
+    const rows = appElement("dl", "", "app-evidence");
+    for (const [label, value] of [["服务", evidence.service], ["账号", evidence.account], ["授权", evidence.grant]]) {
+      rows.append(appElement("dt", label), appElement("dd", value));
+    }
+    return rows;
+  }
+  function renderApps(renderDetail = true) {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
     $("#apps-refresh").disabled = apps.loading || Boolean(apps.installing);
@@ -1990,64 +2184,64 @@
     const catalog = new Map((apps.catalog || []).map((row) => [row.id, row]));
     const records = new Map((apps.registered || []).map((row) => [row.id, row]));
     for (const row of catalog.values()) records.set(row.id, row);
-    if (!records.size) {
-      const text = apps.loading ? "正在读取应用…" : apps.catalog && apps.registered ? "还没有可管理的应用。" : "暂时无法读取应用，可刷新后重查。";
-      list.replaceChildren(appElement("p", text, "apps-empty"));
-      return;
-    }
-    list.replaceChildren(...Array.from(records.values(), (record) => {
+    const search = $("#apps-search").value.trim().toLowerCase(), filter = $("#apps-filter").value;
+    const focused = document.activeElement?.dataset.app;
+    const cards = [];
+    const ordered = [...records.values()].sort((left, right) => (appPriority.get(left.id) ?? 2) - (appPriority.get(right.id) ?? 2));
+    for (const record of ordered) {
+      const label = record.name || record.id, evidence = appEvidence(record.id);
+      if (!(label + " " + record.id).toLowerCase().includes(search)) continue;
+      if (filter && (filter === "connected") !== Boolean(evidence.connected)) continue;
       const card = appElement("article", "", "app-record");
       const head = appElement("header", "", "app-record-head");
-      const label = record.name || record.id;
-      const mark = appElement("span", Array.from(label)[0], "app-mark");
-      mark.setAttribute("aria-hidden", "true");
-      head.append(mark, appElement("h4", label));
-      const open = appElement("button", "", "app-card-entry");
-      open.type = "button"; open.setAttribute("aria-label", `管理${label}`);
-      const accounts = apps.connections.get(record.id) || [];
-      const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
-      const officialAccount = record.id === "bilibili";
-      const wechat = record.id === "wechat" ? wechatServiceState() : "";
-      const archiveOnly = wechat === "archive";
-      const offlineWechat = wechat === "offline" || wechat === "unavailable";
-      const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
-      const detached = record.id === "douyin" && douyinIsDetached(apps);
-      const paused = douyinLogin?.paused === true;
-      const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
-      const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", archiveOnly ? "仅可查看归档" : offlineWechat ? "微信服务不可用" : detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
-      status.classList.toggle("is-connected", connected && !paused && !detached);
-      head.append(status);
-      const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
-      if (archiveOnly) summary.textContent = "微信原生服务未启动，已保存的投递记录仍可查看。";
-      else if (offlineWechat) summary.textContent = "可继续在本机工作站聊天。";
-      else if (detached) summary.textContent = "可在账号与使用中重新登记。";
-      else if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
       const source = catalog.get(record.id);
-      const foot = appElement("div", "", "app-card-footer");
-      foot.append(appElement("span", source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本"), appElement("span", "管理应用"));
-      open.append(head, summary, foot); card.append(open);
+      const version = source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本";
+      head.append(appMark(record.id, label), appElement("h4", label), appElement("span", version, "app-card-status"));
+      const open = appElement("button", "", "app-card-entry");
+      open.type = "button"; open.setAttribute("aria-label", "管理" + label);
+      open.setAttribute("aria-controls", "app-dialog"); open.setAttribute("aria-expanded", String(apps.openID === record.id));
+      open.dataset.app = record.id;
+      const foot = appElement("span", "管理应用  ›", "app-card-footer");
+      open.append(head, appEvidenceRows(evidence), foot); card.append(open);
       open.addEventListener("click", () => {
-        apps.openID = record.id; apps.detailTab = "account"; renderAppDialog(record, source); $("#app-dialog").showModal();
+        if (apps.openID && apps.openID !== record.id) {
+          clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
+        }
+        const dialog = $("#app-dialog"), changing = apps.openID !== record.id;
+        if (changing) appFeedback("");
+        apps.openID = record.id; apps.detailTab ||= "capabilities";
+        if (!dialog.open) dialog.show();
+        renderApps();
+        if (changing) $("#app-dialog-body").scrollTop = 0;
+        $("#app-dialog-title").focus({ preventScroll: true });
         renderLiveSafety();
         if (record.id === "douyin") {
           void loadDouyinWebLogin(apps);
-          if (apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
+          if (apps.detailTab === "account" && apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
         }
       });
-      return card;
-    }));
-    if ($("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
+      cards.push(card);
+    }
+    if (cards.length) list.replaceChildren(...cards);
+    else {
+      const text = records.size ? "没有符合筛选条件的应用。" : apps.loading ? "正在读取应用…" : apps.catalog && apps.registered ? "还没有可管理的应用。" : "暂时无法读取应用，可刷新后重查。";
+      list.replaceChildren(appElement("p", text, "apps-empty"));
+    }
+    if (focused) [...list.querySelectorAll("[data-app]")].find((button) => button.dataset.app === focused)?.focus({ preventScroll: true });
+    if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
   }
   function renderAppDialog(record, listing) {
     const body = $("#app-dialog-body"), scroll = body.scrollTop;
     $("#app-dialog-feedback").append($("#apps-feedback"));
-    $("#app-dialog-title").textContent = `${record.name || record.id} · 应用设置`;
-    const nav = $("#app-dialog-tabs");
-    nav.replaceChildren(...[["account", "账号与使用"], ["persona", "应用子角色"], ["source", "接入版本管理"]].map(([id, title]) => {
-      const button = appElement("button", title, `local-tab${apps.detailTab === id ? " is-active" : ""}`);
+    const label = record.name || record.id, title = $("#app-dialog-title");
+    title.replaceChildren(appMark(record.id, label), document.createTextNode(label));
+    const evidence = appEvidence(record.id);
+    const nav = $("#app-dialog-tabs"), focusedTab = nav.contains(document.activeElement);
+    nav.replaceChildren(...appTabs.map(([id, label]) => {
+      const button = appElement("button", label, `local-tab${apps.detailTab === id ? " is-active" : ""}`);
       button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
       button.addEventListener("click", () => {
+        if (apps.detailTab === id) return;
         apps.detailTab = id;
         if (record.id === "wechat" && id !== "account") clearWechatRelocation(apps);
         if (record.id === "douyin" && id !== "account") {
@@ -2055,17 +2249,43 @@
           stopDouyinInteractionWork(apps);
           stopDouyinLiveInspection(apps);
         }
-        if (record.id === "douyin" && id === "account") void loadDouyinWebLogin(apps);
         renderAppDialog(record, listing); body.scrollTop = 0;
-      }); return button;
+        if (record.id === "douyin" && id === "account") {
+          void loadDouyinWebLogin(apps);
+          if (apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
+        }
+      });
+      return button;
     }));
-    const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
-      record.id === "douyin" ? [douyinWebLoginRow(apps, listing), douyinIsDetached(apps) ? null : douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
-      record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
+    if (focusedTab) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    let controls;
+    switch (apps.detailTab) {
+      case "overview":
+        controls = [appEvidenceRows(evidence), appPersonaRow(record)];
+        break;
+      case "source":
+        controls = [appSourceRow(record, listing)];
+        if (record.id === "wechat") controls.push(appElement("p", "旧会话资料和回执按账号保管，可在「账号与权限」中核对。", "app-scope-note"));
+        break;
+      case "capabilities": {
+        const list = appElement("div", "", "app-capabilities");
+        for (const [name, status, explanation] of evidence.capabilities) {
+          const row = appElement("section", "", "app-capability");
+          row.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", explanation));
+          list.append(row);
+        }
+        if (!list.childElementCount) list.append(appElement("p", "当前应用暂无可单独展示的能力。"));
+        controls = [list, appElement("p", "各应用按授权范围工作。", "app-scope-note")];
+        break;
+      }
+      default:
+        controls = record.id === "douyin" ? [douyinWebLoginRow(apps, listing), douyinIsDetached(apps) ? null : douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
+          record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
+    }
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
-    $("#app-dialog-refresh").textContent = apps.loading ? "刷新中…" : "刷新";
   }
+
   function stopDouyinLiveInspection(current) {
     const draft = current.douyinLiveClient;
     draft.generation++; draft.controller?.abort(); draft.controller = null; draft.busy = false;
@@ -2233,6 +2453,7 @@
       if (current === apps) {
         current.loading = false;
         renderApps();
+        if (activeView === "apps") void loadDouyinWebLogin(current);
       }
     }
   }
@@ -3998,7 +4219,7 @@
   function renderLiveSafety() {
     const panel = $("#live-safety"), session = liveSafety.active;
     const slot = $("#tool-dialog").open ? $("#tool-dialog-feedback") :
-      $("#app-dialog").open ? $("#app-dialog-feedback") : $("#local-tabs");
+      activeView === "apps" && $("#app-dialog").open ? $("#app-dialog-feedback") : $("#local-tabs");
     if (panel.parentElement !== slot) slot.append(panel);
     panel.hidden = !session && !liveSafety.note;
     $("#live-safety-status").textContent = liveSafety.note || (liveSafety.busy ? "正在停止直播…" :
@@ -4082,6 +4303,9 @@
     stopDouyinWebLoginPolling(apps);
     clearOBSPreview();
     apps = newAppView();
+    memory = newMemoryView(); renderMemoryPage();
+    $("#memory-detail").replaceChildren(); $("#recent-memory-items").replaceChildren();
+    $("#apps-search").value = ""; $("#apps-filter").value = "";
     projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
     appFeedback("");
@@ -4089,7 +4313,7 @@
     projectToolsFeedback("");
     setActiveView("chat");
     document.body.classList.remove("is-home-ready");
-    localWorkspace.hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
+    localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
   }
   function shortId(id, fallback) { const value = String(id || ""); return value ? `${value.slice(0, 11)}…${value.slice(-6)}` : fallback; }
   function showHome(home) {
@@ -4105,7 +4329,8 @@
           : "聊天始终可用；工作空间已暂停，文件操作与新程序启动已停止。"
         : "本地聊天请从独立 Agent-home-station 服务进入。";
     initializeButton.hidden = initialized; $("#setup-actions").hidden = initialized && chatAvailable; localWorkspace.hidden = !initialized || !chatAvailable;
-    document.body.classList.toggle("is-home-ready", initialized && chatAvailable);
+    $("#local-tabs").hidden = localWorkspace.hidden; $(".rail-brand").hidden = localWorkspace.hidden;
+    document.body.classList.toggle("is-home-ready", !localWorkspace.hidden);
     for (const button of [accessButton, settingsAccessButton]) {
       button.hidden = !initialized && button === accessButton;
       button.textContent = enabled ? "暂停工作空间授权" : "恢复工作空间授权";
@@ -4123,6 +4348,7 @@
     showHome(home);
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
+      if (activeView === "chat") void loadRecentMemory();
       await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
@@ -4345,11 +4571,26 @@
   accessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   settingsAccessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   logoutButton.addEventListener("click", logout); settingsLogoutButton.addEventListener("click", logout); $("#local-logout-button").addEventListener("click", logout);
+  $("#open-memory-button").addEventListener("click", () => { setActiveView("memory"); $("#memory-tab").focus(); });
+  $("#memory-filters").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-kind]");
+    if (!button || memory.kind === button.dataset.kind) return;
+    memory.kind = button.dataset.kind; memory.cursor = ""; memory.selected = "";
+    void loadMemoryPage();
+  });
+  $("#memory-modes").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-mode]");
+    if (button) { memory.mode = button.dataset.mode; renderMemoryPage(); }
+  });
+  $("#memory-next").addEventListener("click", () => { memory.cursor = memory.next; void loadMemoryPage(); });
+  $("#memory-first").addEventListener("click", () => { memory.cursor = ""; void loadMemoryPage(); });
+  $("#apps-search").addEventListener("input", () => renderApps(false));
+  $("#apps-filter").addEventListener("change", () => renderApps(false));
   for (const [index, name] of tabs.entries()) {
     const tab = $(`#${name}-tab`);
     tab.addEventListener("click", () => { showMessage(""); setActiveView(name); });
     tab.addEventListener("keydown", (event) => {
-      const positions = { ArrowLeft: (index + tabs.length - 1) % tabs.length, ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1 };
+      const positions = { ArrowLeft: (index + tabs.length - 1) % tabs.length, ArrowRight: (index + 1) % tabs.length, ArrowUp: (index + tabs.length - 1) % tabs.length, ArrowDown: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1 };
       if (!Object.hasOwn(positions, event.key)) return;
       event.preventDefault();
       const selected = tabs[positions[event.key]];
@@ -4376,7 +4617,21 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; renderLiveSafety(); $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); $("#app-dialog").close(); }
+  });
+  $("#app-dialog").addEventListener("close", () => {
+    if ($("#app-dialog").open) return;
+    const opener = apps.openID;
+    clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
+    apps.openID = ""; renderLiveSafety();
+    $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+    if (activeView === "apps" && opener) {
+      renderApps(false);
+      const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
+      (button || $("#apps-search")).focus({ preventScroll: true });
+    }
+  });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

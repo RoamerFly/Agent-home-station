@@ -224,6 +224,8 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 
 func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/chat", s.Protect(h.history))
+	mux.HandleFunc("GET /api/local/memory/palace", s.Protect(h.memoryPalace))
+	mux.HandleFunc("GET /api/local/memory/palace/{id}", s.Protect(h.memoryPalace))
 	mux.HandleFunc("POST /api/local/chat", s.Protect(h.send))
 	mux.HandleFunc("GET /api/local/model", s.Protect(h.modelView))
 	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))

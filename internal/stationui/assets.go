@@ -24,6 +24,7 @@ var routes = map[string]asset{
 	"/assets/local-home.css":        {file: "local-home.css", contentType: "text/css; charset=utf-8"},
 	"/assets/whale-girl-cutout.png": {file: "whale-girl-cutout.png", contentType: "image/png"},
 	"/assets/night-sea.webp":        {file: "night-sea.webp", contentType: "image/webp"},
+	"/assets/tide-atlas.webp":       {file: "tide-atlas.webp", contentType: "image/webp"},
 }
 
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
