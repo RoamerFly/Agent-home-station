@@ -111,10 +111,15 @@ namespace WechatAgent.Desktop {
             return false;
         }
 
-        static void LocalNativeCycle(string packageDirectory) {
+        static void LocalNativeCycle(string packageDirectory, bool usePackagedDeployment) {
             const string password = "synthetic-local-native-cycle";
             var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
-            var d = Deployment.LocalStationDefault(Path.GetFullPath(packageDirectory));
+            var root = Path.GetFullPath(packageDirectory);
+            var d = usePackagedDeployment ? Deployment.Load(root) : Deployment.LocalStationDefault(root);
+            if (usePackagedDeployment) {
+                Assert(d.LocalStationNative && d.UsesPortableStationData(root) &&
+                    d.StationNativeUrl == "http://127.0.0.1:6174", "fresh portable WeChat edition enables its own loopback runtime");
+            }
             d.Root = Path.Combine(d.Root, "native-cycle-test-" + Guid.NewGuid().ToString("N"));
             d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
             d.Url = CycleUrl();
@@ -561,8 +566,8 @@ namespace WechatAgent.Desktop {
                 Console.WriteLine("Windows old-to-station-to-old cutover rehearsal passed (" + count + " assertions, synthetic transport only).");
                 return 0;
             }
-            if (args.Length == 2 && args[0] == "--local-native-cycle") {
-                LocalNativeCycle(args[1]);
+            if (args.Length == 2 && (args[0] == "--local-native-cycle" || args[0] == "--portable-native-cycle")) {
+                LocalNativeCycle(args[1], args[0] == "--portable-native-cycle");
                 Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; synthetic legacy receipt, profiles and independent worker states verified, no login or send.");
                 return 0;
             }

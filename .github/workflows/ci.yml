@@ -51,6 +51,12 @@ jobs:
           $media = (Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Filter ffmpeg.exe -Recurse | Select-Object -First 1).DirectoryName
           if (-not $media) { throw 'Cannot locate the actual FFmpeg distribution (a Chocolatey shim is not portable)' }
           ./scripts/Build-Desktop.ps1 -LegacyWechatDesktop -OutputDirectory dist/windows-native -Test -Portable -MediaDirectory $media
+      - name: Verify fresh Windows station with WeChat runtime
+        shell: powershell
+        run: |
+          $native = (Resolve-Path dist/windows-native/runtimes/windows-x64).Path
+          $media = (Resolve-Path dist/windows-native/runtimes/windows-media).Path
+          ./scripts/Build-Desktop.ps1 -LocalStation -WithWeChatRuntime -WeChatRuntimeDirectory $native -OutputDirectory dist/station-first-start -Test -Portable -MediaDirectory $media
       - name: Test offline Windows account migration
         shell: powershell
         run: python -X utf8 -m unittest discover -s scripts -p test_windows_account_migration.py

@@ -302,6 +302,7 @@ $gorillaLicense=Join-Path $workspace 'docs\licenses\gorilla-websocket.txt'
 if(-not(Test-Path -LiteralPath $gorillaLicense -PathType Leaf)){throw 'The Gorilla WebSocket license notice is missing.'}
 Copy-Item -LiteralPath $gorillaLicense -Destination (Join-Path $OutputDirectory 'Gorilla-WebSocket-LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $workspace 'docs\licenses\rtmp-relay.txt') -Destination (Join-Path $OutputDirectory 'RTMP-Relay-LICENSE.txt') -ErrorAction Stop
+$portableWeChatDefaults=$false
 function Invoke-DesktopPackageTests {
  if(-not $Test){return}
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
@@ -313,7 +314,8 @@ function Invoke-DesktopPackageTests {
   & $tests --local-cycle $OutputDirectory
   if($LASTEXITCODE -ne 0){throw 'LocalStation real process cycle failed.'}
   if($WithWeChatRuntime){
-   & $tests --local-native-cycle $OutputDirectory
+   $cycle=if($portableWeChatDefaults){'--portable-native-cycle'}else{'--local-native-cycle'}
+   & $tests $cycle $OutputDirectory
    if($LASTEXITCODE -ne 0){throw 'LocalStation owned WeChat native cycle failed.'}
   }
  }
@@ -392,6 +394,21 @@ if($Portable){
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
  if($LocalStation){
+  if($WithWeChatRuntime){
+   $secrets=Join-Path $OutputDirectory 'secrets'
+   $deployment=Join-Path $secrets 'local-deployment.json'
+   Assert-NoReparsePointAncestor $deployment
+   if(-not (Get-Item -LiteralPath $deployment -Force -ErrorAction SilentlyContinue) -and
+      -not (Get-Item -LiteralPath (Join-Path $OutputDirectory 'data') -Force -ErrorAction SilentlyContinue)){
+    New-Item -ItemType Directory -Force -Path $secrets | Out-Null
+    # This is a public default for a fresh WeChat edition, with no account or private paths.
+    $json=([ordered]@{backend='local-station';wechat_native_url='http://127.0.0.1:6174'} | ConvertTo-Json)
+    $bytes=[Text.Encoding]::UTF8.GetBytes($json)
+    $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{$file.Write($bytes,0,$bytes.Length);$file.Flush($true)}finally{$file.Dispose()}
+    $portableWeChatDefaults=$true
+   }
+  }
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
   Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length
