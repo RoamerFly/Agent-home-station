@@ -343,3 +343,40 @@ func TestOwnVideoObservationRejectsUnboundProofAndPrivateMetadata(t *testing.T) 
 		t.Fatal("own-video evidence was accepted in a search result")
 	}
 }
+
+type observationDiscoveryTrap struct{ Provider }
+
+func (observationDiscoveryTrap) Connections(context.Context) ([]Connection, error) {
+	panic("discovery probed another application")
+}
+
+func (observationDiscoveryTrap) ObservationTargets(context.Context, string) ([]ObservationTarget, error) {
+	panic("discovery probed another application")
+}
+
+func (observationDiscoveryTrap) ObservationGrant(context.Context, ObservationAccess) (ObservationGrant, error) {
+	panic("discovery probed another application")
+}
+
+func (observationDiscoveryTrap) ReadObservation(context.Context, ObservationRequest) (ObservationPage, error) {
+	panic("discovery read another application")
+}
+
+func TestObserverDiscoverApplicationOnlyProbesRequestedProvider(t *testing.T) {
+	source := &observationFixture{allowed: true, version: "v1"}
+	other := observationDiscoveryTrap{}
+	registry, err := New(
+		Registration{Application: Application{ID: "target", Name: "合成应用", InstallationID: "target-test", Registration: "test"}, Provider: source},
+		Registration{Application: Application{ID: "other", Name: "其他合成应用", InstallationID: "other-test", Registration: "test"}, Provider: other},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := NewObserver(registry, t.TempDir())
+	if targets := observer.DiscoverApplication(t.Context(), "target"); len(targets) != 1 || targets[0].AppID != "target" {
+		t.Fatalf("scoped discovery: %+v", targets)
+	}
+	if targets := observer.DiscoverApplication(t.Context(), "missing"); len(targets) != 0 {
+		t.Fatalf("unknown application discovery: %+v", targets)
+	}
+}

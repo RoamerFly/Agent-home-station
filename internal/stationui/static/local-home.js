@@ -2274,7 +2274,8 @@
   }
   function selectAppConfiguration(view, section) {
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
-    view.roundPanel = null; view.archivePanel = null;
+    view.douyinReadAbort?.abort();
+    view.roundPanel = null; view.archivePanel = null; view.douyinReadPanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -2416,6 +2417,102 @@
     return panel;
   }
 
+  const douyinReadLabels = {
+    page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
+    account_works: "本人作品列表", own_video: "本人作品信息",
+  };
+  function douyinReadPanel(view) {
+    const panel = appElement("section", "", "douyin-read-panel");
+    const actions = appElement("div", "", "publication-actions");
+    const output = appElement("div", "", "configuration-round-records");
+    const feedback = appElement("p", "", "apps-feedback");
+    feedback.setAttribute("role", "status");
+    function beginRead() {
+      view.douyinReadAbort?.abort();
+      const controller = new AbortController();
+      view.douyinReadAbort = controller;
+      return controller;
+    }
+    const discovery = memoryButton("查看可读取范围", "button compact secondary", async () => {
+      const controller = beginRead();
+      const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
+      feedback.textContent = "正在核对抖音读取授权…";
+      actions.replaceChildren(discovery); output.replaceChildren();
+      try {
+        const { items } = await request("/api/local/apps/observation?app_id=douyin", { signal: controller.signal });
+        if (!active()) return;
+        if (!Array.isArray(items)) throw new Error("应用读取范围返回格式无效。");
+        const targets = items.filter((item) => item.app_id === "douyin");
+        for (const item of targets) addActions(actions, item.connection_id, item.content_id, item.fields, item.label);
+        feedback.textContent = targets.length ? "选择要读取的资料。每项按独立权限核对。" : "当前没有可读取的抖音内容。请核对网页登录和浏览授权。";
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+      }
+    });
+    function addActions(area, connection, content, fields, label = "") {
+      if (!connection || !content || !Array.isArray(fields)) return;
+      for (const field of fields) {
+        if (!Object.hasOwn(douyinReadLabels, field)) continue;
+        const name = label ? label + " · " + douyinReadLabels[field] : douyinReadLabels[field];
+        area.append(memoryButton(name, "button compact secondary", () => void read(connection, content, field)));
+      }
+    }
+    async function read(connection, content, field, refresh = false) {
+      const controller = beginRead();
+      const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
+      const query = { app_id: "douyin", connection_id: connection, content_id: content, field, refresh };
+      feedback.textContent = "正在读取" + douyinReadLabels[field] + "…";
+      try {
+        const result = await request("/api/local/apps/observation", { method: "POST", body: JSON.stringify(query), signal: controller.signal });
+        if (!active()) return;
+        const chunks = Array.isArray(result.chunks) ? result.chunks : [];
+        const page = appElement("section", "", "memory-detail-section douyin-read-result");
+        const header = appElement("div", "", "publication-actions");
+        header.append(appElement("strong", douyinReadLabels[field]),
+          appElement("span", result.complete ? "本次读取无后续页" : "仍有后续页", "station-label"));
+        if (result.resumed && !result.cached) header.append(appElement("span", "从已保存进度续读", "station-label"));
+        if (result.visual_proof) {
+          const proof = result.visual_proof;
+          header.append(appElement("span", "采样帧 " + proof.start_frame + "–" + proof.next_frame, "station-label"));
+        }
+        page.append(header, appElement("p", result.coverage || "", "app-scope-note"));
+        for (const item of chunks) {
+          const card = appElement("div", "", "douyin-read-chunk");
+          card.append(appElement("p", item.text || ""));
+          const follow = appElement("div", "", "publication-actions");
+          addActions(follow, connection, item.follow_up_content_id, item.follow_up_fields || [item.follow_up_field]);
+          if (follow.childElementCount) card.append(follow);
+          page.append(card);
+        }
+        if (!chunks.length) page.append(appElement("p", "这页没有返回文本，可查看本次覆盖状态。"));
+        const controls = appElement("div", "", "publication-actions douyin-read-pagination");
+        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field)));
+        if (["page_text", "comments", "visual", "audio", "playback", "account_works"].includes(field))
+          controls.append(memoryButton("从头刷新", "button compact quiet", () => void read(connection, content, field, true)));
+        page.append(controls);
+        const key = JSON.stringify([content, field]);
+        const prior = [...output.children].filter((element) => element.dataset.read === key);
+        if (!refresh && result.resumed && !result.cached) {
+          prior.at(-1)?.querySelector(".douyin-read-pagination")?.remove();
+          output.append(page);
+        } else {
+          for (const old of prior) old.remove();
+          output.append(page);
+        }
+        page.dataset.read = key;
+        feedback.textContent = "";
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          output.replaceChildren(); feedback.textContent = error.message;
+        }
+      }
+    }
+    actions.append(discovery);
+    panel.append(appElement("h4", "内容读取"), appElement("p", "从已授权的入口读取文字、评论和媒体证据。首页候选不能作为本人作品列表。", "app-scope-note"),
+      actions, feedback, output);
+    return panel;
+  }
+
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -2479,7 +2576,10 @@
         if (selected) controls.push(deliveryRecords(selected.id, wechatServiceState() !== "ready"));
         break;
       case "browse":
-        controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : bilibiliPublicRow(record));
+        if (record.id === "douyin") {
+          view.douyinReadPanel ||= douyinReadPanel(view);
+          controls.push(douyinWebLoginRow(apps, listing, section), view.douyinReadPanel);
+        } else controls.push(bilibiliPublicRow(record));
         break;
       case "publications":
       case "interactions":
@@ -4929,6 +5029,7 @@
   $("#app-configuration").addEventListener("close", () => {
     if ($("#app-configuration").open) return;
     appConfiguration?.controller.abort();
+    appConfiguration?.douyinReadAbort?.abort();
     appConfiguration = null;
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();

@@ -94,7 +94,7 @@ func (t *localToolSet) callAppObservation(ctx context.Context, raw json.RawMessa
 		}
 		value = map[string]any{"app_id": in.AppID, "scope": "application_only", "revision": profile.Revision, "persona": profile.Persona}
 	case "list":
-		value = map[string]any{"items": t.observations.Discover(ctx)}
+		value = map[string]any{"items": t.observations.DiscoverApplication(ctx, in.AppID)}
 	case "", "read":
 		result, err := t.observations.Read(ctx, in.ObservationInput)
 		if err != nil {
@@ -158,7 +158,7 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 		defer stop()
 		var value any
 		if r.Method == http.MethodGet {
-			value = map[string]any{"items": h.observations.Discover(ctx)}
+			value = map[string]any{"items": h.observations.DiscoverApplication(ctx, r.URL.Query().Get("app_id"))}
 			err = ctx.Err()
 		} else {
 			var in apphost.ObservationInput

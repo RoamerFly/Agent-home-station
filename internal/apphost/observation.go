@@ -252,19 +252,27 @@ func NewObserver(registry Registry, dir string) *Observer {
 }
 
 func (o *Observer) Discover(ctx context.Context) []ObservationTarget {
-	return o.discover(ctx, false)
+	return o.discover(ctx, false, "")
+}
+
+// DiscoverApplication probes only the named application's provider.
+func (o *Observer) DiscoverApplication(ctx context.Context, appID string) []ObservationTarget {
+	return o.discover(ctx, false, appID)
 }
 
 func (o *Observer) HasDiscoverable(ctx context.Context) bool {
-	return len(o.discover(ctx, true)) > 0
+	return len(o.discover(ctx, true, "")) > 0
 }
 
-func (o *Observer) discover(ctx context.Context, firstOnly bool) []ObservationTarget {
+func (o *Observer) discover(ctx context.Context, firstOnly bool, appID string) []ObservationTarget {
 	if o == nil || ctx.Err() != nil {
 		return nil
 	}
 	result := make([]ObservationTarget, 0)
 	for _, app := range o.registry.Applications() {
+		if appID != "" && app.ID != appID {
+			continue
+		}
 		entry, ok := o.registry.Lookup(app.ID)
 		if !ok {
 			continue

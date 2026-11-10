@@ -768,3 +768,7 @@ body.is-home-ready {
 .configuration-round-steps { display: grid; gap: 7px; padding-inline-start: 1.4rem; overflow-wrap: anywhere; }
 .configuration-round-records article { overflow-wrap: anywhere; }
 .configuration-round-records article p { margin: 0; white-space: pre-wrap; }
+.douyin-read-panel { display: grid; gap: 8px; margin-top: 14px; }
+.douyin-read-panel h4, .douyin-read-panel .app-scope-note { margin: 0; }
+.douyin-read-result .publication-actions { flex-wrap: wrap; }
+.douyin-read-chunk { display: grid; gap: 6px; padding: 7px 0; border-top: 1px solid var(--line); }

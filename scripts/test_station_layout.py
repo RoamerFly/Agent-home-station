@@ -102,6 +102,53 @@ def verify_glass_views(page, output):
     expect(page.get_by_role("button", name="管理抖音", exact=True)).to_be_focused()
 
 
+def verify_douyin_read_controls(page, panel, nav):
+    observed = []
+    pattern = re.compile(r"/api/local/apps/observation(?:\?|$)")
+
+    def observation(route):
+        req = route.request
+        if req.method == "GET":
+            assert parse_qs(urlparse(req.url).query) == {"app_id": ["douyin"]}
+            observed.append("discover")
+            route.fulfill(json={"items": [{"app_id": "douyin", "connection_id": "synthetic-web",
+                                           "content_id": "home", "fields": ["page_text"]}]})
+            return
+        payload = req.post_data_json
+        field = payload["field"]
+        assert payload["app_id"] == "douyin" and payload["connection_id"] == "synthetic-web"
+        observed.append(field)
+        if field == "page_text":
+            assert payload["content_id"] == "home"
+            route.fulfill(json={"coverage": "首页文字样本", "complete": True, "chunks": [
+                {"text": "合成视频候选", "follow_up_content_id": "synthetic-video",
+                 "follow_up_fields": ["comments", "visual"]},
+            ]})
+        else:
+            assert payload["content_id"] == "synthetic-video"
+            if field == "comments":
+                route.fulfill(json={"coverage": "本次评论覆盖", "complete": True,
+                                    "chunks": [{"text": "合成评论原话"}]})
+            else:
+                route.fulfill(json={"coverage": "采样不代表完整观看", "complete": True,
+                                    "visual_proof": {"start_frame": 0, "next_frame": 6},
+                                    "chunks": [{"text": "合成画面分析"}]})
+
+    page.route(pattern, observation)
+    nav.get_by_role("button", name="内容浏览", exact=True).click()
+    expect(panel.get_by_role("button", name="查看可读取范围")).to_be_visible()
+    assert not observed
+    panel.get_by_role("button", name="查看可读取范围").click()
+    panel.get_by_role("button", name="网页文字", exact=True).click()
+    panel.get_by_role("button", name="评论区", exact=True).click()
+    expect(panel.get_by_text("合成评论原话", exact=True)).to_be_visible()
+    panel.get_by_role("button", name="视频画面", exact=True).click()
+    expect(panel.get_by_text("采样不代表完整观看", exact=True)).to_be_visible()
+    expect(panel.get_by_text("合成画面分析", exact=True)).to_be_visible()
+    assert observed == ["discover", "page_text", "comments", "visual"]
+    page.unroute(pattern, observation)
+
+
 def verify_application_configuration(page, output):
     reads = []
     page.on("request", lambda request: reads.append((request.method, urlparse(request.url).path)))
@@ -128,6 +175,7 @@ def verify_application_configuration(page, output):
     page.set_viewport_size({"width": 375, "height": 740})
     opener.click()
     expect(nav.get_by_role("button", name="直播与本机预览")).to_be_visible()
+    verify_douyin_read_controls(page, panel, nav)
     nav.get_by_role("button", name="直播与本机预览").click()
     expect(panel.get_by_role("button", name="打开 OBS 本机预览")).to_be_visible()
     expect(panel.get_by_role("button", name="开始直播", exact=True)).to_have_count(0)
