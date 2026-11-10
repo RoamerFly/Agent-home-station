@@ -1472,6 +1472,10 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("relocation readiness bypassed owner login", code)
 	}
 	runningFixture.login()
+	if code, row := runningFixture.request("GET", route("one"), nil, false); code != 200 ||
+		row["connection"].(map[string]any)["worker_blocker"] != "relocation_confirmation_required" {
+		t.Fatal("prepared receiver did not expose its confirmation in connection details", code, row)
+	}
 	checkReadiness := func(state, fence, login string, wantReason string) {
 		t.Helper()
 		code, row := runningFixture.request("GET", readinessPath, nil, false)
@@ -1541,6 +1545,11 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		if allowed && err != nil || !allowed && !errors.Is(err, linuxnative.ErrWriteNotAdmitted) || receiverWrites.Load() != want {
 			t.Fatal("unexpected platform admission", label, receiverWrites.Load(), err)
 		}
+	}
+	if code, row := runningFixture.request("GET", route("one"), nil, false); code != 200 ||
+		row["connection"].(map[string]any)["worker_blocker"] != nil ||
+		row["connection"].(map[string]any)["worker"] != "paused" {
+		t.Fatal("confirmed connection did not return to ordinary paused controls", code, row)
 	}
 	checkWrite(running, 0, false, "confirmed-paused")
 	if receiverEvents.Load() != 0 {

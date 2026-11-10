@@ -50,7 +50,7 @@
       tab.tabIndex = selected ? 0 : -1;
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
-    else { window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
+    else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") loadProjectTools();
     if (view === "chat" && state.home?.initialized && !document.hidden) void loadChat(true);
   }
@@ -59,6 +59,7 @@
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
+      wechatRelocation: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
@@ -239,6 +240,79 @@
     running: "Agent 运行中", stopping: "Agent 正在停止", paused: "Agent 已暂停", error: "Agent 运行异常",
     cutover_blocked: "等待完成启用核对", rollback_frozen: "此连接已为回退停发"
   };
+  function clearWechatRelocation(current) {
+    for (const entry of current.wechatRelocation.values()) entry.controller?.abort();
+    current.wechatRelocation.clear();
+  }
+  function wechatRelocationPanel(id) {
+    const entry = apps.wechatRelocation.get(id);
+    const panel = appElement("section", "", "app-relocation");
+    panel.setAttribute("aria-label", "微信搬迁核对");
+    panel.append(appElement("strong", "微信搬迁待确认"));
+    const status = appElement("small", entry?.busy === "confirm" ? "正在保存确认…" : entry?.busy ? "正在核对源站停发和新站登录…" :
+      entry?.note || "核对源站停发和新站登录后，再确认是原微信账号。", entry?.error ? "is-warn" : "");
+    status.setAttribute("role", "status");
+    panel.append(status);
+    const actions = appElement("div", "", "app-worker-actions");
+    const check = appSetupButton(entry?.digest ? "重新核对" : "核对搬迁状态", () => checkWechatRelocation(id));
+    check.disabled ||= Boolean(entry?.busy);
+    actions.append(check);
+    if (entry?.digest) {
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      const label = appElement("label", "", "switch-row");
+      label.append(input, appElement("span", "我已核对，新站登录的是原微信账号"));
+      const confirm = appSetupButton("确认搬迁", () => {
+        if (input.checked) void checkWechatRelocation(id, entry.digest);
+      });
+      confirm.disabled = true;
+      input.addEventListener("change", () => { confirm.disabled = !input.checked || apps.loading || apps.setupBusy; });
+      actions.append(label, confirm);
+    }
+    panel.append(actions);
+    return panel;
+  }
+  function relocationReason(result, fallback = "暂时无法完成搬迁核对，请稍后重试。") {
+    return typeof result?.reason === "string" && result.reason.trim() ? result.reason.trim().slice(0, 280) : fallback;
+  }
+  async function checkWechatRelocation(id, digest = "") {
+    const current = apps;
+    if (current.wechatRelocation.get(id)?.busy || current.setupBusy || current.loading) return;
+    const entry = { busy: digest ? "confirm" : "read", controller: new AbortController(), digest: "" };
+    current.wechatRelocation.set(id, entry);
+    const visible = () => current === apps && activeView === "apps" && $("#app-dialog").open &&
+      current.openID === "wechat" && current.detailTab === "account" && current.wechatRelocation.get(id) === entry;
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/relocation/readiness";
+    renderApps();
+    try {
+      const options = { signal: entry.controller.signal };
+      if (digest) Object.assign(options, { method: "POST", body: JSON.stringify({ digest, same_identity: true }) });
+      const result = await request(path, options);
+      if (!visible()) return;
+      if (result.state === "confirmed" && result.frozen === false) {
+        entry.note = "微信搬迁已确认，Agent 仍暂停。";
+        appFeedback(entry.note);
+        await loadApps();
+      } else if (!digest && result.state === "owner_identity_check" && result.frozen === true && result.source_fence === "verified" &&
+                 result.native_login === "online" && typeof result.digest === "string" && /^[0-9a-f]{64}$/.test(result.digest)) {
+        entry.digest = result.digest;
+        entry.note = "源站已停发，新站微信已在线。请核对实际账号。";
+      } else {
+        entry.note = relocationReason(result);
+        entry.error = true;
+      }
+    } catch (error) {
+      if (!visible() || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      entry.note = relocationReason(error.body, error.message);
+      entry.error = true;
+    } finally {
+      if (visible()) {
+        entry.busy = "";
+        entry.controller = null;
+        renderApps();
+      }
+    }
+  }
   function appWorkerControls(id, status) {
     const panel = appElement("div", "", "app-worker");
     const buttons = appElement("div", "", "app-worker-actions");
@@ -247,14 +321,17 @@
       apps.editWorker = apps.editWorker === id ? "" : id;
       renderApps();
     });
-    buttons.append(appElement("small", appWorkerLabels[status.worker]), edit);
+    const label = status.worker_blocker === "relocation_confirmation_required" ? "Agent 暂停处理" : appWorkerLabels[status.worker];
+    buttons.append(appElement("small", label), edit);
     const toggle = appSetupButton(running ? "暂停 Agent" : "启动 Agent",
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= ["stopping", "rollback_frozen"].includes(status.worker) || !running && !status.configured_policy?.conversation_enabled;
-    if (status.worker_blocker === "import_receipt_path_changed" && !running) toggle.disabled = true;
+    if (["import_receipt_path_changed", "relocation_confirmation_required"].includes(status.worker_blocker) && !running) toggle.disabled = true;
     buttons.append(toggle);
     panel.append(buttons);
-    if (status.worker_blocker === "import_receipt_path_changed") {
+    if (status.worker_blocker === "relocation_confirmation_required") {
+      panel.append(wechatRelocationPanel(id));
+    } else if (status.worker_blocker === "import_receipt_path_changed") {
       panel.append(appElement("small", "微信档案搬迁后待核验。请在新目录重新核对原生导入回执，并保留旧站停发记录。"));
     }
     panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
@@ -1292,7 +1369,7 @@
     }
   }
   function appConnectionRow(record) {
-    const row = appElement("div", "", "app-layer");
+    const row = appElement("div", "", "app-layer app-connection-layer");
     const detail = appElement("div", "");
     const connection = apps.connections.get(record.id);
     const canSetup = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.account_setup);
@@ -1847,6 +1924,7 @@
       button.type = "button"; button.setAttribute("aria-pressed", String(apps.detailTab === id));
       button.addEventListener("click", () => {
         apps.detailTab = id;
+        if (record.id === "wechat" && id !== "account") clearWechatRelocation(apps);
         if (record.id === "douyin" && id !== "account") {
           stopDouyinWebLoginPolling(apps);
           stopDouyinInteractionWork(apps);
@@ -3767,6 +3845,7 @@
     }
   }
   function showLogin() {
+    clearWechatRelocation(apps);
     stopDouyinLiveInspection(apps);
     $("#tool-dialog").close();
     $("#app-dialog").close();
@@ -4051,7 +4130,7 @@
     });
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
-  $("#app-dialog-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
+  $("#app-dialog-refresh").addEventListener("click", () => { clearWechatRelocation(apps); appFeedback(""); loadApps(); });
   $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); if (projectTools.openID === "obs-preview") void loadOBSDeployment(projectTools, true); });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
@@ -4067,7 +4146,7 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
-  $("#app-dialog").addEventListener("close", () => { stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
+  $("#app-dialog").addEventListener("close", () => { clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); apps.openID = ""; $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register")); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

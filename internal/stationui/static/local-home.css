@@ -275,6 +275,9 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-worker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .app-worker textarea { box-sizing: border-box; width: 100%; min-width: 0; }
 .app-worker > .button { justify-self: start; }
+.app-relocation { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+.app-relocation .switch-row { margin: 0; min-width: 0; }
+.app-relocation .is-warn { color: var(--warn); }
 .contact-directory input, .group-directory input { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; }
 .group-directory, .group-directory .details-grid, .group-directory small { min-width: 0; overflow-wrap: anywhere; }
 .group-directory .button.group-directory-row { width: 100%; min-width: 0; max-width: 100%; justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
@@ -454,6 +457,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
   .chat-bubble { max-width: 94%; }
   .app-layer { grid-template-columns: 4.5em minmax(0, 1fr); padding: 12px; }
   .app-layer > .button { grid-column: 2; width: auto; justify-self: start; }
+  .app-connection-layer { grid-template-columns: minmax(0, 1fr); }
+  .app-connection-layer > .button { grid-column: 1; }
   .app-layer .app-accounts .button { width: auto; max-width: 100%; }
   .app-layer.publication-layer { grid-template-columns: minmax(0, 1fr); }
   .publication-task { grid-template-columns: minmax(0, 1fr); }
@@ -469,6 +474,7 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 @media (prefers-color-scheme: dark) {
   :root { --accent-deep: #d4d9ff; }
   .eyebrow, .section-kicker { color: #aeb6ff; }
+  .app-relocation .is-warn { color: #ffc486; }
   .button.secondary { color: #e0e4ff; background: #2a3262; border-color: #505a97; }
   :root { --canvas: #0e1329; --canvas-deep: #151936; --surface: rgba(24, 31, 61, .85); --surface-solid: #20294b; --ink: #f0f3ff; --muted: #aeb8d7; --line: rgba(193, 203, 255, .17); --accent-soft: rgba(105, 115, 231, .18); --shadow: 0 28px 75px rgba(0, 0, 0, .34); }
   body.local-home-page { background: radial-gradient(circle at 15% 12%, rgba(74, 87, 189, .3), transparent 28rem), radial-gradient(circle at 92% 89%, rgba(128, 82, 177, .19), transparent 30rem), var(--canvas); }

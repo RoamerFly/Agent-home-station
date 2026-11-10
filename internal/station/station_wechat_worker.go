@@ -482,6 +482,9 @@ func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.Connect
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	view.Configuration, view.Worker = "worker-configured", w.state()
+	if w.runtimeDir != "" && !w.policy.RollbackFrozenAt.IsZero() && w.policy.RelocationActivation == nil {
+		view.WorkerBlocker = "relocation_confirmation_required"
+	}
 	view.SubmissionsPaused, view.Policy = w.policy.Paused, w.policyView()
 	return view, nil
 }

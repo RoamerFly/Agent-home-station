@@ -347,7 +347,9 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 
 源站封存时确认了未知结果的，在这一步也传入 `--accept-unknown`。`source_verified` 表示封存、原交接、复制数据和新档案回执通过了离线核验。给同一条命令追加 `--apply '<预检返回的 apply_digest>'` 后，`archive_prepared` 表示接收站已经固定原投递核对报告。启动管理页后，本机主人可用 `GET /api/apps/wechat/connections/{connection}/legacy-import/relocation/receipts/{key}` 按原幂等键读取，未确认结果保留原状态。同次确认还会准备独立的运行目录，后续入站游标、待发队列、取消与续发、群操作从这里读写。旧投递保留在原报告中。此前已确认归档的隔离副本可以用同一令牌再次执行，补齐运行目录绑定。目标站仍处于冻结状态，当前只在隔离副本演练。
 
-启动接收站后，可在主人登录的管理会话中查询 `GET /api/apps/wechat/connections/{connection}/legacy-import/relocation/readiness`。它分别返回源站封存、原生登录和冻结状态。收到 `owner_identity_check` 时，说明目录及本次原生在线连接已匹配，仍需由主人核对实际微信身份。该查询不会解除冻结或提交微信动作。
+启动接收站后，在「应用 → 微信 → 账号与使用」找到被冻结的搬迁账号，点击「核对搬迁状态」。新站在线时，核对实际微信账号，勾选身份确认并点击「确认搬迁」。确认后仍需单独点击「启动 Agent」。
+
+同一流程也可在主人登录的管理会话中查询 `GET /api/apps/wechat/connections/{connection}/legacy-import/relocation/readiness`。它分别返回源站封存、原生登录和冻结状态。收到 `owner_identity_check` 时，说明目录及本次原生在线连接已匹配，仍需由主人核对实际微信身份。该查询不会解除冻结或提交微信动作。
 
 主人实际确认接收站登录的微信身份一致后，可通过当前管理会话的 CSRF 凭据对同一地址发送 POST，正文包含 GET 返回的确认摘要（字段 `digest`）和显式确认（字段 `same_identity` 为 `true`）。旧摘要须重新查询。返回 `confirmed` 后接收站仍暂停，通过连接的正常启动入口才可运行。当前版本要求持续能读取源站封存和旧宿主交接记录；记录不匹配时会阻止启动和后续提交。
 
