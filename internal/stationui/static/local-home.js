@@ -110,6 +110,7 @@
       if (listing.install_state === "installed") {
         title = "已安装";
         note = `随包版本 ${bundledVersion}；工作区版本 ${workspaceVersion}。接入版本用于本软件连接应用和更新接入功能，可在家目录的 Connected Apps 中维护。`;
+        if (record.id === "wechat") note += " 本次安装只写入家目录；微信服务状态见「账号与使用」。";
       } else if (listing.install_state === "conflict") {
         title = "应用目录待整理";
         note = listing.installed_version ? `已有版本 ${listing.installed_version}，请先保留现有修改。` : "家目录已有同名内容，请先保留并整理该目录。";
@@ -1435,13 +1436,24 @@
       if (current === apps) renderApps();
     }
   }
+  function wechatServiceState() {
+    if (!apps.registered) return "unknown";
+    const wechat = apps.registered.find((app) => app.id === "wechat");
+    if (wechat?.registration === "station-archive") return "archive";
+    if (wechat?.registration !== "station-native") return "offline";
+    return apps.connections.get("wechat") ? "ready" : "unavailable";
+  }
   function appConnectionRow(record) {
     const row = appElement("div", "", "app-layer app-connection-layer");
     const detail = appElement("div", "");
     const connection = apps.connections.get(record.id);
-    const archiveOnly = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.registration === "station-archive");
-    const canSetup = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.account_setup);
-    if (!apps.registered || connection === null) {
+    const wechat = record.id === "wechat" ? wechatServiceState() : "";
+    const archiveOnly = wechat === "archive";
+    const canSetup = wechat === "ready" && apps.registered.some((app) => app.id === "wechat" && app.account_setup);
+    if (wechat === "offline") {
+      detail.append(appElement("strong", "微信服务未运行"),
+        appElement("p", "本地聊天可继续使用。微信可在桌面托盘检查启用状态后，重启服务重试。"));
+    } else if (!apps.registered || connection === null) {
       detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
     } else if (!connection?.length) {
       const nativeReady = apps.registered.some((app) => app.id === record.id && app.registration === "station-native");
@@ -1995,17 +2007,20 @@
       const accounts = apps.connections.get(record.id) || [];
       const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
       const officialAccount = record.id === "bilibili";
-      const archiveOnly = record.id === "wechat" && apps.registered?.some((item) => item.id === "wechat" && item.registration === "station-archive");
+      const wechat = record.id === "wechat" ? wechatServiceState() : "";
+      const archiveOnly = wechat === "archive";
+      const offlineWechat = wechat === "offline" || wechat === "unavailable";
       const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
       const detached = record.id === "douyin" && douyinIsDetached(apps);
       const paused = douyinLogin?.paused === true;
       const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
       const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", archiveOnly ? "仅可查看归档" : detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      const status = appElement("span", archiveOnly ? "仅可查看归档" : offlineWechat ? "微信服务不可用" : detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
       status.classList.toggle("is-connected", connected && !paused && !detached);
       head.append(status);
       const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
       if (archiveOnly) summary.textContent = "微信原生服务未启动，已保存的投递记录仍可查看。";
+      else if (offlineWechat) summary.textContent = "可继续在本机工作站聊天。";
       else if (detached) summary.textContent = "可在账号与使用中重新登记。";
       else if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
       const source = catalog.get(record.id);

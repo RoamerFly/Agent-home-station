@@ -96,6 +96,21 @@ namespace WechatAgent.Desktop {
             Assert(File.ReadAllText(queue) == checkpoint, "old snapshot remains unchanged");
         }
 
+        static bool WaitLocalHealth(string url) {
+            using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
+                client.Timeout = TimeSpan.FromSeconds(2);
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                do {
+                    try {
+                        using (var reply = client.GetAsync(url + "/healthz").GetAwaiter().GetResult())
+                            if (reply.IsSuccessStatusCode) return true;
+                    } catch (HttpRequestException) { } catch (TaskCanceledException) { }
+                    Thread.Sleep(100);
+                } while (DateTime.UtcNow < deadline);
+            }
+            return false;
+        }
+
         static void LocalNativeCycle(string packageDirectory) {
             const string password = "synthetic-local-native-cycle";
             var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
@@ -216,6 +231,31 @@ namespace WechatAgent.Desktop {
                         Assert(true, "native data-root lease is released only after owned shutdown completes");
                         priorEpoch = epoch;
                     }
+                }
+                var stopMarker = Path.Combine(d.Root, "station-native-stop.json");
+                var lastProof = File.ReadAllText(stopMarker);
+                var contenderPort = new TcpListener(IPAddress.Loopback, new Uri(d.StationNativeUrl).Port);
+                try {
+                    contenderPort.Start();
+                    using (var degraded = new LocalStationRuntime(d)) {
+                        degraded.Start(CancellationToken.None).GetAwaiter().GetResult();
+                        Assert(degraded.Running && !degraded.NativeAvailable && degraded.NativePID == 0 && WaitLocalHealth(d.Url), "occupied native port permits only the local server");
+                        degraded.Stop().GetAwaiter().GetResult();
+                    }
+                    Assert(!contenderPort.Pending() && File.ReadAllText(stopMarker) == lastProof, "fallback does not contact the foreign port or replace stop proof");
+                } finally { contenderPort.Stop(); }
+                using (var degraded = new LocalStationRuntime(d)) {
+                    degraded.Start(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(degraded.NativeAvailable && WaitLocalHealth(d.Url), "both services ready before forced native exit");
+                    var startingBytes = File.ReadAllText(stopMarker);
+                    using (var child = Process.GetProcessById(degraded.NativePID)) {
+                        child.Kill();
+                        Assert(child.WaitForExit(5000), "synthetic owned native child was forcibly stopped");
+                    }
+                    degraded.CheckAlive();
+                    Assert(degraded.Running && !degraded.NativeAvailable && WaitLocalHealth(d.Url), "native exit does not stop the local server");
+                    degraded.Stop().GetAwaiter().GetResult();
+                    Assert(File.ReadAllText(stopMarker) == startingBytes, "forced native exit cannot generate stopped evidence");
                 }
                 using (var forced = new LocalStationRuntime(d)) {
                     forced.Start(CancellationToken.None).GetAwaiter().GetResult();

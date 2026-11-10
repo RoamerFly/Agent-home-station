@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -61,6 +63,23 @@ func TestDesktopFlagAndOrdinaryCLIStdinPolicy(t *testing.T) {
 }
 
 func TestDesktopRunStopsFromPrivatePipeAndReportsOwnRuntime(t *testing.T) {
+	t.Run("standalone", func(t *testing.T) { testDesktopRun(t, "") })
+	t.Run("foreign_wechat_instance", func(t *testing.T) {
+		native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/v1/status" {
+				t.Error("unverified native instance was used", r.Method, r.URL.Path)
+				w.WriteHeader(404)
+				return
+			}
+			_, _ = io.WriteString(w, "{\"pid\":12345,\"dataDir\":\"foreign\",\"serverId\":\"dataset\",\"ownershipGeneration\":\"foreign\"}")
+		}))
+		defer native.Close()
+		testDesktopRun(t, native.URL)
+	})
+}
+
+func testDesktopRun(t *testing.T, nativeURL string) {
+	t.Helper()
 	base := t.TempDir()
 	dataDir, workspace := filepath.Join(base, "private"), filepath.Join(base, "workspace")
 	t.Setenv("AHS_ADMIN_PASSWORD", "synthetic-local-password")
@@ -68,9 +87,18 @@ func TestDesktopRunStopsFromPrivatePipeAndReportsOwnRuntime(t *testing.T) {
 	t.Cleanup(func() { _ = writer.Close() })
 	output := &stationStartupWriter{line: make(chan string, 1)}
 	done := make(chan error, 1)
-	go func() {
-		done <- runWithDesktopInput(t.Context(), []string{"--desktop", "--data", dataDir, "--workspace", workspace, "--listen", "127.0.0.1:0"}, output, reader)
-	}()
+	args := []string{"--desktop", "--data", dataDir, "--workspace", workspace, "--listen", "127.0.0.1:0"}
+	if nativeURL != "" {
+		nativeDir := filepath.Join(dataDir, "apps", "wechat", "native")
+		if err := os.MkdirAll(nativeDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nativeDir, "api-token"), []byte("synthetic-station-token"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, "--wechat-native-url", nativeURL, "--wechat-native-pid", "42")
+	}
+	go func() { done <- runWithDesktopInput(t.Context(), args, output, reader) }()
 	var started string
 	select {
 	case started = <-output.line:
@@ -114,6 +142,34 @@ func TestDesktopRunStopsFromPrivatePipeAndReportsOwnRuntime(t *testing.T) {
 	res.Body.Close()
 	if err != nil || res.StatusCode != http.StatusOK || runtime["kind"] != "local-station" || runtime["data_directory"] != dataDir {
 		t.Fatalf("runtime proof: status=%d value=%#v err=%v", res.StatusCode, runtime, err)
+	}
+	origin := "http://" + address
+	init, err := http.NewRequest(http.MethodPost, origin+"/api/local/home", strings.NewReader("{\"action\":\"initialize\"}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	init.Header.Set("Content-Type", "application/json")
+	init.Header.Set("Origin", origin)
+	if csrf, ok := session["csrf"].(string); ok {
+		init.Header.Set("X-CSRF-Token", csrf)
+	}
+	home, err := client.Do(init)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home.Body.Close()
+	if home.StatusCode != http.StatusOK {
+		t.Fatalf("local home unavailable: %d", home.StatusCode)
+	}
+	for path, want := range map[string]int{"/api/local/chat": http.StatusOK, "/api/apps/wechat/connections": http.StatusNotFound} {
+		response, err := client.Get(origin + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("%s: got %d, want %d", path, response.StatusCode, want)
+		}
 	}
 	if _, err := writer.Write([]byte("stop\n")); err != nil {
 		t.Fatal(err)

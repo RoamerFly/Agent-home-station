@@ -143,11 +143,15 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	if cfg.wechatNativeURL != "" {
 		registration, attachErr := wechatapp.StationRegistration(ctx, cfg.wechatNativeURL, cfg.wechatNativePID, cfg.dataDir)
 		if attachErr != nil {
-			return attachErr
-		}
-		registry, err = apphost.New(registration)
-		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			fmt.Fprintln(output, "WeChat native admission failed; local station remains available.")
+		} else {
+			registry, err = apphost.New(registration)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	handler, err := station.NewLocalHomeHandlerWithApps(cfg.dataDir, cfg.workspaceRoot, password, "", registry, windows)

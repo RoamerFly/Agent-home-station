@@ -454,6 +454,13 @@ def verify(binary, output):
                     assert page.get_by_role("button", name="安装接入版本").count() == 0
 
                 close_application(page)
+                page.locator("#apps-list").get_by_text("微信服务不可用", exact=True).wait_for()
+                if source_available:
+                    page.locator("#apps-list").get_by_text("接入版本已安装", exact=True).wait_for()
+                open_application(page)
+                page.get_by_text("微信服务未运行", exact=True).wait_for()
+                assert page.get_by_role("button", name="添加账号").count() == 0
+                close_application(page)
                 # Application-account HTTP calls are intentionally routed in the browser only:
                 # no login material, native connector, or actual WeChat request is involved.
                 apps_route = fulfill_json(app_connection_payload())
@@ -943,6 +950,10 @@ def verify(binary, output):
                 assert worker["attachment_threads"] == ["synthetic-room@chatroom"]
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
                 assert worker["policy_payloads"][-1]["group_rules"] == worker["group_rules"], "group settings must use the local policy route only"
+                # The ordinary UI has no legacy import button. Simulate a rule
+                # already present in the account after an administrative import.
+                worker["group_rules"][0]["reply_settings"] = {"mode": "social", "prefix": "!fish "}
+                refresh_application(page)
                 page.locator("#apps-list[aria-busy='false']").wait_for()
                 page.get_by_text("触发方式与角色（可选）", exact=True).click()
                 assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "social"

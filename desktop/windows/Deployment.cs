@@ -310,7 +310,9 @@ namespace WechatAgent.Desktop {
                     await delay(TimeSpan.FromMilliseconds(300), token);
                 }
                 await Login(token);
-                Progress("本机成长站运行中 · 可直接与大肥鱼对话");
+                Progress(d.LocalStationNative && !station.NativeAvailable
+                    ? "微信服务未就绪 · 本地聊天可用"
+                    : "本机成长站运行中 · 可直接与大肥鱼对话");
                 return;
             }
             if (d.Windows) {

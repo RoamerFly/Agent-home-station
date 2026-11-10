@@ -22,12 +22,13 @@ namespace WechatAgent.Desktop {
         // evidence.  It proves only that this LocalStation launch owned and
         // cleanly stopped its own station/native pair.
         string nativeStopEpoch;
-        bool nativeAdmitted, stationAdmitted, startedWithNative;
+        bool nativeAdmitted, stationAdmitted;
         internal LocalStationRuntime(Deployment deployment) { d = deployment; }
         bool UsesPortableData { get { return d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory); } }
         internal bool Running { get { return server != null && server.Alive; } }
         internal int PID { get { return server == null ? 0 : server.ID; } }
         internal int NativePID { get { return native == null ? 0 : native.ID; } }
+        internal bool NativeAvailable { get { return nativeAdmitted && native != null && native.Alive; } }
 
         static bool Contains(string parent, string child) {
             parent = WindowsRuntime.ComparablePath(parent).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -133,7 +134,6 @@ namespace WechatAgent.Desktop {
         }
         internal void CheckAlive() {
             if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/station/logs/station.log；没有改动微信或旧数据。");
-            if (startedWithNative && (native == null || !native.Alive)) throw new InvalidOperationException("本机成长站微信原生服务提前退出，请查看 data/station/logs/wechat-native.log；没有创建账号或修改旧数据。");
         }
         HttpRequestMessage NativeMessage(string path, object body) {
             var request = new HttpRequestMessage(body == null ? HttpMethod.Get : HttpMethod.Post, d.StationNativeUrl + path);
@@ -153,7 +153,7 @@ namespace WechatAgent.Desktop {
             }
         }
         async Task WaitForNative(CancellationToken cancel) {
-            var deadline = DateTime.UtcNow.AddSeconds(90);
+            var deadline = DateTime.UtcNow.AddSeconds(20);
             while (true) {
                 cancel.ThrowIfCancellationRequested();
                 if (native == null || !native.Alive) throw new InvalidOperationException("本机成长站微信原生服务启动失败，请查看 data/station/logs/wechat-native.log。没有创建或登录微信账号。");
@@ -195,6 +195,21 @@ namespace WechatAgent.Desktop {
             if (failure != null) throw failure;
             return graceful;
         }
+        async Task StartNative(CancellationToken cancel) {
+            if (!File.Exists(d.StationNativeExe)) throw new InvalidOperationException("Missing WeChat native executable.");
+            WindowsRuntime.VerifyNativeBundle(d.StationNativeExe, true);
+            WindowsRuntime.FreePort(d.StationNativeUrl);
+            AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot);
+            // A new launch invalidates any prior clean-stop evidence
+            // before either owned child is created.  Failed and forced
+            // starts deliberately leave this record at "starting".
+            nativeStopEpoch = Guid.NewGuid().ToString("N");
+            WriteNativeStopState("starting", nativeStopEpoch, "", "");
+            // Empty explicit environment: OwnedProcess clears WECHAT_/
+            // XDG_ values, and this child inherits no station secrets.
+            native = OwnedProcess.Start(d.StationNativeExe, new [] { "--json", "--server-config", Path.Combine(d.StationNativeRoot, "native-server.toml"), "--data-dir", d.StationNativeRoot, "--listen", d.StationNativeUrl.Substring("http://".Length), "serve" }, Path.GetDirectoryName(d.StationNativeExe), new Dictionary<string, string>(), Path.Combine(d.Root, "logs", "wechat-native.log"), job, true);
+            await WaitForNative(cancel);
+        }
         internal async Task Start(CancellationToken cancel) {
             cancel.ThrowIfCancellationRequested();
             if (Running) { CheckAlive(); return; }
@@ -203,32 +218,33 @@ namespace WechatAgent.Desktop {
             if (job != null) { job.Dispose(); job = null; }
             if (!File.Exists(d.StationExe)) throw new InvalidOperationException("本机成长站程序不存在，请使用 LocalStation 预览包重新构建。");
             WindowsRuntime.NoLinks(d.StationExe); WindowsRuntime.NoLinks(d.Root);
-            if (startNative) {
-                if (!File.Exists(d.StationNativeExe)) throw new InvalidOperationException("本机成长站微信原生运行文件不存在，请使用包含 wx.exe 的 Windows 程序包。");
-                WindowsRuntime.VerifyNativeBundle(d.StationNativeExe, true); ValidateNativeLayout();
-            }
-            // All potentially destructive validation has completed above.
+            // Overlapping private data and unsafe desktop ownership are host
+            // errors. They must still stop the launch instead of degrading.
+            if (startNative) ValidateNativeLayout();
             WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
             WindowsRuntime.FreePort(d.Url);
-            if (startNative) { AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot); WindowsRuntime.FreePort(d.StationNativeUrl); }
             job = new ProcessJob(); nativeServerId = nativeGeneration = nativeToken = null;
             nativeAdmitted = stationAdmitted = false;
             Exception startFailure = null;
             try {
                 if (startNative) {
+                    // A contested lease or durable release intent is a hard
+                    // fence against using this data root with native enabled.
                     BeginNativeRun();
-                    // A new launch invalidates any prior clean-stop evidence
-                    // before either owned child is created.  Failed and forced
-                    // starts deliberately leave this record at "starting".
-                    nativeStopEpoch = Guid.NewGuid().ToString("N");
-                    WriteNativeStopState("starting", nativeStopEpoch, "", "");
-                    // Empty explicit environment: OwnedProcess clears WECHAT_/
-                    // XDG_ values, and this child inherits no station secrets.
-                    native = OwnedProcess.Start(d.StationNativeExe, new [] { "--json", "--server-config", Path.Combine(d.StationNativeRoot, "native-server.toml"), "--data-dir", d.StationNativeRoot, "--listen", d.StationNativeUrl.Substring("http://".Length), "serve" }, Path.GetDirectoryName(d.StationNativeExe), new Dictionary<string, string>(), Path.Combine(d.Root, "logs", "wechat-native.log"), job, true);
-                    await WaitForNative(cancel);
+                    var nativeFailed = false;
+                    try { await StartNative(cancel); }
+                    catch (Exception) { cancel.ThrowIfCancellationRequested(); nativeFailed = true; }
+                    if (nativeFailed) {
+                        // Fall back only after the owned child is gone. A
+                        // failed launch cannot issue clean-stop evidence.
+                        await StopNative(true);
+                        nativeStopEpoch = null;
+                        System.Diagnostics.Trace.TraceWarning("WeChat native startup unavailable; starting local station only.");
+                    }
                 }
+                cancel.ThrowIfCancellationRequested();
                 var args = new List<string> { "--desktop", "--data", d.Root, "--workspace", d.StationWorkspace, "--listen", new Uri(d.Url).Authority };
-                if (startNative) { args.Add("--wechat-native-url"); args.Add(d.StationNativeUrl); args.Add("--wechat-native-pid"); args.Add(native.ID.ToString()); }
+                if (NativeAvailable) { args.Add("--wechat-native-url"); args.Add(d.StationNativeUrl); args.Add("--wechat-native-pid"); args.Add(native.ID.ToString()); }
                 var programEnv = new Dictionary<string, string>();
                 var media = Path.Combine(Path.GetDirectoryName(d.StationExe), "runtimes", "windows-media");
                 var ffmpeg = Path.Combine(media, "ffmpeg.exe");
@@ -240,7 +256,6 @@ namespace WechatAgent.Desktop {
                 }
                 server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
                 stationAdmitted = true;
-                startedWithNative = startNative;
             } catch (Exception error) {
                 startFailure = error;
             }
