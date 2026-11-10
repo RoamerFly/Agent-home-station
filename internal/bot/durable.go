@@ -81,7 +81,7 @@ func atomicState(path string, value any) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if e = os.Rename(f.Name(), path); e != nil {
+	if e = replaceQueueCheckpoint(f.Name(), path); e != nil {
 		return e
 	}
 	return syncDirectory(filepath.Dir(path))
