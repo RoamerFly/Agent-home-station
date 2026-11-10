@@ -12,6 +12,8 @@ import (
 
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/companion"
+	"wechat-bot/internal/stationbrowser"
 )
 
 const localDouyinWebRoute = "/api/local/apps/douyin/web-login"
@@ -124,6 +126,115 @@ func initializeDouyinWeb(t *testing.T, f *localHomeFixture) {
 	f.login()
 	if code, _ := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); code != 200 {
 		t.Fatal(code)
+	}
+}
+
+func TestLocalDouyinWebPausePersistsAndKeepsLocalWorkbench(t *testing.T) {
+	f, publication, initial, ref := webPublicationFixture(t)
+	_, view := f.request("GET", localDouyinWebRoute, nil, false)
+	code, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": true}, true)
+	if code != 200 {
+		t.Fatal(code, view)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_interactions", "revision": view["revision"], "allow_likes": true, "allow_replies": true}, true)
+	if code != 200 {
+		t.Fatal(code, view)
+	}
+	oldRevision := view["revision"]
+	oldPublish, err := publication.PublicationGrant(t.Context(), ref)
+	if err != nil || !oldPublish.Allowed {
+		t.Fatal("publish setup", oldPublish, err)
+	}
+	like := apphost.InteractionDraft{Kind: "like", Target: ref}
+	interaction := &localDouyinWebInteraction{home: publication.home, installation: publication.installation}
+	oldLike, err := interaction.GrantInteraction(t.Context(), like)
+	if err != nil || !oldLike.Allowed {
+		t.Fatal("like setup", oldLike, err)
+	}
+	profileFile := filepath.Join(initial.profile, "synthetic-profile-marker")
+	if err := os.WriteFile(profileFile, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pause := map[string]any{"action": "pause", "revision": oldRevision}
+	if code, _ := f.request("POST", localDouyinWebRoute, pause, false); code != 403 {
+		t.Fatal("pause without owner CSRF", code)
+	}
+	// Pause between granting an in-flight read and the adapter's last check.
+	checks := make(chan int, 1)
+	f.handler.home.douyinWeb.readPage = func(_ context.Context, _ string, authorize func() error) (stationbrowser.DouyinWebPage, error) {
+		code, _ := f.request("POST", localDouyinWebRoute, pause, true)
+		checks <- code
+		return stationbrowser.DouyinWebPage{}, authorize()
+	}
+	if code, out := f.request("POST", "/api/local/apps/observation", syntheticDouyinWebReadInput(2), true); code != 403 {
+		t.Fatal("in-flight read escaped pause", code, out)
+	}
+	select {
+	case code := <-checks:
+		if code != 200 {
+			t.Fatal("pause failed", code)
+		}
+	default:
+		t.Fatal("read never reached the synthetic browser")
+	}
+	if code, targets := f.request("GET", "/api/local/apps/observation", nil, false); code != 200 || len(localAppObservationItems(targets)) != 0 {
+		t.Fatal("paused read remained discoverable", code, targets)
+	}
+	if grant, _ := publication.PublicationGrant(t.Context(), ref); grant.Allowed {
+		t.Fatal("paused publish grant remained active")
+	}
+	if grant, _ := interaction.GrantInteraction(t.Context(), like); grant.Allowed {
+		t.Fatal("paused interaction grant remained active")
+	}
+	if err := publication.queryAuthorization(t.Context(), initial, apphost.PublicationReference{Target: ref})(); !errors.Is(err, apphost.ErrPublicationDenied) {
+		t.Fatal("paused publication could use the browser to reconcile", err)
+	}
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		return localModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			return `{"action":"reply","messages":["本地对话仍可用。"],"reason":"synthetic"}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(f, "douyin-paused", "我们继续聊"); code != 200 || out["status"] != "completed" {
+		t.Fatal("app pause interrupted local chat", code, out)
+	}
+	if code, out := f.request("GET", "/api/local/project-tools", nil, false); code != 200 || out["tools"] == nil {
+		t.Fatal("app pause removed the project tool catalog", code, out)
+	}
+	if err := f.handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := apphost.New(douyinapp.New(filepath.Join(f.dir, "apps", "douyin")).Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithApps(f.dir, f.root, "synthetic-local-password", "", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.home.douyinWeb.available = func() bool { return true }
+	next := newLocalAppObservationFixtureWithHandler(t, handler, f.dir, f.root)
+	next.login()
+	code, view = next.request("GET", localDouyinWebRoute, nil, false)
+	if code != 200 || view["paused"] != true || view["state"] != "saved" || view["publish_enabled"] != false || view["read_enabled"] != false {
+		t.Fatal("restart lost pause or saved profile", code, view)
+	}
+	if code, _ := next.request("POST", localDouyinWebRoute, map[string]any{"action": "resume", "revision": oldRevision}, true); code != 409 {
+		t.Fatal("stale resume accepted", code)
+	}
+	code, view = next.request("POST", localDouyinWebRoute, map[string]any{"action": "resume", "revision": view["revision"]}, true)
+	if code != 200 || view["paused"] != false || view["state"] != "saved" || view["read_enabled"] != true || view["publish_enabled"] != true || view["likes_enabled"] != true || view["replies_enabled"] != true {
+		t.Fatal("resume lost the owner's existing grants", code, view)
+	}
+	if got, err := os.ReadFile(profileFile); err != nil || string(got) != "synthetic" {
+		t.Fatal("pause or resume touched the profile contents", err)
+	}
+	publication.home = handler.home
+	interaction.home = handler.home
+	if grant, err := publication.PublicationGrant(t.Context(), ref); err != nil || !grant.Allowed || grant.Version == oldPublish.Version {
+		t.Fatal("resume revived a stale publish grant or lost the account", grant, err)
+	}
+	if grant, err := interaction.GrantInteraction(t.Context(), like); err != nil || !grant.Allowed || grant.Version == oldLike.Version {
+		t.Fatal("resume revived a stale interaction grant or lost the account", grant, err)
 	}
 }
 

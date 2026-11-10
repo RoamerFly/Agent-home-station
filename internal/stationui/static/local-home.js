@@ -1413,6 +1413,7 @@
     return value && Number.isFinite(Number(value.revision)) &&
       ["unconfigured", "unconfirmed", "saved", "login_open"].includes(value.state) &&
       typeof value.active === "boolean" && typeof value.available === "boolean" &&
+      (typeof value.paused === "undefined" || typeof value.paused === "boolean") &&
       (typeof value.attempt_id === "undefined" || typeof value.attempt_id === "string") &&
       (typeof value.confirmed_at === "undefined" || typeof value.confirmed_at === "string") &&
       (typeof value.read_enabled === "undefined" || typeof value.read_enabled === "boolean") &&
@@ -1497,6 +1498,10 @@
     }
   }
   function douyinWebLoginSummary(value) {
+    if (value?.paused) {
+      const note = value.state === "unconfigured" ? "恢复后可以重新登录和设置授权。" : "登录资料和原有授权已保留。恢复后可重新读取、互动和发布。";
+      return ["抖音网页能力已暂停", note];
+    }
     const states = {
       unconfigured: ["尚未保存网页登录资料", "在独立网页窗口完成普通账号登录后，再回到这里保存。"],
       login_open: ["网页登录窗口已打开", "请在新窗口完成登录；保存前不会把它当作已登录。"],
@@ -1538,6 +1543,7 @@
       web.value = updated;
       web.loaded = true;
       let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "begin_creator" ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
+      if (action === "pause" || action === "resume") feedback = updated.paused ? "已暂停抖音网页能力。" : "已恢复抖音网页能力。";
       if (action === "set_read") {
         if (typeof options.allowComments === "boolean") feedback = options.allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
         else if (typeof options.allowAudio === "boolean") feedback = options.allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
@@ -1591,7 +1597,14 @@
       const retry = appElement("button", "读取网页登录状态", "button compact quiet");
       retry.type = "button"; retry.addEventListener("click", () => { void loadDouyinWebLogin(current); }); actions.append(retry);
     } else if (value) {
-      if (!value.attempt_id || value.state === "saved") {
+      if (value.paused || (value.state === "saved" && !value.attempt_id)) {
+        const action = value.paused ? "resume" : "pause";
+        const toggle = appElement("button", value.paused ? "恢复抖音网页能力" : "暂停抖音网页能力", "button compact secondary");
+        toggle.type = "button"; toggle.disabled = busy;
+        toggle.addEventListener("click", () => { void updateDouyinWebLogin(current, action); });
+        actions.append(toggle);
+      }
+      if (!value.paused && (!value.attempt_id || value.state === "saved")) {
         const begin = appElement("button", web.applying === "begin" ? "正在打开…" : value.state === "saved" ? "重新打开登录窗口" : "打开网页登录窗口", "button compact secondary");
         begin.type = "button"; begin.disabled = busy || !available;
         begin.addEventListener("click", () => { void updateDouyinWebLogin(current, "begin", {}); }); actions.append(begin);
@@ -1610,7 +1623,7 @@
         clear.type = "button"; clear.disabled = busy;
         clear.addEventListener("click", () => { void updateDouyinWebLogin(current, "clear", {}); }); actions.append(clear);
       }
-      if (value.state === "saved" && !value.active && !value.attempt_id) {
+      if (!value.paused && value.state === "saved" && !value.active && !value.attempt_id) {
         const publishEnabled = douyinWebPublishEnabled(value);
         const publish = document.createElement("input");
         publish.type = "checkbox";
@@ -1894,12 +1907,14 @@
       const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
       const officialAccount = record.id === "bilibili";
       const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
+      const paused = douyinLogin?.paused === true;
       const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
       const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
-      status.classList.toggle("is-connected", connected);
+      const status = appElement("span", paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      status.classList.toggle("is-connected", connected && !paused);
       head.append(status);
       const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
+      if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
       const source = catalog.get(record.id);
       const foot = appElement("div", "", "app-card-footer");
       foot.append(appElement("span", source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本"), appElement("span", "管理应用"));
@@ -2461,7 +2476,8 @@
       });
       tabs.append(button);
     }
-    detail.append(appElement("strong", "应用活动"), appElement("p", tab === "interactions" ? "互动记录只展示已有任务。页面不会自动提交、继续或查询平台。" : "发布记录保留已有创作任务及其结果。新的普通账号发布能力会直接使用已保存的登录状态。"), tabs);
+    const note = tab === "interactions" ? "查看已有互动任务及结果。" : "查看已有发布任务及结果。";
+    detail.append(appElement("strong", "应用活动"), appElement("p", note), tabs);
     detail.append(tab === "interactions" ? douyinInteractionTasksPanel(current) : publicationTasksPanel(current, "douyin", "抖音"));
     row.append(heading, detail);
     return row;

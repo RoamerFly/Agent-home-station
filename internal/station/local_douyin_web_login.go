@@ -25,6 +25,7 @@ import (
 // to capability discovery, the editable fish home or model input.
 type localDouyinWebView struct {
 	Revision        uint64 `json:"revision"`
+	Paused          bool   `json:"paused"`
 	State           string `json:"state"`
 	Active          bool   `json:"active"`
 	AttemptID       string `json:"attempt_id,omitempty"`
@@ -64,6 +65,7 @@ type localDouyinWebRecord struct {
 	Version  int    `json:"schema_version"`
 	FishID   string `json:"fish_id"`
 	Revision uint64 `json:"revision"`
+	Paused   bool   `json:"paused,omitempty"`
 	Profile  string `json:"profile,omitempty"`
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
@@ -223,7 +225,7 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 }
 
 func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
-	v := localDouyinWebView{Revision: record.Revision, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
+	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -248,14 +250,14 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	if !v.Available {
 		v.Reason = "未找到可用的 Microsoft Edge，已有网页登录资料保留"
 	}
-	v.ReadEnabled = record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
+	v.ReadEnabled = !record.Paused && record.ReadEnabled && v.State == "saved" && v.AttemptID == ""
 	v.PlaybackEnabled = v.ReadEnabled && record.PlaybackEnabled
 	v.AudioEnabled = v.ReadEnabled && record.AudioEnabled
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
 	v.CommentsEnabled = v.ReadEnabled && v.ReadScope == "home_and_videos" && record.CommentsEnabled
 	v.LikesEnabled = v.ReadEnabled && v.ReadScope == "home_and_videos" && record.LikesEnabled
 	v.RepliesEnabled = v.CommentsEnabled && record.RepliesEnabled
-	v.PublishEnabled = record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
+	v.PublishEnabled = !record.Paused && record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
 }
 
@@ -282,6 +284,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return false
 	}
 	switch in.Action {
+	case "pause":
+		return true
 	case "clear":
 		return in.ApproveProfile
 	case "set_publish":
@@ -331,6 +335,9 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
+	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" {
+		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
+	}
 	save := func() error {
 		record.Revision++
 		raw, err := json.Marshal(record)
@@ -340,6 +347,18 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
 	}
 	switch in.Action {
+	case "pause", "resume":
+		paused := in.Action == "pause"
+		if paused == record.Paused {
+			return m.view(record), 200, nil
+		}
+		if m.attempt != "" && m.fish == fish {
+			return fail(409, "请先保存或取消本次登录")
+		}
+		record.Paused = paused
+		if save() != nil {
+			return fail(503, "抖音网页能力状态未保存，请重新读取后核对")
+		}
 	case "set_publish":
 		if in.AllowPublish == nil {
 			return fail(400, "请明确是否允许大肥鱼通过该网页登录资料发布作品")

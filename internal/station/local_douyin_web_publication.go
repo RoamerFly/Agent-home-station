@@ -56,7 +56,14 @@ func (p *localDouyinWebPublication) access(ctx context.Context) (localDouyinWebA
 	}
 	// observation.state is intentionally also the one place that derives the
 	// host-owned connection/account reference from current login metadata.
-	return (&localDouyinWebObservation{home: p.home, installation: p.installation}).state(ctx)
+	access, err := (&localDouyinWebObservation{home: p.home, installation: p.installation}).state(ctx)
+	if err != nil {
+		return localDouyinWebAccess{}, err
+	}
+	if access.record.Paused {
+		return localDouyinWebAccess{}, apphost.ErrPublicationDenied
+	}
+	return access, nil
 }
 
 func (p *localDouyinWebPublication) PublicationGrant(ctx context.Context, target apphost.ConnectionRef) (apphost.PublicationGrant, error) {

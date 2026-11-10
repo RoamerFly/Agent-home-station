@@ -69,7 +69,7 @@ func (p *localDouyinWebObservation) state(ctx context.Context) (localDouyinWebAc
 		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
 	}
 	view := m.view(record)
-	if record.ReadEnabled && view.State != "saved" {
+	if !record.Paused && record.ReadEnabled && view.State != "saved" {
 		return localDouyinWebAccess{}, apphost.ErrObservationWebSessionInvalid
 	}
 	return p.access(identity.FishID, identity.LocalOwner.ID, record, view), nil
