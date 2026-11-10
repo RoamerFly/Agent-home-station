@@ -258,6 +258,18 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		}
 		return row
 	}
+	waitReceipt := func(key, serverID, operationID string) {
+		t.Helper()
+		var status int
+		var last map[string]any
+		for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			status, last = f.request("GET", path+"/receipts/"+key, nil, false)
+			if status == http.StatusOK && last["server_id"] == serverID && last["operation_id"] == operationID && last["state"] == "accepted" {
+				return
+			}
+		}
+		t.Fatalf("receipt %s: HTTP %d, expected accepted operation %s with server ID %s, got %#v", key, status, operationID, serverID, last)
+	}
 	acquire := func(code int) map[string]any {
 		return req("POST", path+"/attachments", map[string]string{"thread_id": thread, "message_id": "msg"}, true, code)
 	}
@@ -421,10 +433,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
 		t.Fatalf("worker did not submit the verified quoted attachment: %s", queue)
 	}
-	waitAppLifecycle(t, func() bool {
-		code, receipt := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
-		return code == 200 && strings.Contains(fmt.Sprint(receipt), "2311")
-	})
+	waitReceipt(deliveryKey, "2311", "synthetic-send-image")
 	req("POST", path+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 	if len(submitted) != 0 || uploads.Load() != 3 {
 		t.Fatal("worker repeated upload or submit", uploads.Load(), len(submitted))
@@ -465,10 +474,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
 		t.Fatalf("registered work not delivered: %s", queue)
 	}
-	waitAppLifecycle(t, func() bool {
-		code, result := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
-		return code == 200 && strings.Contains(fmt.Sprint(result), "2311")
-	})
+	waitReceipt(deliveryKey, "2311", "synthetic-send-file")
 	grantBody["enabled"] = false
 	req("POST", path+"/work-grants/"+workID+"/revoke", map[string]any{}, true, 200)
 	if _, err := workAccess.authorized(textTurn, workID); err == nil {
@@ -521,10 +527,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		queue, _ := os.ReadFile(filepath.Join(worker.dir, "queue", "messages-v2.json"))
 		t.Fatalf("worker did not submit exported PDF: %s", queue)
 	}
-	waitAppLifecycle(t, func() bool {
-		code, receipt := f.request("GET", path+"/receipts/"+deliveryKey, nil, false)
-		return code == 200 && strings.Contains(fmt.Sprint(receipt), "2419") && strings.Contains(fmt.Sprint(receipt), "synthetic-send-document")
-	})
+	waitReceipt(deliveryKey, "2419", "synthetic-send-document")
 	req("POST", path+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
 	if len(submitted) != 0 || uploads.Load() != 5 {
 		t.Fatal("worker duplicated PDF upload or send", uploads.Load(), len(submitted))
