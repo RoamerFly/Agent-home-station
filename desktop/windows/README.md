@@ -1,6 +1,6 @@
 # Windows 桌面程序
 
-应用化重构的零应用预览使用 `./scripts/Build-Desktop.ps1 -LocalStation -OutputDirectory temp/local-station-preview`，打开输出的 `AgentHomeStation.exe`。它只启动本机聊天和家目录服务，使用独立数据、单例与控制通道，不要求微信原生包，也不会停止旧微信实例。[独立入口说明](../../docs/guide/local-home-preview.md)包含目录、配置和隔离 `-Test` 验证方式。下面描述仍可兼容使用的原微信桌面入口；尚未将真实登录和历史自动迁入新入口。
+当前默认构建独立工作站，使用 `./scripts/Build-Desktop.ps1 -OutputDirectory temp/local-station-preview`，打开输出的 `AgentHomeStation.exe`。它只启动本机聊天和家目录服务，使用独立数据、单例与控制通道，不要求微信原生包，也不会停止旧微信实例。[独立入口说明](../../docs/guide/local-home-preview.md)包含目录、配置和隔离 `-Test` 验证方式。下面描述仍可兼容使用的原微信桌面入口；尚未将真实登录和历史自动迁入新入口。
 
 双击 `WechatAgent.exe` 自动启动本机服务，窗口直接显示现有管理页，没有额外的启动控制台或外部浏览器窗口。右上角 **× 关闭窗口** 默认弹窗选择“取消／最小化到托盘运行／退出程序”，未勾选“记住此选项”时下次仍询问。选择退出才等待在途任务、停止全部本实例服务并退出；选择托盘则保持服务运行。可从托盘菜单“关闭窗口时”随时改回“每次询问”。普通 **最小化** 保留任务栏按钮；仅在关闭选择托盘或使用托盘菜单时隐藏窗口，双击托盘图标返回管理页。进入托盘不弹气泡提醒。托盘菜单另提供启动、停止服务、关于及明确的“退出并停止全部服务”。启动服务不会更改管理页中的 Agent 自动回复开关。
 
@@ -8,12 +8,12 @@
 
 支持两个后端：独立便携包默认使用 **Windows 原生**；已有 `secrets/local-deployment.json` 的 `backend=wsl` 仍按原方式管理 WSL 服务，不自动迁移或覆盖资料。Docker 部署继续使用原入口，桌面版不会擅自控制 Docker。
 
-## Windows 原生便携包
+## 旧版微信原生便携包
 
 开发机执行：
 
 ```powershell
-./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
+./scripts/Build-Desktop.ps1 -LegacyWechatDesktop -OutputDirectory dist/windows-native -Test -Portable
 ```
 
 新 Windows 桌面构建从分发目录移除了旧手机控制工具和桥接脚本。若目标目录已有这些组件，构建会保留原目录并要求另选输出位置。旧设备任务与素材属于原部署的数据目录。原生 Windows 旧管理页可从工具列表的设备历史档案查看已保留的任务、截图和录屏；历史会话里的设备记录也可跳到该档案。
@@ -45,7 +45,7 @@ DesktopTests.exe --cycle <隔离便携包目录>
 在 Windows 运行一次构建（使用系统 .NET Framework C# 编译器）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Desktop.ps1 -Test
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Desktop.ps1 -LegacyWechatDesktop -Test
 ```
 
 产物在 `dist/windows-desktop/WechatAgent.exe`。它是 Windows x64 GUI 可执行文件，内嵌 SDK 程序集及加载器，无需从 PowerShell、BAT 或 Python 启动。运行时直接调用隐藏的 `wsl.exe` 和现有 systemd 单元；Python 3 仅用于 WSL 内的只读在途任务检查，已有本机部署已具备此依赖。

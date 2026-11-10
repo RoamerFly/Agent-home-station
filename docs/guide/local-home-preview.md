@@ -2,22 +2,19 @@
 
 独立入口可以在没有微信账号、原生端、ADB 或模型运行环境的安装中启动。主人完成本机身份准备、保存模型连接后，即可在软件页面与同一条大肥鱼聊天。它复用现有聊天引擎和 SQLite 记忆内核，不把本机主人伪装成微信账号。
 
-页面左侧场景跟随窗口高度，右侧内容独立滚动。「设置」中的主角色用于本机聊天和各应用的基础性格。应用页点击微信、抖音等卡片，在大弹窗中管理账号与使用范围、应用子角色和源码。应用子角色可以填写该平台的语气、兴趣或偏好，留空沿用主角色；群备注仍只作用于对应群。修改子角色在下次模型调用生效，无需重新登录应用。
+页面左侧场景跟随窗口高度，右侧内容独立滚动。「设置」中的主角色用于本机聊天和各应用的基础性格。应用页点击微信、抖音等卡片，在大弹窗中管理账号与使用范围、应用子角色和接入版本。应用子角色可以填写该平台的语气、兴趣或偏好，留空沿用主角色；群备注仍只作用于对应群。修改子角色在下次模型调用生效，无需重新登录应用。
 
 项目工具页使用等宽等高卡片，点击后在大弹窗内管理安装、启停、声线、工作流与资源。OBS 预览随工具弹窗关闭而停止。桌面图标与启动、停止画面采用暖灯小屋标识。关闭窗口时可选择“收起到托盘”或“退出并停止服务”，勾选“记住这次选择”后沿用所选方式。
 
-这是 Windows 开发预览，正式程序切换情况以阶梯计划的最新验收记录为准。独立入口可在桌面窗口或本机 HTTP 服务中运行。Agent 可以在自己的家目录读写文件、持久保存工具，并通过受管 Windows 运行器执行程序。应用页支持源码安装、微信账号登记与扫码、会话授权、Agent 启停及回执查询。抖音提供应用内授权窗、授权续期、作品读取与发布接入，各项真实平台验收范围见阶梯计划。
+这是 Windows 开发预览，正式程序切换情况以阶梯计划的最新验收记录为准。独立入口可在桌面窗口或本机 HTTP 服务中运行。Agent 可以在自己的家目录读写文件、持久保存工具，并通过受管 Windows 运行器执行程序。应用页支持安装接入版本、微信账号登记与扫码、会话授权、Agent 启停及回执查询。抖音的普通账号使用独立网页登录，可保存状态和过期重登。各项平台操作另有权限和验收边界。
 
-抖音提供两条独立入口：**普通账号网页登录**无需开放平台密钥，操作见本页后面的网页登录说明；**开放平台网站应用授权**用于正式 API。后者从[开放平台控制台](https://developer.open-douyin.com/console)开始：完成开发者主体认证，创建网站应用，审核通过后在应用信息取得 Client Key、Client Secret，并登记自己控制的 HTTPS 回调地址。密钥只填写在软件的私有配置表单中，不发到聊天或提交仓库。[官方创建步骤](https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/app-mgmt/create-mobile-and-web-app)
-
-2026-11-07 核对的[官方入驻条件](https://partner.open-douyin.com/docs/resource/zh-CN/developer/join/issues)列明：企业、个体工商户等主体可创建网站应用；个人主体支持小程序、小游戏、小玩法。仅有普通个人抖音账号，不能因此认为已具备网站应用资格或接口权限。软件在开放平台未配置时展示申请入口与这一前置条件；普通网页登录不受这项 API 申请前置条件限制，真实平台验证范围以阶梯计划为准。
 
 ## Windows 桌面预览
 
 在源码目录构建到全新的隔离目录：
 
 ```powershell
-./scripts/Build-Desktop.ps1 -LocalStation -OutputDirectory temp/local-station-preview
+./scripts/Build-Desktop.ps1 -OutputDirectory temp/local-station-preview
 ```
 
 双击输出目录里的 `AgentHomeStation.exe`，窗口显示本机聊天、应用和设置页面。此构建不要求微信原生程序、ADB、Python、GPU 环境或任何应用账号，也不拷贝原来的私有配置。Windows 仍需 WebView2 Runtime；构建需要源码开发环境。
@@ -404,7 +401,7 @@ New-Item -ItemType Directory -Force $env:TEMP | Out-Null
 需要配套更新时，常规部署继续使用原有快捷方式、管理端和原生程序。脚本将离线原生程序及其同目录 CRT 发布到 `cutover-native-<候选启动器 SHA-256>`，核对清单后原子替换旧桌面入口 `WechatAgent.exe`。只有受控停机命令会读取当前启动器对应的配套目录。用当前源码构建候选，使用不同于正式安装的构建目录。
 
 ```powershell
-.\scripts\Build-Desktop.ps1 -Test -OutputDirectory 'C:\Temp\ahs-legacy-candidate'
+.\scripts\Build-Desktop.ps1 -LegacyWechatDesktop -Test -OutputDirectory 'C:\Temp\ahs-legacy-candidate'
 .\scripts\Build-WindowsNative.ps1 -OutputDirectory 'C:\Temp\ahs-legacy-native-candidate'
 $candidate = 'C:\Temp\ahs-legacy-candidate\WechatAgent.exe'
 $native = 'C:\Temp\ahs-legacy-native-candidate\wx.exe'

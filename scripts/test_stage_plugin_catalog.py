@@ -62,6 +62,33 @@ class StagePluginCatalogTests(unittest.TestCase):
                     self.assertEqual(marker.read_bytes(), b"synthetic previous output")
                     self.assertFalse((output / "AgentHomeStation.exe").exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows desktop build")
+    def test_windows_desktop_does_not_mix_station_and_legacy_output(self):
+        script = SCRIPT.with_name("Build-Desktop.ps1")
+        command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+        with tempfile.TemporaryDirectory() as temp:
+            for args, member, expected in (
+                ([], "WechatAgent.exe", b"Output belongs to a different desktop product"),
+                ([], "runtimes/windows-x64/wechat-admin.exe", b"Output belongs to a different desktop product"),
+                (["-LegacyWechatDesktop"], "agent-home-station-server.exe", b"Output belongs to a different desktop product"),
+                (["-LegacyWechatDesktop", "-LocalStation"], "data/sentinel", b"cannot be combined"),
+                (["-NativeSourceDirectory", "synthetic"], "data/sentinel", b"require -LegacyWechatDesktop"),
+            ):
+                with self.subTest(args=args, member=member):
+                    with tempfile.TemporaryDirectory(dir=temp) as directory:
+                        output = Path(directory)
+                        original = output / member
+                        original.parent.mkdir(parents=True, exist_ok=True)
+                        original.write_bytes(b"original")
+                        result = subprocess.run(
+                            [*command, *args, "-OutputDirectory", str(output)],
+                            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(expected, result.stderr)
+                        self.assertEqual(original.read_bytes(), b"original")
+                        self.assertFalse((output / "AgentHomeStation.exe").exists())
+
     def test_selected_package_stages_only_verified_members(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

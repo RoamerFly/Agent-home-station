@@ -1,6 +1,17 @@
 # 安装与启动
 
-## 已有 Windows 便携包
+## Windows 工作站
+
+把完整程序包解压到可写目录，双击 `AgentHomeStation.exe`。完成本机主人身份和模型设置后，即可在软件里和大肥鱼聊天。微信等应用从应用页另行接入。只构建主体时，在仓库目录执行：
+
+```powershell
+.\scripts\Build-Desktop.ps1 -OutputDirectory 'dist\local-station-preview'
+.\dist\local-station-preview\AgentHomeStation.exe
+```
+
+现有微信资料的接续与选装组件见[工作站使用说明](../docs/guide/local-home-preview.md)。
+
+## 旧版 Windows 微信便携包
 
 1. 把**整个程序目录**解压到当前用户可以写入的位置。确认根目录有 `WechatAgent.exe`，旁边有 `runtimes/`。在桌面创建快捷方式时，目标指向此处的 EXE；单独复制 EXE 会丢失微信后台等运行文件。
 2. 双击 EXE。窗口应直接显示管理页。桌面外壳需要 Microsoft Edge WebView2 Runtime；使用者无须为了基础微信连接安装 WSL、CUDA 或开发工具链。
@@ -9,15 +20,15 @@
 
 最小化会留在任务栏。点关闭按钮时可选择托盘运行或退出；托盘菜单可以恢复窗口、启停服务，以及修改已记住的关闭方式。要彻底停机，选择退出并停止服务，等待在途工作收尾。
 
-## 只有源码时如何构建 Windows 包
+## 构建旧版微信兼容包
 
 构建机准备 Git、与 `go.mod` 匹配的 Go、Python 3.13、Rust 1.93.1、MSVC C++ 工具链、Windows SDK、原生 Perl，以及含真实 `ffmpeg.exe` 和 `ffprobe.exe` 的媒体分发目录。首次构建需要能访问所固定的上游依赖。安装程序的快捷入口或包管理器 shim 无法代替媒体二进制。
 
 ```powershell
 git clone --branch main https://github.com/RoamerFly/Agent-home-station.git
-cd wechat-agent
+cd Agent-home-station
 # 将路径改成你的媒体分发目录；选择一个新的输出目录。
-.\scripts\Build-Desktop.ps1 -Portable -Test -MediaDirectory 'C:\tools\ffmpeg\bin' -OutputDirectory 'dist\first-portable'
+.\scripts\Build-Desktop.ps1 -LegacyWechatDesktop -Portable -Test -MediaDirectory 'C:\tools\ffmpeg\bin' -OutputDirectory 'dist\first-portable'
 .\dist\first-portable\WechatAgent.exe
 ```
 

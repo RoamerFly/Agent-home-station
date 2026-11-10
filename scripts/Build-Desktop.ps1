@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [switch]$WithBilibiliApp, [switch]$WithDouyinApp)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -172,6 +172,11 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
  Write-Output ('Staged trusted station speech runner: '+$staged+' (SHA-256 '+$hash+'). Backend registration must use this explicit absolute path and digest.')
 }
 
+# The standalone station is the product entry point. Keep the original
+# -LocalStation switch for existing build commands.
+if($LocalStation -and $LegacyWechatDesktop){throw 'LocalStation and LegacyWechatDesktop cannot be combined.'}
+$LocalStation=-not $LegacyWechatDesktop
+if($LocalStation -and ($NativeSourceDirectory -or $GoSourcePatch)){throw 'NativeSourceDirectory and GoSourcePatch require -LegacyWechatDesktop.'}
 if($WithWeChatRuntime -and -not $LocalStation){throw 'WithWeChatRuntime is only valid with -LocalStation.'}
 if($WithRVCBackend -and -not $LocalStation){throw 'WithRVCBackend is only valid with -LocalStation.'}
 if($WithComfyUI -and -not $LocalStation){throw 'WithComfyUI is only valid with -LocalStation.'}
@@ -190,6 +195,25 @@ if($WithWeChatRuntime){$WithWeChatApp=$true}
 $hasDocumentRuntimeInput=[bool]($DocumentPythonPackagesDirectory -or $DocumentFontsDirectory -or $DocumentTesseractDirectory -or $DocumentPDFiumWheel)
 if($LocalStation -and $hasDocumentRuntimeInput -and -not $WithDocumentWorkshop){throw 'Native document runtime sources require -WithDocumentWorkshop for a LocalStation package.'}
 if($hasDocumentRuntimeInput -and (-not $DocumentPythonPackagesDirectory -or -not $DocumentFontsDirectory)){throw 'Native document runtime requires both DocumentPythonPackagesDirectory and DocumentFontsDirectory.'}
+if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace ($(if($LocalStation){'dist\local-station-preview'}else{'dist\windows-desktop'}))}
+$OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
+# Rebuilding is not a migration or a request to delete previous output.
+foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_bridge.py')){
+ $obsolete=Join-Path $OutputDirectory $relative
+ if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
+  throw 'Output contains retired mobile components; build into a fresh directory.'
+ }
+}
+if($LocalStation){
+ $foreignOutput=@('WechatAgent.exe','runtimes\windows-x64\wechat-admin.exe','runtimes\windows-music')
+}else{
+ $foreignOutput=@('AgentHomeStation.exe','agent-home-station-server.exe')
+}
+foreach($relative in $foreignOutput){
+ if(Get-Item -LiteralPath (Join-Path $OutputDirectory $relative) -Force -ErrorAction SilentlyContinue){
+  throw 'Output belongs to a different desktop product; build into a fresh directory.'
+ }
+}
 # Keep project-local SDK/model caches outside `go test ./...` discovery.
 # Nested build snapshots retain their own go.mod; never replace an existing one.
 foreach($artifactName in @('temp','dist')){
@@ -198,15 +222,6 @@ foreach($artifactName in @('temp','dist')){
  $boundary=Join-Path $artifactDirectory 'go.mod'
  if(-not(Test-Path -LiteralPath $boundary)){
   [IO.File]::WriteAllText($boundary,("module local.invalid/wechat-agent-"+$artifactName+"`n`ngo 1.25.3`n"),[Text.Encoding]::ASCII)
- }
-}
-if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace ($(if($LocalStation){'dist\local-station-preview'}else{'dist\windows-desktop'}))}
-$OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
-# Rebuilding is not a migration or a request to delete previous output.
-foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_bridge.py')){
- $obsolete=Join-Path $OutputDirectory $relative
- if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
-  throw 'Output contains retired mobile components; build into a fresh directory.'
  }
 }
 $version='1.0.3537.50'
@@ -375,7 +390,7 @@ if($Portable){
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
  if($LocalStation){
-  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
+  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
   Get-Item -LiteralPath $target | Select-Object FullName,Length
   Get-FileHash -LiteralPath $target -Algorithm SHA256
   return
