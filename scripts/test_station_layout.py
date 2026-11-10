@@ -196,7 +196,8 @@ def verify_douyin_notice(page, panel, nav):
             route.fulfill(json={"ticket": "synthetic-single-use"})
         else:
             assert action == "read" and data["allow_mark_read"] is True and data["ticket"] == "synthetic-single-use"
-            route.fulfill(json={"items": [{"id": "1234", "type": 2, "work_id": "5678"}], "has_more": True})
+            route.fulfill(json={"items": [{"id": "1234", "type": 2, "work_id": "5678"}], "has_more": True,
+                                "rendered_text": "合成用户评论了你的作品 <img src=invalid>"})
 
     page.route(status_path, lambda route: route.fulfill(json=login))
     page.route(notice_path, notice)
@@ -211,6 +212,7 @@ def verify_douyin_notice(page, panel, nav):
     assert observed == ["bind"]
     read.click()
     expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_be_visible()
+    expect(panel.get_by_text("合成用户评论了你的作品 <img src=invalid>", exact=True)).to_be_visible()
     expect(panel.get_by_text("本次返回 1 条通知。平台报告还有后续通知。")).to_be_visible()
     assert observed == ["bind", "prepare", "read"]
     panel.get_by_role("button", name="撤销通知绑定", exact=True).click()

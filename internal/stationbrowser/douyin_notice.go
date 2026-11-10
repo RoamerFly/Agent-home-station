@@ -29,6 +29,9 @@ type DouyinNoticePage struct {
 	Items            []DouyinNotice
 	MinTime, MaxTime int64
 	HasMore          bool
+	// RenderedText is separate from item metadata. The official page filters
+	// and groups notifications before rendering, so positions cannot be joined.
+	RenderedText string
 }
 
 type DouyinNoticeRequest struct {

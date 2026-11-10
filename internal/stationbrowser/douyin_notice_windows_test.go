@@ -27,7 +27,16 @@ func TestDouyinNoticeNativeReadRequiresBoundAccountAndMarkReadConsent(t *testing
 <script>
 function loadNotice() {
  const bad = new XMLHttpRequest(); bad.open('POST', '/aweme/v1/web/notice/del/'); bad.send();
- const req = new XMLHttpRequest(); req.open('GET', '/aweme/v1/web/notice/?is_new_notice=1&is_mark_read=1'); req.send();
+ const req = new XMLHttpRequest();
+ req.open('GET', '/aweme/v1/web/notice/?is_new_notice=1&is_mark_read=1');
+ req.onload = () => {
+   if (req.status !== 200) return;
+   const panel = document.createElement('section');
+   panel.dataset.e2e = 'listDlgTest-container';
+   panel.innerHTML = '<h2>互动消息</h2><div class="sKMx4DKd"><p>合成用户评论了你的作品</p><p>点击加载更多</p><p hidden>隐藏字段</p></div>';
+   document.body.append(panel);
+ };
+ req.send();
 }
 </script>`))
 		case douyinNoticePath:
@@ -56,7 +65,8 @@ function loadNotice() {
 		t.Fatalf("mark-read attempted without authorization: %v, calls=%d", err, listCalls.Load())
 	}
 	page, err := read(&DouyinNoticeRequest{Account: account.Account, AllowMarkRead: true})
-	if err != nil || page.Account != account.Account || len(page.Items) != 1 || page.Items[0].ID != "9182736450" || !page.HasMore || page.MaxTime != 1700000000 {
+	if err != nil || page.Account != account.Account || len(page.Items) != 1 || page.Items[0].ID != "9182736450" || !page.HasMore || page.MaxTime != 1700000000 ||
+		page.RenderedText != "合成用户评论了你的作品" {
 		t.Fatalf("bound inbox read: %+v %v", page, err)
 	}
 	if listCalls.Load() != 1 || otherWrites.Load() != 0 {

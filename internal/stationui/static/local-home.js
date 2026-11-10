@@ -2599,6 +2599,13 @@
         const page = await post({ action: "read", allow_mark_read: true, ticket: prepared.ticket });
         if (!active()) return;
         if (!Array.isArray(page.items) || typeof page.has_more !== "boolean") throw new Error("互动通知返回格式无效。");
+        if (typeof page.rendered_text === "string" && page.rendered_text) {
+          const rendered = appElement("article", "", "douyin-read-chunk");
+          rendered.append(appElement("strong", "平台页面可见文字"), appElement("p", page.rendered_text));
+          output.append(rendered);
+        } else if (page.items.length) {
+          output.append(appElement("p", "本次仅取得通知编号及元数据，页面文字未能核对。", "app-scope-note"));
+        }
         for (const row of page.items) {
           const card = appElement("div", "", "douyin-read-chunk");
           card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type));

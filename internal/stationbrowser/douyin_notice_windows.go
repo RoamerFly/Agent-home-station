@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -119,10 +120,11 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 				continue
 			}
 			var req struct {
-				ID      string `json:"requestId"`
-				Kind    string `json:"resourceType"`
-				Status  int    `json:"responseStatusCode"`
-				Request struct{ URL, Method string }
+				ID            string `json:"requestId"`
+				Kind          string `json:"resourceType"`
+				Status        int    `json:"responseStatusCode"`
+				ResponseError string `json:"responseErrorReason"`
+				Request       struct{ URL, Method string }
 			}
 			if json.Unmarshal(event.Params, &req) != nil || req.ID == "" {
 				report(DouyinNoticePage{}, ErrDouyinNoticeUnavailable)
@@ -132,7 +134,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 			params := map[string]any{"requestId": req.ID, "errorReason": "BlockedByClient"}
 			mark, exact := noticeListRequest(req.Request.URL, f.origin)
 			switch {
-			case req.Status != 0:
+			case req.Status != 0 || req.ResponseError != "":
 				if exact && req.ID == admitted && !settled {
 					var page DouyinNoticePage
 					err := ErrDouyinNoticeUnavailable
@@ -140,10 +142,17 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						page, err = readDouyinNoticeResponse(ctx, session, f.sessionID, req.ID)
 					}
 					if denied := f.authorize(); denied != nil {
-						report(DouyinNoticePage{}, denied)
-					} else {
-						report(page, err)
+						err = denied
 					}
+					if err == nil {
+						method = "Fetch.continueResponse"
+						params = map[string]any{"requestId": req.ID}
+					}
+					if session.Call(ctx, f.sessionID, method, params, nil) != nil && err == nil {
+						err = ErrDouyinNoticeUnavailable
+					}
+					report(page, err)
+					continue
 				}
 			case req.Request.Method == "GET" && exact && (req.Kind == "XHR" || req.Kind == "Fetch") && f.armed.Swap(false) && !settled:
 				if err := f.authorize(); err != nil {
@@ -279,9 +288,54 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 		if noticePageState(ctx, session, id, world, target, false).Account != account {
 			return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
 		}
+		if len(result.page.Items) != 0 {
+			textCtx, stop := context.WithTimeout(ctx, 3*time.Second)
+			defer stop()
+			for textCtx.Err() == nil {
+				if err := authorize(); err != nil {
+					return DouyinNoticePage{}, err
+				}
+				result.page.RenderedText = noticeRenderedText(textCtx, session, id, world, target)
+				if result.page.RenderedText != "" || creatorWait(textCtx) != nil {
+					break
+				}
+			}
+			if noticePageState(ctx, session, id, world, target, false).Account != account {
+				return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
+			}
+		}
 		result.page.Account = account
 		return result.page, authorize()
 	}
+}
+
+func noticeRenderedText(ctx context.Context, session readerSession, id string, world int64, target string) string {
+	arg, _ := json.Marshal(target)
+	// This container and list class are from the official NoticeEntry bundle.
+	// A missing or changed UI supplies no text and leaves wire metadata intact.
+	const js = `((target) => {
+		if (location.href !== target) return '';
+		const panels = [...document.querySelectorAll('[data-e2e="listDlgTest-container"]')].filter(node => node.getClientRects().length);
+		if (panels.length !== 1) return '';
+		const lists = panels[0].querySelectorAll('.sKMx4DKd');
+		if (lists.length !== 1 || !lists[0].getClientRects().length) return '';
+		return [...lists[0].innerText].slice(0,4000).join('');
+	})`
+	var out struct{ Result struct{ Value string } }
+	if session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": js + "(" + string(arg) + ")", "contextId": world, "returnByValue": true}, &out) != nil {
+		return ""
+	}
+	lines := strings.Split(out.Result.Value, "\n")
+	text := lines[:0]
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch line {
+		case "", "点击加载更多", "暂时没有更多了", "暂无互动消息":
+		default:
+			text = append(text, line)
+		}
+	}
+	return strings.Join(text, "\n")
 }
 
 type douyinNoticeControl struct {

@@ -35,7 +35,7 @@ func TestLocalDouyinNoticeRequiresSeparateOwnerConsentAndSingleUseRead(t *testin
 				t.Errorf("in-flight revocation status = %d", code)
 			}
 		}
-		return stationbrowser.DouyinNoticePage{Account: account, HasMore: true, Items: []stationbrowser.DouyinNotice{
+		return stationbrowser.DouyinNoticePage{Account: account, HasMore: true, RenderedText: "合成通知正文", Items: []stationbrowser.DouyinNotice{
 			{ID: "1234", Type: 2, CreatedAt: 1700000000, WorkID: "5678"},
 		}}, nil
 	}
@@ -75,7 +75,7 @@ func TestLocalDouyinNoticeRequiresSeparateOwnerConsentAndSingleUseRead(t *testin
 	payload := prepare()
 	status, page := post("read", payload, true)
 	rows, ok := page["items"].([]any)
-	if status != http.StatusOK || !ok || len(rows) != 1 || page["has_more"] != true || page["account"] != nil || reads != 1 {
+	if status != http.StatusOK || !ok || len(rows) != 1 || page["has_more"] != true || page["rendered_text"] != "合成通知正文" || page["account"] != nil || reads != 1 {
 		t.Fatalf("read = %d %v, reads=%d", status, page, reads)
 	}
 	if status, _ := post("read", payload, true); status != http.StatusConflict || reads != 1 {
@@ -83,7 +83,7 @@ func TestLocalDouyinNoticeRequiresSeparateOwnerConsentAndSingleUseRead(t *testin
 	}
 	revokeDuringRead = true
 	payload = prepare()
-	if status, page := post("read", payload, true); status != http.StatusConflict || page["items"] != nil || reads != 2 {
+	if status, page := post("read", payload, true); status != http.StatusConflict || page["items"] != nil || page["rendered_text"] != nil || reads != 2 {
 		t.Fatalf("late result passed revocation: %d %v, reads=%d", status, page, reads)
 	}
 	_, view = f.request("GET", localDouyinWebRoute, nil, false)

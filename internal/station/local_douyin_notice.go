@@ -215,7 +215,7 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			}
 			items = append(items, localDouyinNoticeItem{ID: row.ID, Type: row.Type, CreatedAt: created, WorkID: row.WorkID})
 		}
-		websession.Respond(w, http.StatusOK, map[string]any{"items": items, "has_more": page.HasMore})
+		websession.Respond(w, http.StatusOK, map[string]any{"items": items, "has_more": page.HasMore, "rendered_text": page.RenderedText})
 	}))
 }
 
