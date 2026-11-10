@@ -44,10 +44,26 @@ func (p *localDouyinWebObservation) webObservationAllowed(a localDouyinWebAccess
 		return a.record.WorksEnabled && field == apphost.ObservationAccountWorks
 	}
 	if strings.HasPrefix(id, douyinapp.WebCreatorWorkPrefix) {
+		if !a.record.WorksEnabled {
+			return false
+		}
 		row, ok := p.creatorWorks.get(id, a.version)
-		return a.record.WorksEnabled && ok && (field == apphost.ObservationPageText ||
-			a.record.ReadEnabled && row.work.Video && row.work.Visibility == "公开" && !row.work.Reviewing &&
-				localDouyinWebFieldAllowed(a.record, id, field))
+		if field == apphost.ObservationPageText {
+			return ok
+		}
+		if !a.record.ReadEnabled || !localDouyinWebFieldAllowed(a.record, id, field) {
+			return false
+		}
+		if ok {
+			return row.work.Video && row.work.Visibility == "公开" && !row.work.Reviewing
+		}
+		// Only an actually observed comment page may retain its video
+		// reference across restart. It does not grant other media reads.
+		if field == apphost.ObservationComments {
+			_, ok = p.creatorCommentTarget(a, id)
+			return ok
+		}
+		return false
 	}
 	return a.record.ReadEnabled && localDouyinWebFieldAllowed(a.record, id, field)
 }
@@ -56,7 +72,7 @@ func (p *localDouyinWebObservation) resolveTarget(a localDouyinWebAccess, id str
 	if strings.HasPrefix(id, douyinapp.WebCreatorWorkPrefix) {
 		row, ok := p.creatorWorks.get(id, a.version)
 		if !ok {
-			return localDouyinWebTarget{}, false
+			return p.creatorCommentTarget(a, id)
 		}
 		url, _ := stationbrowser.DouyinVideoURL(row.work.ID)
 		return localDouyinWebTarget{url: url, videoID: row.work.ID}, true
@@ -97,6 +113,56 @@ func (p *localDouyinWebObservation) resolveTarget(a localDouyinWebAccess, id str
 		}
 	}
 	return localDouyinWebTarget{}, false
+}
+
+// A creator detail reference is in-memory. After a successful comment read
+// retain only the exact public video ID, bound to the current grant. This is
+// needed to resume an existing reply after the detail view expires or restarts.
+func (p *localDouyinWebObservation) saveCreatorCommentTarget(a localDouyinWebAccess, content, video string) error {
+	token, creator := strings.CutPrefix(content, douyinapp.WebCreatorWorkPrefix)
+	if !creator {
+		return nil
+	}
+	if !validLocalDouyinWebID(token) || !validLocalDouyinCommentID(video) {
+		return apphost.ErrObservationForbidden
+	}
+	dir := p.snapshotDirectory(a)
+	proof := localDouyinWebLinkProof{Version: 1, Grant: a.version, Snapshot: token, SourceURL: stationbrowser.DouyinCreatorManageURL, Videos: []string{video}}
+	raw, _ := json.Marshal(proof)
+	if err := hostfile.WritePrivate(filepath.Join(dir, token+".creator-comment.json"), raw); err != nil {
+		return apphost.ErrObservationWebStorageUnavailable
+	}
+	return nil
+}
+
+func (p *localDouyinWebObservation) creatorCommentTarget(a localDouyinWebAccess, content string) (localDouyinWebTarget, bool) {
+	token, creator := strings.CutPrefix(content, douyinapp.WebCreatorWorkPrefix)
+	if !creator || !a.record.WorksEnabled || !a.record.ReadEnabled || !validLocalDouyinWebID(token) ||
+		!localDouyinWebFieldAllowed(a.record, content, apphost.ObservationComments) {
+		return localDouyinWebTarget{}, false
+	}
+	root, err := workspacefs.OpenPath(p.snapshotDirectory(a))
+	if err != nil {
+		return localDouyinWebTarget{}, false
+	}
+	defer root.Close()
+	file, err := workspacefs.OpenRegular(root, token+".creator-comment.json")
+	if err != nil {
+		return localDouyinWebTarget{}, false
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 1025))
+	var proof localDouyinWebLinkProof
+	if err != nil || len(raw) > 1024 || strictLocalMemoryDecode(raw, &proof) != nil || proof.Version != 1 ||
+		proof.Grant != a.version || proof.Snapshot != token || proof.SourceURL != stationbrowser.DouyinCreatorManageURL || len(proof.Videos) != 1 {
+		return localDouyinWebTarget{}, false
+	}
+	video := proof.Videos[0]
+	url, err := stationbrowser.DouyinVideoURL(video)
+	if err != nil {
+		return localDouyinWebTarget{}, false
+	}
+	return localDouyinWebTarget{url: url, videoID: video}, true
 }
 
 func saveLocalDouyinWebLinkProof(dir string, snapshot localDouyinWebSnapshot) error {

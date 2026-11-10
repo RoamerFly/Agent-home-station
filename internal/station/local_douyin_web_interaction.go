@@ -38,7 +38,7 @@ func (p *localDouyinWebInteraction) ResolveInteractionSubject(ctx context.Contex
 		return "", apphost.ErrInteractionDenied
 	}
 	r := &localDouyinWebObservation{home: p.home, installation: p.installation}
-	target, ok := r.resolveTarget(a, d.ContentID)
+	target, ok := resolveDouyinInteractionTarget(r, a, d)
 	if !ok || target.videoID == "" {
 		return "", apphost.ErrInteractionDenied
 	}
@@ -47,6 +47,16 @@ func (p *localDouyinWebInteraction) ResolveInteractionSubject(ctx context.Contex
 		return "", apphost.ErrInteractionDenied
 	}
 	return proof.SHA256, nil
+}
+
+func resolveDouyinInteractionTarget(reader *localDouyinWebObservation, a localDouyinWebAccess, draft apphost.InteractionDraft) (localDouyinWebTarget, bool) {
+	if strings.HasPrefix(draft.ContentID, douyinapp.WebCreatorWorkPrefix) {
+		if draft.Kind != "reply_comment" {
+			return localDouyinWebTarget{}, false
+		}
+		return reader.creatorCommentTarget(a, draft.ContentID)
+	}
+	return reader.resolveTarget(a, draft.ContentID)
 }
 
 func (p *localDouyinWebInteraction) GrantInteraction(ctx context.Context, d apphost.InteractionDraft) (apphost.PublicationGrant, error) {
@@ -61,7 +71,7 @@ func (p *localDouyinWebInteraction) GrantInteraction(ctx context.Context, d apph
 	}
 	if d.ContentID != "" {
 		reader := &localDouyinWebObservation{home: p.home, installation: p.installation}
-		target, ok := reader.resolveTarget(a, d.ContentID)
+		target, ok := resolveDouyinInteractionTarget(reader, a, d)
 		if !ok || target.videoID == "" {
 			return apphost.PublicationGrant{Allowed: false}, nil
 		}
@@ -112,7 +122,7 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionDenied
 	}
 	r := &localDouyinWebObservation{home: p.home, installation: p.installation}
-	target, ok := r.resolveTarget(a, in.Draft.ContentID)
+	target, ok := resolveDouyinInteractionTarget(r, a, in.Draft)
 	if !ok || target.videoID == "" {
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionDenied
 	}
