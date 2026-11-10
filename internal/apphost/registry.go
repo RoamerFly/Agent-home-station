@@ -130,10 +130,11 @@ type Registration struct {
 	Provider Provider
 }
 
-// Registry is immutable after construction. Its zero value represents a host
-// with no registered applications.
+// Registry holds trusted adapters. Its zero value represents a host with no
+// registered applications. A host can additionally restrict their visibility.
 type Registry struct {
-	apps map[string]Registration
+	apps    map[string]Registration
+	visible func(string) bool
 }
 
 func New(registrations ...Registration) (Registry, error) {
@@ -155,8 +156,10 @@ func New(registrations ...Registration) (Registry, error) {
 
 func (r Registry) Applications() []Application {
 	result := make([]Application, 0, len(r.apps))
-	for _, entry := range r.apps {
-		result = append(result, entry.Application)
+	for id := range r.apps {
+		if entry, ok := r.Lookup(id); ok {
+			result = append(result, entry.Application)
+		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
@@ -164,5 +167,16 @@ func (r Registry) Applications() []Application {
 
 func (r Registry) Lookup(id string) (Registration, bool) {
 	entry, exists := r.apps[id]
+	if exists && r.visible != nil && !r.visible(id) {
+		return Registration{}, false
+	}
 	return entry, exists
+}
+
+// WithVisibility gives runtime callers a restricted view without changing the
+// original catalogue used to mount owner controls. Providers must still check
+// current grants at the actual operation boundary.
+func (r Registry) WithVisibility(visible func(string) bool) Registry {
+	r.visible = visible
+	return r
 }

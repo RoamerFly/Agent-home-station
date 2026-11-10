@@ -1414,6 +1414,7 @@
       ["unconfigured", "unconfirmed", "saved", "login_open"].includes(value.state) &&
       typeof value.active === "boolean" && typeof value.available === "boolean" &&
       (typeof value.paused === "undefined" || typeof value.paused === "boolean") &&
+      (typeof value.detached === "undefined" || typeof value.detached === "boolean") &&
       (typeof value.attempt_id === "undefined" || typeof value.attempt_id === "string") &&
       (typeof value.confirmed_at === "undefined" || typeof value.confirmed_at === "string") &&
       (typeof value.read_enabled === "undefined" || typeof value.read_enabled === "boolean") &&
@@ -1476,6 +1477,7 @@
   async function loadDouyinWebLogin(current = apps) {
     const web = current?.douyinWebLogin;
     if (!web || current !== apps || web.loading || web.applying) return;
+    if (!current.catalog?.some((item) => item.id === "douyin" && item.source_available) && !current.registered?.some((item) => item.id === "douyin")) return;
     const generation = web.generation;
     web.loading = true;
     try {
@@ -1498,6 +1500,7 @@
     }
   }
   function douyinWebLoginSummary(value) {
+    if (value?.detached) return ["抖音已撤下", "登录资料、接入版本和历史任务仍保留。重新登记后，可按需恢复网页能力。"];
     if (value?.paused) {
       const note = value.state === "unconfigured" ? "恢复后可以重新登录和设置授权。" : "登录资料和原有授权已保留。恢复后可重新读取、互动和发布。";
       return ["抖音网页能力已暂停", note];
@@ -1544,6 +1547,11 @@
       web.loaded = true;
       let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : action === "begin_creator" ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
       if (action === "pause" || action === "resume") feedback = updated.paused ? "已暂停抖音网页能力。" : "已恢复抖音网页能力。";
+      if (action === "detach" || action === "attach") {
+        feedback = updated.detached ? "已撤下抖音。" : "已重新登记抖音，网页能力仍暂停。";
+        await loadApps();
+        if (current !== apps || web.generation !== generation) return;
+      }
       if (action === "set_read") {
         if (typeof options.allowComments === "boolean") feedback = options.allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
         else if (typeof options.allowAudio === "boolean") feedback = options.allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
@@ -1577,8 +1585,8 @@
       }
     }
   }
-  function douyinWebLoginRow(current) {
-    if (!current.registered?.some((item) => item.id === "douyin")) return null;
+  function douyinWebLoginRow(current, listing) {
+    if (!listing?.source_available && !current.registered?.some((item) => item.id === "douyin")) return null;
     const web = current.douyinWebLogin, value = web.value;
     const [title, note] = douyinWebLoginSummary(value);
     const row = appElement("section", "", "app-layer publication-layer douyin-web-login");
@@ -1596,6 +1604,11 @@
     if (!web.loaded && !web.loading) {
       const retry = appElement("button", "读取网页登录状态", "button compact quiet");
       retry.type = "button"; retry.addEventListener("click", () => { void loadDouyinWebLogin(current); }); actions.append(retry);
+    } else if (value?.detached) {
+      const attach = appElement("button", "重新登记抖音", "button compact secondary");
+      attach.type = "button"; attach.disabled = busy;
+      attach.addEventListener("click", () => { void updateDouyinWebLogin(current, "attach"); });
+      actions.append(attach);
     } else if (value) {
       if (value.paused || (value.state === "saved" && !value.attempt_id)) {
         const action = value.paused ? "resume" : "pause";
@@ -1622,6 +1635,13 @@
         const clear = appElement("button", web.applying === "clear" ? "正在移除…" : "移除网页登录资料", "button compact quiet");
         clear.type = "button"; clear.disabled = busy;
         clear.addEventListener("click", () => { void updateDouyinWebLogin(current, "clear", {}); }); actions.append(clear);
+      }
+      if (!value.attempt_id) {
+        const detach = appElement("button", "撤下抖音", "button compact quiet");
+        detach.type = "button"; detach.disabled = busy;
+        detach.title = "停止使用抖音，保留登录资料、接入版本和历史任务";
+        detach.addEventListener("click", () => { void updateDouyinWebLogin(current, "detach"); });
+        actions.append(detach);
       }
       if (!value.paused && value.state === "saved" && !value.active && !value.attempt_id) {
         const publishEnabled = douyinWebPublishEnabled(value);
@@ -1907,14 +1927,16 @@
       const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
       const officialAccount = record.id === "bilibili";
       const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
+      const detached = record.id === "douyin" && douyinIsDetached(apps);
       const paused = douyinLogin?.paused === true;
       const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
       const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
-      status.classList.toggle("is-connected", connected && !paused);
+      const status = appElement("span", detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      status.classList.toggle("is-connected", connected && !paused && !detached);
       head.append(status);
       const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
-      if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
+      if (detached) summary.textContent = "可在账号与使用中重新登记。";
+      else if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
       const source = catalog.get(record.id);
       const foot = appElement("div", "", "app-card-footer");
       foot.append(appElement("span", source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本"), appElement("span", "管理应用"));
@@ -1952,7 +1974,7 @@
       }); return button;
     }));
     const controls = apps.detailTab === "source" ? [appSourceRow(record, listing)] : apps.detailTab === "persona" ? [appPersonaRow(record)] :
-      record.id === "douyin" ? [douyinWebLoginRow(apps), douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
+      record.id === "douyin" ? [douyinWebLoginRow(apps, listing), douyinIsDetached(apps) ? null : douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
       record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
@@ -2450,7 +2472,7 @@
     return row;
   }
   function douyinPublicationRow(current) {
-    if (!current.registered?.some((item) => item.id === "douyin")) return null;
+    if (!current.registered?.some((item) => item.id === "douyin") && !douyinIsDetached(current)) return null;
     const tab = current.douyinActivityTab === "interactions" ? "interactions" : "publications";
     const work = tab === "interactions" ? current.douyinInteractions : current.douyinWork;
     const row = appElement("section", "", "app-layer publication-layer");
@@ -2555,6 +2577,9 @@
       load: (cursors) => loadDouyinInteractionWork(current, cursors),
     });
   }
+  function douyinIsDetached(current) {
+    return current.douyinWebLogin.value?.detached ?? current.catalog?.some((item) => item.id === "douyin" && item.detached) ?? false;
+  }
   function publicationTasksPanel(current, appID, label, options = {}) {
     const work = options.work || publicationWork(current, appID);
     const load = options.load || ((cursors) => loadPublicationWork(current, appID, cursors));
@@ -2632,6 +2657,7 @@
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(publicationActions)) {
       if (!available.includes(action)) continue;
+      if (appID === "douyin" && douyinIsDetached(current) && action !== "cancel") continue;
       if (action === "resume" && task.progress?.stage === "part_pending") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
@@ -2675,6 +2701,7 @@
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(interactionActions)) {
       if (!available.includes(action)) continue;
+      if (douyinIsDetached(current) && action !== "cancel") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
       button.dataset.action = action;

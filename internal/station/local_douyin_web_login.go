@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/stationbrowser"
@@ -26,6 +27,7 @@ import (
 type localDouyinWebView struct {
 	Revision        uint64 `json:"revision"`
 	Paused          bool   `json:"paused"`
+	Detached        bool   `json:"detached"`
 	State           string `json:"state"`
 	Active          bool   `json:"active"`
 	AttemptID       string `json:"attempt_id,omitempty"`
@@ -66,6 +68,7 @@ type localDouyinWebRecord struct {
 	FishID   string `json:"fish_id"`
 	Revision uint64 `json:"revision"`
 	Paused   bool   `json:"paused,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
 	Profile  string `json:"profile,omitempty"`
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
@@ -189,6 +192,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.ReadEnabled && (record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("网页读取授权没有已确认的登录资料，原资料保留")
 	}
+	if record.Detached && !record.Paused {
+		return record, errors.New("抖音接入状态无效，原资料保留")
+	}
 	if record.ReadScope != "" && record.ReadScope != "home" && record.ReadScope != "home_and_videos" {
 		return record, errors.New("网页读取范围无效，原资料保留")
 	}
@@ -224,8 +230,39 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	return record, nil
 }
 
+// The editable Connected Apps checkout never decides which adapters may run.
+// Read the host-owned registration state so a restart or another host process
+// cannot expose a detached connection from an earlier snapshot.
+func (h *localHomeService) applicationVisible(id string) bool {
+	if id != douyinapp.ID {
+		return true
+	}
+	detached, err := h.douyinRegistrationDetached()
+	return err == nil && !detached
+}
+
+func (h *localHomeService) douyinRegistrationDetached() (bool, error) {
+	identity, err := h.identity.Read()
+	if err != nil {
+		return false, err
+	}
+	if identity.LocalOwner == nil {
+		return false, nil
+	}
+	root, err := workspacefs.OpenPath(filepath.Join(h.dataDir, "apps", "douyin", "web-login", identity.FishID))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	record, err := readLocalDouyinWebRecord(root, identity.FishID)
+	return record.Detached, err
+}
+
 func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
-	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
+	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, Detached: record.Detached, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -284,7 +321,7 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return false
 	}
 	switch in.Action {
-	case "pause":
+	case "pause", "detach":
 		return true
 	case "clear":
 		return in.ApproveProfile
@@ -335,7 +372,10 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
-	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" {
+	if record.Detached && in.Action != "attach" && in.Action != "detach" {
+		return fail(409, "抖音已撤下，请先重新登记")
+	}
+	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" {
 		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
 	}
 	save := func() error {
@@ -347,6 +387,18 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
 	}
 	switch in.Action {
+	case "detach", "attach":
+		detached := in.Action == "detach"
+		if detached == record.Detached {
+			return m.view(record), 200, nil
+		}
+		if m.attempt != "" && m.fish == fish {
+			return fail(409, "请先保存或取消本次登录")
+		}
+		record.Detached, record.Paused = detached, true
+		if save() != nil {
+			return fail(503, "抖音接入状态未保存，请重新读取后核对")
+		}
 	case "pause", "resume":
 		paused := in.Action == "pause"
 		if paused == record.Paused {

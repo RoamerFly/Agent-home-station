@@ -38,7 +38,12 @@ func (h *localHomeService) appInstallRoutes(s *websession.Store, mux *http.Serve
 				return
 			}
 			installState, installedVersion := h.appInstallState(contract)
-			if id != "wechat" && sourceErr != nil && installState != "installed" && installState != "conflict" {
+			detached := false
+			if id == "douyin" {
+				saved, err := h.douyinRegistrationDetached()
+				detached = err == nil && saved
+			}
+			if id != "wechat" && sourceErr != nil && installState != "installed" && installState != "conflict" && !detached {
 				continue
 			}
 			row := map[string]any{
@@ -48,6 +53,9 @@ func (h *localHomeService) appInstallRoutes(s *websession.Store, mux *http.Serve
 			}
 			if installedVersion != "" {
 				row["installed_version"] = installedVersion
+			}
+			if id == "douyin" {
+				row["detached"] = detached
 			}
 			rows = append(rows, row)
 		}

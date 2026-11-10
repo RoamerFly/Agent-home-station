@@ -4,9 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	appcatalog "wechat-bot/connected-apps"
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationbrowser"
@@ -90,6 +96,87 @@ func TestLocalAppInteractionNormalChatCreatesSubmitsAndKeepsReceipt(t *testing.T
 	_, pub := f.request("GET", "/api/local/publications?app_id=douyin", nil, false)
 	if len(pub["tasks"].(map[string]any)["items"].([]any)) != 0 {
 		t.Fatal("interaction appeared as publication")
+	}
+
+	_, login := f.request("GET", localDouyinWebRoute, nil, false)
+	_, home := f.request("GET", "/api/local/home", nil, false)
+	contract, err := appcatalog.Lookup(douyinapp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.handler.home.appCatalog, err = filepath.Abs("../../connected-apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, checkout := f.request("POST", "/api/local/apps/douyin/install", map[string]any{"revision": home["revision"], "digest": contract.Digest}, true)
+	if code != http.StatusOK {
+		t.Fatal("install checkout", code, checkout)
+	}
+	marker := filepath.Join(checkout["directory"].(string), "synthetic-edits.md")
+	if err = os.WriteFile(marker, []byte("local changes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detach := map[string]any{"action": "detach", "revision": login["revision"]}
+	if code, _ = f.request("POST", localDouyinWebRoute, detach, false); code != http.StatusForbidden {
+		t.Fatal("detach accepted without CSRF", code)
+	}
+	code, login = f.request("POST", localDouyinWebRoute, detach, true)
+	if code != http.StatusOK || login["detached"] != true || login["paused"] != true || login["likes_enabled"] != false {
+		t.Fatal("detach did not withdraw the grants", code, login)
+	}
+	if code, apps := f.request("GET", "/api/apps", nil, false); code != http.StatusOK || len(apps["items"].([]any)) != 0 {
+		t.Fatal("detached provider still registered", code, apps)
+	}
+	if code, targets := f.request("GET", "/api/local/apps/observation", nil, false); code != http.StatusOK || len(localAppObservationItems(targets)) != 0 {
+		t.Fatal("detached app still provided observation targets", code, targets)
+	}
+	if code, out := f.request("POST", "/api/local/interactions", map[string]any{"action": "status", "job_id": job}, true); code != http.StatusOK || out["state"] != "applied" || clicks != 1 {
+		t.Fatal("local receipt was lost or caused external work", code, out)
+	}
+	if code, out := f.request("GET", "/api/local/project-tools", nil, false); code != http.StatusOK || out["tools"] == nil {
+		t.Fatal("detach affected shared tools", code, out)
+	}
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		return localModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+			return `{"action":"reply","messages":["继续在家里聊天。"]}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(f, "detached-app-local-chat", "继续本地聊天"); code != http.StatusOK || out["status"] != "completed" {
+		t.Fatal("detach interrupted local chat", code, out)
+	}
+	if err = f.handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	registry, err := apphost.New(douyinapp.NewWebOnly(nil).Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithApps(f.dir, f.root, "synthetic-local-password", "", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.home.douyinWeb.available = func() bool { return true }
+	next := newLocalAppObservationFixtureWithHandler(t, handler, f.dir, f.root)
+	next.login()
+	if code, apps := next.request("GET", "/api/apps", nil, false); code != http.StatusOK || len(apps["items"].([]any)) != 0 {
+		t.Fatal("restart re-registered the detached app", code, apps)
+	}
+	if code, _ = next.request("POST", localDouyinWebRoute, map[string]any{"action": "resume", "revision": login["revision"]}, true); code != http.StatusConflict {
+		t.Fatal("resume bypassed re-registration", code)
+	}
+	code, login = next.request("POST", localDouyinWebRoute, map[string]any{"action": "attach", "revision": login["revision"]}, true)
+	if code != http.StatusOK || login["detached"] != false || login["paused"] != true || login["state"] != "saved" || login["likes_enabled"] != false {
+		t.Fatal("re-registration restored access or lost login", code, login)
+	}
+	if code, apps := next.request("GET", "/api/apps", nil, false); code != http.StatusOK || len(apps["items"].([]any)) != 1 {
+		t.Fatal("re-registration did not restore the provider", code, apps)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "local changes" {
+		t.Fatal("re-registration changed the editable checkout", err)
+	}
+	if code, page := next.request("GET", "/api/local/interactions?app_id=douyin", nil, false); code != http.StatusOK || len(page["tasks"].(map[string]any)["items"].([]any)) != 1 {
+		t.Fatal("re-registration lost task history", code, page)
 	}
 }
 
