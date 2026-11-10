@@ -105,13 +105,16 @@ func (s *stationWechat) signedInAccount(ctx context.Context, id string) (string,
 	return view.AccountID, err
 }
 
+func (s *stationWechat) directoryAccess() wechatapp.StationDirectoryAccess {
+	return wechatapp.StationDirectoryAccess{Cursor: s.contactCursor, SignedInAccount: s.signedInAccount, Sender: s.WorkerSender}
+}
+
 func (s *stationWechat) readDirectory(ctx context.Context, in wechatapp.StationDirectoryQuery, kind, audience string, check func(context.Context) error) (wechatapp.StationDirectoryPage, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
-	access := wechatapp.StationDirectoryAccess{Cursor: s.contactCursor, SignedInAccount: s.signedInAccount, Sender: s.WorkerSender}
-	return access.Read(ctx, in, kind, audience, check)
+	return s.directoryAccess().Read(ctx, in, kind, audience, check)
 }
 
 func (t *localToolSet) checkWechatOwner(ctx context.Context) error {

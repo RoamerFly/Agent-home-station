@@ -5,9 +5,9 @@ import (
 	"crypto/cipher"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,7 +20,7 @@ import (
 
 const (
 	stationDirectoryNativeLimit = 200
-	StationDirectoryCursorLimit = 11000 // Native 8192 bytes plus authenticated encryption and base64.
+	stationDirectoryCursorLimit = 11000 // Native 8192 bytes plus authenticated encryption and base64.
 )
 
 type stationDirectoryError struct{ code, message string }
@@ -96,23 +96,10 @@ func (a StationDirectoryAccess) Read(ctx context.Context, in StationDirectoryQue
 	if err := check(ctx); err != nil {
 		return out, err
 	}
-	scopeFields, _ := json.Marshal([]string{kind, in.Connection, audience, in.Search})
-	sum := sha256.Sum256(scopeFields)
-	scope := []byte(fmt.Sprintf("%x", sum))
-	cursor := ""
-	if in.Cursor != "" {
-		if !strings.HasPrefix(in.Cursor, "cc-") || len(in.Cursor) > StationDirectoryCursorLimit {
-			return out, ErrDirectoryCursor
-		}
-		packet, err := base64.RawURLEncoding.DecodeString(in.Cursor[3:])
-		if err != nil {
-			return out, ErrDirectoryCursor
-		}
-		plain, err := a.Cursor.Open(nil, nil, packet, scope)
-		if err != nil || len(plain) == 0 || len(plain) > 8192 {
-			return out, ErrDirectoryCursor
-		}
-		cursor = string(plain)
+	scope := stationDirectoryScope(kind, in.Connection, audience, in.Search)
+	cursor, err := openStationDirectoryCursor(a.Cursor, scope, "cc-", in.Cursor)
+	if err != nil {
+		return out, ErrDirectoryCursor
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -165,12 +152,48 @@ func (a StationDirectoryAccess) Read(ctx context.Context, in StationDirectoryQue
 	if limit < in.Limit {
 		out.LimitReason = "原生接口单页上限为 200 条，可用续读位置继续。"
 	}
-	if page.NextCursor != nil && *page.NextCursor != "" {
-		if *page.NextCursor == cursor || len(*page.NextCursor) > 8192 {
-			return StationDirectoryPage{}, ErrDirectoryCursor
-		}
-		out.Next = "cc-" + base64.RawURLEncoding.EncodeToString(a.Cursor.Seal(nil, nil, []byte(*page.NextCursor), scope))
-		out.More = true
+	out.Next, err = nextStationDirectoryCursor(a.Cursor, scope, "cc-", cursor, page.NextCursor)
+	if err != nil {
+		return StationDirectoryPage{}, ErrDirectoryCursor
 	}
+	out.More = out.Next != ""
 	return out, nil
+}
+
+// The JSON string array digest preserves the existing cursor and recall key format.
+func stationDirectoryScope(fields ...string) string {
+	payload, _ := json.Marshal(fields)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+var errStationDirectoryCursor = errors.New("invalid station directory cursor")
+
+func openStationDirectoryCursor(codec cipher.AEAD, scope, prefix, token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	raw, ok := strings.CutPrefix(token, prefix)
+	if !ok || len(token) > stationDirectoryCursorLimit {
+		return "", errStationDirectoryCursor
+	}
+	packet, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return "", errStationDirectoryCursor
+	}
+	plain, err := codec.Open(nil, nil, packet, []byte(scope))
+	if err != nil || len(plain) == 0 || len(plain) > 8192 {
+		return "", errStationDirectoryCursor
+	}
+	return string(plain), nil
+}
+
+func nextStationDirectoryCursor(codec cipher.AEAD, scope, prefix, current string, next *string) (string, error) {
+	if next == nil || *next == "" {
+		return "", nil
+	}
+	if *next == current || len(*next) > 8192 {
+		return "", errStationDirectoryCursor
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(codec.Seal(nil, nil, []byte(*next), []byte(scope))), nil
 }

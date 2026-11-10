@@ -1,6 +1,7 @@
 package station
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
@@ -26,7 +27,7 @@ func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	var submits, statusReads atomic.Int32
-	var statusMode atomic.Int32
+	var statusMode, directoryMode atomic.Int32
 	nativeReceipt := func(id, state, outcome, message, server string) map[string]any {
 		return map[string]any{"id": id, "accountId": "one", "kind": "message_recall", "state": state,
 			"result": map[string]string{"messageId": message, "threadId": "room@chatroom", "serverId": server, "remoteOutcome": outcome, "status": "synthetic_recall"}}
@@ -49,10 +50,20 @@ func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 			if r.URL.Query().Get("cursor") != "private-native-cursor" {
 				t.Error("wrong native cursor")
 			}
-			write(map[string]any{"items": []map[string]any{
-				{"id": "msg_original", "serverId": "101", "threadId": "room@chatroom", "direction": "outgoing", "body": "synthetic-private-text"},
-				{"id": "msg_voice", "serverId": "102", "threadId": "room@chatroom", "direction": "outgoing"},
-			}})
+			switch directoryMode.Load() {
+			case 1:
+				write(map[string]any{"items": []map[string]any{
+					{"id": "msg_original", "serverId": "101", "threadId": "room@chatroom", "direction": "outgoing"},
+					{"id": "msg_conflicting", "serverId": "101", "threadId": "room@chatroom", "direction": "outgoing"},
+				}})
+			case 2:
+				write(map[string]any{"items": []map[string]any{}, "nextCursor": "private-native-cursor"})
+			default:
+				write(map[string]any{"items": []map[string]any{
+					{"id": "msg_original", "serverId": "101", "threadId": "room@chatroom", "direction": "outgoing", "body": "synthetic-private-text"},
+					{"id": "msg_voice", "serverId": "102", "threadId": "room@chatroom", "direction": "outgoing"},
+				}})
+			}
 		case "GET /v1/accounts/one/messages/msg_original", "GET /v1/accounts/one/messages/msg_voice", "GET /v1/accounts/one/messages/msg_bystander", "GET /v1/accounts/one/messages/msg_otherroom":
 			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 			thread, server, direction := "room@chatroom", "101", "outgoing"
@@ -158,7 +169,15 @@ func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 		t.Fatal("first page exposed data or performed a mutation", first)
 	}
 	call("GET", voicePath+"?server_id=102&cursor="+cursor, nil, false, 400)
-	target := call("GET", textPath+"?server_id=101&cursor="+cursor, nil, false, 200)
+	directoryMode.Store(1)
+	call("GET", textPath+"?server_id=101&cursor="+cursor, nil, false, 409)
+	directoryMode.Store(2)
+	call("GET", textPath+"?server_id=101&cursor="+cursor, nil, false, 400)
+	directoryMode.Store(0)
+	// A continuation from the old host implementation must still open.
+	scope := []byte(localCheckpointKey("recall", connection, "text-send", "room@chatroom", "101"))
+	legacyCursor := base64.RawURLEncoding.EncodeToString(f.handler.chat.wechat.contactCursor.Seal(nil, nil, []byte("private-native-cursor"), scope))
+	target := call("GET", textPath+"?server_id=101&cursor="+legacyCursor, nil, false, 200)
 	if target["message_id"] != "msg_original" || len(target) != 1 {
 		t.Fatal("wrong exact candidate or exposed message body", target)
 	}
@@ -166,7 +185,8 @@ func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 	call("POST", textPath, params("msg_otherroom", "101"), true, 409)
 	call("POST", textPath, params("msg_voice", "102"), true, 404)
 	textResult := call("POST", textPath, params("msg_original", "101"), true, 202)
-	if textResult["state"] != "submitted_pending" || textResult["action"] != "recall" {
+	legacyOperation := "station-recall-" + localCheckpointKey(connection, "room@chatroom", "101")
+	if textResult["state"] != "submitted_pending" || textResult["action"] != "recall" || textResult["operation_id"] != legacyOperation {
 		t.Fatal(textResult)
 	}
 	call("POST", textPath, params("msg_original", "101"), true, 202)
