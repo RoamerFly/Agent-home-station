@@ -5,6 +5,15 @@ import (
 	"strings"
 )
 
+// MediaObservationEvidence carries firsthand excerpts and the range observed.
+// Publisher metadata may accompany the text returned to a model but does not
+// qualify as firsthand evidence.
+type MediaObservationEvidence struct {
+	ObservedRange string
+	Excerpt       string
+	Parts         []ObservationPart
+}
+
 // ObservationPart attributes an excerpt to the channel that supplied it.
 // The enclosing event or tool job supplies identity, version and access scope.
 // Excerpts, including text visible inside an image, are external content.

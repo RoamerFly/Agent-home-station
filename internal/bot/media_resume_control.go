@@ -3,23 +3,12 @@ package bot
 import (
 	"context"
 	"time"
+
+	"wechat-bot/internal/sending"
 )
 
-// MediaResumeRequest is a host-issued explicit operation, never model input.
-// Its original key and new trace remain immutable across restarts.
-type MediaResumeRequest struct {
-	ID      string `json:"id"`
-	Account string `json:"account"`
-	Thread  string `json:"thread"`
-	Key     string `json:"key"`
-	Trace   string `json:"trace"`
-}
-
-type MediaResumeResult struct {
-	State       string `json:"state"`
-	Reason      string `json:"reason,omitempty"`
-	DeliveryKey string `json:"delivery_key,omitempty"`
-}
+type MediaResumeRequest = sending.MediaResumeRequest
+type MediaResumeResult = sending.MediaResumeResult
 
 func (w *Worker) processHostMediaResume(ctx context.Context) {
 	if w.runtime == nil || w.draining() || w.config.NextMediaResume == nil || w.config.MediaResumeResult == nil {

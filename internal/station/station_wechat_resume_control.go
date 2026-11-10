@@ -5,20 +5,20 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
+	"wechat-bot/internal/sending"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
 
-func (w *stationWechatWorker) nextMediaResume(now time.Time) (*bot.MediaResumeRequest, error) {
+func (w *stationWechatWorker) nextMediaResume(now time.Time) (*sending.MediaResumeRequest, error) {
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
 	return w.deliveryJournal().NextResume(now)
 }
 
-func (w *stationWechatWorker) mediaResumeResult(request bot.MediaResumeRequest, result bot.MediaResumeResult) error {
+func (w *stationWechatWorker) mediaResumeResult(request sending.MediaResumeRequest, result sending.MediaResumeResult) error {
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
 	return w.deliveryJournal().RecordResumeResult(request, result)

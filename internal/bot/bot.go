@@ -108,17 +108,8 @@ func (w *Worker) authorizedMessage(message linuxnative.Message) bool {
 
 var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 
-// MediaObservationEvidence is supplied only by a trusted host observer that
-// actually decoded incoming media. It is intentionally separate from the text
-// returned to the model, because that text may include untrusted card fields.
-type MediaObservationEvidence struct {
-	ObservedRange string
-	Excerpt       string
-	// Parts preserve which observer supplied each excerpt. Card metadata is
-	// deliberately represented separately from decoded page, image or audio
-	// content so consumers never turn a publisher claim into firsthand memory.
-	Parts []companion.ObservationPart
-}
+type MediaObservationEvidence = companion.MediaObservationEvidence
+
 type GroupRule struct {
 	Mode, Prefix, Persona   string
 	ForceReplyWhenMentioned bool

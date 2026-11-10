@@ -12,7 +12,6 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/localasr"
@@ -123,50 +122,50 @@ func (a stationMediaObserver) Analyze(ctx context.Context, m linuxnative.Message
 	return text, err
 }
 
-func (a stationMediaObserver) AnalyzeWithEvidence(ctx context.Context, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
+func (a stationMediaObserver) AnalyzeWithEvidence(ctx context.Context, m linuxnative.Message) (string, companion.MediaObservationEvidence, error) {
 	ref, ok := companion.MediaSourceFromContext(ctx)
 	if !ok || !a.HandlesType(ref.MessageType) || ref.MessageType != m.Type || ref.MessageID != m.ID || ref.Account != m.AccountID || ref.Thread != m.ThreadID || ref.Sender != m.SenderID {
-		return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
+		return "", companion.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
 	}
 	t := *a.tools
 	t.trace = companion.Input{Channel: "wechat", Account: ref.Account, Thread: ref.Thread, Sender: ref.Sender, TraceID: ref.MessageID, MessageTime: ref.OccurredAt, Source: &ref}
 	if m.Type == 43 {
 		if m.Direction != "incoming" || !t.allowed() {
-			return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
+			return "", companion.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
 		}
 		audio, vision := a.videoObservationModes(ctx, m)
 		if !audio && !vision {
-			return "", bot.MediaObservationEvidence{}, observationFailure("video_observation_unavailable", "当前微信连接没有可用的视频观察方式。")
+			return "", companion.MediaObservationEvidence{}, observationFailure("video_observation_unavailable", "当前微信连接没有可用的视频观察方式。")
 		}
 		text, evidence, err := t.readAutomaticVideoEvidence(ctx, m.ID, 45, audio, vision)
 		if err != nil {
-			return "", bot.MediaObservationEvidence{}, err
+			return "", companion.MediaObservationEvidence{}, err
 		}
 		return "[普通微信视频实际内容观察]\n覆盖：" + evidence.ObservedRange + "\n" + text, evidence, nil
 	}
 	if m.Type == 3 {
 		if !a.SupportsMedia(ctx, m) {
-			return "", bot.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
+			return "", companion.MediaObservationEvidence{}, wechatapp.ErrAttachmentDenied
 		}
 		observed, err := t.readImageObservation(ctx, stationImageInput{Message: m.ID})
 		if err != nil {
-			return "", bot.MediaObservationEvidence{}, err
+			return "", companion.MediaObservationEvidence{}, err
 		}
-		return observed.Observation, bot.MediaObservationEvidence{ObservedRange: observed.Coverage, Excerpt: observed.Observation, Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: observed.Coverage, Excerpt: observed.Observation}}}, nil
+		return observed.Observation, companion.MediaObservationEvidence{ObservedRange: observed.Coverage, Excerpt: observed.Observation, Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: observed.Coverage, Excerpt: observed.Observation}}}, nil
 	}
 	out, err := t.transcribeVoice(ctx, stationVoiceInput{Message: ref.MessageID, Duration: 90, Timeout: 180})
 	if err != nil {
-		return "", bot.MediaObservationEvidence{}, err
+		return "", companion.MediaObservationEvidence{}, err
 	}
 	if out["transcription_state"] == "no_recognizable_speech" {
-		return "这条微信语音没有识别到可辨认的词句。", bot.MediaObservationEvidence{}, nil
+		return "这条微信语音没有识别到可辨认的词句。", companion.MediaObservationEvidence{}, nil
 	}
 	text, ok := out["text"].(string)
 	if !ok || text == "" {
-		return "", bot.MediaObservationEvidence{}, observationFailure("incoming_voice_no_audio", "微信语音没有可读取的音频。")
+		return "", companion.MediaObservationEvidence{}, observationFailure("incoming_voice_no_audio", "微信语音没有可读取的音频。")
 	}
 	coverage := fmt.Sprintf("微信语音音轨 %g–%g 秒", out["start_seconds"], out["end_seconds"])
-	return text, bot.MediaObservationEvidence{ObservedRange: coverage, Excerpt: text, Parts: []companion.ObservationPart{{Kind: companion.ObservationAudioTranscript, Range: coverage, Excerpt: text}}}, nil
+	return text, companion.MediaObservationEvidence{ObservedRange: coverage, Excerpt: text, Parts: []companion.ObservationPart{{Kind: companion.ObservationAudioTranscript, Range: coverage, Excerpt: text}}}, nil
 }
 
 func (t *stationAttachmentTools) voiceTranscription(ctx context.Context, raw json.RawMessage) (string, error) {

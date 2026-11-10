@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sending"
 )
 
 // WorkerSender grants the station host an account-scoped native transport only
@@ -174,11 +176,96 @@ func WaitWorkerLogin(ctx context.Context, native *linuxnative.Sender) error {
 	}
 }
 
-// RunQueue assembles the existing message engine around one WeChat account.
-// The host supplies its durable grants, delivery fence and media operations.
-func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, model bot.Model, config bot.Config, checkActivation func() error) error {
-	if native == nil || checkActivation == nil || config.AuthorizeThread == nil || config.WithDeliverySubmit == nil {
+// WorkerQueue supplies the host-owned dependencies for one WeChat run.
+// The adapter owns defaults and inbound policy. The host retains storage,
+// artifact authorization, and the fence used to serialize native submissions.
+type WorkerQueue struct {
+	StateDir          string
+	Groups            GroupPolicy
+	AllowMediaReplies bool
+	Memory            *companion.Store
+	Model             companion.LanguageModel
+	Persona           string
+	Tools             companion.ToolAccess
+	MediaObserver     WorkerMediaObserver
+
+	ReadGroupShare       func(context.Context, companion.Input, linuxnative.Message) (string, companion.MediaObservationEvidence, error)
+	DeliveryCancelled    func(companion.Input) (bool, error)
+	WithDeliverySubmit   func(context.Context, companion.Input, func() error) error
+	NextMediaResume      func(time.Time) (*sending.MediaResumeRequest, error)
+	MediaResumeResult    func(sending.MediaResumeRequest, sending.MediaResumeResult) error
+	AuthorizeMedia       func(companion.Input) bool
+	PrepareMediaSource   func(context.Context, companion.Input, string, string) (string, error)
+	AuthorizeMediaAsset  func(companion.Input, string, string) bool
+	AuthorizeMediaSubmit func(context.Context, companion.Input, string, string) bool
+}
+
+type WorkerMediaObserver interface {
+	Analyze(context.Context, linuxnative.Message) (string, error)
+	AnalyzeWithEvidence(context.Context, linuxnative.Message) (string, companion.MediaObservationEvidence, error)
+	HandlesType(int) bool
+	SupportsMedia(context.Context, linuxnative.Message) bool
+}
+
+func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, queue WorkerQueue, checkActivation func() error) error {
+	if native == nil || checkActivation == nil || queue.WithDeliverySubmit == nil {
 		return apphost.ErrLifecycleNotReady
+	}
+	characterConfig, config := r.queueConfig(native.Account(), queue, checkActivation)
+	character, err := companion.New(characterConfig, queue.Memory, queue.Model, queue.Persona)
+	if err != nil {
+		return err
+	}
+	character.Names, character.Tools = native, queue.Tools
+	character.ConversationPreference = func(in companion.Input) (string, bool) {
+		if r.Blocked() {
+			return "", false
+		}
+		return queue.Groups.ConversationNote(native.Account(), in)
+	}
+	worker, err := bot.New(config, activationCheckedSource{Sender: native, check: checkActivation}, character, native)
+	if err != nil {
+		return err
+	}
+	return worker.Run(ctx)
+}
+
+func (r *WorkerRun) queueConfig(account string, queue WorkerQueue, checkActivation func() error) (companion.Config, bot.Config) {
+	character := companion.Defaults()
+	character.Enabled, character.Name = true, "大肥鱼"
+	// The application model supplies the live main and application personas.
+	character.Persona = "使用宿主在本轮提供的主角色设定，并结合当前应用的子角色补充。"
+	character.Permissions = companion.Permissions{
+		ReplyText: true, Remember: true, SendImage: queue.AllowMediaReplies,
+		SendVideo: queue.AllowMediaReplies, SendVoice: queue.AllowMediaReplies, SendFile: queue.AllowMediaReplies,
+	}
+	groups := queue.Groups
+	threads, rules := groups.Participation(&character)
+	config := bot.Config{
+		StateDir: queue.StateDir, AllowedThreads: threads, GroupRules: rules,
+		ScopedAnalyzer:    queue.MediaObserver,
+		DeliveryCancelled: queue.DeliveryCancelled, WithDeliverySubmit: queue.WithDeliverySubmit,
+		NextMediaResume: queue.NextMediaResume, MediaResumeResult: queue.MediaResumeResult,
+		AuthorizeMedia: queue.AuthorizeMedia, PrepareMediaSource: queue.PrepareMediaSource,
+		AuthorizeMediaAsset: queue.AuthorizeMediaAsset, AuthorizeMediaSubmit: queue.AuthorizeMediaSubmit,
+		OnDemandAttachment: func(m linuxnative.Message) bool {
+			kind, _ := AttachmentKind(m)
+			grant := groups.Attachments[m.ThreadID]
+			stamp, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+			return kind == "file" && m.Direction == "incoming" && !r.Blocked() && m.AccountID == account && !grant.IsZero() && err == nil && !stamp.Before(grant)
+		},
+		AuthorizeReply: func(in companion.Input) bool { return groups.AllowsReply(account, in) },
+	}
+	if queue.ReadGroupShare != nil {
+		config.PreferredGroupShare = func(m linuxnative.Message) bool {
+			return !r.Blocked() && groups.ShareCandidate(account, m)
+		}
+		config.ReadPreferredGroupShare = func(ctx context.Context, in companion.Input, m linuxnative.Message) (string, companion.MediaObservationEvidence, error) {
+			if !config.PreferredGroupShare(m) {
+				return "", companion.MediaObservationEvidence{}, errors.New("share_group_policy_changed")
+			}
+			return queue.ReadGroupShare(ctx, in, m)
+		}
 	}
 	options := bot.DefaultOptions()
 	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
@@ -197,7 +284,6 @@ func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, mo
 		}
 		return ctx.Err()
 	}
-	authorizeThread := config.AuthorizeThread
 	config.AuthorizeThread = func(ctx context.Context, thread string) (bool, error) {
 		if err := checkActivation(); err != nil {
 			return false, err
@@ -205,7 +291,7 @@ func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, mo
 		if r.Blocked() {
 			return false, ctx.Err()
 		}
-		return authorizeThread(ctx, thread)
+		return !groups.Replies[thread].IsZero(), ctx.Err()
 	}
 	withDeliverySubmit := config.WithDeliverySubmit
 	config.WithDeliverySubmit = func(ctx context.Context, in companion.Input, submit func() error) error {
@@ -218,11 +304,7 @@ func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, mo
 			return submit()
 		})
 	}
-	worker, err := bot.New(config, activationCheckedSource{Sender: native, check: checkActivation}, model, native)
-	if err != nil {
-		return err
-	}
-	return worker.Run(ctx)
+	return character, config
 }
 
 type activationCheckedSource struct {

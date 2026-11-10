@@ -15,6 +15,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sending"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -86,8 +87,8 @@ func deliveryControlKey(first, second, third string) string {
 func (j DeliveryJournal) RequestResume(account, key, requestKey, thread, parentTrace string, rows map[string]ResumeControl, now time.Time) (ResumeControl, error) {
 	id := "resume-" + deliveryControlKey(account, key, requestKey)
 	control := ResumeControl{
-		MediaResumeRequest: bot.MediaResumeRequest{ID: id, Account: account, Thread: thread, Key: key, Trace: "owner-" + id},
-		MediaResumeResult:  bot.MediaResumeResult{State: "requested"},
+		MediaResumeRequest: sending.MediaResumeRequest{ID: id, Account: account, Thread: thread, Key: key, Trace: "owner-" + id},
+		MediaResumeResult:  sending.MediaResumeResult{State: "requested"},
 		RequestKey:         requestKey, ParentTrace: parentTrace, Created: now,
 	}
 	rows[key] = control
@@ -159,8 +160,8 @@ func (j DeliveryJournal) WithSubmit(ctx context.Context, in companion.Input, sub
 }
 
 type ResumeControl struct {
-	bot.MediaResumeRequest
-	bot.MediaResumeResult
+	sending.MediaResumeRequest
+	sending.MediaResumeResult
 	RequestKey  string    `json:"request_key"`
 	ParentTrace string    `json:"parent_trace"`
 	Created     time.Time `json:"created"`
@@ -219,7 +220,7 @@ func (j DeliveryJournal) ReadResumes() (map[string]ResumeControl, error) {
 	return rows, nil
 }
 
-func (j DeliveryJournal) NextResume(now time.Time) (*bot.MediaResumeRequest, error) {
+func (j DeliveryJournal) NextResume(now time.Time) (*sending.MediaResumeRequest, error) {
 	rows, err := j.ReadResumes()
 	if err != nil {
 		return nil, err
@@ -238,7 +239,7 @@ func (j DeliveryJournal) NextResume(now time.Time) (*bot.MediaResumeRequest, err
 	return &request, nil
 }
 
-func (j DeliveryJournal) RecordResumeResult(request bot.MediaResumeRequest, result bot.MediaResumeResult) error {
+func (j DeliveryJournal) RecordResumeResult(request sending.MediaResumeRequest, result sending.MediaResumeResult) error {
 	rows, err := j.ReadResumes()
 	if err != nil {
 		return err

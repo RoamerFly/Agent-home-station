@@ -16,7 +16,6 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
@@ -723,27 +722,6 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		return err
 	}
 	defer memory.Close()
-	config := companion.Defaults()
-	config.Enabled, config.Name = true, "大肥鱼"
-	// The application model supplies the current main and app personas on each
-	// call. Do not freeze a second copy of the default character in this worker.
-	config.Persona = "使用宿主在本轮提供的主角色设定，并结合当前应用的子角色补充。"
-	config.Permissions = companion.Permissions{ReplyText: true, Remember: true}
-	groups := policy.groupPolicy()
-	threads, rules := groups.Participation(&config)
-	mediaReplies := len(policy.MediaReplyGrants) != 0
-	config.Permissions.SendImage, config.Permissions.SendVideo, config.Permissions.SendVoice, config.Permissions.SendFile = mediaReplies, mediaReplies, mediaReplies, mediaReplies
-	character, err := companion.New(config, memory, s.model, persona)
-	if err != nil {
-		return err
-	}
-	character.Names = native
-	character.ConversationPreference = func(in companion.Input) (string, bool) {
-		if run.Blocked() {
-			return "", false
-		}
-		return groups.ConversationNote(native.Account(), in)
-	}
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.Blocked, documents: s.documents}
 	attachment.stationImageVision, attachment.stationVideoVision, attachment.localVision = policy.StationImageVision, policy.StationVideoVision, s.localVision
 	attachment.stationLocalAudio, attachment.localASR = policy.StationLocalAudio, s.localASR
@@ -751,40 +729,18 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}
+	var tools companion.ToolAccess
 	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
-		character.Tools = attachment
+		tools = attachment
 	}
-	return run.RunQueue(ctx, native, character, bot.Config{
-		DeliveryCancelled:  station.deliveryCancelled,
-		WithDeliverySubmit: station.withDeliverySubmit,
-		NextMediaResume:    station.nextMediaResume,
-		MediaResumeResult:  station.mediaResumeResult,
-		StateDir:           station.queueDir(), AllowedThreads: threads, GroupRules: rules,
-		ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
-		OnDemandAttachment: func(m linuxnative.Message) bool {
-			kind, _ := wechatapp.AttachmentKind(m)
-			grant := policy.AttachmentGrants[m.ThreadID]
-			stamp, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
-			return kind == "file" && m.Direction == "incoming" && !run.Blocked() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)
-		},
-		PreferredGroupShare: func(m linuxnative.Message) bool {
-			return !run.Blocked() && groups.ShareCandidate(native.Account(), m)
-		},
-		ReadPreferredGroupShare: func(ctx context.Context, in companion.Input, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
-			if run.Blocked() || !groups.ShareCandidate(native.Account(), m) {
-				return "", bot.MediaObservationEvidence{}, errors.New("share_group_policy_changed")
-			}
-			return attachment.readGroupShareEvidence(ctx, in, m)
-		},
-		AuthorizeThread: func(ctx context.Context, thread string) (bool, error) {
-			return !policy.Grants[thread].IsZero(), ctx.Err()
-		},
-		AuthorizeReply: func(in companion.Input) bool {
-			return groups.AllowsReply(native.Account(), in)
-		},
-		AuthorizeMedia:       attachment.replyAllowed,
-		PrepareMediaSource:   attachment.stageReply,
-		AuthorizeMediaAsset:  attachment.workAllowed,
-		AuthorizeMediaSubmit: attachment.canSubmitMedia,
+	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
+		StateDir: station.queueDir(), Groups: policy.groupPolicy(), AllowMediaReplies: len(policy.MediaReplyGrants) != 0,
+		Memory: memory, Model: s.model, Persona: persona, Tools: tools,
+		MediaObserver:     stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
+		ReadGroupShare:    attachment.readGroupShareEvidence,
+		DeliveryCancelled: station.deliveryCancelled, WithDeliverySubmit: station.withDeliverySubmit,
+		NextMediaResume: station.nextMediaResume, MediaResumeResult: station.mediaResumeResult,
+		AuthorizeMedia: attachment.replyAllowed, PrepareMediaSource: attachment.stageReply,
+		AuthorizeMediaAsset: attachment.workAllowed, AuthorizeMediaSubmit: attachment.canSubmitMedia,
 	}, activationAllowed)
 }

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
@@ -37,35 +36,35 @@ const (
 // reply grant.  This method separately checks the attachment grant and the
 // exact persisted source, so a stale/revoked source fails closed before any
 // media byte is fetched.
-func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in companion.Input, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
+func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in companion.Input, m linuxnative.Message) (string, companion.MediaObservationEvidence, error) {
 	canonical, err := t.validateCurrentGroupShare(ctx, in, m)
 	if err != nil {
-		return "", bot.MediaObservationEvidence{}, err
+		return "", companion.MediaObservationEvidence{}, err
 	}
 
 	// A fork prevents a concurrent model turn from replacing this callback's
 	// trace while the original source and grant checks are in progress.
 	tools, ok := t.ForkTools().(*stationAttachmentTools)
 	if !ok {
-		return "", bot.MediaObservationEvidence{}, errors.New("share_auto_summary_tools_unavailable")
+		return "", companion.MediaObservationEvidence{}, errors.New("share_auto_summary_tools_unavailable")
 	}
 	tools.SetTrace(canonical)
 	text, evidence, err := tools.readAutomaticVideoEvidence(ctx, m.ID, stationGroupShareAudioBudget, true, true)
 	if err != nil {
-		return "", bot.MediaObservationEvidence{}, err
+		return "", companion.MediaObservationEvidence{}, err
 	}
 	return "[微信视频号实际内容观察]\n" + text, evidence, nil
 }
 
 // Both automatic entry points use the same verified original and observation
 // tools. Each caller controls its budget and authorized backends.
-func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context, message string, audioBudget float64, useAudio, useVision bool) (string, bot.MediaObservationEvidence, error) {
+func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context, message string, audioBudget float64, useAudio, useVision bool) (string, companion.MediaObservationEvidence, error) {
 	asset, duration, frames, err := stationGroupShareRead(ctx, t, message)
 	if err != nil {
-		return "", bot.MediaObservationEvidence{}, err
+		return "", companion.MediaObservationEvidence{}, err
 	}
 
-	evidence := bot.MediaObservationEvidence{}
+	evidence := companion.MediaObservationEvidence{}
 	var audioErr error
 	var audio stationGroupShareAudio
 	if useAudio {
@@ -89,9 +88,9 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 		visual, visualErr := stationGroupShareObserveFrames(ctx, t, message, asset, frames)
 		if visualErr != nil {
 			if audioErr != nil {
-				return "", bot.MediaObservationEvidence{}, errors.Join(audioErr, visualErr)
+				return "", companion.MediaObservationEvidence{}, errors.Join(audioErr, visualErr)
 			}
-			return "", bot.MediaObservationEvidence{}, visualErr
+			return "", companion.MediaObservationEvidence{}, visualErr
 		}
 		if strings.TrimSpace(visual.Text) != "" {
 			times := make([]string, 0, len(visual.Times))
@@ -109,15 +108,15 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 	}
 	if !companion.HasFirsthandObservation(evidence.Parts) {
 		if audioErr != nil {
-			return "", bot.MediaObservationEvidence{}, audioErr
+			return "", companion.MediaObservationEvidence{}, audioErr
 		}
 		switch audio.State {
 		case "no_audio_track":
-			return "", bot.MediaObservationEvidence{}, observationFailure("video_audio_track_absent", "视频没有音轨，未取得画面观察。")
+			return "", companion.MediaObservationEvidence{}, observationFailure("video_audio_track_absent", "视频没有音轨，未取得画面观察。")
 		case "no_recognizable_speech":
-			return "", bot.MediaObservationEvidence{}, observationFailure("video_no_recognizable_speech", "已读取音轨，未识别到可辨语音，未取得画面观察。")
+			return "", companion.MediaObservationEvidence{}, observationFailure("video_no_recognizable_speech", "已读取音轨，未识别到可辨语音，未取得画面观察。")
 		}
-		return "", bot.MediaObservationEvidence{}, errors.New("media_observation_empty")
+		return "", companion.MediaObservationEvidence{}, errors.New("media_observation_empty")
 	}
 	evidence.ObservedRange, evidence.Excerpt = stationGroupShareEvidenceText(evidence.Parts)
 	return evidence.Excerpt, evidence, nil
