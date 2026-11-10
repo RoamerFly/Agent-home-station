@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -61,31 +60,30 @@ func readLegacyRelocationRuntimeMarker(runtime *os.Root) (string, error) {
 }
 
 func (s *stationWechat) relocationRuntime(worker *os.Root, id string) (string, error) {
-	raw, err := readLegacyImportFile(worker, legacyRelocationEvidenceFile, 16<<10)
-	if errors.Is(err, os.ErrNotExist) {
+	evidence, err := s.readRelocationEvidence(worker, id)
+	if errors.Is(err, apphost.ErrNotFound) {
 		// An orphaned runtime must never select the copied queue.
 		if _, statErr := worker.Lstat(legacyRelocationRuntimeDir); errors.Is(statErr, os.ErrNotExist) {
 			return "", nil
 		}
 	}
-	var evidence legacyRelocationEvidence
-	if err != nil || json.Unmarshal(raw, &evidence) != nil || evidence.Version != 1 ||
-		evidence.ApplyDigest != evidence.digest() || evidence.Target.Connection != id ||
-		!sameCutoverPath(evidence.Target.Root, s.dataDir) {
-		return "", apphost.ErrUnavailable
-	}
-	owner, err := fishidentity.New(s.dataDir).Read()
-	if err != nil || owner.LocalOwner == nil || owner.FishID != evidence.Target.FishID ||
-		owner.LocalOwner.ID != evidence.Target.OwnerID {
-		return "", apphost.ErrUnavailable
-	}
-	runtime, err := workspacefs.OpenExistingDirectory(worker, legacyRelocationRuntimeDir)
 	if err != nil {
 		return "", apphost.ErrUnavailable
 	}
-	defer runtime.Close()
-	if digest, err := readLegacyRelocationRuntimeMarker(runtime); err != nil || digest != evidence.ApplyDigest {
-		return "", apphost.ErrUnavailable
+	if err := checkLegacyRelocationRuntime(worker, evidence.ApplyDigest); err != nil {
+		return "", err
 	}
 	return filepath.Join(s.root, id, legacyRelocationRuntimeDir), nil
+}
+
+func checkLegacyRelocationRuntime(worker *os.Root, digest string) error {
+	runtime, err := workspacefs.OpenExistingDirectory(worker, legacyRelocationRuntimeDir)
+	if err != nil {
+		return apphost.ErrUnavailable
+	}
+	defer runtime.Close()
+	if saved, err := readLegacyRelocationRuntimeMarker(runtime); err != nil || saved != digest {
+		return apphost.ErrUnavailable
+	}
+	return nil
 }

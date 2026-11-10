@@ -81,18 +81,9 @@ func (s *stationWechat) legacyRelocationReceipt(id, key string) (rollbackReceipt
 		return out, apphost.ErrUnavailable
 	}
 	defer root.Close()
-	raw, err := readLegacyImportFile(root, legacyRelocationEvidenceFile, 16<<10)
-	if errors.Is(err, os.ErrNotExist) {
-		return out, apphost.ErrNotFound
-	}
-	var evidence legacyRelocationEvidence
-	if err != nil || json.Unmarshal(raw, &evidence) != nil || evidence.Version != 1 || evidence.ApplyDigest != evidence.digest() ||
-		evidence.Target.Connection != id || !sameCutoverPath(evidence.Target.Root, s.dataDir) || !legacyMemoryDigestValid(evidence.AuditDigest) {
-		return out, apphost.ErrUnavailable
-	}
-	owner, err := fishidentity.New(s.dataDir).Read()
-	if err != nil || owner.LocalOwner == nil || owner.FishID != evidence.Target.FishID || owner.LocalOwner.ID != evidence.Target.OwnerID {
-		return out, apphost.ErrUnavailable
+	evidence, err := s.readRelocationEvidence(root, id)
+	if err != nil {
+		return out, err
 	}
 	archive, err := readLegacyImportArchive(root)
 	if err != nil || archive.Plan.Digest != evidence.Target.Archive || wechatapp.ConnectionID(archive.Plan.Account) != id {
@@ -122,4 +113,23 @@ func (s *stationWechat) legacyRelocationReceipt(id, key string) (rollbackReceipt
 	}
 	out.Lookup = "relocation_snapshot"
 	return out, nil
+}
+
+// readRelocationEvidence validates the private record without contacting either
+// native service. Archived receipts stay available independently of the queue.
+func (s *stationWechat) readRelocationEvidence(root *os.Root, id string) (legacyRelocationEvidence, error) {
+	var evidence legacyRelocationEvidence
+	raw, err := readLegacyImportFile(root, legacyRelocationEvidenceFile, 16<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return evidence, apphost.ErrNotFound
+	}
+	if err != nil || json.Unmarshal(raw, &evidence) != nil || evidence.Version != 1 || evidence.ApplyDigest != evidence.digest() ||
+		evidence.Target.Connection != id || !sameCutoverPath(evidence.Target.Root, s.dataDir) || !legacyMemoryDigestValid(evidence.AuditDigest) {
+		return evidence, apphost.ErrUnavailable
+	}
+	owner, err := fishidentity.New(s.dataDir).Read()
+	if err != nil || owner.LocalOwner == nil || owner.FishID != evidence.Target.FishID || owner.LocalOwner.ID != evidence.Target.OwnerID {
+		return evidence, apphost.ErrUnavailable
+	}
+	return evidence, nil
 }

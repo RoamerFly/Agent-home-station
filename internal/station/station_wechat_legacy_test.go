@@ -1419,6 +1419,95 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if old, err := os.ReadFile(copiedQueue); err != nil || !bytes.Equal(old, []byte(newQueue)) {
 		t.Fatal("runtime setup changed copied delivery evidence", err)
 	}
+	// The read-only online gate is evaluated only against the receiver's
+	// owned daemon and never authorizes sends or mutates the frozen policy.
+	readinessPath := planRoute("one") + "/relocation/readiness"
+	receiverStop := filepath.Join(receiver, stationNativeStopFile)
+	copiedStop, err := os.ReadFile(receiverStop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusReply atomic.Value
+	statusReply.Store(map[string]any{"id": "one", "storageMode": "managed", "authenticated": false})
+	var receiverWrites atomic.Int64
+	nativeRoot := filepath.Join(receiverApp, "native")
+	receiverDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			receiverWrites.Add(1)
+			http.Error(w, "read only", http.StatusMethodNotAllowed)
+			return
+		}
+		var response any
+		switch r.URL.Path {
+		case "/v1/status":
+			response = map[string]any{"pid": 9440, "dataDir": nativeRoot, "serverId": "receiver-dataset", "ownershipGeneration": "synthetic-receiver-generation"}
+		case "/v1/accounts":
+			response = map[string]any{"items": []map[string]string{{"id": "one"}}}
+		case "/v1/accounts/one":
+			response = statusReply.Load()
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer receiverDaemon.Close()
+	receiverEntry, err := wechatapp.StationRegistration(t.Context(), receiverDaemon.URL, 9440, receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverApps, err := apphost.New(receiverEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, runningFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), receiverApps)
+	if code, _ := runningFixture.request("GET", readinessPath, nil, false); code != http.StatusUnauthorized {
+		t.Fatal("relocation readiness bypassed owner login", code)
+	}
+	runningFixture.login()
+	checkReadiness := func(state, fence, login string, wantReason string) {
+		t.Helper()
+		code, row := runningFixture.request("GET", readinessPath, nil, false)
+		reason, _ := row["reason"].(string)
+		if code != 200 || row["state"] != state || row["source_fence"] != fence || row["native_login"] != login ||
+			row["frozen"] != true || !strings.Contains(reason, wantReason) ||
+			bytes.Contains(j(row), []byte("relocation receiver")) {
+			t.Fatal("unexpected relocation readiness", code, row)
+		}
+	}
+	checkReadiness("blocked", "verified", "pending", "本次桌面运行")
+	write(receiverStop, j(stationNativeStop{Version: 1, State: "starting", Epoch: strings.Repeat("e", 32), DataRoot: receiver, At: time.Now().UTC()}))
+	checkReadiness("blocked", "verified", "signed_out", "尚未在线")
+	statusReply.Store(map[string]any{"id": "two", "storageMode": "managed", "authenticated": true, "connection": "online"})
+	checkReadiness("blocked", "verified", "pending", "托管登录状态")
+	statusReply.Store(map[string]any{"id": "one", "storageMode": "managed", "authenticated": true, "connection": "online"})
+	checkReadiness("owner_identity_check", "verified", "online", "")
+	if _, err := running.chat.wechat.SetConnectionRunning(t.Context(), releaseReq.ConnectionID, true); !errors.Is(err, apphost.ErrLifecycleCutover) {
+		t.Fatal("read-only readiness permitted the frozen worker to start", err)
+	}
+	relocationIntent, err := os.ReadFile(intentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(intentPath, j(legacyReleaseIntent{}))
+	checkReadiness("blocked", "unverified", "pending", "源站封存")
+	write(intentPath, relocationIntent)
+	receiverProfilePath := filepath.Join(receiverApp, filepath.Base(receiptPath))
+	profileEvidence, err := os.ReadFile(receiverProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(receiverProfilePath, append(bytes.Clone(profileEvidence), '\n'))
+	checkReadiness("blocked", "verified", "pending", "档案导入回执已变化")
+	write(receiverProfilePath, profileEvidence)
+	runningFixture.server.Close()
+	if err := running.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if receiverWrites.Load() != 0 {
+		t.Fatal("relocation readiness attempted native writes", receiverWrites.Load())
+	}
+	write(receiverStop, copiedStop)
 	write(copiedQueue, []byte(newQueue+"\n"))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "投递或群操作记录") {
 		t.Fatal("changed destination queue was accepted", err)
