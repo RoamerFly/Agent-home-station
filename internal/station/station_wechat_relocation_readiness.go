@@ -12,6 +12,8 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/identity"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
@@ -22,23 +24,57 @@ type legacyRelocationReadiness struct {
 	SourceFence string `json:"source_fence"`
 	NativeLogin string `json:"native_login"`
 	Frozen      bool   `json:"frozen"`
+	Digest      string `json:"digest,omitempty"`
+}
+
+type legacyRelocationActivation struct {
+	ArchiveBinding     string    `json:"archive_binding"`
+	ConfirmationDigest string    `json:"confirmation_digest"`
+	TargetDataset      string    `json:"target_dataset"`
+	ConfirmedAt        time.Time `json:"confirmed_at"`
+}
+
+func (a legacyRelocationActivation) valid() bool {
+	return legacyMemoryDigestValid(a.ArchiveBinding) && legacyMemoryDigestValid(a.ConfirmationDigest) &&
+		identity.ValidPathID(a.TargetDataset) && !a.ConfirmedAt.IsZero()
+}
+
+type legacyRelocationConfirmation struct {
+	Digest       string `json:"digest"`
+	SameIdentity bool   `json:"same_identity"`
 }
 
 func (s *stationWechat) legacyRelocationReadinessRoute(auth *websession.Store, mux *http.ServeMux, path string) {
-	mux.HandleFunc("GET "+path, auth.Protect(func(w http.ResponseWriter, r *http.Request) {
+	handle := auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
-		view, err := s.relocationReadiness(ctx, r.PathValue("connection"))
+		var input legacyRelocationConfirmation
+		if r.Method == http.MethodPost {
+			if !websession.Decode(w, r, &input) {
+				return
+			}
+			if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
+				websession.Fail(w, http.StatusBadRequest, "请提交当前核对摘要并确认实际微信身份")
+				return
+			}
+		}
+		view, err := s.relocationReadiness(ctx, r.PathValue("connection"), input.Digest)
 		if err != nil {
 			legacyImportFailure(w, err)
 			return
 		}
+		if r.Method == http.MethodPost && view.State != "confirmed" {
+			websession.Respond(w, http.StatusConflict, view)
+			return
+		}
 		websession.Respond(w, http.StatusOK, view)
-	}))
+	})
+	mux.HandleFunc("GET "+path, handle)
+	mux.HandleFunc("POST "+path, handle)
 }
 
-func (s *stationWechat) relocationReadiness(ctx context.Context, id string) (legacyRelocationReadiness, error) {
+func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmation string) (legacyRelocationReadiness, error) {
 	view := legacyRelocationReadiness{State: "blocked", SourceFence: "unverified", NativeLogin: "pending"}
 	blocked := func(reason string) (legacyRelocationReadiness, error) {
 		view.Reason = reason
@@ -59,11 +95,23 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id string) (leg
 	if err != nil {
 		return view, err
 	}
+	var worker *stationWechatWorker
+	if confirmation != "" {
+		worker, err = s.worker(id, false)
+		if err != nil || worker == nil {
+			return blocked("接收站工作器不可核对")
+		}
+		worker.mu.Lock()
+		defer worker.mu.Unlock()
+	}
 	policy, err := readStationWechatPolicy(root)
 	proof := policy.LegacyActivation
 	view.Frozen = err == nil && policy.Paused && !policy.RollbackFrozenAt.IsZero()
 	archive, archiveErr := readLegacyImportArchive(root)
-	if !view.Frozen || proof == nil || !policy.RollbackFrozenAt.Equal(evidence.FrozenAt) || archiveErr != nil ||
+	active := policy.RelocationActivation
+	if err != nil || proof == nil || archiveErr != nil ||
+		active == nil && (!view.Frozen || !policy.RollbackFrozenAt.Equal(evidence.FrozenAt)) ||
+		active != nil && (!policy.RollbackFrozenAt.IsZero() || active.ArchiveBinding != evidence.ApplyDigest) ||
 		archive.Plan.Digest != evidence.Target.Archive || policy.LegacyArchiveDigest != evidence.Target.Archive ||
 		!s.activationBound(*proof, id, archive.Plan, evidence.SourceDataset) ||
 		wechatapp.ConnectionID(archive.Plan.Account) != id {
@@ -115,7 +163,32 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id string) (leg
 		view.NativeLogin = "pending"
 		return blocked("接收站实例或档案在核对期间已变化")
 	}
-	view.State = "owner_identity_check"
+	if active != nil {
+		if active.TargetDataset != daemon.ServerID || confirmation != "" && confirmation != active.ConfirmationDigest {
+			return blocked("已确认的接收站身份或启用摘要不匹配")
+		}
+		view.State = "confirmed"
+		return view, nil
+	}
+	digest := localCheckpointKey("wechat-relocation-confirm-v1", evidence.ApplyDigest, policy, epoch, daemon)
+	if confirmation == "" {
+		view.State, view.Digest = "owner_identity_check", digest
+		return view, nil
+	}
+	if confirmation != digest || localCheckpointKey(worker.policy) != localCheckpointKey(policy) ||
+		worker.runtimeDir == "" || worker.run != nil || !s.relocationSourceStillFenced(evidence, *proof) ||
+		checkLegacyRelocationRuntime(root, evidence.ApplyDigest) != nil {
+		return blocked("接收站启用条件已变化，请重新核对")
+	}
+	policy.RelocationActivation = &legacyRelocationActivation{ArchiveBinding: evidence.ApplyDigest,
+		ConfirmationDigest: digest, TargetDataset: daemon.ServerID, ConfirmedAt: time.Now().UTC()}
+	policy.RollbackFrozenAt = time.Time{}
+	// Confirmation grants no automatic start. The owner starts separately.
+	policy.Paused = true
+	if err := worker.save(policy); err != nil {
+		return view, err
+	}
+	view.State, view.Frozen = "confirmed", false
 	return view, nil
 }
 
@@ -141,4 +214,49 @@ func (s *stationWechat) relocationSourceStillFenced(evidence legacyRelocationEvi
 		intent.ApplyDigest == localCheckpointKey("wechat-relocation-fence-v1", proof, intent.AuditDigest,
 			evidence.Target.SourceStop, intent.ClaimDigest, intent.AcceptUnknown, intent.RelocationTarget) &&
 		s.legacyHandover(proof, handoverActive) == ""
+}
+
+func (s *stationWechat) relocationActivationGuard(ctx context.Context, id string, native *linuxnative.Sender, root *os.Root, policy stationWechatPolicy) (func() bool, error) {
+	approval := *policy.RelocationActivation
+	if !s.relocationActivationEvidence(root, id, policy) {
+		return nil, apphost.ErrLifecycleCutover
+	}
+	epoch := s.runningDesktopEpoch()
+	daemon, err := native.DaemonStatus(ctx)
+	if epoch == "" || err != nil || daemon.ServerID != approval.TargetDataset || !sameStationNativeRoot(s.dataDir, daemon) {
+		return nil, apphost.ErrLifecycleCutover
+	}
+	status, err := native.Status(ctx)
+	if err != nil || status.StorageMode != "managed" || targetLoginState(status, native.Account()) != "online" ||
+		s.runningDesktopEpoch() != epoch || ctx.Err() != nil {
+		return nil, apphost.ErrLifecycleCutover
+	}
+	return func() bool {
+		currentRoot, err := workspacefs.OpenPath(filepath.Join(s.root, id))
+		if err != nil {
+			return false
+		}
+		defer currentRoot.Close()
+		current, err := readStationWechatPolicy(currentRoot)
+		return err == nil && current.Enabled && !current.Paused && current.RelocationActivation != nil &&
+			*current.RelocationActivation == approval && s.runningDesktopEpoch() == epoch &&
+			s.relocationActivationEvidence(currentRoot, id, current)
+	}, nil
+}
+
+func (s *stationWechat) relocationActivationEvidence(root *os.Root, id string, policy stationWechatPolicy) bool {
+	proof, approval := policy.LegacyActivation, policy.RelocationActivation
+	if proof == nil || approval == nil || !policy.RollbackFrozenAt.IsZero() {
+		return false
+	}
+	evidence, err := s.readRelocationEvidence(root, id)
+	if err != nil || approval.ArchiveBinding != evidence.ApplyDigest || policy.LegacyArchiveDigest != evidence.Target.Archive ||
+		proof.ArchiveDigest != evidence.Target.Archive || proof.TargetDataset != evidence.SourceDataset ||
+		proof.Connection != s.connectionRef(id, proof.Connection.AccountID) ||
+		checkLegacyRelocationRuntime(root, approval.ArchiveBinding) != nil ||
+		!s.relocationSourceStillFenced(evidence, *proof) {
+		return false
+	}
+	profile, digest := s.nativeImportReceipt(id, proof.Connection.AccountID)
+	return profile == "import_receipt_matched" && hex.EncodeToString(digest[:]) == evidence.ProfileDigest
 }

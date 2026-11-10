@@ -148,6 +148,9 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	if !w.policy.RollbackFrozenAt.IsZero() {
 		return blocked("此连接已为回退停发，请先查看回退核对")
 	}
+	if w.policy.RelocationActivation != nil {
+		return blocked("此连接已通过搬迁启用流程，请从应用连接启动")
+	}
 	if w.policy.LegacyArchiveDigest != "" && w.policy.LegacyArchiveDigest != archive.Plan.Digest {
 		return blocked("旧接入摘要与工作器记录不一致")
 	}
@@ -383,6 +386,14 @@ func (s *stationWechat) legacyActivationCheck(ctx context.Context, id string, na
 		policy.LegacyArchiveDigest != archive.Plan.Digest {
 		return nil, apphost.ErrLifecycleCutover
 	}
+	if policy.RelocationActivation != nil {
+		return s.relocationActivationGuard(ctx, id, native, root, policy)
+	}
+	for _, name := range []string{legacyRelocationEvidenceFile, legacyRelocationRuntimeDir} {
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return nil, apphost.ErrLifecycleCutover
+		}
+	}
 	proof := *policy.LegacyActivation
 	daemon, err := native.DaemonStatus(ctx)
 	if err != nil || !s.activationMatches(proof, id, archive.Plan, daemon.ServerID) {
@@ -429,7 +440,13 @@ func (s *stationWechat) admitPlatformWrite(ctx context.Context, id string, nativ
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err = s.legacyActivationCheck(ctx, id, native, root, policy)
+	if policy.RelocationActivation != nil && (!policy.Enabled || policy.Paused) {
+		return apphost.ErrLifecycleCutover
+	}
+	guard, err := s.legacyActivationCheck(ctx, id, native, root, policy)
+	if err == nil && policy.RelocationActivation != nil && !guard() {
+		return apphost.ErrLifecycleCutover
+	}
 	return err
 }
 

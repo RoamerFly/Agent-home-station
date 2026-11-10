@@ -1383,7 +1383,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeQueue := filepath.Join(runtimeDir, "queue", "messages-v2.json")
-	freshQueue := []byte(`{"version":2,"server":"relocated-dataset","account":"one","deliveries":[{"key":"fresh-accepted","id":"fresh-job","thread":"filehelper","state":"accepted","server_id":"91235","input":{"account":"one","thread":"filehelper"}}]}`)
+	freshQueue := []byte(`{"version":2,"server":"receiver-dataset","account":"one","deliveries":[{"key":"fresh-accepted","id":"fresh-job","thread":"filehelper","state":"accepted","server_id":"91235","input":{"account":"one","thread":"filehelper"}}]}`)
 	write(runtimeQueue, freshQueue)
 	if applied, err := verify(); err != nil || applied.State != "archive_prepared" {
 		t.Fatal("apply retry rejected an already bound runtime", applied, err)
@@ -1429,12 +1429,16 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	var statusReply atomic.Value
 	statusReply.Store(map[string]any{"id": "one", "storageMode": "managed", "authenticated": false})
-	var receiverWrites atomic.Int64
+	var receiverWrites, receiverEvents atomic.Int64
 	nativeRoot := filepath.Join(receiverApp, "native")
 	receiverDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			receiverWrites.Add(1)
-			http.Error(w, "read only", http.StatusMethodNotAllowed)
+			if r.Method == http.MethodPut && r.URL.Path == "/v1/accounts/one/threads/123@chatroom/notifications" {
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "synthetic-receiver-action", "accountId": "one", "threadId": "123@chatroom", "kind": "mute", "state": "succeeded"})
+				return
+			}
+			http.Error(w, "unexpected operation", http.StatusMethodNotAllowed)
 			return
 		}
 		var response any
@@ -1445,6 +1449,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			response = map[string]any{"items": []map[string]string{{"id": "one"}}}
 		case "/v1/accounts/one":
 			response = statusReply.Load()
+		case "/v1/accounts/one/events":
+			receiverEvents.Add(1)
+			response = linuxnative.EventPage{Items: []linuxnative.Event{}, NextCursor: "0"}
 		default:
 			http.NotFound(w, r)
 			return
@@ -1500,13 +1507,92 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	write(receiverProfilePath, append(bytes.Clone(profileEvidence), '\n'))
 	checkReadiness("blocked", "verified", "pending", "档案导入回执已变化")
 	write(receiverProfilePath, profileEvidence)
+	_, previewView := runningFixture.request("GET", readinessPath, nil, false)
+	digest, _ := previewView["digest"].(string)
+	if !legacyMemoryDigestValid(digest) {
+		t.Fatal("ready result did not bind the confirmation to the current evidence", previewView)
+	}
+	relocationConfirmation := map[string]any{"digest": digest, "same_identity": true}
+	if code, _ := runningFixture.request("POST", readinessPath, relocationConfirmation, false); code != 403 {
+		t.Fatal("confirmation bypassed CSRF", code)
+	}
+	if code, _ := runningFixture.request("POST", readinessPath, map[string]any{"digest": digest}, true); code != 400 {
+		t.Fatal("confirmation bypassed owner acknowledgement", code)
+	}
+	freshStop := stationNativeStop{Version: 1, State: "starting", Epoch: strings.Repeat("f", 32), DataRoot: receiver, At: time.Now().UTC()}
+	write(receiverStop, j(freshStop))
+	if code, _ := runningFixture.request("POST", readinessPath, relocationConfirmation, true); code != 409 {
+		t.Fatal("a stale desktop preview authorized relocation", code)
+	}
+	_, previewView = runningFixture.request("GET", readinessPath, nil, false)
+	relocationConfirmation["digest"] = previewView["digest"]
+	for range 2 {
+		if code, result := runningFixture.request("POST", readinessPath, relocationConfirmation, true); code != 200 || result["state"] != "confirmed" || result["frozen"] != false {
+			t.Fatal("confirmation did not persist idempotently", code, result)
+		}
+	}
+	checkWrite := func(h *LocalHomeHandler, want int64, allowed bool, label string) {
+		t.Helper()
+		sender, err := h.chat.wechat.WorkerSender(t.Context(), releaseReq.ConnectionID)
+		if err != nil {
+			t.Fatal(label, err)
+		}
+		_, err = sender.ExecuteAction(t.Context(), guardedAction, label)
+		if allowed && err != nil || !allowed && !errors.Is(err, linuxnative.ErrWriteNotAdmitted) || receiverWrites.Load() != want {
+			t.Fatal("unexpected platform admission", label, receiverWrites.Load(), err)
+		}
+	}
+	checkWrite(running, 0, false, "confirmed-paused")
+	if receiverEvents.Load() != 0 {
+		t.Fatal("confirmation started the worker automatically")
+	}
+	startReceiver := func(h *LocalHomeHandler) {
+		t.Helper()
+		if _, err := h.chat.wechat.SetConnectionRunning(t.Context(), releaseReq.ConnectionID, true); err != nil {
+			t.Fatal("confirmed connection did not start", err)
+		}
+	}
+	startReceiver(running)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := os.ReadFile(filepath.Join(runtimeDir, "queue", "checkpoint.json"))
+		if err == nil && bytes.Contains(raw, []byte("receiver-dataset")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("started worker did not initialize a fresh receiver event cursor", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	checkWrite(running, 1, true, "relocated-started")
 	runningFixture.server.Close()
 	if err := running.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if receiverWrites.Load() != 0 {
-		t.Fatal("relocation readiness attempted native writes", receiverWrites.Load())
+	freshStop.Epoch = strings.Repeat("1", 32)
+	write(receiverStop, j(freshStop))
+	restored, restoredFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), receiverApps)
+	checkWrite(restored, 2, true, "relocated-restart")
+	write(intentPath, j(legacyReleaseIntent{}))
+	checkWrite(restored, 2, false, "relocated-fence-lost")
+	write(intentPath, relocationIntent)
+	write(runtimeMarker, j(strings.Repeat("8", 64)))
+	checkWrite(restored, 2, false, "relocated-binding-lost")
+	write(runtimeMarker, savedMarker)
+	if _, err := restored.chat.wechat.legacyRollback(t.Context(), releaseReq.ConnectionID, true, "", "", 10); err != nil {
+		t.Fatal("could not refreeze relocated connection", err)
 	}
+	restoredFixture.login()
+	if code, _ := restoredFixture.request("POST", readinessPath, relocationConfirmation, true); code != 409 {
+		t.Fatal("original confirmation replayed across a new freeze", code)
+	}
+	checkWrite(restored, 2, false, "relocated-refrozen")
+	restoredFixture.server.Close()
+	if err := restored.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Reset only the isolated target fixture for the offline tamper cases.
+	write(receiverPolicyPath, receiverPolicy)
 	write(receiverStop, copiedStop)
 	write(copiedQueue, []byte(newQueue+"\n"))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "投递或群操作记录") {

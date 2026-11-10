@@ -138,6 +138,9 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 		run.cancel()
 	}
 	view.dataset = proof.TargetDataset
+	if relocated := w.policy.RelocationActivation; relocated != nil {
+		view.dataset = relocated.TargetDataset
+	}
 	w.mu.Unlock()
 	workerStopped := run == nil
 	if run != nil {

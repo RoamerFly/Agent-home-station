@@ -71,7 +71,8 @@ type stationWechatPolicy struct {
 	LegacyGroupReplyImports map[string]string `json:"legacy_group_reply_imports,omitempty"`
 	// Imported workers require a local old-host/native-profile attestation
 	// before they may start or submit any automated reply.
-	LegacyActivation *legacyActivation `json:"legacy_activation,omitempty"`
+	RelocationActivation *legacyRelocationActivation `json:"relocation_activation,omitempty"`
+	LegacyActivation     *legacyActivation           `json:"legacy_activation,omitempty"`
 	// Older imports may only have the archive digest. It is still sufficient to
 	// require the same activation gate until the connection is explicitly bound.
 	LegacyArchiveDigest string    `json:"legacy_archive_digest,omitempty"`
@@ -278,6 +279,9 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
 	if policy.LegacyActivation != nil && !policy.LegacyActivation.valid() || policy.LegacyArchiveDigest != "" && !legacyMemoryDigestValid(policy.LegacyArchiveDigest) {
+		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
+	}
+	if a := policy.RelocationActivation; a != nil && (!a.valid() || policy.LegacyActivation == nil) {
 		return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 	}
 	if !policy.RollbackFrozenAt.IsZero() && (!policy.Paused || policy.LegacyActivation == nil) {
