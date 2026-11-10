@@ -87,7 +87,7 @@ func (s *stationWechat) managementActions(session *websession.Store, readOwner s
 }
 
 func wechatManagementError(err error) error {
-	if errors.Is(err, errContactLogin) {
+	if errors.Is(err, wechatapp.ErrDirectoryLogin) {
 		return apphost.ErrLifecycleConflict
 	}
 	return err

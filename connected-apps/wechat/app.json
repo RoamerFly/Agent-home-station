@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.50",
+  "version": "0.1.51",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,7 +39,7 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "727585b8c0d5360c201dc5e00e34d94cfdf381b7940406a916100339b2619a81",
+    "CHANGELOG.md": "3a82e8f7d1c909474bee2ab94b6bbfbb2e8bb362691144bbd8872d05abc4e044",
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "8e6334a50c7e1fff4c4f2aa47a049f0dc4d4f09583fc069338730a4379f398bb",
@@ -87,6 +87,7 @@
     "adapter/source.go": "707586ebf0e16d001f33fef073bed8fa44dd783c0f250871a388422dead0f5f2",
     "adapter/station.go": "dc7672ca1526887ce5c686c683f3e734a9b7a691a5a2a2fe2b304b7c845093c6",
     "adapter/station_contacts.go": "a54d1b31ee12c094816bf1b70baf8e76678311dec0e3b865cded2aa3001c312d",
+    "adapter/station_directory.go": "a65b5b34431737733891be3d17058d70de82d79c49b751ae81c0b6097f8c9627",
     "adapter/station_read.go": "e36190c1bd29fb830b919a802e68bbab24c4bc7a7e1aa74e6cd2ec66ff96976f",
     "adapter/station_setup.go": "7aaee4abf5bb7516b41caaad48f991d1749c37063852c7abf22e2f60f110d9fa",
     "adapter/station_test.go": "88f16afadc954f76e2e6a8a60f76ccc92e0d55e3833b0c69ec817d3e5a996d4e",

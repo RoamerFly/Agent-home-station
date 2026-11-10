@@ -131,7 +131,7 @@ func stationMuteToolFailure(err error) error {
 		return &stationContactError{"wechat_cutover_not_ready", "旧微信接续未获启用或凭证已失效，群操作未提交。"}
 	case errors.Is(err, wechatapp.ErrGroupActionTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
 		return &stationContactError{"wechat_group_mute_target_invalid", "未能在该连接核对所选群。"}
-	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
+	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, wechatapp.ErrDirectoryLogin):
 		return &stationContactError{"wechat_group_mute_conflict", "连接已暂停、未登录或本轮已改变目标状态，请查询原操作。"}
 	default:
 		return &stationContactError{"wechat_group_mute_unavailable", "暂时无法核对群免打扰操作，请查询原操作记录。"}

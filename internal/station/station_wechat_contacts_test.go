@@ -143,6 +143,8 @@ func TestStationWechatContactsOwnerAndLocalAgentIsolation(t *testing.T) {
 	request(f, "GET", twoPath+"?search="+url.QueryEscape("大鱼")+"&limit=2&cursor="+token, nil, false, 400)
 	request(f, "GET", onePath+"?search=changed&limit=2&cursor="+token, nil, false, 400)
 	request(f, "GET", onePath+"?account_id=two", nil, false, 400)
+	request(f, "GET", onePath+"?search=a&search=b", nil, false, 400)
+	request(f, "GET", path(one)+"/groups?search="+url.QueryEscape("大鱼")+"&limit=2&cursor="+token, nil, false, 400)
 	if before != requests.Load() {
 		t.Fatal("invalid scope reached native directory")
 	}
@@ -161,7 +163,7 @@ func TestStationWechatContactsOwnerAndLocalAgentIsolation(t *testing.T) {
 	in.TraceID = "synthetic-direct-tool-turn"
 	localTools := f.handler.chat.tools(store, in)
 	call := func(tgt, query, cursor string) (string, error) {
-		raw, _ := json.Marshal(stationContactQuery{Connection: tgt, Search: query, Cursor: cursor, Limit: 50})
+		raw, _ := json.Marshal(wechatapp.StationDirectoryQuery{Connection: tgt, Search: query, Cursor: cursor, Limit: 50})
 		return localTools.Call(t.Context(), wechatapp.StationContactsToolName, raw)
 	}
 	if _, err := call(one, "", ""); !errors.Is(err, errContactDenied) {
@@ -175,7 +177,7 @@ func TestStationWechatContactsOwnerAndLocalAgentIsolation(t *testing.T) {
 	if _, err := call(two, "", ""); !errors.Is(err, errContactDenied) {
 		t.Fatal("grant leaked to second connection", err)
 	}
-	if _, err := call(one, "大鱼", token); !errors.Is(err, errContactCursor) {
+	if _, err := call(one, "大鱼", token); !errors.Is(err, wechatapp.ErrDirectoryCursor) {
 		t.Fatal("owner cursor was usable from Agent", err)
 	}
 	in.Channel = "wechat"
@@ -211,7 +213,7 @@ func TestStationWechatContactsOwnerAndLocalAgentIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var observed stationContactPage
+	var observed wechatapp.StationDirectoryPage
 	if json.Unmarshal([]byte(result), &observed) != nil || observed.Next == "" {
 		t.Fatal(result)
 	}
@@ -237,7 +239,7 @@ func TestStationWechatContactsOwnerAndLocalAgentIsolation(t *testing.T) {
 	if err := <-pending; !errors.Is(err, errContactDenied) {
 		t.Fatal("old directory call survived revoke/regrant", err)
 	}
-	if _, err := call(one, "", observed.Next); !errors.Is(err, errContactCursor) {
+	if _, err := call(one, "", observed.Next); !errors.Is(err, wechatapp.ErrDirectoryCursor) {
 		t.Fatal("old Agent cursor survived revoke/regrant", err)
 	}
 	f.server.Close()

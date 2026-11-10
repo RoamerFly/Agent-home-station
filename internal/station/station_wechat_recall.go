@@ -103,7 +103,7 @@ func (s *stationWechat) readStationRecall(ctx context.Context, id string, source
 	scope := []byte(localCheckpointKey("recall", id, source.deliveryKey, source.thread, source.serverID))
 	platformCursor := ""
 	if cursor != "" {
-		if len(cursor) > stationContactCursorLimit {
+		if len(cursor) > wechatapp.StationDirectoryCursorLimit {
 			return view, wechatapp.ErrRecallCursor
 		}
 		packet, err := base64.RawURLEncoding.DecodeString(cursor)
