@@ -57,7 +57,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	var requestAt atomic.Value
 	requestAt.Store("")
 	submitted := make(chan string, 2)
-	var acceptedSends sync.Map
+	var acceptedSends, operations sync.Map
 	contentStarted, releaseContent := make(chan struct{}, 1), make(chan struct{})
 	originalMessage := func(body string) linuxnative.Message {
 		return linuxnative.Message{ID: "msg", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1234",
@@ -230,6 +230,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				w.WriteHeader(http.StatusConflict)
 				return
 			}
+			operations.Store(operationID, receipt)
 			if body["sourceId"] == "upload-work" {
 				// The platform accepted the work, but the original HTTP reply did not arrive.
 				w.WriteHeader(http.StatusBadGateway)
@@ -239,6 +240,16 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			submitted <- key
 		case "GET /v1/accounts/one/sends/by-idempotency-key":
 			if receipt, found := acceptedSends.Load(r.URL.Query().Get("key")); found {
+				out(receipt)
+				return
+			}
+			http.NotFound(w, r)
+		case "GET /v1/accounts/one/sends/synthetic-send-file",
+			"GET /v1/accounts/one/sends/synthetic-send-image",
+			"GET /v1/accounts/one/sends/synthetic-send-document":
+			// A revocation may race the worker persisting the accepted key.
+			// The next worker can settle the same accepted operation by ID.
+			if receipt, found := operations.Load(strings.TrimPrefix(r.URL.Path, "/v1/accounts/one/sends/")); found {
 				out(receipt)
 				return
 			}

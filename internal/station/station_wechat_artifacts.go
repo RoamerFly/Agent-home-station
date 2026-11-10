@@ -404,12 +404,14 @@ func (t *stationAttachmentTools) stageWork(ctx context.Context, in companion.Inp
 		return "", err
 	}
 	defer file.Close()
-	upload, err := t.native.UploadVerified(ctx, a.Name, "application/octet-stream", file, a.Bytes, a.SHA256)
+	upload, err := wechatapp.StageMediaUpload(ctx, t.native, wechatapp.MediaUpload{
+		Account: in.Account, Filename: a.Name, MIME: "application/octet-stream", Bytes: a.Bytes, SHA256: a.SHA256,
+	}, file, func() bool { return t.replyAllowed(in) })
 	if err != nil {
 		return "", err
 	}
 	if !check() {
 		return "", wechatapp.ErrAttachmentDenied
 	}
-	return upload.ID, nil
+	return upload, nil
 }

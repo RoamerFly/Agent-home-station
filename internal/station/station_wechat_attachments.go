@@ -202,7 +202,7 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 		if limit == 0 {
 			limit = stationAttachmentLimit
 		}
-		result, err = a.native.StreamVerifiedIncomingMedia(ctx, message, source.Kind, limit, attachmentGrantWriter{allow: check, out: file})
+		result, err = wechatapp.StreamAttachment(ctx, a.native, source, false, limit, file, check)
 	}
 	if err == nil {
 		err = file.Sync()

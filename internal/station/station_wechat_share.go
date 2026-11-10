@@ -152,10 +152,7 @@ func (h *stationShareHost) resolve(ctx context.Context, a stationAttachmentAcces
 		return empty, err
 	}
 	args, link, err := wechatapp.ChannelsResolutionArguments(ctx, source, bridge, 0, func(ctx context.Context) (string, error) {
-		if err := check(ctx); err != nil {
-			return "", err
-		}
-		return a.native.ChannelsShareURL(ctx, message.ID, message.ThreadID, source.ObjectID)
+		return wechatapp.ReadBoundChannelsShortLink(ctx, a.native, original, message, source, check)
 	})
 	if err != nil {
 		return empty, videoReadError("share_source_resolution_unavailable", "按原卡片取得解析入口")

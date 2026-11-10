@@ -351,12 +351,14 @@ func (t *stationAttachmentTools) stageDocumentReply(ctx context.Context, in comp
 	if err := t.verifyDocumentReplySource(ctx, in, r); err != nil {
 		return "", err
 	}
-	upload, err := t.native.UploadVerified(ctx, r.Name, r.media().CachedMIME, file, r.Product.Bytes, r.Product.SHA256)
+	upload, err := wechatapp.StageMediaUpload(ctx, t.native, wechatapp.MediaUpload{
+		Account: in.Account, Filename: r.Name, MIME: r.media().CachedMIME, Bytes: r.Product.Bytes, SHA256: r.Product.SHA256,
+	}, file, func() bool { return t.replyAllowed(in) })
 	if err != nil {
 		return "", err
 	}
 	if err := t.verifyDocumentReplySource(ctx, in, r); err != nil {
 		return "", err
 	}
-	return upload.ID, nil
+	return upload, nil
 }

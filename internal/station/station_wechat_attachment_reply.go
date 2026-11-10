@@ -90,17 +90,9 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 			return "", err
 		}
 		defer original.Close()
-		if !allowed() {
-			return "", wechatapp.ErrAttachmentDenied
-		}
-		upload, err := t.native.UploadVerified(ctx, source.Filename, record.MIME, original, record.Bytes, record.SHA256)
-		if err != nil {
-			return "", err
-		}
-		if !allowed() {
-			return "", wechatapp.ErrAttachmentDenied
-		}
-		return upload.ID, nil
+		return wechatapp.StageMediaUpload(ctx, t.native, wechatapp.MediaUpload{
+			Account: source.Account, Filename: source.Filename, MIME: record.MIME, Bytes: record.Bytes, SHA256: record.SHA256,
+		}, original, func() bool { return access.Allowed(ctx, source.Thread) })
 	}
 	return "", errors.New("station_attachment_reply_source_unavailable")
 }

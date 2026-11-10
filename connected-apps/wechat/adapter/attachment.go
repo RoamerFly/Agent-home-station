@@ -35,9 +35,9 @@ type Attachment struct {
 	Variant   string
 }
 
-// AttachmentHost keeps authorization, source resolution, native transfer and
-// asset registration on the host side.  Implementations must recheck Allowed
-// around every operation which can observe or acquire source bytes.
+// AttachmentHost owns authorization and local staging. Implementations use the
+// adapter's source and transfer functions with the current grant before
+// registering bytes in the host's private storage.
 type AttachmentHost interface {
 	CurrentThread() string
 	Allowed(context.Context, string) bool

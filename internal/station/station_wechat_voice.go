@@ -226,7 +226,8 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	if err != nil {
 		return nil, observationFailure("media_staging_failed", "无法暂存微信语音。")
 	}
-	rendered, transferErr := t.native.StreamVerifiedPlayableVoice(ctx, source.Message, stationAttachmentLimit, attachmentGrantWriter{allow: func() bool { return access.Allowed(ctx, source.Thread) }, out: file})
+	rendered, transferErr := wechatapp.StreamAttachment(ctx, t.native, source, true, stationAttachmentLimit, file,
+		func() bool { return access.Allowed(ctx, source.Thread) })
 	closeErr := file.Close()
 	if err := check(ctx); err != nil {
 		return nil, err
