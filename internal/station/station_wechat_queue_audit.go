@@ -11,7 +11,6 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
@@ -90,13 +89,13 @@ func AuditLegacyWechatQueue(ctx context.Context, legacyDataDir, primary string) 
 			worker = filepath.Join(worker, "accounts", id)
 			admin = filepath.Join(admin, "accounts", id)
 		}
-		queue, err := read(filepath.Join(worker, "messages-v2.json"), bot.MaxDeliveryCheckpointBytes)
+		checkpoint, err := wechatapp.ReadLegacyWorkerCheckpoint(worker, account, read)
 		if err != nil {
-			return LegacyWechatQueueAudit{}, err
-		}
-		cursor, err := read(filepath.Join(worker, "checkpoint.json"), 128<<10)
-		if err != nil {
-			return LegacyWechatQueueAudit{}, err
+			var readErr *wechatapp.LegacyCheckpointReadError
+			if errors.As(err, &readErr) {
+				return LegacyWechatQueueAudit{}, readErr.Err
+			}
+			return LegacyWechatQueueAudit{}, errors.New("旧投递账本或游标的归属无法核对")
 		}
 		tasks, err := read(filepath.Join(admin, "agent-state.json"), 16<<20)
 		if err != nil {
@@ -106,7 +105,7 @@ func AuditLegacyWechatQueue(ctx context.Context, legacyDataDir, primary string) 
 		if err != nil {
 			return LegacyWechatQueueAudit{}, err
 		}
-		if err := out.addAccount(account, queue, cursor, tasks, sends); err != nil {
+		if err := out.addAccount(checkpoint, tasks, sends); err != nil {
 			return LegacyWechatQueueAudit{}, err
 		}
 	}
@@ -128,15 +127,8 @@ func AuditLegacyWechatQueue(ctx context.Context, legacyDataDir, primary string) 
 	return out, nil
 }
 
-func (out *LegacyWechatQueueAudit) addAccount(account string, queue, cursor, tasks, sends []byte) error {
-	server, evidence, err := bot.LegacyDeliveryEvidence(queue, cursor, account)
-	if err != nil || (server != "" && !identity.ValidPathID(server)) {
-		return errors.New("旧投递账本或游标的归属无法核对")
-	}
-	for key, row := range evidence {
-		if !identity.ValidPathID(key) || !identity.ValidPathID(row.Status.ThreadID) || (row.Status.ID != "" && !identity.ValidPathID(row.Status.ID)) {
-			return errors.New("旧投递记录的归属无法核对")
-		}
+func (out *LegacyWechatQueueAudit) addAccount(checkpoint wechatapp.LegacyWorkerCheckpoint, tasks, sends []byte) error {
+	for _, row := range checkpoint.Deliveries {
 		kind := "media"
 		if row.Status.Kind == "text" {
 			kind = "text"
@@ -144,59 +136,24 @@ func (out *LegacyWechatQueueAudit) addAccount(account string, queue, cursor, tas
 		addLegacyAuditReceipt(out.WorkerDelivery[kind], row.Status)
 	}
 	type row struct{ State string }
-	var worker struct {
-		Inbox      []struct{ Phase string }
-		Deliveries []*row
-		Media      []*row
-		Wakes      []row `json:"conversation_wakes"`
-		Plans      []row `json:"utterance_plans"`
-		Replies    []row `json:"media_replies"`
-	}
 	var admin struct{ Tasks, Operations map[string]row }
 	var tools struct {
 		Version int
 		Sends   map[string]struct{ Status linuxnative.ToolStatus }
 	}
-	if (queue != nil && json.Unmarshal(queue, &worker) != nil) ||
-		(tasks != nil && json.Unmarshal(tasks, &admin) != nil) ||
+	pending, err := checkpoint.PendingWork()
+	if err != nil || (tasks != nil && json.Unmarshal(tasks, &admin) != nil) ||
 		(sends != nil && (json.Unmarshal(sends, &tools) != nil || tools.Version != 1 || tools.Sends == nil)) {
 		return errors.New("旧微信待办或管理端投递记录格式无效")
 	}
-	if queue != nil {
+	if checkpoint.Queue.Data != nil {
 		out.WorkerLedgers++
 	}
-	for _, item := range worker.Deliveries {
-		if item != nil && item.State != "accepted" && item.State != "stopped" {
-			out.WorkerDeliveryOpen++
-		}
-	}
-	for _, item := range worker.Media {
-		if item != nil && item.State != "accepted" && item.State != "stopped" && item.State != "needs_review" {
-			out.WorkerDeliveryOpen++
-		}
-	}
-	for _, item := range worker.Inbox {
-		switch item.Phase {
-		case "completed", "failed", "interrupted", "needs_review", "replied", "silent", "skipped", "stopped":
-		default:
-			out.InboxPending++
-		}
-	}
-	for _, item := range worker.Wakes {
-		if item.State == "waiting" || item.State == "claimed" {
-			out.WaitingWakes++
-		}
-	}
-	for _, item := range worker.Plans {
-		if item.State != "accepted" && item.State != "stopped" {
-			out.PlanPending++
-		}
-	}
-	for _, item := range worker.Replies {
-		if item.State != "accepted" && item.State != "stopped" && item.State != "queued_plan" {
-			out.MediaReplyPending++
-		}
-	}
+	out.WorkerDeliveryOpen += pending.Deliveries
+	out.InboxPending += pending.Inbox
+	out.WaitingWakes += pending.Wakes
+	out.PlanPending += pending.Plans
+	out.MediaReplyPending += pending.MediaReplies
 	for _, item := range admin.Tasks {
 		switch item.State {
 		case "completed", "cancelled", "needs_review", "failed", "stopped":

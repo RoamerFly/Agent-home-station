@@ -15,7 +15,6 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
@@ -326,30 +325,22 @@ func (s *stationWechat) previewLegacyImportFrom(ctx context.Context, id string, 
 	if err != nil {
 		return legacyImportArchive{}, err
 	}
-	queue, err := source.guard.readFile(root, filepath.Join(queueDir, "messages-v2.json"), bot.MaxDeliveryCheckpointBytes)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	checkpoint, err := wechatapp.ReadLegacyWorkerCheckpoint(queueDir, account, func(name string, limit int64) ([]byte, error) {
+		return source.guard.readFile(root, name, limit)
+	})
+	if err != nil {
 		return legacyImportArchive{}, legacyImportReadError(err)
 	}
-	cursor, err := source.guard.readFile(root, filepath.Join(queueDir, "checkpoint.json"), 128<<10)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return legacyImportArchive{}, legacyImportReadError(err)
-	}
-	oldServer, evidence, err := bot.LegacyDeliveryEvidence(queue, cursor, account)
-	if err != nil || oldServer != "" && !identity.ValidPathID(oldServer) {
-		return legacyImportArchive{}, errLegacyImportInvalid
-	}
+	oldServer := checkpoint.ServerID
 	suggested, omitted := legacySuggestedThreads(policy)
-	queueHash, cursorHash := sha256.Sum256(queue), sha256.Sum256(cursor)
+	queueHash, cursorHash := sha256.Sum256(checkpoint.Queue.Data), sha256.Sum256(checkpoint.Cursor.Data)
 	archive := legacyImportArchive{
 		Version: 1, LegacyServer: oldServer, Receipts: map[string]apphost.Receipt{},
 		Plan: legacyImportPlan{Account: account, LegacyEnabled: policy.Enabled, LegacyPaused: policy.ConnectionPaused,
 			SameDataset: oldServer != "" && oldServer == status.ServerID, SuggestedThreads: suggested, Omitted: omitted},
 		SourceRevision: localCheckpointKey(policy, queueHash, cursorHash), SnapshotManifestDigest: source.guard.digest(),
 	}
-	for key, row := range evidence {
-		if !identity.ValidPathID(key) || !identity.ValidPathID(row.Status.ThreadID) || row.Status.ID != "" && !identity.ValidPathID(row.Status.ID) {
-			return legacyImportArchive{}, errLegacyImportInvalid
-		}
+	for key, row := range checkpoint.Deliveries {
 		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID, ResumedFrom: row.ResumedFrom,
 			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "legacy_snapshot"}}
 		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)

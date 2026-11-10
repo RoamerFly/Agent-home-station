@@ -20,7 +20,6 @@ import (
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/workspacefs"
@@ -272,25 +271,26 @@ func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root,
 	}
 	safe, _ := json.Marshal(policy)
 	p.addSmall(config, raw, safe)
-	queuePath, cursorPath := filepath.Join(queue, "messages-v2.json"), filepath.Join(queue, "checkpoint.json")
-	rows, err := readLegacyImportFile(root, queuePath, bot.MaxDeliveryCheckpointBytes)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	checkpoint, err := wechatapp.ReadLegacyWorkerCheckpoint(queue, account, func(name string, limit int64) ([]byte, error) {
+		return readLegacyImportFile(root, name, limit)
+	})
+	var readErr *wechatapp.LegacyCheckpointReadError
+	if errors.As(err, &readErr) {
+		if readErr.Cursor {
+			return errors.New("旧投递检查点不可读或超出支持范围")
+		}
 		return errors.New("旧投递账本不可读或超出支持范围")
 	}
-	cursor, err := readLegacyImportFile(root, cursorPath, 128<<10)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.New("旧投递检查点不可读或超出支持范围")
-	}
-	server, evidence, err := bot.LegacyDeliveryEvidence(rows, cursor, account)
-	if err != nil || server != "" && (!identity.ValidPathID(server) || *dataset != "" && server != *dataset) {
+	server := checkpoint.ServerID
+	if err != nil || server != "" && *dataset != "" && server != *dataset {
 		return errors.New("旧投递账本、检查点或停机凭证的账号或数据集不一致")
 	}
 	if server != "" {
 		*dataset = server
 	}
-	p.manifest.DeliveryRecords += len(evidence)
-	p.addSmall(queuePath, rows, nil)
-	p.addSmall(cursorPath, cursor, nil)
+	p.manifest.DeliveryRecords += len(checkpoint.Deliveries)
+	p.addSmall(checkpoint.Queue.Path, checkpoint.Queue.Data, nil)
+	p.addSmall(checkpoint.Cursor.Path, checkpoint.Cursor.Data, nil)
 	adminDir := filepath.Dir(config)
 	rawManagement, projectedManagement, managementCount, coldHashes, err := readLegacyManagementSnapshot(ctx, root, adminDir, account)
 	if err != nil {
