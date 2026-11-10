@@ -10,6 +10,7 @@ It never calls a model, WeChat, or a neural inference service.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import http.cookiejar
 import json
@@ -17,15 +18,35 @@ import os
 from pathlib import Path
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import urllib.request
-from typing import Any
+from typing import Any, Iterator
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+@contextmanager
+def cutover_fixture() -> Iterator[Path]:
+    parent = Path(tempfile.gettempdir()).resolve(strict=True)
+    prefix = "ahs-cutover-cli-"
+    root = Path(tempfile.mkdtemp(dir=parent, prefix=prefix))
+    try:
+        yield root
+    finally:
+        resolved = root.resolve(strict=True)
+        if resolved != root or resolved.parent != parent or not resolved.name.startswith(prefix):
+            raise RuntimeError("Refused to clean a directory outside the cutover fixture")
+        path = str(resolved)
+        # The packaged LPAC Python omits its PE manifest. Use Win32's
+        # extended path only for cleanup of our own deep package tree.
+        if os.name == "nt":
+            path = "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
+        shutil.rmtree(path)
 
 
 def write(path: Path, value: bytes | dict[str, Any]) -> Path:
@@ -297,8 +318,7 @@ def main() -> int:
     required_runner = package / "runtimes" / "windows-station-speech" / "gpt_sovits.py"
     assert required_runner.is_file(), f"packaged speech runner does not exist: {required_runner}"
 
-    with tempfile.TemporaryDirectory(prefix="ahs-cutover-cli-") as temporary:
-        base = Path(temporary)
+    with cutover_fixture() as base:
         data = base / "new-station"
         fish_id, owner_id, source_hashes = create_legacy_settings(base, data, binary)
         persistent = import_legacy_home(base, data, binary)
