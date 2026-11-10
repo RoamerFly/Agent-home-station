@@ -104,6 +104,9 @@ func TestOfficialOBSProgramCamera(t *testing.T) {
 	if err := checkOfficialOBSProgramFrame(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := checkDirectShowProgramFrame(ctx, os.Getenv("AHS_TEST_OBS_FFMPEG")); err != nil {
+		t.Fatal(err)
+	}
 	stop, endStop := context.WithTimeout(ctx, 5*time.Second)
 	defer endStop()
 	if err := camera.Stop(stop); err != nil {
@@ -115,6 +118,33 @@ func TestOfficialOBSProgramCamera(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(installation.studio, "config")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("private program profile remained after stop: %v", err)
 	}
+}
+
+// A real Windows consumer must receive the same picture as the OBS producer.
+// Selecting this exact software device never opens a physical camera.
+func checkDirectShowProgramFrame(ctx context.Context, ffmpeg string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+		"-f", "dshow", "-video_size", "1280x720", "-framerate", "30", "-i", "video=OBS Virtual Camera",
+		"-frames:v", "15", "-vf", "scale=4:2:flags=area", "-pix_fmt", "gray", "-c:v", "rawvideo", "-threads", "1", "-f", "rawvideo", "pipe:1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+	pixels, err := cmd.Output()
+	if err != nil {
+		var failed *exec.ExitError
+		if errors.As(err, &failed) {
+			return fmt.Errorf("read OBS DirectShow device: %w %.300s", err, failed.Stderr)
+		}
+		return err
+	}
+	const frameBytes = 4 * 2
+	for offset := 0; offset+frameBytes <= len(pixels); offset += frameBytes {
+		frame := pixels[offset : offset+frameBytes]
+		if frame[0] > 180 && frame[3] < 60 && frame[4] > 180 && frame[7] < 60 {
+			return nil
+		}
+	}
+	return fmt.Errorf("DirectShow consumer received %d bytes without the black/white program", len(pixels))
 }
 
 func TestOfficialOBSProgramLoopback(t *testing.T) {

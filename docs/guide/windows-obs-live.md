@@ -25,10 +25,12 @@
 
 主人可将官方直播伴侣安装到发行目录的 `connected-apps/douyin/runtime/live-companion`，使客户端运行文件跟随抖音应用区域整理。Windows 安装器可能要求系统管理员授权；只有安装结束并检查到实际主程序，才能算安装完成。安装包的版本和客户端版本分别核对，不以安装包文件名代替主程序身份。客户端保存登录的位置仍由官方软件决定，不将这些资料复制到可编辑的应用接入版本中。
 
-开发验收可用官方 ZIP 和发行包的 FFmpeg。测试会在 `TEMP` 下导入隔离副本，生成黑白画面和 440 Hz 音调的合成 MP4。回环测试只向本机接收端发送，并核对收到 AAC 与 H.264 媒体包。摄像头测试要求设备空闲且已登记，额外检查共享帧中确有黑白图案及退出后的清理；未登记时核对预检后跳过帧验收。
+开发验收可用官方 ZIP 和发行包的 FFmpeg。测试会在 `TEMP` 下导入隔离副本，生成黑白画面和 440 Hz 音调的合成 MP4。回环测试只向本机接收端发送，并核对收到 AAC 与 H.264 媒体包。摄像头测试要求设备空闲且已登记，核对共享帧与 Windows DirectShow 接收端是否都收到黑白图案，并检查退出后的清理。未登记时核对预检后跳过帧验收。
 
 ```powershell
 $env:AHS_TEST_OBS_ZIP = 'E:\验证\OBS-Studio-33.0.1-Windows-x64.zip'
 $env:AHS_TEST_OBS_FFMPEG = 'E:\验证\runtimes\windows-media\ffmpeg.exe'
 go test ./internal/obsportable -run '^TestOfficialOBSProgram(Camera|Loopback)$' -count=1 -v -timeout 145s
+# 将发行包的 windows-media 目录加入当前 PATH，供工作站调用 FFmpeg 和 ffprobe。
+go test ./internal/station -run '^TestLocalLive(VerifiedEncoderDoesNotImplyAPlatformGrant|PortableOBSProgramReachesLoopbackThroughChat)$' -count=1 -v -timeout 150s
 ```
