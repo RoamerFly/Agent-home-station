@@ -26,8 +26,8 @@ type legacyGroupSettingView struct {
 	Reason                   string                                `json:"reason,omitempty"`
 }
 
-func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *http.ServeMux, path string, replyRule bool) {
-	handle := server.Protect(func(w http.ResponseWriter, r *http.Request) {
+func (s *stationWechat) legacyGroupSettingHandler(replyRule bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		thread := r.PathValue("thread")
 		if !wechatapp.ValidGroup(thread) {
@@ -63,9 +63,7 @@ func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *
 		default:
 			websession.Respond(w, http.StatusOK, view)
 		}
-	})
-	mux.HandleFunc("GET "+path, handle)
-	mux.HandleFunc("POST "+path, handle)
+	}
 }
 
 func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, digest string, replyRule, enableChannelsSummary bool) (legacyGroupSettingView, error) {

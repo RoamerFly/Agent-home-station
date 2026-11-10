@@ -44,34 +44,30 @@ type legacyRelocationConfirmation struct {
 	SameIdentity bool   `json:"same_identity"`
 }
 
-func (s *stationWechat) legacyRelocationReadinessRoute(auth *websession.Store, mux *http.ServeMux, path string) {
-	handle := auth.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		defer cancel()
-		var input legacyRelocationConfirmation
-		if r.Method == http.MethodPost {
-			if !websession.Decode(w, r, &input) {
-				return
-			}
-			if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
-				websession.Fail(w, http.StatusBadRequest, "请提交当前核对摘要并确认实际微信身份")
-				return
-			}
-		}
-		view, err := s.relocationReadiness(ctx, r.PathValue("connection"), input.Digest)
-		if err != nil {
-			legacyImportFailure(w, err)
+func (s *stationWechat) legacyRelocationReadinessHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	var input legacyRelocationConfirmation
+	if r.Method == http.MethodPost {
+		if !websession.Decode(w, r, &input) {
 			return
 		}
-		if r.Method == http.MethodPost && view.State != "confirmed" {
-			websession.Respond(w, http.StatusConflict, view)
+		if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
+			websession.Fail(w, http.StatusBadRequest, "请提交当前核对摘要并确认实际微信身份")
 			return
 		}
-		websession.Respond(w, http.StatusOK, view)
-	})
-	mux.HandleFunc("GET "+path, handle)
-	mux.HandleFunc("POST "+path, handle)
+	}
+	view, err := s.relocationReadiness(ctx, r.PathValue("connection"), input.Digest)
+	if err != nil {
+		legacyImportFailure(w, err)
+		return
+	}
+	if r.Method == http.MethodPost && view.State != "confirmed" {
+		websession.Respond(w, http.StatusConflict, view)
+		return
+	}
+	websession.Respond(w, http.StatusOK, view)
 }
 
 func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmation string) (legacyRelocationReadiness, error) {

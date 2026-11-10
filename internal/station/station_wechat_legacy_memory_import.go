@@ -72,45 +72,40 @@ func legacyMemoryDigestValid(digest string) bool {
 	return len(digest) == sha256.Size*2 && err == nil
 }
 
-func (s *stationWechat) legacyMemoryImportRoutes(server *websession.Store, mux *http.ServeMux) {
-	const path = "/api/apps/wechat/connections/{connection}/legacy-import/memory/{thread}"
-	handle := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		id, thread := r.PathValue("connection"), r.PathValue("thread")
-		if !identity.ValidPathID(thread) {
-			websession.Fail(w, http.StatusBadRequest, "会话编号无效")
-			return
-		}
-		var digest string
-		if r.Method == http.MethodPost {
-			var input struct {
-				Digest       string `json:"digest"`
-				SameIdentity bool   `json:"same_identity"`
-			}
-			if !websession.Decode(w, r, &input) {
-				return
-			}
-			if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
-				websession.Fail(w, http.StatusBadRequest, "请先预演并确认新旧连接使用同一个微信身份")
-				return
-			}
-			digest = input.Digest
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		view, err := s.legacyMemoryImport(ctx, id, thread, digest)
-		if err != nil {
-			legacyImportFailure(w, err)
-			return
-		}
-		if digest != "" && view.Status != "applied" {
-			websession.Fail(w, http.StatusConflict, view.Reason)
-			return
-		}
-		websession.Respond(w, http.StatusOK, view)
+func (s *stationWechat) legacyMemoryImportHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	id, thread := r.PathValue("connection"), r.PathValue("thread")
+	if !identity.ValidPathID(thread) {
+		websession.Fail(w, http.StatusBadRequest, "会话编号无效")
+		return
 	}
-	mux.HandleFunc("GET "+path, server.Protect(handle))
-	mux.HandleFunc("POST "+path, server.Protect(handle))
+	var digest string
+	if r.Method == http.MethodPost {
+		var input struct {
+			Digest       string `json:"digest"`
+			SameIdentity bool   `json:"same_identity"`
+		}
+		if !websession.Decode(w, r, &input) {
+			return
+		}
+		if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
+			websession.Fail(w, http.StatusBadRequest, "请先预演并确认新旧连接使用同一个微信身份")
+			return
+		}
+		digest = input.Digest
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	view, err := s.legacyMemoryImport(ctx, id, thread, digest)
+	if err != nil {
+		legacyImportFailure(w, err)
+		return
+	}
+	if digest != "" && view.Status != "applied" {
+		websession.Fail(w, http.StatusConflict, view.Reason)
+		return
+	}
+	websession.Respond(w, http.StatusOK, view)
 }
 
 func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, digest string) (legacyMemoryImportView, error) {

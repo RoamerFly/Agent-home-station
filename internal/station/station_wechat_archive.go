@@ -51,11 +51,16 @@ func attachStationWechatArchive(registry apphost.Registry, dataDir string, apps 
 		return apphost.Registry{}, nil, err
 	}
 	apps = append(apps, stationhost.Attachment{Mount: func(owner *websession.Store, mux *http.ServeMux) {
-		const base = "/api/apps/wechat/connections/{connection}/legacy-import"
-		store.legacyReceiptRoutes(owner, mux, base+"/receipts")
-		store.legacyRelocationReceiptRoute(owner, mux, base+"/relocation/receipts/{key}")
+		store.archiveManagementHandlers().Mount(mux, owner.Protect)
 	}})
 	return registry, apps, nil
+}
+
+func (s *stationWechat) archiveManagementHandlers() wechatapp.ArchiveManagementHandlers {
+	return wechatapp.ArchiveManagementHandlers{
+		ListLegacyReceipts: s.listLegacyReceiptsHandler, ReadLegacyReceipt: s.readLegacyReceiptHandler,
+		ReadRelocationReceipt: s.readLegacyRelocationReceiptHandler,
+	}
 }
 
 func (a *stationWechatArchive) savedConnection(id string) (apphost.Connection, error) {

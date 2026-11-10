@@ -71,39 +71,37 @@ func newStationContactCursor() (cipher.AEAD, error) {
 	return cipher.NewGCMWithRandomNonce(block)
 }
 
-func (s *stationWechat) contactRoutes(owner *websession.Store, mux *http.ServeMux) {
-	for _, kind := range []string{"contacts", "groups"} {
-		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/"+kind, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "no-store")
-			key, _, _ := owner.Lookup(r)
-			check := func(ctx context.Context) error {
-				if id, _, ok := owner.Lookup(r); !ok || id != key {
-					return errContactDenied
-				}
-				return ctx.Err()
+func (s *stationWechat) contactHandler(owner *websession.Store, kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		key, _, _ := owner.Lookup(r)
+		check := func(ctx context.Context) error {
+			if id, _, ok := owner.Lookup(r); !ok || id != key {
+				return errContactDenied
 			}
-			in, err := stationContactHTTPQuery(r)
-			var result stationContactPage
-			if err == nil {
-				result, err = s.readDirectory(r.Context(), in, kind, "owner:"+key, check)
-			}
-			switch {
-			case err == nil:
-				websession.Respond(w, http.StatusOK, result)
-			case errors.Is(err, errContactInput):
-				websession.Fail(w, http.StatusBadRequest, errContactInput.message)
-			case errors.Is(err, errContactCursor):
-				websession.Fail(w, http.StatusBadRequest, errContactCursor.message)
-			case errors.Is(err, errContactDenied):
-				websession.Fail(w, http.StatusUnauthorized, "请先登录管理页面")
-			case errors.Is(err, apphost.ErrNotFound):
-				websession.Fail(w, http.StatusNotFound, "微信连接不存在")
-			case errors.Is(err, errContactLogin):
-				websession.Fail(w, http.StatusConflict, errContactLogin.message)
-			default:
-				websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对该连接的本机目录")
-			}
-		}))
+			return ctx.Err()
+		}
+		in, err := stationContactHTTPQuery(r)
+		var result stationContactPage
+		if err == nil {
+			result, err = s.readDirectory(r.Context(), in, kind, "owner:"+key, check)
+		}
+		switch {
+		case err == nil:
+			websession.Respond(w, http.StatusOK, result)
+		case errors.Is(err, errContactInput):
+			websession.Fail(w, http.StatusBadRequest, errContactInput.message)
+		case errors.Is(err, errContactCursor):
+			websession.Fail(w, http.StatusBadRequest, errContactCursor.message)
+		case errors.Is(err, errContactDenied):
+			websession.Fail(w, http.StatusUnauthorized, "请先登录管理页面")
+		case errors.Is(err, apphost.ErrNotFound):
+			websession.Fail(w, http.StatusNotFound, "微信连接不存在")
+		case errors.Is(err, errContactLogin):
+			websession.Fail(w, http.StatusConflict, errContactLogin.message)
+		default:
+			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对该连接的本机目录")
+		}
 	}
 }
 

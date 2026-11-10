@@ -48,7 +48,7 @@ func TestStationOwnerResumeIsAuthenticatedPersistentAndCancelable(t *testing.T) 
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", owner.Login)
-	station.deliveryControlRoutes(owner, mux)
+	(wechatapp.ManagementHandlers{CancelDelivery: station.cancelDelivery, ResumeDelivery: station.requestDeliveryResume}).Mount(mux, owner.Protect)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	jar, _ := cookiejar.New(nil)

@@ -123,91 +123,87 @@ func (a *stationWorkAccess) list(in companion.Input, after string, limit int) ([
 	return items, "", nil
 }
 
-func (s *stationWechat) artifactRoutes(owner *websession.Store, mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/work-grants", owner.Protect(s.workGrants))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants/{delivery}/revoke", owner.Protect(s.revokeWorkGrant))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/work-grants", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Artifact  string `json:"artifact_id"`
-			Thread    string `json:"thread_id"`
-			Requester string `json:"requester_id"`
-			Enabled   *bool  `json:"enabled"`
-			Key       string `json:"request_key"`
-		}
-		if !websession.Decode(w, r, &req) {
+func (s *stationWechat) saveWorkGrant(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Artifact  string `json:"artifact_id"`
+		Thread    string `json:"thread_id"`
+		Requester string `json:"requester_id"`
+		Enabled   *bool  `json:"enabled"`
+		Key       string `json:"request_key"`
+	}
+	if !websession.Decode(w, r, &req) {
+		return
+	}
+	if !identity.ValidPathID(req.Thread) || !identity.ValidPathID(req.Requester) || !identity.ValidPathID(req.Key) || req.Enabled == nil {
+		websession.Fail(w, 400, "请提供会话、请求者、请求编号和授权状态")
+		return
+	}
+	native, err := s.WorkerSender(r.Context(), r.PathValue("connection"))
+	if err != nil {
+		websession.Fail(w, 404, "微信连接不可用")
+		return
+	}
+	worker, err := s.worker(r.PathValue("connection"), false)
+	if err != nil || worker == nil {
+		websession.Fail(w, 404, "请先配置此连接的附件回复范围")
+		return
+	}
+	artifact, err := s.artifacts.ReadArtifact(req.Artifact)
+	if err != nil {
+		websession.Fail(w, 404, "成品不存在或来源已变化")
+		return
+	}
+	homeRevision, err := s.artifacts.HomeRevision()
+	if err != nil {
+		websession.Fail(w, 409, "请先恢复家目录授权")
+		return
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	grant := worker.policy.MediaReplyGrants[req.Thread]
+	if grant.IsZero() {
+		websession.Fail(w, 409, "请先在此会话开启附件回复")
+		return
+	}
+	g := stationWorkGrant{Artifact: artifact.ID, Account: native.Account(), Thread: req.Thread, Requester: req.Requester, MediaGrant: grant, Enabled: *req.Enabled, RequestKey: req.Key}
+	g.HomeRevision = homeRevision
+	g.ID = g.id()
+	root, err := workspacefs.EnsurePath(filepath.Join(worker.dir, "exports"))
+	if err != nil {
+		websession.Fail(w, 503, "交付授权存储不可用")
+		return
+	}
+	defer root.Close()
+	if g.Enabled {
+		prior, priorErr := (&stationWorkAccess{artifacts: s.artifacts, dir: worker.dir}).read(g.ID)
+		if priorErr == nil && !prior.Enabled {
+			websession.Fail(w, 409, "此交付授权已撤销，新授权请使用新的请求编号")
 			return
 		}
-		if !identity.ValidPathID(req.Thread) || !identity.ValidPathID(req.Requester) || !identity.ValidPathID(req.Key) || req.Enabled == nil {
-			websession.Fail(w, 400, "请提供会话、请求者、请求编号和授权状态")
+	}
+	stage := ".grant-" + identity.RandomToken()
+	defer root.Remove(stage)
+	if err = writeLegacyStagedFile(root, stage, g); err == nil {
+		err = root.Rename(stage, g.ID+".json")
+	}
+	if err != nil {
+		websession.Fail(w, 503, "交付授权未保存")
+		return
+	}
+	if !g.Enabled && worker.run != nil {
+		next := worker.policy
+		next.Paused = true
+		if err := worker.changePolicy(next); err != nil {
+			websession.Fail(w, 503, "授权已撤销，暂停连接失败，请重试暂停")
 			return
 		}
-		native, err := s.WorkerSender(r.Context(), r.PathValue("connection"))
-		if err != nil {
-			websession.Fail(w, 404, "微信连接不可用")
+		if err := worker.stop(r.Context()); err != nil {
+			websession.Fail(w, 409, "授权已撤销，连接正在停止")
 			return
 		}
-		worker, err := s.worker(r.PathValue("connection"), false)
-		if err != nil || worker == nil {
-			websession.Fail(w, 404, "请先配置此连接的附件回复范围")
-			return
-		}
-		artifact, err := s.artifacts.ReadArtifact(req.Artifact)
-		if err != nil {
-			websession.Fail(w, 404, "成品不存在或来源已变化")
-			return
-		}
-		homeRevision, err := s.artifacts.HomeRevision()
-		if err != nil {
-			websession.Fail(w, 409, "请先恢复家目录授权")
-			return
-		}
-		worker.mu.Lock()
-		defer worker.mu.Unlock()
-		grant := worker.policy.MediaReplyGrants[req.Thread]
-		if grant.IsZero() {
-			websession.Fail(w, 409, "请先在此会话开启附件回复")
-			return
-		}
-		g := stationWorkGrant{Artifact: artifact.ID, Account: native.Account(), Thread: req.Thread, Requester: req.Requester, MediaGrant: grant, Enabled: *req.Enabled, RequestKey: req.Key}
-		g.HomeRevision = homeRevision
-		g.ID = g.id()
-		root, err := workspacefs.EnsurePath(filepath.Join(worker.dir, "exports"))
-		if err != nil {
-			websession.Fail(w, 503, "交付授权存储不可用")
-			return
-		}
-		defer root.Close()
-		if g.Enabled {
-			prior, priorErr := (&stationWorkAccess{artifacts: s.artifacts, dir: worker.dir}).read(g.ID)
-			if priorErr == nil && !prior.Enabled {
-				websession.Fail(w, 409, "此交付授权已撤销，新授权请使用新的请求编号")
-				return
-			}
-		}
-		stage := ".grant-" + identity.RandomToken()
-		defer root.Remove(stage)
-		if err = writeLegacyStagedFile(root, stage, g); err == nil {
-			err = root.Rename(stage, g.ID+".json")
-		}
-		if err != nil {
-			websession.Fail(w, 503, "交付授权未保存")
-			return
-		}
-		if !g.Enabled && worker.run != nil {
-			next := worker.policy
-			next.Paused = true
-			if err := worker.changePolicy(next); err != nil {
-				websession.Fail(w, 503, "授权已撤销，暂停连接失败，请重试暂停")
-				return
-			}
-			if err := worker.stop(r.Context()); err != nil {
-				websession.Fail(w, 409, "授权已撤销，连接正在停止")
-				return
-			}
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		websession.Respond(w, 200, map[string]any{"delivery_id": g.ID, "artifact_id": g.Artifact, "enabled": g.Enabled, "status": "authorization_saved"})
-	}))
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	websession.Respond(w, 200, map[string]any{"delivery_id": g.ID, "artifact_id": g.Artifact, "enabled": g.Enabled, "status": "authorization_saved"})
 }
 
 func (s *stationWechat) revokeWorkGrant(w http.ResponseWriter, r *http.Request) {

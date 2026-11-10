@@ -19,11 +19,6 @@ import (
 	"wechat-bot/internal/websession"
 )
 
-func (s *stationWechat) attachmentRoutes(owner *websession.Store, mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/attachments", owner.Protect(s.acquireAttachment))
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/attachments/{asset}/content", owner.Protect(s.downloadAttachment))
-}
-
 func (s *stationWechat) ownerAttachmentAccess(ctx context.Context, id string, w *stationWechatWorker, in wechatapp.AttachmentRequest) (stationAttachmentAccess, error) {
 	w.mu.Lock()
 	grant := w.policy.AttachmentGrants[in.Thread]

@@ -45,40 +45,37 @@ type legacyMemoryPreview struct {
 	NextAfter      string                     `json:"next_after,omitempty"`
 }
 
-func (s *stationWechat) legacyMemoryRoute(server *websession.Store, mux *http.ServeMux) {
-	s.legacyMemoryImportRoutes(server, mux)
-	mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/legacy-import/memory", server.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		limit := 30
-		if raw := r.URL.Query().Get("limit"); raw != "" {
-			var err error
-			limit, err = strconv.Atoi(raw)
-			if err != nil || limit < 1 || limit > 200 {
-				websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
-				return
-			}
+func (s *stationWechat) previewLegacyMemoryHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	limit := 30
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 200 {
+			websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
+			return
 		}
-		after := r.URL.Query().Get("after")
-		if after != "" {
-			revision, thread, ok := strings.Cut(after, ":")
-			_, err := hex.DecodeString(revision)
-			if !ok || len(revision) != 64 || err != nil || !identity.ValidPathID(thread) {
-				websession.Fail(w, http.StatusBadRequest, errLegacyMemoryPage.Error())
-				return
-			}
+	}
+	after := r.URL.Query().Get("after")
+	if after != "" {
+		revision, thread, ok := strings.Cut(after, ":")
+		_, err := hex.DecodeString(revision)
+		if !ok || len(revision) != 64 || err != nil || !identity.ValidPathID(thread) {
+			websession.Fail(w, http.StatusBadRequest, errLegacyMemoryPage.Error())
+			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		report, err := s.previewLegacyMemory(ctx, r.PathValue("connection"), after, limit)
-		switch {
-		case errors.Is(err, errLegacyMemoryPage):
-			websession.Fail(w, http.StatusConflict, err.Error())
-		case err != nil:
-			legacyImportFailure(w, err)
-		default:
-			websession.Respond(w, http.StatusOK, report)
-		}
-	}))
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	report, err := s.previewLegacyMemory(ctx, r.PathValue("connection"), after, limit)
+	switch {
+	case errors.Is(err, errLegacyMemoryPage):
+		websession.Fail(w, http.StatusConflict, err.Error())
+	case err != nil:
+		legacyImportFailure(w, err)
+	default:
+		websession.Respond(w, http.StatusOK, report)
+	}
 }
 
 func (s *stationWechat) previewLegacyMemory(ctx context.Context, id, after string, limit int) (legacyMemoryPreview, error) {

@@ -31,27 +31,27 @@ type stationRecallView struct {
 
 var errStationRecallCursor = errors.New("invalid recall cursor")
 
-func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux, identity stationservices.OwnerReader) {
-	const route = "/api/apps/wechat/connections/{connection}/receipts/{receipt}/recall"
-	mux.HandleFunc("GET "+route, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-		stop := context.AfterFunc(s.ctx, cancel)
-		defer stop()
-		id, key, server := r.PathValue("connection"), r.PathValue("receipt"), r.URL.Query().Get("server_id")
-		source, err := s.stationRecallEvidence(ctx, id, key, server)
+func (s *stationWechat) readRecallHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
+	id, key, server := r.PathValue("connection"), r.PathValue("receipt"), r.URL.Query().Get("server_id")
+	source, err := s.stationRecallEvidence(ctx, id, key, server)
+	if err == nil {
+		var view stationRecallView
+		view, err = s.readStationRecall(ctx, id, source, r.URL.Query().Get("cursor"))
 		if err == nil {
-			var view stationRecallView
-			view, err = s.readStationRecall(ctx, id, source, r.URL.Query().Get("cursor"))
-			if err == nil {
-				websession.Respond(w, http.StatusOK, view)
-				return
-			}
+			websession.Respond(w, http.StatusOK, view)
+			return
 		}
-		stationRecallFailure(w, err)
-	}))
-	mux.HandleFunc("POST "+route, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+	}
+	stationRecallFailure(w, err)
+}
+
+func (s *stationWechat) submitRecallHandler(owner *websession.Store, identity stationservices.OwnerReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in struct {
 			ServerID  string `json:"server_id"`
@@ -88,7 +88,7 @@ func (s *stationWechat) recallRoutes(owner *websession.Store, mux *http.ServeMux
 			}
 		}
 		stationRecallFailure(w, err)
-	}))
+	}
 }
 
 func stationRecallFailure(w http.ResponseWriter, err error) {

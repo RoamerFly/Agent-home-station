@@ -84,73 +84,72 @@ func legacyReceiptOrigin(w http.ResponseWriter, r *http.Request) (management, ok
 	}
 }
 
-func (s *stationWechat) legacyReceiptRoutes(server *websession.Store, mux *http.ServeMux, path string) {
-	mux.HandleFunc("GET "+path, server.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		management, ok := legacyReceiptOrigin(w, r)
-		if !ok {
+func (s *stationWechat) listLegacyReceiptsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	management, ok := legacyReceiptOrigin(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	limit := 30
+	if raw := query.Get("limit"); raw != "" {
+		var err error
+		if limit, err = strconv.Atoi(raw); err != nil || limit < 1 || limit > 200 {
+			websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
 			return
 		}
-		query := r.URL.Query()
-		limit := 30
-		if raw := query.Get("limit"); raw != "" {
-			var err error
-			if limit, err = strconv.Atoi(raw); err != nil || limit < 1 || limit > 200 {
-				websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
-				return
-			}
+	}
+	pending := query.Get("pending")
+	if pending != "" && pending != "1" {
+		websession.Fail(w, http.StatusBadRequest, "待核对筛选参数无效")
+		return
+	}
+	cursor := query.Get("after")
+	revision, key, _ := strings.Cut(cursor, ":")
+	if cursor != "" && (!legacyMemoryDigestValid(revision) || !identity.ValidPathID(key)) {
+		websession.Fail(w, http.StatusBadRequest, "旧回执游标无效，请重新查看")
+		return
+	}
+	page, err := s.listLegacyReceipts(r.PathValue("connection"), revision, key, limit, pending == "1", management)
+	if err != nil {
+		legacyImportFailure(w, err)
+		return
+	}
+	websession.Respond(w, http.StatusOK, page)
+}
+
+func (s *stationWechat) readLegacyReceiptHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	management, ok := legacyReceiptOrigin(w, r)
+	if !ok {
+		return
+	}
+	id, key := r.PathValue("connection"), r.PathValue("key")
+	archive, receipt, err := s.legacyReceiptAt(id, key, management)
+	if errors.Is(err, apphost.ErrNotFound) {
+		websession.Fail(w, http.StatusNotFound, "此连接没有这条旧投递回执")
+		return
+	}
+	if err != nil {
+		legacyImportFailure(w, err)
+		return
+	}
+	if !management && legacyReceiptPending(receipt) {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		// The saved record stays available during a native outage. The
+		// check itself uses a freshly roster-bound native transport.
+		if receipt.OperationID == "" {
+			receipt.Lookup = "legacy_operation_unknown"
+		} else if archive.LegacyServer == "" {
+			receipt.Lookup = "legacy_dataset_mismatch"
+		} else if native, err := s.WorkerSender(ctx, id); err != nil {
+			receipt.Lookup = "legacy_native_unavailable"
+		} else {
+			receipt = checkLegacyReceipt(ctx, native, archive, receipt)
 		}
-		pending := query.Get("pending")
-		if pending != "" && pending != "1" {
-			websession.Fail(w, http.StatusBadRequest, "待核对筛选参数无效")
-			return
-		}
-		cursor := query.Get("after")
-		revision, key, _ := strings.Cut(cursor, ":")
-		if cursor != "" && (!legacyMemoryDigestValid(revision) || !identity.ValidPathID(key)) {
-			websession.Fail(w, http.StatusBadRequest, "旧回执游标无效，请重新查看")
-			return
-		}
-		page, err := s.listLegacyReceipts(r.PathValue("connection"), revision, key, limit, pending == "1", management)
-		if err != nil {
-			legacyImportFailure(w, err)
-			return
-		}
-		websession.Respond(w, http.StatusOK, page)
-	}))
-	mux.HandleFunc("GET "+path+"/{key}", server.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		management, ok := legacyReceiptOrigin(w, r)
-		if !ok {
-			return
-		}
-		id, key := r.PathValue("connection"), r.PathValue("key")
-		archive, receipt, err := s.legacyReceiptAt(id, key, management)
-		if errors.Is(err, apphost.ErrNotFound) {
-			websession.Fail(w, http.StatusNotFound, "此连接没有这条旧投递回执")
-			return
-		}
-		if err != nil {
-			legacyImportFailure(w, err)
-			return
-		}
-		if !management && legacyReceiptPending(receipt) {
-			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-			defer cancel()
-			// The saved record stays available during a native outage. The
-			// check itself uses a freshly roster-bound native transport.
-			if receipt.OperationID == "" {
-				receipt.Lookup = "legacy_operation_unknown"
-			} else if archive.LegacyServer == "" {
-				receipt.Lookup = "legacy_dataset_mismatch"
-			} else if native, err := s.WorkerSender(ctx, id); err != nil {
-				receipt.Lookup = "legacy_native_unavailable"
-			} else {
-				receipt = checkLegacyReceipt(ctx, native, archive, receipt)
-			}
-		}
-		websession.Respond(w, http.StatusOK, receipt)
-	}))
+	}
+	websession.Respond(w, http.StatusOK, receipt)
 }
 
 func (s *stationWechat) legacyReceiptArchive(id string) (legacyImportArchive, error) {

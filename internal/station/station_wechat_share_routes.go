@@ -17,17 +17,6 @@ import (
 	catalog "wechat-bot/plugins"
 )
 
-func (s *stationWechat) shareRoutes(owner *websession.Store, mux *http.ServeMux) {
-	for _, plugin := range []string{wechatapp.ShareReaderToolID, localasr.PluginID} {
-		path := "/api/apps/wechat/connections/{connection}/" + plugin
-		handler := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-			s.stationMediaSettings(w, r, plugin)
-		})
-		mux.HandleFunc("GET "+path, handler)
-		mux.HandleFunc("PUT "+path, handler)
-	}
-}
-
 func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Request, plugin string) {
 	w.Header().Set("Cache-Control", "no-store")
 	ctx, id := r.Context(), r.PathValue("connection")

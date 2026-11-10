@@ -31,46 +31,42 @@ type legacyRollbackTarget struct {
 	dataset string
 }
 
-func (s *stationWechat) legacyRollbackRoutes(owner *websession.Store, mux *http.ServeMux, path string) {
-	handle := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		freeze := r.Method == http.MethodPost
-		if freeze && !websession.Decode(w, r, &struct{}{}) {
+func (s *stationWechat) legacyRollbackHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	freeze := r.Method == http.MethodPost
+	if freeze && !websession.Decode(w, r, &struct{}{}) {
+		return
+	}
+	q := r.URL.Query()
+	limit := 20
+	if raw := q.Get("limit"); raw != "" {
+		var err error
+		if limit, err = strconv.Atoi(raw); err != nil || limit < 1 || limit > 200 {
+			websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
 			return
 		}
-		q := r.URL.Query()
-		limit := 20
-		if raw := q.Get("limit"); raw != "" {
-			var err error
-			if limit, err = strconv.Atoi(raw); err != nil || limit < 1 || limit > 200 {
-				websession.Fail(w, http.StatusBadRequest, "每页请输入 1 到 200 条")
-				return
-			}
-		}
-		cursor := q.Get("after")
-		revision, after, _ := strings.Cut(cursor, ":")
-		if cursor != "" && (!legacyMemoryDigestValid(revision) || !identity.ValidPathID(after)) {
-			websession.Fail(w, http.StatusBadRequest, "回退核对游标无效，请从第一页读取")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		view, err := s.legacyRollback(ctx, r.PathValue("connection"), freeze, revision, after, limit)
-		switch {
-		case errors.Is(err, apphost.ErrLifecycleCutover):
-			websession.Fail(w, http.StatusConflict, "尚未确认该连接的接续，无法冻结回退")
-		case errors.Is(err, errLegacyImportChanged):
-			websession.Fail(w, http.StatusConflict, "本地投递记录已变化，请从第一页重新核对")
-		case err != nil:
-			legacyImportFailure(w, err)
-		case freeze && view.State == "draining":
-			websession.Respond(w, http.StatusAccepted, view)
-		default:
-			websession.Respond(w, http.StatusOK, view)
-		}
-	})
-	mux.HandleFunc("GET "+path, handle)
-	mux.HandleFunc("POST "+path, handle)
+	}
+	cursor := q.Get("after")
+	revision, after, _ := strings.Cut(cursor, ":")
+	if cursor != "" && (!legacyMemoryDigestValid(revision) || !identity.ValidPathID(after)) {
+		websession.Fail(w, http.StatusBadRequest, "回退核对游标无效，请从第一页读取")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	view, err := s.legacyRollback(ctx, r.PathValue("connection"), freeze, revision, after, limit)
+	switch {
+	case errors.Is(err, apphost.ErrLifecycleCutover):
+		websession.Fail(w, http.StatusConflict, "尚未确认该连接的接续，无法冻结回退")
+	case errors.Is(err, errLegacyImportChanged):
+		websession.Fail(w, http.StatusConflict, "本地投递记录已变化，请从第一页重新核对")
+	case err != nil:
+		legacyImportFailure(w, err)
+	case freeze && view.State == "draining":
+		websession.Respond(w, http.StatusAccepted, view)
+	default:
+		websession.Respond(w, http.StatusOK, view)
+	}
 }
 
 func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bool, revision, after string, limit int) (legacyRollbackView, error) {

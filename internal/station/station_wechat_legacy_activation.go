@@ -70,33 +70,29 @@ type legacyActivationInput struct {
 	ReviewedReceipts bool   `json:"reviewed_receipts"`
 }
 
-func (s *stationWechat) legacyActivationRoutes(server *websession.Store, mux *http.ServeMux, path string) {
-	handle := server.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		var input legacyActivationInput
-		if r.Method == http.MethodPost {
-			if !websession.Decode(w, r, &input) {
-				return
-			}
-			if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
-				websession.Fail(w, http.StatusBadRequest, "请重新核对启用条件并确认实际微信身份")
-				return
-			}
+func (s *stationWechat) legacyActivationHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var input legacyActivationInput
+	if r.Method == http.MethodPost {
+		if !websession.Decode(w, r, &input) {
+			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		view, err := s.legacyActivation(ctx, r.PathValue("connection"), input)
-		switch {
-		case err != nil:
-			legacyImportFailure(w, err)
-		case input.Digest != "" && view.Status != "confirmed":
-			websession.Fail(w, http.StatusConflict, view.Reason)
-		default:
-			websession.Respond(w, http.StatusOK, view)
+		if !legacyMemoryDigestValid(input.Digest) || !input.SameIdentity {
+			websession.Fail(w, http.StatusBadRequest, "请重新核对启用条件并确认实际微信身份")
+			return
 		}
-	})
-	mux.HandleFunc("GET "+path, handle)
-	mux.HandleFunc("POST "+path, handle)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	view, err := s.legacyActivation(ctx, r.PathValue("connection"), input)
+	switch {
+	case err != nil:
+		legacyImportFailure(w, err)
+	case input.Digest != "" && view.Status != "confirmed":
+		websession.Fail(w, http.StatusConflict, view.Reason)
+	default:
+		websession.Respond(w, http.StatusOK, view)
+	}
 }
 
 func (s *stationWechat) legacyActivation(ctx context.Context, id string, input legacyActivationInput) (legacyActivationView, error) {

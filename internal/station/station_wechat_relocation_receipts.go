@@ -56,16 +56,14 @@ func saveLegacyRelocationEvidence(root *os.Root, evidence legacyRelocationEviden
 	return root.Rename(stage, legacyRelocationEvidenceFile)
 }
 
-func (s *stationWechat) legacyRelocationReceiptRoute(auth *websession.Store, mux *http.ServeMux, path string) {
-	mux.HandleFunc("GET "+path, auth.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		result, err := s.legacyRelocationReceipt(r.PathValue("connection"), r.PathValue("key"))
-		if err != nil {
-			legacyImportFailure(w, err)
-			return
-		}
-		websession.Respond(w, http.StatusOK, result)
-	}))
+func (s *stationWechat) readLegacyRelocationReceiptHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	result, err := s.legacyRelocationReceipt(r.PathValue("connection"), r.PathValue("key"))
+	if err != nil {
+		legacyImportFailure(w, err)
+		return
+	}
+	websession.Respond(w, http.StatusOK, result)
 }
 
 func (s *stationWechat) legacyRelocationReceipt(id, key string) (wechatapp.RollbackReceipt, error) {

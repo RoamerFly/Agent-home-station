@@ -35,11 +35,8 @@ type stationGroupActionAuthority struct {
 	active    func(context.Context) bool
 }
 
-func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.ServeMux, readOwner stationservices.OwnerReader) {
-	const base = "/api/apps/wechat/connections/{connection}"
-	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.Protect(s.stationGroupDetails("mute")))
-	mux.HandleFunc("GET "+base+"/groups/{group}/profile", owner.Protect(s.stationGroupDetails("rename", "my_name")))
-	mux.HandleFunc("POST "+base+"/group-actions", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+func (s *stationWechat) submitGroupActionHandler(owner *websession.Store, readOwner stationservices.OwnerReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var in stationGroupActionInput
 		if !websession.Decode(w, r, &in) {
@@ -94,7 +91,7 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 		default:
 			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对操作，请查看该群的原操作记录")
 		}
-	}))
+	}
 }
 
 func (w *stationWechatWorker) actionLedgerLocked() (*wechatapp.ActionLedger, error) {

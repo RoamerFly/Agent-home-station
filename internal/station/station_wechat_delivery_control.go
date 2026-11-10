@@ -54,11 +54,6 @@ func (w *stationWechatWorker) deliveryCancelled(in companion.Input) (bool, error
 	return cancelled, err
 }
 
-func (s *stationWechat) deliveryControlRoutes(owner *websession.Store, mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/cancel", owner.Protect(s.cancelDelivery))
-	mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/receipts/{key}/resume", owner.Protect(s.requestDeliveryResume))
-}
-
 func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, key := r.PathValue("connection"), r.PathValue("key")

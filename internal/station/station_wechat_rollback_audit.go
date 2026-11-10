@@ -88,34 +88,30 @@ func (a rollbackAudit) summary(digest string) rollbackAuditView {
 	return view
 }
 
-func (s *stationWechat) legacyRollbackAuditRoutes(owner *websession.Store, mux *http.ServeMux, path string) {
-	handle := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		capture := r.Method == http.MethodPost
-		if capture && !websession.Decode(w, r, &struct{}{}) {
-			return
-		}
-		digest := r.URL.Query().Get("digest")
-		if digest != "" && (capture || !legacyMemoryDigestValid(digest)) {
-			websession.Fail(w, http.StatusBadRequest, "回退核对摘要无效")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		view, err := s.legacyRollbackAudit(ctx, r.PathValue("connection"), capture, digest)
-		switch {
-		case errors.Is(err, apphost.ErrNotFound):
-			websession.Fail(w, http.StatusNotFound, "此连接没有保存的回退核对记录")
-		case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errLegacyImportChanged):
-			websession.Fail(w, http.StatusConflict, "请等待停发排空并重新核对。采集期间本地记录变化时需重新保存")
-		case err != nil:
-			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法完整保存或读取回退核对记录")
-		default:
-			websession.Respond(w, http.StatusOK, view)
-		}
-	})
-	mux.HandleFunc("GET "+path, handle)
-	mux.HandleFunc("POST "+path, handle)
+func (s *stationWechat) legacyRollbackAuditHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	capture := r.Method == http.MethodPost
+	if capture && !websession.Decode(w, r, &struct{}{}) {
+		return
+	}
+	digest := r.URL.Query().Get("digest")
+	if digest != "" && (capture || !legacyMemoryDigestValid(digest)) {
+		websession.Fail(w, http.StatusBadRequest, "回退核对摘要无效")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	view, err := s.legacyRollbackAudit(ctx, r.PathValue("connection"), capture, digest)
+	switch {
+	case errors.Is(err, apphost.ErrNotFound):
+		websession.Fail(w, http.StatusNotFound, "此连接没有保存的回退核对记录")
+	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errLegacyImportChanged):
+		websession.Fail(w, http.StatusConflict, "请等待停发排空并重新核对。采集期间本地记录变化时需重新保存")
+	case err != nil:
+		websession.Fail(w, http.StatusServiceUnavailable, "暂时无法完整保存或读取回退核对记录")
+	default:
+		websession.Respond(w, http.StatusOK, view)
+	}
 }
 
 func (s *stationWechat) legacyRollbackAudit(ctx context.Context, id string, capture bool, digest string) (rollbackAuditView, error) {
