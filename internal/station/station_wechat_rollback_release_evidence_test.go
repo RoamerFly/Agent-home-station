@@ -23,7 +23,7 @@ func TestValidateRollbackReleaseEvidence(t *testing.T) {
 
 	unknown := audit
 	unknown.DeliveryDataset = target.dataset
-	unknown.Deliveries = []rollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-one", Kind: "text", State: "submission_unknown", Lookup: "stored"}}, Disposition: "unknown"}}
+	unknown.Deliveries = []wechatapp.RollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-one", Kind: "text", State: "submission_unknown", Lookup: "stored"}}, Disposition: "unknown"}}
 	if err := validateRollbackReleaseEvidence(target, unknown, marker, root, false); err == nil {
 		t.Fatal("unknown delivery released without explicit acknowledgement")
 	}
@@ -38,13 +38,13 @@ func TestValidateRollbackReleaseEvidence(t *testing.T) {
 	}
 	activeDelivery := audit
 	activeDelivery.DeliveryDataset = target.dataset
-	activeDelivery.Deliveries = []rollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-active", Kind: "voice", State: "submitted_pending", Lookup: "platform", PlatformState: "running"}}, Disposition: "active"}}
+	activeDelivery.Deliveries = []wechatapp.RollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-active", Kind: "voice", State: "submitted_pending", Lookup: "platform", PlatformState: "running"}}, Disposition: "active"}}
 	if err := validateRollbackReleaseEvidence(target, activeDelivery, marker, root, true); err == nil {
 		t.Fatal("active native delivery released")
 	}
 
 	wrongDataset := audit
-	wrongDataset.Deliveries = []rollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-two", Kind: "text", State: "not_submitted", Lookup: "stored"}}, Disposition: "not_submitted"}}
+	wrongDataset.Deliveries = []wechatapp.RollbackReceipt{{Receipt: apphost.Receipt{ConnectionRef: ref, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: "delivery-two", Kind: "text", State: "not_submitted", Lookup: "stored"}}, Disposition: "not_submitted"}}
 	wrongDataset.DeliveryDataset = "other-dataset"
 	if err := validateRollbackReleaseEvidence(target, wrongDataset, marker, root, false); err == nil {
 		t.Fatal("observed checkpoint from another native dataset released")

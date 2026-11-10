@@ -10,26 +10,18 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
-	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
-	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/websession"
 )
 
-type rollbackReceipt struct {
-	apphost.Receipt
-	Disposition string `json:"disposition"`
-}
-
 type legacyRollbackView struct {
-	State     string            `json:"state"`
-	Eligible  bool              `json:"eligible"`
-	FrozenAt  time.Time         `json:"frozen_at,omitzero"`
-	Snapshot  string            `json:"snapshot,omitempty"`
-	NextAfter string            `json:"next_after,omitempty"`
-	Native    string            `json:"native,omitempty"`
-	Items     []rollbackReceipt `json:"items"`
+	State     string                      `json:"state"`
+	Eligible  bool                        `json:"eligible"`
+	FrozenAt  time.Time                   `json:"frozen_at,omitzero"`
+	Snapshot  string                      `json:"snapshot,omitempty"`
+	NextAfter string                      `json:"next_after,omitempty"`
+	Native    string                      `json:"native,omitempty"`
+	Items     []wechatapp.RollbackReceipt `json:"items"`
 }
 
 type legacyRollbackTarget struct {
@@ -90,7 +82,7 @@ func (s *stationWechat) legacyRollback(ctx context.Context, id string, freeze bo
 }
 
 func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bool) (legacyRollbackTarget, error) {
-	view := legacyRollbackTarget{legacyRollbackView: legacyRollbackView{State: "not_frozen", Items: []rollbackReceipt{}}}
+	view := legacyRollbackTarget{legacyRollbackView: legacyRollbackView{State: "not_frozen", Items: []wechatapp.RollbackReceipt{}}}
 	archive, err := s.legacyReceiptArchive(id)
 	if err != nil {
 		return view, err
@@ -161,25 +153,11 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 	return view, nil
 }
 
-type rollbackCheckpoint struct {
-	rows     bot.DeliveryEvidencePage
-	stops    map[string]wechatapp.DeliveryStop
-	controls map[string]wechatapp.ResumeControl
-	digest   string
-}
-
-func (target legacyRollbackTarget) checkpoint(after string, limit int) (rollbackCheckpoint, error) {
+func (target legacyRollbackTarget) checkpoint(after string, limit int) (wechatapp.RollbackCheckpoint, error) {
 	w := target.worker
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
-	rows, err := wechatapp.ReadWorkerDeliveryPage(w.runtimeStateDir(), target.ref.AccountID, after, limit)
-	stops, stopErr := w.deliveryJournal().ReadStops()
-	controls, controlErr := w.deliveryJournal().ReadResumes()
-	if err != nil || stopErr != nil || controlErr != nil {
-		return rollbackCheckpoint{}, apphost.ErrUnavailable
-	}
-	digest := localCheckpointKey("wechat-rollback-v1", target.ref, target.FrozenAt, target.dataset, rows.Snapshot, stops, controls)
-	return rollbackCheckpoint{rows, stops, controls, digest}, nil
+	return wechatapp.ReadRollbackCheckpoint(w.deliveryJournal(), target.ref, target.FrozenAt, target.dataset, after, limit)
 }
 
 func (s *stationWechat) rollbackReceiptPage(ctx context.Context, target legacyRollbackTarget, revision, after string, limit int) (legacyRollbackView, error) {
@@ -188,79 +166,23 @@ func (s *stationWechat) rollbackReceiptPage(ctx context.Context, target legacyRo
 	if err != nil {
 		return view, err
 	}
-	view.Snapshot = checkpoint.digest
+	view.Snapshot = checkpoint.Snapshot()
 	if revision != "" && revision != view.Snapshot {
 		return view, errLegacyImportChanged
 	}
-	if len(checkpoint.rows.Keys) == 0 {
+	if checkpoint.Empty() {
 		return view, nil
 	}
-	if checkpoint.rows.ServerID != target.dataset {
+	if checkpoint.Dataset() != target.dataset {
 		view.Native = "dataset_mismatch"
-		view.Items, err = checkpoint.project(ctx, target.ref, nil)
+		view.Items, err = checkpoint.Receipts(ctx, nil)
 	} else {
-		native, _, state := s.rollbackNative(ctx, target)
+		native, _, state := wechatapp.VerifyRollbackTransport(ctx, target.ref, target.dataset, s.WorkerSender)
 		view.Native = state
-		view.Items, err = checkpoint.project(ctx, target.ref, native)
+		view.Items, err = checkpoint.Receipts(ctx, native)
 	}
-	if checkpoint.rows.NextAfter != "" {
-		view.NextAfter = view.Snapshot + ":" + checkpoint.rows.NextAfter
+	if checkpoint.NextAfter() != "" {
+		view.NextAfter = view.Snapshot + ":" + checkpoint.NextAfter()
 	}
 	return view, err
-}
-
-func (s *stationWechat) rollbackNative(ctx context.Context, target legacyRollbackTarget) (*linuxnative.Sender, linuxnative.DaemonStatus, string) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	native, err := s.WorkerSender(ctx, target.ref.ConnectionID)
-	if err != nil || native.Account() != target.ref.AccountID {
-		return nil, linuxnative.DaemonStatus{}, "unavailable"
-	}
-	daemon, err := native.DaemonStatus(ctx)
-	if err != nil {
-		return nil, daemon, "unavailable"
-	}
-	if daemon.ServerID != target.dataset {
-		return nil, daemon, "dataset_mismatch"
-	}
-	return native, daemon, "available"
-}
-
-func (c rollbackCheckpoint) project(ctx context.Context, ref apphost.ConnectionRef, native *linuxnative.Sender) ([]rollbackReceipt, error) {
-	items := make([]rollbackReceipt, 0, len(c.rows.Keys))
-	for _, key := range c.rows.Keys {
-		if !identity.ValidPathID(key) {
-			return nil, apphost.ErrUnavailable
-		}
-		// Keep the requested local page intact if the optional platform lookups
-		// exhaust their deadline. The remaining records retain stored evidence.
-		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		row := c.rows.Records[key]
-		receipt, active := wechatapp.ProjectRollbackReceipt(lookupCtx, native, ref, key, row)
-		cancel()
-		_, stopped := c.stops[wechatapp.DeliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
-		receipt.CancelRequested = receipt.CancelRequested || stopped
-		if control, exists := c.controls[key]; exists {
-			receipt.Continuation = wechatapp.ResumeControlView(control)
-		}
-		items = append(items, rollbackReceipt{Receipt: receipt, Disposition: rollbackDisposition(receipt, active)})
-	}
-	return items, nil
-}
-
-func rollbackDisposition(receipt apphost.Receipt, active bool) string {
-	switch {
-	case active:
-		return "active"
-	case receipt.State == "accepted":
-		return "accepted"
-	case receipt.PartsIncomplete || len(receipt.UnconfirmedParts) != 0:
-		return "unknown"
-	case receipt.State == "failed" || receipt.State == "cancelled":
-		return "terminal"
-	case receipt.State == "not_submitted" && receipt.OperationID == "":
-		return "not_submitted"
-	default:
-		return "unknown"
-	}
 }

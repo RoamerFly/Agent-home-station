@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
@@ -33,19 +34,19 @@ type stationNativeStop struct {
 }
 
 type rollbackAudit struct {
-	Version          int                     `json:"version"`
-	Connection       apphost.ConnectionRef   `json:"connection"`
-	FrozenAt         time.Time               `json:"frozen_at"`
-	CapturedAt       time.Time               `json:"captured_at"`
-	Checkpoint       string                  `json:"checkpoint"`
-	ActionSnapshot   string                  `json:"action_snapshot"`
-	TargetDataset    string                  `json:"target_dataset"`
-	NativeState      string                  `json:"native_state"`
-	DeliveryDataset  string                  `json:"delivery_dataset,omitempty"`
-	DesktopEpoch     string                  `json:"desktop_epoch,omitempty"`
-	NativeGeneration string                  `json:"native_generation,omitempty"`
-	Deliveries       []rollbackReceipt       `json:"deliveries"`
-	Actions          []apphost.ActionReceipt `json:"actions"`
+	Version          int                         `json:"version"`
+	Connection       apphost.ConnectionRef       `json:"connection"`
+	FrozenAt         time.Time                   `json:"frozen_at"`
+	CapturedAt       time.Time                   `json:"captured_at"`
+	Checkpoint       string                      `json:"checkpoint"`
+	ActionSnapshot   string                      `json:"action_snapshot"`
+	TargetDataset    string                      `json:"target_dataset"`
+	NativeState      string                      `json:"native_state"`
+	DeliveryDataset  string                      `json:"delivery_dataset,omitempty"`
+	DesktopEpoch     string                      `json:"desktop_epoch,omitempty"`
+	NativeGeneration string                      `json:"native_generation,omitempty"`
+	Deliveries       []wechatapp.RollbackReceipt `json:"deliveries"`
+	Actions          []apphost.ActionReceipt     `json:"actions"`
 }
 
 type rollbackAuditView struct {
@@ -215,14 +216,10 @@ func (s *stationWechat) captureRollbackAudit(ctx context.Context, target legacyR
 	if err != nil {
 		return audit, err
 	}
-	native, daemon, state := s.rollbackNative(ctx, target)
+	native, daemon, state := wechatapp.VerifyRollbackTransport(ctx, target.ref, target.dataset, s.WorkerSender)
 	epoch := s.runningDesktopEpoch()
-	deliveryNative := native
-	if checkpoint.rows.ServerID != target.dataset {
-		deliveryNative = nil
-	}
 	lookup, cancel := context.WithTimeout(ctx, 8*time.Second)
-	deliveries, err := checkpoint.project(lookup, target.ref, deliveryNative)
+	deliveries, err := checkpoint.Receipts(lookup, native)
 	cancel()
 	if err != nil {
 		return audit, err
@@ -234,8 +231,8 @@ func (s *stationWechat) captureRollbackAudit(ctx context.Context, target legacyR
 		return audit, err
 	}
 	audit = rollbackAudit{Version: 1, Connection: target.ref, FrozenAt: target.FrozenAt, CapturedAt: time.Now().UTC(),
-		Checkpoint: checkpoint.digest, ActionSnapshot: actionSnapshot, TargetDataset: target.dataset,
-		NativeState: state, DeliveryDataset: checkpoint.rows.ServerID, Deliveries: deliveries, Actions: actions}
+		Checkpoint: checkpoint.Snapshot(), ActionSnapshot: actionSnapshot, TargetDataset: target.dataset,
+		NativeState: state, DeliveryDataset: checkpoint.Dataset(), Deliveries: deliveries, Actions: actions}
 	if epoch != "" && native != nil {
 		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
 		latest, err := native.DaemonStatus(probe)
@@ -271,7 +268,7 @@ func (s *stationWechat) rollbackAuditCurrent(ctx context.Context, target legacyR
 		return false, err
 	}
 	_, actions, err := s.rollbackActionEvidence(ctx, target.worker, target.ref, nil)
-	return checkpoint.digest == audit.Checkpoint && actions == audit.ActionSnapshot, err
+	return checkpoint.Snapshot() == audit.Checkpoint && actions == audit.ActionSnapshot, err
 }
 
 func (s *stationWechat) runningDesktopEpoch() string {

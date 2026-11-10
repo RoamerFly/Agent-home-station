@@ -68,8 +68,8 @@ func (s *stationWechat) legacyRelocationReceiptRoute(auth *websession.Store, mux
 	}))
 }
 
-func (s *stationWechat) legacyRelocationReceipt(id, key string) (rollbackReceipt, error) {
-	var out rollbackReceipt
+func (s *stationWechat) legacyRelocationReceipt(id, key string) (wechatapp.RollbackReceipt, error) {
+	var out wechatapp.RollbackReceipt
 	if !artifactID(id, "wechat-") || !identity.ValidPathID(key) {
 		return out, apphost.ErrNotFound
 	}
@@ -104,7 +104,7 @@ func (s *stationWechat) legacyRelocationReceipt(id, key string) (rollbackReceipt
 			continue
 		}
 		if found {
-			return rollbackReceipt{}, apphost.ErrUnavailable
+			return wechatapp.RollbackReceipt{}, apphost.ErrUnavailable
 		}
 		out, found = entry, true
 	}

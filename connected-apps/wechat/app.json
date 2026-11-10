@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,7 +39,7 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "43a26b8513c0249d76b8c19415f2c4e15639a25328ab2ca622113013bf40f275",
+    "CHANGELOG.md": "2c0fdec0e50a997bc20b98a2593a833d361c1e651d1972f98662ece2214f372d",
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "8e6334a50c7e1fff4c4f2aa47a049f0dc4d4f09583fc069338730a4379f398bb",
@@ -61,8 +61,8 @@
     "adapter/read.go": "12173c594c151b9de40e5feb980f6bb0e8dff4e3288ee5333564498b35003c54",
     "adapter/receipt.go": "62f960a9ac5d1365eb78393df7ca79ebc9c61843fc9b241a80956140a9ce9f65",
     "adapter/receipt_test.go": "b8010668757c5a8a9ce1bedc7d27a791796979e87fc2d95e874a0805fcc35631",
-    "adapter/rollback_receipt.go": "9e5a43cd41e0e2dacbcec75d5ba3262b07c95139089a6ec050876c005dab30e3",
-    "adapter/rollback_receipt_test.go": "eb71b207008e5fe3f8818c2ecea55531f94394de777b593bf2c6f64cb05e53f8",
+    "adapter/rollback_receipt.go": "199f1f5e6310f31480c7669e1f51d7a6c8d3f4486dfc0e79fcb995a71ac5d532",
+    "adapter/rollback_receipt_test.go": "8f8fc9c1a468d7730b8ac6994e37c54f9f12ed101119d6f411cb17e175877400",
     "adapter/send_text.go": "88b7afe7bd555f3cf999f904938f6778e0ac136c6c5e6bb8014457c956b58b28",
     "adapter/share_binding.go": "ac097876eb4fb892f45cde4756700983d5b8c56e4267a7476026dc22a24805d1",
     "adapter/share_bridge.go": "8be855851a9d85201829d8d4aec6a2667393d007b73f67179fedd75ec2f5b0ba",

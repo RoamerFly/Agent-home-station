@@ -2,12 +2,15 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
@@ -67,5 +70,47 @@ func TestProjectRollbackReceiptSeparatesActiveFromUnknownAndRetainsParts(t *test
 	}
 	if len(unknown.AcceptedParts) != 1 || unknown.AcceptedParts[0].ServerID != "71" {
 		t.Fatalf("offline projection lost accepted prefix: %#v", unknown)
+	}
+}
+
+func TestRollbackCheckpointPreservesSnapshotAndControlEvidence(t *testing.T) {
+	dir := t.TempDir()
+	queue := filepath.Join(dir, "queue")
+	if err := os.Mkdir(queue, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(queue, "messages-v2.json"), []byte(workerCheckpointFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	frozen := time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC)
+	ref := apphost.ConnectionRef{AppID: ID, InstallationID: "local", ConnectionID: ConnectionID("fixture"), AccountID: "fixture"}
+	journal := DeliveryJournal(dir)
+	original, err := ReadRollbackCheckpoint(journal, ref, frozen, "original-server", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Compare with the legacy station digest encoding for already sealed audits.
+	raw, err := json.Marshal([]any{"wechat-rollback-v1", ref, frozen, "original-server", original.rows.Snapshot, map[string]DeliveryStop{}, map[string]ResumeControl{}})
+	if err != nil || original.Snapshot() != fmt.Sprintf("%x", sha256.Sum256(raw)) {
+		t.Fatal("legacy rollback snapshot changed", original.Snapshot(), err)
+	}
+	if err := journal.SaveStop(DeliveryStop{Account: "fixture", Thread: "room", Trace: "original-turn", Key: "original-key", At: frozen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.RequestResume("fixture", "original-key", "request-one", "room", "original-turn", map[string]ResumeControl{}, frozen); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ReadRollbackCheckpoint(journal, ref, frozen, "original-server", "", 1)
+	if err != nil || first.Snapshot() == original.Snapshot() || first.Dataset() != "original-server" {
+		t.Fatal("the checkpoint omitted journal changes", first.Snapshot(), err)
+	}
+	last, err := ReadRollbackCheckpoint(journal, ref, frozen, "original-server", "original-key", 1)
+	if err != nil || !last.Empty() || last.Snapshot() != first.Snapshot() {
+		t.Fatal("page boundaries changed the sealed snapshot", last.Snapshot(), err)
+	}
+	rows, err := first.Receipts(t.Context(), nil)
+	if err != nil || len(rows) != 1 || !rows[0].CancelRequested || rows[0].Continuation == nil ||
+		rows[0].IdempotencyKey != "original-key" || rows[0].Lookup != "stored" {
+		t.Fatal("the offline page lost stop or resume evidence", rows, err)
 	}
 }
