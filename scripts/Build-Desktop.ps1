@@ -301,7 +301,8 @@ $gorillaLicense=Join-Path $workspace 'docs\licenses\gorilla-websocket.txt'
 if(-not(Test-Path -LiteralPath $gorillaLicense -PathType Leaf)){throw 'The Gorilla WebSocket license notice is missing.'}
 Copy-Item -LiteralPath $gorillaLicense -Destination (Join-Path $OutputDirectory 'Gorilla-WebSocket-LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $workspace 'docs\licenses\rtmp-relay.txt') -Destination (Join-Path $OutputDirectory 'RTMP-Relay-LICENSE.txt') -ErrorAction Stop
-if($Test){
+function Invoke-DesktopPackageTests {
+ if(-not $Test){return}
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
  & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs') (Join-Path $source 'CutoverRehearsal.cs')
  if($LASTEXITCODE -ne 0){throw 'Desktop tests did not compile.'}
@@ -391,6 +392,7 @@ if($Portable){
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
  if($LocalStation){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
+  Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length
   Get-FileHash -LiteralPath $target -Algorithm SHA256
   return
@@ -411,5 +413,6 @@ if($Portable){
  [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
+Invoke-DesktopPackageTests
 Get-Item -LiteralPath $target | Select-Object FullName,Length
 Get-FileHash -LiteralPath $target -Algorithm SHA256

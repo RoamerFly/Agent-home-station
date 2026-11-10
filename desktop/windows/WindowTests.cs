@@ -270,18 +270,21 @@ namespace WechatAgent.Desktop {
         }
 
         static void BundledAppAndToolTests(Deployment d) {
-            var douyinBundled = File.Exists(Path.Combine(d.Workspace, "connected-apps", "douyin", "app.json"));
-            var obsBundled = File.Exists(Path.Combine(d.Workspace, "plugins", "obs-preview", "plugin.json"));
-            if (!douyinBundled && !obsBundled) return;
+            var bundledApps = new[] { "wechat", "douyin", "bilibili" }
+                .Where(id => File.Exists(Path.Combine(d.Workspace, "connected-apps", id, "app.json"))).ToArray();
+            var bundledTools = new[] { "document-workshop", "audio-workshop", "media-understanding", "rvc", "comfyui", "yue", "station-speech", "obs-preview" }
+                .Where(id => File.Exists(Path.Combine(d.Workspace, "plugins", id, "plugin.json"))).ToArray();
+            if (bundledApps.Length == 0 && bundledTools.Length == 0) return;
 
             using (var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })) {
                 client.Timeout = TimeSpan.FromSeconds(5);
-                const string authorization = "/api/local/apps/douyin/authorization";
+                const string webLogin = "/api/local/apps/douyin/web-login";
                 const string publications = "/api/local/publications?app_id=douyin";
-                const string obsPackage = "/api/local/project-tools/obs-preview";
-                const string preview = obsPackage + "/preview";
+                const string toolRoute = "/api/local/project-tools";
+                const string preview = toolRoute + "/obs-preview/preview";
                 const string live = "/api/local/live";
-                if (douyinBundled) ExpectStationStatus(client, d.Url + authorization, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                if (bundledApps.Contains("douyin")) ExpectStationStatus(client, d.Url + webLogin, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
+                ExpectStationStatus(client, d.Url + toolRoute, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
                 ExpectStationStatus(client, d.Url + publications, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
                 ExpectStationStatus(client, d.Url + preview, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
                 ExpectStationStatus(client, d.Url + live, HttpMethod.Get, null, HttpStatusCode.Unauthorized);
@@ -289,37 +292,66 @@ namespace WechatAgent.Desktop {
                 var password = Deployment.LocalStationPassword(d.Root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD") ?? "");
                 var login = ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/login", new { password });
                 client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
-                ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/local/home", new { action = "initialize" });
+                var home = ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/local/home", new { action = "initialize" });
                 Func<string, Dictionary<string, object>> read = path => Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + path).GetAwaiter().GetResult());
 
-                if (douyinBundled) {
+                var catalog = ((IList)read("/api/local/apps/catalog")["applications"]).Cast<Dictionary<string, object>>().ToArray();
+                foreach (string id in bundledApps) {
+                    var item = catalog.Single(app => Deployment.Text(app, "id") == id);
+                    Assert(Convert.ToBoolean(item["source_available"]), "the packaged app failed its signed source check: " + id);
+                    var checkout = ControllerTests.StationJSON(client, HttpMethod.Post, d.Url + "/api/local/apps/" + id + "/install",
+                        new { revision = home["revision"], digest = item["digest"] });
+                    Assert(Deployment.Text(checkout, "result") == "created" && !Convert.ToBoolean(checkout["connected"]),
+                        "the packaged app could not prepare an editable checkout without connecting: " + id);
+                }
+                var tools = ((IList)read(toolRoute)["tools"]).Cast<Dictionary<string, object>>().ToArray();
+                foreach (string id in bundledTools) {
+                    var tool = tools.Single(item => Deployment.Text(item, "id") == id);
+                    Assert(Convert.ToBoolean(tool["catalog_available"]) && !Convert.ToBoolean(tool["installed"]),
+                        "the bundled project tool was missing or installed without consent: " + id);
+                    if (id == "document-workshop" || id == "audio-workshop" || id == "media-understanding")
+                        Assert(Convert.ToBoolean(tool["runtime_ready"]), "the packaged shared runtime was not ready for " + id);
+                    else
+                        Assert(!Convert.ToBoolean(tool["runtime_ready"]), "a bundled declaration claimed a configured backend: " + id);
+                    var route = d.Url + toolRoute + "/" + id;
+                    ExpectStationStatus(client, route, HttpMethod.Put, new { action = "install" }, HttpStatusCode.BadRequest);
+                    var installed = (Dictionary<string, object>)ControllerTests.StationJSON(client, HttpMethod.Put, route,
+                        new { action = "install", approve_artifacts = true })["tool"];
+                    Assert(Convert.ToBoolean(installed["installed"]) && !Convert.ToBoolean(installed["enabled"]),
+                        "the packaged tool could not install with owner consent while staying disabled: " + id);
+                }
+
+                if (bundledApps.Contains("douyin")) {
                     var apps = (IList)read("/api/apps")["items"];
-                    Assert(apps.Cast<Dictionary<string, object>>().Any(app => Deployment.Text(app, "id") == "douyin"),
+                    Assert(apps.Cast<Dictionary<string, object>>().Any(app => Deployment.Text(app, "id") == "douyin" &&
+                        Deployment.Text(app, "registration") == "ordinary-web-v1"),
                         "the packaged Douyin app did not register");
-                    var fresh = read(authorization);
-                    Assert(Deployment.Text(fresh, "status") == "unconfigured" && !Convert.ToBoolean(fresh["publish_authorized"]),
+                    ExpectStationStatus(client, d.Url + "/api/local/apps/douyin/authorization", HttpMethod.Get, null, HttpStatusCode.NotFound);
+                    var fresh = read(webLogin);
+                    Assert(Deployment.Text(fresh, "state") == "unconfigured" && !Convert.ToBoolean(fresh["publish_enabled"]),
                         "bundling Douyin granted authorization before sign-in");
 
-                    // A past consent is retained in the account record, while
-                    // effective publication permission is gated by expiry.
-                    const string token = "synthetic-expired-package-access";
-                    var file = Path.Combine(d.Root, "apps", "douyin", "authorization.json");
-                    Directory.CreateDirectory(Path.GetDirectoryName(file));
-                    File.WriteAllText(file, Deployment.Json.Serialize(new { schema_version = 1, revision = new string('a', 48),
-                        client_key = "synthetic-client", open_id = "synthetic-account", access_token = token, label = "Synthetic account",
-                        read_works = true, publish_video = true, expires_at = DateTime.UtcNow.AddHours(-1).ToString("o") }), new UTF8Encoding(false));
-                    var expired = read(authorization);
-                    Assert(Deployment.Text(expired, "status") == "expired" && !Deployment.Json.Serialize(expired).Contains(token),
-                        "the packaged account failed to report expiry or exposed a credential");
+                    // Reopen a synthetic ordinary-account profile without a
+                    // browser session or any effective platform permission.
+                    var fish = Deployment.Text(home, "fish_id");
+                    var profile = new string('a', 32);
+                    var settings = Path.Combine(d.Root, "apps", "douyin", "web-login", fish);
+                    Directory.CreateDirectory(Path.Combine(settings, profile));
+                    File.WriteAllText(Path.Combine(settings, "login.json"), Deployment.Json.Serialize(new {
+                        schema_version = 1, fish_id = fish, revision = 1, profile,
+                        confirmed_at = DateTime.UtcNow.ToString("o")
+                    }), new UTF8Encoding(false));
+                    var saved = read(webLogin);
+                    Assert(Deployment.Text(saved, "state") == "saved" && !Convert.ToBoolean(saved["read_enabled"]) &&
+                        !Convert.ToBoolean(saved["publish_enabled"]) && !Deployment.Json.Serialize(saved).Contains(profile),
+                        "a saved ordinary-account profile leaked its identity or acquired a grant");
                     var publish = read(publications);
                     var tasks = (Dictionary<string, object>)publish["tasks"];
                     Assert(((IList)publish["targets"]).Count == 0 && ((IList)tasks["items"]).Count == 0,
-                        "expired authorization exposed a publish target or fabricated a task");
+                        "an unapproved ordinary-account profile exposed a publish target or fabricated a task");
                 }
 
-                if (obsBundled) {
-                    ExpectStationStatus(client, d.Url + obsPackage, HttpMethod.Put, new { action = "install" }, HttpStatusCode.BadRequest);
-                    ControllerTests.StationJSON(client, HttpMethod.Put, d.Url + obsPackage, new { action = "install", approve_artifacts = true });
+                if (bundledTools.Contains("obs-preview")) {
                     ExpectStationStatus(client, d.Url + preview, HttpMethod.Post,
                         new { action = "configure", host = "192.0.2.1", port = 4455 }, HttpStatusCode.BadRequest);
                     var state = read(preview);
@@ -433,7 +465,9 @@ namespace WechatAgent.Desktop {
             if (args.Length != 0 && localStationPackage == null) { Console.Error.WriteLine("参数：--local-station <预览包目录>"); return 2; }
             Exception failure = null;
             Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) { failure = e.Exception; };
-            string root = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "window-tests-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            // Keep room for the station's fish and browser profile IDs under a deep package path.
+            string root = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "wt-" + Guid.NewGuid().ToString("N").Substring(0, 12));
+            Directory.CreateDirectory(root);
             using (var host = new Form { ShowInTaskbar = false, Opacity = 0, Location = new Point(-20000, -20000), StartPosition = FormStartPosition.Manual }) {
                 host.Shown += async delegate {
                     try {

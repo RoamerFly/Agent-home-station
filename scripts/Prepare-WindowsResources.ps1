@@ -6,40 +6,48 @@ $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed.'}
 if(-not $MediaDirectory){$MediaDirectory=Split-Path (Get-Command ffmpeg.exe -ErrorAction Stop).Source -Parent}
 $MediaDirectory=[IO.Path]::GetFullPath($MediaDirectory)
-$mediaTarget=Join-Path $OutputDirectory 'windows-media'
-if(Test-Path -LiteralPath $mediaTarget){
- $existing=Get-Content -LiteralPath (Join-Path $mediaTarget 'runtime-manifest.json') -Raw | ConvertFrom-Json
- foreach($entry in $existing.files.PSObject.Properties){
-  if($entry.Name -ne [IO.Path]::GetFileName($entry.Name) -or (Get-FileHash -LiteralPath (Join-Path $mediaTarget $entry.Name) -Algorithm SHA256).Hash -ne $entry.Value){throw 'Existing media runtime failed integrity checks; it was not overwritten.'}
+function Prepare-MediaRuntime {
+ $mediaTarget=Join-Path $OutputDirectory 'windows-media'
+ if(Test-Path -LiteralPath $mediaTarget){
+  $existing=Get-Content -LiteralPath (Join-Path $mediaTarget 'runtime-manifest.json') -Raw | ConvertFrom-Json
+  foreach($entry in $existing.files.PSObject.Properties){
+   if($entry.Name -ne [IO.Path]::GetFileName($entry.Name) -or (Get-FileHash -LiteralPath (Join-Path $mediaTarget $entry.Name) -Algorithm SHA256).Hash -ne $entry.Value){throw 'Existing media runtime failed integrity checks; it was not overwritten.'}
+  }
+  foreach($name in @('ffmpeg.exe','ffprobe.exe')){
+   if((Get-FileHash -LiteralPath (Join-Path $MediaDirectory $name) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $mediaTarget $name) -Algorithm SHA256).Hash){throw 'Different media runtime already exists; build into a new output directory for review and atomic deployment.'}
+  }
+  Write-Output 'Existing project-local media runtime verified; no files overwritten.'
+  return
  }
+ $media=Join-Path $OutputDirectory ('windows-media.staging-'+[Guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Path $media | Out-Null
  foreach($name in @('ffmpeg.exe','ffprobe.exe')){
-  if((Get-FileHash -LiteralPath (Join-Path $MediaDirectory $name) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $mediaTarget $name) -Algorithm SHA256).Hash){throw 'Different media runtime already exists; build into a new output directory for review and atomic deployment.'}
+  $source=Join-Path $MediaDirectory $name
+  if(-not(Test-Path -LiteralPath $source)){throw 'The build requires FFmpeg and FFprobe from the same distribution.'}
+  Copy-Item -LiteralPath $source -Destination (Join-Path $media $name)
  }
- Write-Output 'Existing project-local resources verified; no files overwritten.'
- return
+ # Shared FFmpeg distributions carry their codec DLLs beside the tools.
+ Get-ChildItem -LiteralPath $MediaDirectory -Filter '*.dll' -File | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $media}
+ $licenseRoots=@($MediaDirectory,(Split-Path $MediaDirectory -Parent))
+ $licenses=@(foreach($base in $licenseRoots){Get-ChildItem -LiteralPath $base -File | Where-Object {$_.Name -match '^(LICENSE|COPYING|README)(\.|$)'}})
+ if($licenses.Count -eq 0){throw 'FFmpeg distribution license/source information is required; no unlicensed package produced.'}
+ foreach($item in $licenses){Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $media $item.Name)}
+ $version=& (Join-Path $media 'ffmpeg.exe') -version
+ if($LASTEXITCODE -ne 0){throw 'Project-local FFmpeg failed its startup check.'}
+ & (Join-Path $media 'ffprobe.exe') -version | Out-Null
+ if($LASTEXITCODE -ne 0){throw 'Project-local FFprobe failed its startup check.'}
+ $files=@{}
+ Get-ChildItem -LiteralPath $media -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$files[$_.Name]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}
+ $record=@{schema_version=1;platform='windows-x64';version=$version[0];build_configuration=$version;files=$files}
+ [IO.File]::WriteAllText((Join-Path $media 'runtime-manifest.json'),($record|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
+ $stage=(Resolve-Path -LiteralPath $media).ProviderPath
+ $outputRoot=(Resolve-Path -LiteralPath $OutputDirectory).ProviderPath
+ if([IO.Path]::GetDirectoryName($stage) -ne $outputRoot -or (Test-Path -LiteralPath $mediaTarget)){
+  throw 'Media staging is outside the output directory or the destination is no longer empty.'
+ }
+ Move-Item -LiteralPath $stage -Destination $mediaTarget
 }
-$media=Join-Path $OutputDirectory ('windows-media.staging-'+[Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $media | Out-Null
-foreach($name in @('ffmpeg.exe','ffprobe.exe')){
- $source=Join-Path $MediaDirectory $name
- if(-not(Test-Path -LiteralPath $source)){throw 'The build requires FFmpeg and FFprobe from the same distribution.'}
- Copy-Item -LiteralPath $source -Destination (Join-Path $media $name)
-}
-# Shared FFmpeg distributions carry their codec DLLs beside the tools.
-Get-ChildItem -LiteralPath $MediaDirectory -Filter '*.dll' -File | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $media}
-$licenseRoots=@($MediaDirectory,(Split-Path $MediaDirectory -Parent))
-$licenses=@(foreach($base in $licenseRoots){Get-ChildItem -LiteralPath $base -File | Where-Object {$_.Name -match '^(LICENSE|COPYING|README)(\.|$)'}})
-if($licenses.Count -eq 0){throw 'FFmpeg distribution license/source information is required; no unlicensed package produced.'}
-foreach($item in $licenses){Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $media $item.Name)}
-$version=& (Join-Path $media 'ffmpeg.exe') -version
-if($LASTEXITCODE -ne 0){throw 'Project-local FFmpeg failed its startup check.'}
-& (Join-Path $media 'ffprobe.exe') -version | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Project-local FFprobe failed its startup check.'}
-$files=@{}
-Get-ChildItem -LiteralPath $media -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$files[$_.Name]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}
-$record=@{schema_version=1;platform='windows-x64';version=$version[0];build_configuration=$version;files=$files}
-[IO.File]::WriteAllText((Join-Path $media 'runtime-manifest.json'),($record|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
-Move-Item -LiteralPath $media -Destination $mediaTarget
+Prepare-MediaRuntime
 if($DocumentPythonPackagesDirectory -or $DocumentFontsDirectory -or $DocumentTesseractDirectory -or $DocumentPDFiumWheel){
  if(-not $DocumentPythonPackagesDirectory -or -not $DocumentFontsDirectory){throw 'Native document runtime requires both DocumentPythonPackagesDirectory and DocumentFontsDirectory.'}
  $documentArgs=@('--target',(Join-Path $OutputDirectory 'document-workshop'),'--python-packages-source',$DocumentPythonPackagesDirectory,'--fonts-source',$DocumentFontsDirectory)
