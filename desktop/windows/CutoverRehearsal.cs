@@ -108,6 +108,10 @@ namespace WechatAgent.Desktop {
                     primary_account = Account, snapshot_stopped = true, snapshot_manifest_digest = Deployment.Text(verified, "manifest_digest") });
 
                 next.StationNativeUrl = stationNativeUrl;
+                Write(Path.Combine(next.Workspace, "secrets", "local-deployment.json"), new {
+                    backend = "local-station", runtime_directory = Path.GetDirectoryName(next.StationExe),
+                    admin_url = next.Url, wechat_native_url = next.StationNativeUrl
+                });
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
                 AuthenticateStation(client, next.Url);
@@ -195,7 +199,8 @@ namespace WechatAgent.Desktop {
                 ExpectRefused(() => current.Start(CancellationToken.None).GetAwaiter().GetResult(), "拒绝重新启动微信原生服务");
                 ControllerTests.Assert(current.PID == 0 && current.NativePID == 0 && newProof.SequenceEqual(File.ReadAllBytes(newMarker)), "new runtime cannot start a child or change its stop proof after release");
 
-                next.StationNativeEnabled = false;
+                next.SaveStationNativeEnabled(false);
+                ControllerTests.Assert(!Deployment.Load(next.Workspace).LocalStationNative, "offline preference persists without removing the configured native endpoint");
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
                 AuthenticateStation(client, next.Url);

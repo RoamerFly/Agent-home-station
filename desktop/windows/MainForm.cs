@@ -20,6 +20,7 @@ namespace WechatAgent.Desktop {
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly ToolStripMenuItem startItem = new ToolStripMenuItem("启动全部服务"), stopItem = new ToolStripMenuItem("停止全部服务"), exitItem = new ToolStripMenuItem("退出并停止全部服务");
+        readonly ToolStripMenuItem wechatStartupItem = new ToolStripMenuItem("下次启动时运行微信服务");
         readonly Label status = new Label();
         readonly Button retry = new Button(), cancel = new Button();
         readonly Panel placeholder = new Panel();
@@ -80,6 +81,19 @@ namespace WechatAgent.Desktop {
             closeMode.DropDownOpening += delegate { for (int i = 0; i < closeMode.DropDownItems.Count; i++) ((ToolStripMenuItem)closeMode.DropDownItems[i]).Checked = closeSettings.Behavior == new [] {"ask", "tray", "exit"}[i]; };
             about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/Agent-home-station\n反馈：https://github.com/RoamerFly/Agent-home-station/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.LocalStation ? "本机成长站（无需微信）" : d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), closeMode, about, exitItem});
+            if (d.LocalStation && !String.IsNullOrEmpty(d.StationNativeUrl)) {
+                wechatStartupItem.Checked = d.LocalStationNative;
+                wechatStartupItem.Click += delegate {
+                    if (busy || exitRequested || closeQueued || allowExit) return;
+                    try {
+                        d.SaveStationNativeEnabled(!d.StationNativeEnabled);
+                        wechatStartupItem.Checked = d.LocalStationNative;
+                    } catch (Exception error) {
+                        MessageBox.Show(this, "未保存微信启动开关。\n" + error.Message, "Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                };
+                menu.Items.Insert(5, wechatStartupItem);
+            }
             tray.Icon = Icon; tray.Text = "Agent-home-station · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };
             retry.Click += async delegate { await StartServices(); };
@@ -170,6 +184,7 @@ namespace WechatAgent.Desktop {
         }
         void SetBusy(bool value, bool stopping) {
             busy = value; startItem.Enabled = stopItem.Enabled = !value;
+            wechatStartupItem.Enabled = !value;
             retry.Visible = false; cancel.Visible = value && stopping; cancel.Enabled = true;
         }
         internal async Task StartServices() {

@@ -356,6 +356,17 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":false}");
                 var paused = Deployment.Load(root);
                 Assert(!paused.LocalStationNative && paused.StationNativeUrl.EndsWith(":18174") && paused.StationNativeRoot == local.StationNativeRoot, "disabling native startup preserves the configured URL and data root");
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":false,\"extra\":{\"keep\":17}}");
+                paused.SaveStationNativeEnabled(true);
+                var savedSwitch = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config));
+                Assert(paused.LocalStationNative && Deployment.Load(root).LocalStationNative &&
+                    Convert.ToInt32(((Dictionary<string, object>)savedSwitch["extra"])["keep"]) == 17, "startup preference survives reopening and preserves other settings");
+                paused.SaveStationNativeEnabled(false);
+                Assert(!paused.LocalStationNative && !Deployment.Load(root).LocalStationNative, "disable persists on the same deployment");
+                File.WriteAllText(config, File.ReadAllText(config).Replace("18174", "18175"));
+                var newerConfig = File.ReadAllText(config);
+                await Reject(() => { paused.SaveStationNativeEnabled(true); return Task.FromResult(0); });
+                Assert(!paused.LocalStationNative && File.ReadAllText(config) == newerConfig, "a stale desktop cannot overwrite a changed native address");
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_enabled\":true}");
                 await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":\"false\"}");

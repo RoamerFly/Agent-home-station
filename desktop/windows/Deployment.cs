@@ -38,7 +38,9 @@ namespace WechatAgent.Desktop {
             workspace = Path.GetFullPath(workspace);
             var config = Path.Combine(workspace, "secrets", "local-deployment.json");
             if (!File.Exists(config)) return File.Exists(Path.Combine(workspace, "agent-home-station-server.exe")) ? LocalStationDefault(workspace) : WindowsDefault(workspace);
-            var data = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config, Encoding.UTF8));
+            return Parse(workspace, Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config, Encoding.UTF8)));
+        }
+        static Deployment Parse(string workspace, Dictionary<string, object> data) {
             if (Text(data, "backend") == "local-station") {
                 var local = LocalStationDefault(workspace);
                 if (Text(data, "runtime_directory") != "") local.StationExe = Path.Combine(Path.GetFullPath(Path.Combine(workspace, Text(data, "runtime_directory"))), "agent-home-station-server.exe");
@@ -81,6 +83,40 @@ namespace WechatAgent.Desktop {
                 throw new InvalidOperationException("本机部署配置无效；没有启动或停止服务。");
             if (d.Music != "" && !Regex.IsMatch(d.Music, @"\Awechat-agent-music(?:-[a-f0-9]+)?\.service\z")) throw new InvalidOperationException("受管音乐服务名称无效。");
             return d;
+        }
+        internal void SaveStationNativeEnabled(bool enabled) {
+            if (!LocalStation || String.IsNullOrEmpty(StationNativeUrl))
+                throw new InvalidOperationException("请先在本机部署中配置微信原生地址。");
+            var config = Path.Combine(Workspace, "secrets", "local-deployment.json");
+            ValidateDeploymentFile(config);
+            var original = File.ReadAllBytes(config);
+            var text = Encoding.UTF8.GetString(original).TrimStart('\uFEFF');
+            var data = Json.Deserialize<Dictionary<string, object>>(text);
+            var saved = Parse(Workspace, data);
+            if (!saved.LocalStation || saved.StationNativeEnabled != StationNativeEnabled || saved.StationNativeUrl != StationNativeUrl || saved.Url != Url ||
+                !SamePath(saved.Root, Root) || !SamePath(saved.StationWorkspace, StationWorkspace) || !SamePath(saved.StationExe, StationExe))
+                throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
+            data["wechat_native_enabled"] = enabled;
+            var temporary = config + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try {
+                var bytes = new UTF8Encoding(false).GetBytes(Json.Serialize(data));
+                using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)) {
+                    file.Write(bytes, 0, bytes.Length);
+                    file.Flush(true);
+                }
+                ValidateDeploymentFile(config);
+                if (!File.ReadAllBytes(config).SequenceEqual(original))
+                    throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
+                File.Replace(temporary, config, null);
+                StationNativeEnabled = enabled;
+            } finally {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        }
+        static void ValidateDeploymentFile(string path) {
+            WindowsRuntime.NoLinks(Path.GetDirectoryName(path));
+            if ((File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+                throw new InvalidOperationException("微信启动开关只能保存到常规部署文件。");
         }
         internal static string LocalUrl(string value, bool explicitPort = false) {
             Uri uri;

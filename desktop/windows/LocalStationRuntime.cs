@@ -22,7 +22,7 @@ namespace WechatAgent.Desktop {
         // evidence.  It proves only that this LocalStation launch owned and
         // cleanly stopped its own station/native pair.
         string nativeStopEpoch;
-        bool nativeAdmitted, stationAdmitted;
+        bool nativeAdmitted, stationAdmitted, startedWithNative;
         internal LocalStationRuntime(Deployment deployment) { d = deployment; }
         bool UsesPortableData { get { return d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory); } }
         internal bool Running { get { return server != null && server.Alive; } }
@@ -133,7 +133,7 @@ namespace WechatAgent.Desktop {
         }
         internal void CheckAlive() {
             if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/station/logs/station.log；没有改动微信或旧数据。");
-            if (d.LocalStationNative && (native == null || !native.Alive)) throw new InvalidOperationException("本机成长站微信原生服务提前退出，请查看 data/station/logs/wechat-native.log；没有创建账号或修改旧数据。");
+            if (startedWithNative && (native == null || !native.Alive)) throw new InvalidOperationException("本机成长站微信原生服务提前退出，请查看 data/station/logs/wechat-native.log；没有创建账号或修改旧数据。");
         }
         HttpRequestMessage NativeMessage(string path, object body) {
             var request = new HttpRequestMessage(body == null ? HttpMethod.Get : HttpMethod.Post, d.StationNativeUrl + path);
@@ -198,23 +198,24 @@ namespace WechatAgent.Desktop {
         internal async Task Start(CancellationToken cancel) {
             cancel.ThrowIfCancellationRequested();
             if (Running) { CheckAlive(); return; }
+            var startNative = d.LocalStationNative;
             if (server != null) { server.Dispose(); server = null; }
             if (job != null) { job.Dispose(); job = null; }
             if (!File.Exists(d.StationExe)) throw new InvalidOperationException("本机成长站程序不存在，请使用 LocalStation 预览包重新构建。");
             WindowsRuntime.NoLinks(d.StationExe); WindowsRuntime.NoLinks(d.Root);
-            if (d.LocalStationNative) {
+            if (startNative) {
                 if (!File.Exists(d.StationNativeExe)) throw new InvalidOperationException("本机成长站微信原生运行文件不存在，请使用包含 wx.exe 的 Windows 程序包。");
                 WindowsRuntime.VerifyNativeBundle(d.StationNativeExe, true); ValidateNativeLayout();
             }
             // All potentially destructive validation has completed above.
             WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
             WindowsRuntime.FreePort(d.Url);
-            if (d.LocalStationNative) { AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot); WindowsRuntime.FreePort(d.StationNativeUrl); }
+            if (startNative) { AdmitNativeDirectories(); WriteNativeConfig(d.StationNativeRoot); WindowsRuntime.FreePort(d.StationNativeUrl); }
             job = new ProcessJob(); nativeServerId = nativeGeneration = nativeToken = null;
             nativeAdmitted = stationAdmitted = false;
             Exception startFailure = null;
             try {
-                if (d.LocalStationNative) {
+                if (startNative) {
                     BeginNativeRun();
                     // A new launch invalidates any prior clean-stop evidence
                     // before either owned child is created.  Failed and forced
@@ -227,7 +228,7 @@ namespace WechatAgent.Desktop {
                     await WaitForNative(cancel);
                 }
                 var args = new List<string> { "--desktop", "--data", d.Root, "--workspace", d.StationWorkspace, "--listen", new Uri(d.Url).Authority };
-                if (d.LocalStationNative) { args.Add("--wechat-native-url"); args.Add(d.StationNativeUrl); args.Add("--wechat-native-pid"); args.Add(native.ID.ToString()); }
+                if (startNative) { args.Add("--wechat-native-url"); args.Add(d.StationNativeUrl); args.Add("--wechat-native-pid"); args.Add(native.ID.ToString()); }
                 var programEnv = new Dictionary<string, string>();
                 var media = Path.Combine(Path.GetDirectoryName(d.StationExe), "runtimes", "windows-media");
                 var ffmpeg = Path.Combine(media, "ffmpeg.exe");
@@ -239,6 +240,7 @@ namespace WechatAgent.Desktop {
                 }
                 server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
                 stationAdmitted = true;
+                startedWithNative = startNative;
             } catch (Exception error) {
                 startFailure = error;
             }

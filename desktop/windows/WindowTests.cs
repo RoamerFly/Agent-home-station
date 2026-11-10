@@ -361,6 +361,7 @@ namespace WechatAgent.Desktop {
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 Assert(instance.IsOwner, "local station window owns its isolated control name");
+                Assert(WechatStartupItem(form).Owner == null, "a station without a configured native endpoint has no startup switch");
                 form.Show();
                 await Wait(() => form.Controls.OfType<WebView2>().Any(candidate => candidate.CoreWebView2 != null && candidate.Visible), "local station WebView did not initialize");
                 var view = form.Controls.OfType<WebView2>().Single();
@@ -378,6 +379,43 @@ namespace WechatAgent.Desktop {
                 form.Close();
                 await Wait(() => form.IsDisposed, "local station exit did not close its management window");
                 await Wait(() => !LocalPortOpen(d.Url), "local station exit left its owned service listening");
+            }
+            await WechatStartupMenuTests(package, root);
+        }
+        static ToolStripMenuItem WechatStartupItem(MainForm form) {
+            return (ToolStripMenuItem)typeof(MainForm).GetField("wechatStartupItem", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+        }
+        static async Task WechatStartupMenuTests(string package, string root) {
+            var workspace = Path.Combine(root, "station-wechat-menu");
+            var secrets = Path.Combine(workspace, "secrets");
+            Directory.CreateDirectory(secrets);
+            var url = FreeLocalUrl();
+            string nativeUrl;
+            do { nativeUrl = FreeLocalUrl(); } while (nativeUrl == url);
+            File.WriteAllText(Path.Combine(secrets, "local-deployment.json"), Deployment.Json.Serialize(new {
+                backend = "local-station", runtime_directory = Path.GetFullPath(package),
+                admin_url = url, wechat_native_url = nativeUrl, wechat_native_enabled = false
+            }));
+            var d = Deployment.Load(workspace);
+            new CloseSettings(workspace).Save("exit");
+            using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
+            using (var form = new MainForm(d, instance)) {
+                form.Show();
+                await Wait(() => form.Controls.OfType<WebView2>().Any(candidate => candidate.CoreWebView2 != null && candidate.Visible), "switch fixture did not start its local service");
+                var view = form.Controls.OfType<WebView2>().Single();
+                var toggle = WechatStartupItem(form);
+                await Wait(() => toggle.Enabled, "startup switch did not become available");
+                Assert(toggle.Owner != null && !toggle.Checked, "configured offline mode shows an unchecked startup switch");
+                toggle.PerformClick();
+                Assert(toggle.Checked && Deployment.Load(workspace).LocalStationNative, "tray click persists enabling without editing the deployment by hand");
+                await form.StartServices();
+                Assert(view.Visible && !view.IsDisposed && form.Controls.OfType<WebView2>().Single() == view &&
+                    !File.Exists(Path.Combine(d.Root, "station-native-stop.json")), "a pending enable does not launch wx or alter the active local session");
+                toggle.PerformClick();
+                Assert(!toggle.Checked && !Deployment.Load(workspace).LocalStationNative, "tray click persists disabling");
+                form.Close();
+                await Wait(() => form.IsDisposed, "switch fixture did not close");
+                await Wait(() => !LocalPortOpen(d.Url), "switch fixture left a station process listening");
             }
         }
         [STAThread]
