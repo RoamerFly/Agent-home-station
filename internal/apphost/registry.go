@@ -88,6 +88,7 @@ type ConnectionStatus struct {
 	CapabilityCheck   string            `json:"capability_check"`
 	SupportedActions  []string          `json:"supported_actions"`
 	LegacyImport      string            `json:"legacy_import,omitempty"`
+	WorkerBlocker     string            `json:"worker_blocker,omitempty"`
 }
 
 type ConnectionLifecycle struct {

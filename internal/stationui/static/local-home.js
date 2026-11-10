@@ -251,8 +251,12 @@
     const toggle = appSetupButton(running ? "暂停 Agent" : "启动 Agent",
       () => runWorkerAction(id, "POST", "lifecycle", { action: running ? "stop" : "start" }));
     toggle.disabled ||= ["stopping", "rollback_frozen"].includes(status.worker) || !running && !status.configured_policy?.conversation_enabled;
+    if (status.worker_blocker === "import_receipt_path_changed" && !running) toggle.disabled = true;
     buttons.append(toggle);
     panel.append(buttons);
+    if (status.worker_blocker === "import_receipt_path_changed") {
+      panel.append(appElement("small", "微信档案搬迁后待核验。请在新目录重新核对原生导入回执，并保留旧站停发记录。"));
+    }
     panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");

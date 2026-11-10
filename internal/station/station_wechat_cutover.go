@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/workspacefs"
 )
 
 const legacyStopMarkerFile = "legacy-cutover-state.json"
+const nativeImportPathChanged = "import_receipt_path_changed"
 
 type legacyCutover struct {
 	LegacyHost     string `json:"legacy_host"`
@@ -94,6 +96,9 @@ func (s *stationWechat) legacyHostEvidence(snapshot *os.Root, source legacyImpor
 
 func (s *stationWechat) nativeImportReceipt(id, account string) (string, [32]byte) {
 	var noDigest [32]byte
+	if !identity.ValidPathID(account) || id != wechatapp.ConnectionID(account) {
+		return "mismatch", noDigest
+	}
 	root, err := workspacefs.OpenPath(filepath.Dir(s.root))
 	if err != nil {
 		return "pending", noDigest
@@ -110,8 +115,7 @@ func (s *stationWechat) nativeImportReceipt(id, account string) (string, [32]byt
 		ProfilePath string `json:"profilePath"`
 	}
 	profile := filepath.Join("native", "accounts", account, "profile")
-	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.ID != account || receipt.StorageMode != "managed" ||
-		!sameCutoverPath(receipt.ProfilePath, filepath.Join(filepath.Dir(s.root), profile)) {
+	if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.ID != account || receipt.StorageMode != "managed" {
 		return "mismatch", digest
 	}
 	dir, err := workspacefs.OpenExistingDirectory(root, profile)
@@ -119,6 +123,18 @@ func (s *stationWechat) nativeImportReceipt(id, account string) (string, [32]byt
 		return "mismatch", digest
 	}
 	dir.Close()
+	if !sameCutoverPath(receipt.ProfilePath, filepath.Join(filepath.Dir(s.root), profile)) {
+		previous := cutoverPath(receipt.ProfilePath)
+		suffix := string(os.PathSeparator) + profile
+		validPath := filepath.IsAbs(previous) && previous == filepath.Clean(previous)
+		if runtime.GOOS == "windows" {
+			previous, suffix = strings.ToLower(previous), strings.ToLower(suffix)
+		}
+		if validPath && strings.HasSuffix(previous, suffix) {
+			return nativeImportPathChanged, digest
+		}
+		return "mismatch", digest
+	}
 	return "import_receipt_matched", digest
 }
 

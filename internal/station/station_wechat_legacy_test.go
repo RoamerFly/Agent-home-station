@@ -762,16 +762,29 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	var daemonReady, unexpectedRequest atomic.Bool
 	daemonReady.Store(true)
 	movedDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/status" || r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
 			unexpectedRequest.Store(true)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if !daemonReady.Load() {
+			if r.URL.Path != "/v1/status" {
+				unexpectedRequest.Store(true)
+			}
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"pid": 9433, "dataDir": movedNative, "serverId": "new-dataset", "ownershipGeneration": "synthetic-relocated-generation"})
+		switch r.URL.Path {
+		case "/v1/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"pid": 9433, "dataDir": movedNative, "serverId": "new-dataset", "ownershipGeneration": "synthetic-relocated-generation"})
+		case "/v1/accounts":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]string{{"id": "one"}}})
+		case "/v1/accounts/one":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "one", "storageMode": "managed", "authenticated": true, "connection": "online"})
+		default:
+			unexpectedRequest.Store(true)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer movedDaemon.Close()
 	movedEntry, err := wechatapp.StationRegistration(t.Context(), movedDaemon.URL, 9433, movedHost)
@@ -808,9 +821,24 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err != nil || !bytes.Equal(j(copied), j(bundle)) {
 		t.Fatal("relocated history changed its source identity, revision or text", err)
 	}
-	if state, _ := movedHandler.chat.wechat.nativeImportReceipt(wechatapp.ConnectionID("one"), "one"); state != "mismatch" {
-		t.Fatal("an old absolute native-profile receipt authorized a new path", state)
+	daemonReady.Store(true)
+	if code, row := movedFixture.request("GET", route("one"), nil, false); code != 200 ||
+		row["connection"].(map[string]any)["worker_blocker"] != nativeImportPathChanged || bytes.Contains(j(row), []byte("portable package")) {
+		t.Fatal("connection details did not expose the moved profile blocker safely", code, row)
 	}
+	code, row := movedFixture.request("GET", activationRoute, nil, false)
+	reason, _ := row["reason"].(string)
+	if code != 200 || row["status"] != "blocked" || row["native_profile"] != nativeImportPathChanged ||
+		row["target_login"] != "online" || !strings.Contains(reason, "搬迁前的目录") || bytes.Contains(j(row), []byte("portable package")) {
+		t.Fatal("activation did not distinguish the relocated receipt from the current login", code, row)
+	}
+	movedReceiptPath := filepath.Join(movedHost, "apps", "wechat", filepath.Base(receiptPath))
+	write(movedReceiptPath, j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": filepath.Join(movedNative, "accounts", "one", "profile")}))
+	if code, row := movedFixture.request("GET", activationRoute, nil, false); code != 200 || row["status"] != "blocked" ||
+		row["native_profile"] != "import_receipt_matched" || row["legacy_host"] != "stop_record_matched" || row["digest"] != nil {
+		t.Fatal("fresh native receipt should pass only the profile check under a v1 stop marker", code, row)
+	}
+	write(movedReceiptPath, receiptJSON)
 	if unexpectedRequest.Load() {
 		t.Fatal("offline receipt or history read contacted an unrelated endpoint")
 	}
@@ -931,6 +959,34 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	if eventReads.Load() != 0 || detailFor("one")["worker"] != "paused" {
 		t.Fatal("confirming the cutover started the worker")
+	}
+	originalClaim, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedPolicy, err := os.ReadFile(filepath.Join(target, "worker.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(movedTarget, "worker.json"), confirmedPolicy)
+	movedHandler, movedFixture = openAt(movedHost, movedWork, movedApps)
+	movedFixture.login()
+	if code, row := movedFixture.request("GET", activationRoute, nil, false); code != 200 || row["status"] != "blocked" ||
+		row["native_profile"] != nativeImportPathChanged || row["legacy_host"] != "stop_record_matched" || row["target_identity"] != "owner_check_pending" {
+		t.Fatal("copied confirmation did not separate old-host fence from relocated profile", code, row)
+	}
+	if code, _ := movedFixture.request("POST", activationRoute, confirm, true); code != 409 {
+		t.Fatal("old activation digest could be reused on the relocated station", code)
+	}
+	if code, _ := movedFixture.request("POST", route("one")+"/lifecycle", start, true); code != 409 {
+		t.Fatal("relocated station could start with the old profile receipt", code)
+	}
+	if current, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(current, originalClaim) || unexpectedRequest.Load() {
+		t.Fatal("relocation check changed the original handover claim or contacted a write endpoint", err)
+	}
+	movedFixture.server.Close()
+	if err := movedHandler.Close(); err != nil {
+		t.Fatal(err)
 	}
 	write(receiptPath, append(bytes.Clone(receiptJSON), '\n'))
 	req("POST", route("one")+"/lifecycle", start, true, 409)

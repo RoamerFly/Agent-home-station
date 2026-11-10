@@ -161,6 +161,16 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	status, _ := native.Status(ctx)
 	view.TargetLogin = targetLoginState(status, account)
 	view.NativeProfile, _ = s.nativeImportEvidence(id, account, status)
+	if view.NativeProfile == nativeImportPathChanged {
+		// An existing claim may still fence the old host even when the copied
+		// station no longer has a valid profile receipt at this path.
+		if prior := w.policy.LegacyActivation; prior != nil &&
+			s.activationBound(*prior, id, archive.Plan, daemon.ServerID) &&
+			s.legacyHandover(*prior, handoverActive) == "" {
+			view.LegacyHost = "stop_record_matched"
+		}
+		return blocked(activationMissing(view))
+	}
 	if prior := w.policy.LegacyActivation; prior != nil && s.activationMatches(*prior, id, archive.Plan, daemon.ServerID) {
 		view.LegacyHost, view.TargetIdentity = "stop_record_matched", "owner_confirmed"
 		if input.Digest != "" && input.Digest != prior.ConfirmationDigest {
@@ -244,6 +254,8 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 
 func activationMissing(view legacyActivationView) string {
 	switch {
+	case view.NativeProfile == nativeImportPathChanged:
+		return "档案导入回执指向搬迁前的目录。请在新目录用原生档案导入流程重新核验，并保留原宿主的停发记录"
 	case view.LegacyHost != "stop_record_matched":
 		return "旧宿主停机记录缺失或已变化，请核对旧桌面已正常停止"
 	case view.NativeProfile != "import_receipt_matched":
@@ -270,9 +282,12 @@ func sameLegacyActivationSnapshot(saved, current legacyImportArchive) bool {
 		(len(saved.ReceiptSources) == 0 || localCheckpointKey(saved.ReceiptSources) == localCheckpointKey(current.ReceiptSources))
 }
 
+func (s *stationWechat) activationBound(a legacyActivation, id string, plan legacyImportPlan, dataset string) bool {
+	return a.valid() && a.ArchiveDigest == plan.Digest && a.Connection == s.connectionRef(id, plan.Account) && a.TargetDataset == dataset
+}
+
 func (s *stationWechat) activationMatches(a legacyActivation, id string, plan legacyImportPlan, dataset string) bool {
-	return a.valid() && a.ArchiveDigest == plan.Digest && a.Connection == s.connectionRef(id, plan.Account) && a.TargetDataset == dataset &&
-		s.localActivationEvidence(id, a)
+	return s.activationBound(a, id, plan, dataset) && s.localActivationEvidence(id, a)
 }
 
 func (s *stationWechat) localActivationEvidence(id string, a legacyActivation) bool {

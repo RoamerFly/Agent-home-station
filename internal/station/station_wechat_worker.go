@@ -449,6 +449,11 @@ func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.Connect
 		return view, err
 	}
 	view.LegacyImport = s.legacyImportState(view.AccountID, w)
+	if view.LegacyImport == "applied" {
+		if state, _ := s.nativeImportReceipt(id, view.AccountID); state == nativeImportPathChanged {
+			view.WorkerBlocker = state
+		}
+	}
 	if w == nil {
 		view.Worker = "disabled"
 		view.Policy = (&stationWechatWorker{}).policyView()
