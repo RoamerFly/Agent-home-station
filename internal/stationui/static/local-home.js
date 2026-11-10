@@ -3259,6 +3259,9 @@
       reply_submit_unavailable: "未找到可用的评论回复提交控件，尚未继续回复。",
       receipt_not_found: "尚未找到平台结果，请查询原任务。",
       receipt_unknown: "平台结果尚未确认，请查询原任务。",
+      reply_cooldown: "账号回复间隔尚未结束，本任务未发送。",
+      reply_pacing_unavailable: "账号回复间隔无法核对，本任务未发送。",
+      platform_rate_limited: "页面提示操作频繁。已提交的任务只核对回执。",
       not_submitted: "互动尚未提交，原任务可继续处理。",
       platform_rejected: "平台没有接受这次互动，原任务保留。",
       authorization_changed: "互动许可或来源资料已变化，未继续操作。",
@@ -3283,6 +3286,12 @@
       return ["正在停止", task.state === "unknown" ? "已请求停止，但平台结果仍待核对。" : "已请求停止后续操作。"];
     }
     const diagnostic = interactionDiagnostic(task.diagnostic);
+    const retryAt = task.next_attempt_at && new Date(task.next_attempt_at);
+    if (diagnostic && retryAt && Number.isFinite(retryAt.getTime()) &&
+        ["reply_cooldown", "platform_rate_limited"].includes(task.diagnostic)) {
+      const label = task.diagnostic === "reply_cooldown" ? "等待回复间隔" : "平台限频";
+      return [label, diagnostic + " 新回复最早可在 " + retryAt.toLocaleString() + " 提交。"];
+    }
     if (task.cancel_requested && task.state === "applied") {
       return [normal[0], `${diagnostic || normal[1]} 停止请求未撤回这次已核对的操作。`];
     }

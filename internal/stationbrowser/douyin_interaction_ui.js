@@ -7,6 +7,12 @@
   if (!locationOK) return { invalid: true };
   const login = [...document.querySelectorAll('input[type=password],form[action*="login"],iframe[src*="captcha"],iframe[src*="verify"]')].some(visible) || /\/login(?:\/|$)/u.test(location.pathname);
   if (login) return { login: true };
+  if (input.kind === "reply_comment") {
+    const notices = [...document.querySelectorAll('[role="alert"],[data-e2e="toast"]')].filter(visible);
+    if (notices.some(e => /^(?:(?:操作|评论|回复)(?:过于|太)?频繁|发送频率过高)[，,。 ]*(?:请稍后再试)?[。！!]?$/u.test((e.innerText || "").trim()))) {
+      return {ready: true, url: location.href, code: "platform_rate_limited"};
+    }
+  }
   const cardFor = id => {
     const matches = [...document.querySelectorAll('[data-e2e="comment-item"][data-comment-id], [data-comment-id][data-e2e]')].filter(visible).filter(e => e.getAttribute('data-comment-id') === input.commentID);
     return matches.length === 1 ? matches[0] : null;

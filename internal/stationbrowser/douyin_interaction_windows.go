@@ -144,7 +144,7 @@ func runDouyinInteractionSession(ctx context.Context, session readerSession, tar
 		if err != nil {
 			return result, err
 		}
-		if state.Ready && state.Code == "" && sameDouyinHomeLocation(state.URL, target) {
+		if state.Ready && (state.Code == "" || state.Code == "platform_rate_limited") && sameDouyinHomeLocation(state.URL, target) {
 			break
 		}
 	}
@@ -198,6 +198,10 @@ func runDouyinInteractionSession(ctx context.Context, session readerSession, tar
 			if prepared.Prepared {
 				break
 			}
+			if prepared.Code == "platform_rate_limited" {
+				result.Code = prepared.Code
+				return result, ErrDouyinInteractionRejected
+			}
 			result.Code = prepared.Code
 			if prepared.Code == "comment_changed" || strings.HasPrefix(prepared.Code, "reply_text_limit_") {
 				result.State = DouyinInteractionFailed
@@ -243,6 +247,10 @@ func runDouyinInteractionSession(ctx context.Context, session readerSession, tar
 		state, err = douyinInteractionPage(ctx, session, id, world, target, "query", req)
 		if err != nil {
 			return result, err
+		}
+		if state.Code == "platform_rate_limited" {
+			result.Code = state.Code
+			return result, ErrDouyinInteractionUnknown
 		}
 		if state.Actual {
 			result.State, result.Code, result.RemoteID = DouyinInteractionApplied, "applied", state.RemoteID

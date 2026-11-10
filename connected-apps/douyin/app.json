@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "douyin",
   "name": "抖音",
-  "version": "0.18.2",
+  "version": "0.18.3",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -64,7 +64,7 @@
     "MIGRATION.md": "0b4e410edb22232210359788b0203fc570a28ddce4f44c3f79d05ab8aaf689bc",
     "own-video.schema.json": "c7da49685c9183986a7296c8ebd4597277429df802d2136449fc91a540f1cde2",
     "PERMISSIONS.md": "8644afc003a2403fcb4607003ed57bd164ece72dde78a5a5d2de6e5cb7225541",
-    "README.md": "147b335012ca7ca461972cd69b28c46ee19c294aef7d872857ae29156ddd476c",
+    "README.md": "30f38550928876cccf9abf626dde85ed5002f26450313e8318d70771eeaec543",
     "ui.schema.json": "72df5fbb0104eeec9fb196490c5cd0872f2293326c710a7b53bbdfb57d080dc3",
     "web-read.schema.json": "1baee23b549a7637a90ddd362cd95eed6fa0f1e5e11e116f98f77c0aec7f6ad6"
   },

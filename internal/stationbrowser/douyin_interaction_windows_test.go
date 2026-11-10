@@ -78,3 +78,30 @@ func douyinInteractionFixture(t *testing.T) *httptest.Server {
 		_, _ = fmt.Fprint(w, `<!doctype html><title>interaction</title><button data-e2e="like-button" data-video-id="123" aria-pressed="false" onclick="let n=this.getAttribute('aria-pressed')!=='true';this.setAttribute('aria-pressed',n);localStorage.like=n?'1':'0'">赞</button><script>document.currentScript.previousElementSibling.setAttribute('aria-pressed',localStorage.like==='1')</script><article data-e2e="comment-item" data-comment-id="456"><p data-e2e="comment-content">parent A</p><button data-e2e="comment-reply-button" onclick="document.querySelector('textarea').style.display='block';document.querySelector('[data-e2e=comment-reply-submit]').style.display='block'">回复</button></article><textarea data-e2e="comment-reply-editor" data-reply-to="456" style="display:none"></textarea><button data-e2e="comment-reply-submit" data-reply-to="456" style="display:none" onclick="let x=document.createElement('div');x.dataset.e2e='comment-reply-item';x.dataset.replyId='789';x.dataset.parentCommentId='456';x.dataset.authorSelf='true';x.textContent=document.querySelector('textarea').value;document.body.append(x)">发</button><div data-e2e="comment-reply-item" data-reply-id="777" data-parent-comment-id="456" data-author-self="false">同文回复</div>`)
 	}))
 }
+
+func TestLocalDouyinInteractionReplyRateLimitIsReportedWithoutASecondClick(t *testing.T) {
+	if !Available() {
+		t.Skip("Microsoft Edge unavailable")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html>
+		  <article data-e2e="comment-item" data-comment-id="456"><p data-e2e="comment-content">parent A</p></article>
+		  <textarea data-e2e="comment-reply-editor" data-reply-to="456"></textarea>
+		  <button data-e2e="comment-reply-submit" data-reply-to="456" onclick="document.querySelector('[role=alert]').textContent='操作过于频繁，请稍后再试'">回复</button>
+		  <div role="alert"></div>`)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	prepared := 0
+	got, err := runDouyinInteraction(ctx, t.TempDir()+"\\profile", server.URL+"/video/123", DouyinInteractionRequest{
+		VideoID: "123", Kind: DouyinInteractionReplyComment, CommentID: "456", Text: "合成回复",
+		ExpectedCommentSHA256: sha256Text("parent A"),
+		BeforeSubmit:          func(context.Context) error { prepared++; return nil },
+	}, func() error { return nil }, true)
+	if !errors.Is(err, ErrDouyinInteractionUnknown) || got.State != DouyinInteractionUnknown ||
+		!got.Submitted || got.Code != "platform_rate_limited" || prepared != 1 {
+		t.Fatalf("rate limit: %+v %v preparations=%d", got, err, prepared)
+	}
+}

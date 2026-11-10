@@ -332,3 +332,25 @@ func TestInteractionProviderFailureRemainsUnknownAndIsReported(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractionReplyRetryTimeRemainsVisibleInTaskList(t *testing.T) {
+	p, provider, _, target := interactionFixture(t)
+	actor := interactionActor("paced-reply")
+	draft := interactionDraft(target)
+	draft.Kind, draft.CommentID, draft.Text, draft.Desired = "reply_comment", "105", "合成回复", false
+	draft.CommentVersion = strings.Repeat("a", 64)
+	const next = "2026-11-10T23:00:00+08:00"
+	provider.receipt = InteractionReceipt{State: "unknown", Code: "reply_cooldown", NextAttemptAt: next}
+	view, err := p.Create(t.Context(), actor, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err = p.Action(t.Context(), actor, view.JobID, "submit")
+	if err != nil || view.NextAttemptAt != next || view.Diagnostic != "reply_cooldown" {
+		t.Fatalf("action: %+v %v", view, err)
+	}
+	page, err := p.List(t.Context(), actor, target.AppID, 0, 10)
+	if err != nil || len(page.Items) != 1 || page.Items[0].NextAttemptAt != next {
+		t.Fatalf("task list: %+v %v", page, err)
+	}
+}

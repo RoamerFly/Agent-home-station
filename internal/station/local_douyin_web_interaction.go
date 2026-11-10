@@ -122,6 +122,13 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 			return apphost.InteractionReceipt{}, apphost.ErrInteractionDenied
 		}
 	}
+	paced := in.Draft.Kind == "reply_comment"
+	var pacingErr error
+	if paced {
+		if _, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil {
+			return douyinReplyPacingReceipt(in.Reference, err)
+		}
+	}
 	c.VideoID = target.videoID
 	if err := in.SaveCheckpoint(ctx, mustLocalDouyinJSON(c)); err != nil {
 		return apphost.InteractionReceipt{}, err
@@ -131,10 +138,29 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 			if err := in.CheckActive(callCtx); err != nil {
 				return err
 			}
+			if paced {
+				_, pacingErr = p.replyPacing(a, time.Now(), douyinReplyReserve)
+				if pacingErr != nil {
+					return pacingErr
+				}
+			}
 			c.Submitted = true
 			return in.SaveCheckpoint(callCtx, mustLocalDouyinJSON(c))
 		}}
 	result, err := p.run(ctx, a, request, func() error { return in.CheckActive(ctx) })
+	if paced {
+		if pacingErr != nil {
+			return douyinReplyPacingReceipt(in.Reference, pacingErr)
+		}
+		if result.Code == "platform_rate_limited" {
+			until, paceErr := p.replyPacing(a, time.Now(), douyinReplyRateLimited)
+			if paceErr != nil {
+				return apphost.InteractionReceipt{}, paceErr
+			}
+			return apphost.InteractionReceipt{Reference: in.Reference, State: "unknown",
+				Code: result.Code, NextAttemptAt: until.Format(time.RFC3339Nano)}, nil
+		}
+	}
 	result.Code = localInteractionBrowserCode(result.Code, err)
 	// Preserve late verified identity independently of a cancelled HTTP request.
 	if result.RemoteID != "" {
@@ -164,6 +190,12 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 		state := "unknown"
 		if in.Cancel {
 			state = "cancelled"
+		} else if in.Draft.Kind == "reply_comment" {
+			if a, err := p.access(ctx); err == nil && p.ref(a) == in.Reference.Target {
+				if _, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil {
+					return douyinReplyPacingReceipt(in.Reference, err)
+				}
+			}
 		}
 		return apphost.InteractionReceipt{Reference: in.Reference, State: state, Code: "not_submitted"}, nil
 	}
@@ -188,9 +220,24 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 	result, err := p.run(ctx, a, request, authorize)
 	result.Code = localInteractionBrowserCode(result.Code, err)
 	if err != nil && result.State != "applied" {
-		return apphost.InteractionReceipt{Reference: in.Reference, State: "unknown", Code: localInteractionCode(result.Code)}, nil
+		receipt := apphost.InteractionReceipt{Reference: in.Reference, State: "unknown", Code: localInteractionCode(result.Code)}
+		if in.Draft.Kind == "reply_comment" && result.Code == "platform_rate_limited" {
+			if until, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil && !until.IsZero() {
+				receipt.NextAttemptAt = until.Format(time.RFC3339Nano)
+			}
+		}
+		return receipt, nil
 	}
 	return localDouyinInteractionReceipt(in.Reference, in.Draft.Kind, c.VideoID, result)
+}
+
+func douyinReplyPacingReceipt(ref apphost.InteractionReference, err error) (apphost.InteractionReceipt, error) {
+	var cooling *douyinReplyCooling
+	if errors.As(err, &cooling) {
+		return apphost.InteractionReceipt{Reference: ref, State: "unknown",
+			Code: "reply_cooldown", NextAttemptAt: cooling.until.Format(time.RFC3339Nano)}, nil
+	}
+	return apphost.InteractionReceipt{Reference: ref, State: "unknown", Code: "reply_pacing_unavailable"}, nil
 }
 
 func localInteractionBrowserCode(code string, err error) string {

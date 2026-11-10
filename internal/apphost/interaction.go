@@ -61,9 +61,10 @@ type InteractionQuery struct {
 	Cancel     bool                 `json:"cancel"`
 }
 type InteractionReceipt struct {
-	Reference InteractionReference `json:"reference"`
-	State     string               `json:"state"`
-	Code      string               `json:"code,omitempty"`
+	Reference     InteractionReference `json:"reference"`
+	State         string               `json:"state"`
+	Code          string               `json:"code,omitempty"`
+	NextAttemptAt string               `json:"next_attempt_at,omitempty"`
 }
 
 // InteractionProvider is optional on an application adapter.  Origin never
@@ -96,6 +97,7 @@ type InteractionView struct {
 	UpdatedAt        string        `json:"updated_at"`
 	AvailableActions []string      `json:"available_actions"`
 	Diagnostic       string        `json:"diagnostic,omitempty"`
+	NextAttemptAt    string        `json:"next_attempt_at,omitempty"`
 }
 type InteractionPage struct {
 	Items   []InteractionView `json:"items"`
@@ -388,13 +390,13 @@ func (p *Interactor) settle(ctx context.Context, job pluginhost.Job, record inte
 		return job, ErrInteractionReceipt
 	}
 	if receipt.State == "unknown" {
-		if err := p.storeDiagnostic(ctx, job, record, receipt.Code); err != nil {
+		if err := p.storeDiagnostic(ctx, job, record, receipt.Code, receipt.NextAttemptAt); err != nil {
 			return job, err
 		}
 		return p.store.Job(ctx, job.ID)
 	}
 	if receipt.State == "applied" {
-		if err := p.storeDiagnostic(ctx, job, record, ""); err != nil {
+		if err := p.storeDiagnostic(ctx, job, record, "", ""); err != nil {
 			return job, err
 		}
 	}
@@ -422,7 +424,7 @@ func (p *Interactor) settle(ctx context.Context, job pluginhost.Job, record inte
 			return next, e
 		}
 		if receipt.State == "failed" {
-			if err := p.storeDiagnostic(ctx, current, record, receipt.Code); err != nil {
+			if err := p.storeDiagnostic(ctx, current, record, receipt.Code, ""); err != nil {
 				return current, err
 			}
 			next, e := p.store.FailJob(ctx, current.ID, current.Revision, mustJSON(receipt))
@@ -450,9 +452,14 @@ func (p *Interactor) settle(ctx context.Context, job pluginhost.Job, record inte
 	return job, ErrInteractionConflict
 }
 
-// storeDiagnostic keeps only a provider-safe normalized code in the existing
-// host state. It intentionally never records arbitrary provider error text.
-func (p *Interactor) storeDiagnostic(ctx context.Context, job pluginhost.Job, record interactionRecord, code string) error {
+type interactionDiagnostic struct {
+	Code          string `json:"code"`
+	NextAttemptAt string `json:"next_attempt_at,omitempty"`
+}
+
+// storeDiagnostic keeps a normalized code and optional retry timestamp in
+// host state without persisting arbitrary provider error text.
+func (p *Interactor) storeDiagnostic(ctx context.Context, job pluginhost.Job, record interactionRecord, code, nextAttemptAt string) error {
 	if !validInteractionCode(code) {
 		return ErrInteractionReceipt
 	}
@@ -472,7 +479,7 @@ func (p *Interactor) storeDiagnostic(ctx context.Context, job pluginhost.Job, re
 				return nil
 			}
 			puts := map[string]json.RawMessage{}
-			puts[interactionDiagnosticKey] = mustJSON(code)
+			puts[interactionDiagnosticKey] = mustJSON(interactionDiagnostic{Code: code, NextAttemptAt: nextAttemptAt})
 			_, err = p.store.InitializeHostState(ctx, plugin, job.ID, record.Manifest, puts)
 			if errors.Is(err, pluginhost.ErrRevision) {
 				continue
@@ -484,7 +491,7 @@ func (p *Interactor) storeDiagnostic(ctx context.Context, job pluginhost.Job, re
 		if code == "" {
 			deletes = append(deletes, interactionDiagnosticKey)
 		} else {
-			puts[interactionDiagnosticKey] = mustJSON(code)
+			puts[interactionDiagnosticKey] = mustJSON(interactionDiagnostic{Code: code, NextAttemptAt: nextAttemptAt})
 		}
 		_, err = p.store.UpdateHostState(ctx, plugin, job.ID, state.Revision, puts, deletes)
 		if errors.Is(err, pluginhost.ErrRevision) {
@@ -510,9 +517,15 @@ func (p *Interactor) decorate(ctx context.Context, view InteractionView, job plu
 		return view
 	}
 	raw := state.Records[interactionDiagnosticKey]
-	var code string
-	if len(raw) != 0 && json.Unmarshal(raw, &code) == nil && validInteractionCode(code) {
-		view.Diagnostic = code
+	var diagnostic interactionDiagnostic
+	if len(raw) != 0 {
+		if json.Unmarshal(raw, &diagnostic) != nil {
+			// Existing jobs stored only the code string.
+			_ = json.Unmarshal(raw, &diagnostic.Code)
+		}
+		if validInteractionCode(diagnostic.Code) && validInteractionRetryTime(diagnostic.Code, diagnostic.NextAttemptAt) {
+			view.Diagnostic, view.NextAttemptAt = diagnostic.Code, diagnostic.NextAttemptAt
+		}
 	}
 	return view
 }
@@ -576,6 +589,9 @@ func validInteractionReceipt(job pluginhost.Job, r interactionRecord, x Interact
 	if x.Reference.TaskID != job.ID || x.Reference.Target != r.Draft.Target || x.Reference.ManifestSHA256 != r.Manifest || !validRemoteID(x.Reference.RemoteID) || !validInteractionCode(x.Code) {
 		return false
 	}
+	if x.NextAttemptAt != "" && (x.State != "unknown" || r.Draft.Kind != "reply_comment" || !validInteractionRetryTime(x.Code, x.NextAttemptAt)) {
+		return false
+	}
 	switch x.State {
 	case "unknown":
 		// An adapter which has already learned the provider identifier may keep
@@ -589,6 +605,17 @@ func validInteractionReceipt(job pluginhost.Job, r interactionRecord, x Interact
 		return false
 	}
 }
+func validInteractionRetryTime(code, timestamp string) bool {
+	if timestamp == "" {
+		return true
+	}
+	if code != "reply_cooldown" && code != "platform_rate_limited" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	return err == nil && !t.IsZero()
+}
+
 func validInteractionCode(code string) bool {
 	if len(code) > 64 {
 		return false
