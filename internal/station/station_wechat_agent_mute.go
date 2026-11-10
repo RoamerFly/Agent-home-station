@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
@@ -78,7 +79,7 @@ func (t *localToolSet) localWechatGroupMute(ctx context.Context, raw json.RawMes
 		}
 		return localProcessJSON(map[string]any{"targets": t.wechat.stationMuteTargets(t.requestTime)})
 	}
-	if !artifactID(in.Connection, "wechat-") || !validStationGroup(in.Group) ||
+	if !artifactID(in.Connection, "wechat-") || !wechatapp.ValidGroup(in.Group) ||
 		!(in.Action == "set" && in.Muted != nil || in.Action == "status" && in.Muted == nil) {
 		return "", invalid
 	}

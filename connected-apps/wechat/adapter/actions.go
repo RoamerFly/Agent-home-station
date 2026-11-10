@@ -3,7 +3,10 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -111,4 +114,15 @@ func Recall(ctx context.Context, raw json.RawMessage, host ActionHost) (string, 
 		return "", err
 	}
 	return submit(ctx, action)
+}
+
+func ValidGroupName(name string, allowEmpty bool) bool {
+	return utf8.ValidString(name) && len(name) <= 512 && (allowEmpty || strings.TrimSpace(name) != "") && strings.IndexFunc(name, unicode.IsControl) < 0
+}
+
+func GroupActionSupported(caps linuxnative.Capabilities, kind string) bool {
+	if kind == "mute" {
+		return slices.Contains(caps.ThreadNotificationTargets, "group")
+	}
+	return IsManagedGroupAction(kind) && slices.Contains(caps.GroupMutations, kind)
 }

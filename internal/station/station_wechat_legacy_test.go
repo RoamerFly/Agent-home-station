@@ -665,8 +665,8 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("could not read imported group policy", err)
 	}
 	summaryWorker.mu.Lock()
-	allowedBefore := summaryWorker.policy.groupShareAllowed("123@chatroom", beforeSummary.Format(time.RFC3339Nano))
-	allowedAfter := summaryWorker.policy.groupShareAllowed("123@chatroom", time.Now().UTC().Format(time.RFC3339Nano))
+	allowedBefore := summaryWorker.policy.groupPolicy().AllowsShare("123@chatroom", beforeSummary.Format(time.RFC3339Nano))
+	allowedAfter := summaryWorker.policy.groupPolicy().AllowsShare("123@chatroom", time.Now().UTC().Format(time.RFC3339Nano))
 	summaryWorker.mu.Unlock()
 	if allowedBefore || !allowedAfter {
 		t.Fatal("the imported summary preference must only apply from confirmation", allowedBefore, allowedAfter)

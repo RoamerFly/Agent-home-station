@@ -51,17 +51,17 @@ type stationWechat struct {
 }
 
 type stationWechatPolicy struct {
-	Enabled          bool                              `json:"enabled"`
-	Paused           bool                              `json:"paused"`
-	Grants           map[string]time.Time              `json:"reply_grants"`
-	AttachmentGrants map[string]time.Time              `json:"attachment_grants,omitempty"`
-	AutoImagesSince  time.Time                         `json:"auto_images_since,omitzero"`
-	AutoVideosSince  time.Time                         `json:"auto_videos_since,omitzero"`
-	MediaReplyGrants map[string]time.Time              `json:"media_reply_grants,omitempty"`
-	HistoryGrants    map[string]time.Time              `json:"history_grants,omitempty"`
-	ContactGrant     time.Time                         `json:"contact_grant,omitzero"`
-	GroupMuteGrants  map[string]time.Time              `json:"group_mute_grants,omitempty"`
-	GroupRules       map[string]stationWechatGroupRule `json:"group_rules,omitempty"`
+	Enabled          bool                           `json:"enabled"`
+	Paused           bool                           `json:"paused"`
+	Grants           map[string]time.Time           `json:"reply_grants"`
+	AttachmentGrants map[string]time.Time           `json:"attachment_grants,omitempty"`
+	AutoImagesSince  time.Time                      `json:"auto_images_since,omitzero"`
+	AutoVideosSince  time.Time                      `json:"auto_videos_since,omitzero"`
+	MediaReplyGrants map[string]time.Time           `json:"media_reply_grants,omitempty"`
+	HistoryGrants    map[string]time.Time           `json:"history_grants,omitempty"`
+	ContactGrant     time.Time                      `json:"contact_grant,omitzero"`
+	GroupMuteGrants  map[string]time.Time           `json:"group_mute_grants,omitempty"`
+	GroupRules       map[string]wechatapp.GroupRule `json:"group_rules,omitempty"`
 	// Persist the import claim with its note so retrying cannot restore a
 	// note the owner later edited, cleared, or lost by revoking its scope.
 	LegacyGroupNoteImports map[string]string `json:"legacy_group_note_imports,omitempty"`
@@ -76,6 +76,10 @@ type stationWechatPolicy struct {
 	// require the same activation gate until the connection is explicitly bound.
 	LegacyArchiveDigest string    `json:"legacy_archive_digest,omitempty"`
 	RollbackFrozenAt    time.Time `json:"rollback_frozen_at,omitzero"`
+}
+
+func (policy stationWechatPolicy) groupPolicy() wechatapp.GroupPolicy {
+	return wechatapp.GroupPolicy{Replies: policy.Grants, Attachments: policy.AttachmentGrants, Rules: policy.GroupRules}
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -287,22 +291,22 @@ func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
 		}
 	}
 	for group, granted := range policy.GroupMuteGrants {
-		if !validStationGroup(group) || granted.IsZero() {
+		if !wechatapp.ValidGroup(group) || granted.IsZero() {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
 	for thread, rule := range policy.GroupRules {
-		if !validStationGroupRule(thread, rule, policy.Grants, policy.AttachmentGrants) {
+		if !wechatapp.ValidGroupRule(thread, rule, policy.Grants, policy.AttachmentGrants) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
 	for thread, digest := range policy.LegacyGroupNoteImports {
-		if !validStationGroup(thread) || !legacyMemoryDigestValid(digest) {
+		if !wechatapp.ValidGroup(thread) || !legacyMemoryDigestValid(digest) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
 	for thread, digest := range policy.LegacyGroupReplyImports {
-		if !validStationGroup(thread) || !legacyMemoryDigestValid(digest) {
+		if !wechatapp.ValidGroup(thread) || !legacyMemoryDigestValid(digest) {
 			return stationWechatPolicy{}, apphost.ErrInvalidConnectionPolicy
 		}
 	}
@@ -413,13 +417,7 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	}
 	groupRules := make([]apphost.ConnectionGroupRule, 0, len(w.policy.GroupRules))
 	for _, thread := range slices.Sorted(maps.Keys(w.policy.GroupRules)) {
-		rule := w.policy.GroupRules[thread]
-		view := apphost.ConnectionGroupRule{ThreadID: thread, Note: rule.Note, SummarizeShares: !rule.SummarizeSince.IsZero()}
-		if rule.hasReplySettings() {
-			reply := rule.replyRule()
-			view.ReplySettings = &apphost.ConnectionGroupReplySettings{Mode: reply.Mode, Prefix: reply.Prefix, Persona: reply.Persona, ForceReplyWhenMentioned: reply.ForceReplyWhenMentioned}
-		}
-		groupRules = append(groupRules, view)
+		groupRules = append(groupRules, w.policy.GroupRules[thread].View(thread))
 	}
 	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, AutoObserveImages: !w.policy.AutoImagesSince.IsZero(), AutoObserveVideos: !w.policy.AutoVideosSince.IsZero(), MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
 }
@@ -499,7 +497,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	if err != nil {
 		return view, err
 	}
-	groupRules, err := stationGroupRules(w.policy.GroupRules, policy.GroupRules, grants, attachments, now)
+	groupRules, err := wechatapp.UpdateGroupRules(w.policy.GroupRules, policy.GroupRules, grants, attachments, now)
 	if err != nil {
 		return view, err
 	}
@@ -514,7 +512,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 		}
 		next.GroupMuteGrants = make(map[string]time.Time, len(requested))
 		for _, group := range requested {
-			if !validStationGroup(group) || !next.GroupMuteGrants[group].IsZero() {
+			if !wechatapp.ValidGroup(group) || !next.GroupMuteGrants[group].IsZero() {
 				return view, apphost.ErrInvalidConnectionPolicy
 			}
 			grant := w.policy.GroupMuteGrants[group]
@@ -717,7 +715,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	// call. Do not freeze a second copy of the default character in this worker.
 	config.Persona = "使用宿主在本轮提供的主角色设定，并结合当前应用的子角色补充。"
 	config.Permissions = companion.Permissions{ReplyText: true, Remember: true}
-	threads, rules := policy.groupParticipation(&config)
+	groups := policy.groupPolicy()
+	threads, rules := groups.Participation(&config)
 	mediaReplies := len(policy.MediaReplyGrants) != 0
 	config.Permissions.SendImage, config.Permissions.SendVideo, config.Permissions.SendVoice, config.Permissions.SendFile = mediaReplies, mediaReplies, mediaReplies, mediaReplies
 	character, err := companion.New(config, memory, s.model, persona)
@@ -726,10 +725,10 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	}
 	character.Names = native
 	character.ConversationPreference = func(in companion.Input) (string, bool) {
-		if run.Blocked() || in.Preview || in.Channel != "wechat" || in.Account != native.Account() || !validStationGroup(in.Thread) || policy.Grants[in.Thread].IsZero() {
+		if run.Blocked() {
 			return "", false
 		}
-		return policy.GroupRules[in.Thread].Note, true
+		return groups.ConversationNote(native.Account(), in)
 	}
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.Blocked, documents: s.documents}
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
@@ -753,10 +752,10 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			return kind == "file" && m.Direction == "incoming" && !run.Blocked() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)
 		},
 		PreferredGroupShare: func(m linuxnative.Message) bool {
-			return !run.Blocked() && policy.groupShareCandidate(native.Account(), m)
+			return !run.Blocked() && groups.ShareCandidate(native.Account(), m)
 		},
 		ReadPreferredGroupShare: func(ctx context.Context, in companion.Input, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
-			if run.Blocked() || !policy.groupShareCandidate(native.Account(), m) {
+			if run.Blocked() || !groups.ShareCandidate(native.Account(), m) {
 				return "", bot.MediaObservationEvidence{}, errors.New("share_group_policy_changed")
 			}
 			return attachment.readGroupShareEvidence(ctx, in, m)
@@ -765,18 +764,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			return !policy.Grants[thread].IsZero(), ctx.Err()
 		},
 		AuthorizeReply: func(in companion.Input) bool {
-			if in.GroupShareSummary && !policy.groupShareAllowed(in.Thread, in.MessageTime) {
-				return false
-			}
-			granted := policy.Grants[in.Thread]
-			if granted.IsZero() {
-				return false
-			}
-			if since := policy.GroupRules[in.Thread].ReplySince; since.After(granted) {
-				granted = since
-			}
-			when, err := time.Parse(time.RFC3339Nano, in.MessageTime)
-			return in.Account == native.Account() && err == nil && !when.Before(granted)
+			return groups.AllowsReply(native.Account(), in)
 		},
 		AuthorizeMedia:       attachment.replyAllowed,
 		PrepareMediaSource:   attachment.stageReply,

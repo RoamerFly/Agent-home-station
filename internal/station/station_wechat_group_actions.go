@@ -4,11 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
-	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -39,10 +35,6 @@ type stationGroupActionAuthority struct {
 	active    func(context.Context) bool
 }
 
-func validStationGroup(id string) bool {
-	return identity.ValidPathID(id) && strings.HasSuffix(id, "@chatroom") && id != "@chatroom"
-}
-
 func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.ServeMux, readOwner stationservices.OwnerReader) {
 	const base = "/api/apps/wechat/connections/{connection}"
 	mux.HandleFunc("GET "+base+"/groups/{group}/notification", owner.Protect(s.stationGroupDetails("mute")))
@@ -57,7 +49,7 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 		if action.Kind == "" {
 			action.Kind = "mute"
 		}
-		if !validStationGroup(in.Group) || !identity.ValidPathID(in.Key) || !artifactID(r.PathValue("connection"), "wechat-") {
+		if !wechatapp.ValidGroup(in.Group) || !identity.ValidPathID(in.Key) || !artifactID(r.PathValue("connection"), "wechat-") {
 			websession.Fail(w, http.StatusBadRequest, "请提供有效的连接、群 ID 和请求编号")
 			return
 		}
@@ -65,7 +57,7 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 		case action.Kind == "mute" && in.Muted != nil && (in.Name == nil || *in.Name == ""):
 			action.Muted = *in.Muted
 		case (action.Kind == "rename" || action.Kind == "my_name") && in.Muted == nil &&
-			in.Name != nil && validStationGroupName(*in.Name, action.Kind == "my_name"):
+			in.Name != nil && wechatapp.ValidGroupName(*in.Name, action.Kind == "my_name"):
 			action.Text = *in.Name
 		default:
 			websession.Fail(w, http.StatusBadRequest, "请提供有效的群操作。群名称须非空，本人群昵称可明确提交空字符串。名称最多 512 UTF-8 字节，且不能含控制字符")
@@ -133,7 +125,7 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	if err != nil {
 		return out, err
 	}
-	if !stationGroupActionSupported(caps, action.Kind) {
+	if !wechatapp.GroupActionSupported(caps, action.Kind) {
 		return out, errStationGroupActionUnsupported
 	}
 	group, err := native.GroupProfile(ctx, action.ThreadID)
@@ -237,17 +229,6 @@ func submitReservedStationAction(ctx context.Context, native *linuxnative.Sender
 	return ledger.RecordConnectedReceipt(p, status)
 }
 
-func validStationGroupName(name string, allowEmpty bool) bool {
-	return utf8.ValidString(name) && len(name) <= 512 && (allowEmpty || strings.TrimSpace(name) != "") && strings.IndexFunc(name, unicode.IsControl) < 0
-}
-
-func stationGroupActionSupported(caps linuxnative.Capabilities, kind string) bool {
-	if kind == "mute" {
-		return slices.Contains(caps.ThreadNotificationTargets, "group")
-	}
-	return wechatapp.IsManagedGroupAction(kind) && slices.Contains(caps.GroupMutations, kind)
-}
-
 func (s *stationWechat) lookupStationAction(ctx context.Context, ledger *wechatapp.ActionLedger, p wechatapp.ActionProposal) apphost.ActionReceipt {
 	out := p.Receipt()
 	if wechatapp.IsFinalActionState(p.State) || p.Request.Kind == "recall" && p.Result.ID == "" {
@@ -337,7 +318,7 @@ func (s *stationWechat) stationGroupDetails(kinds ...string) http.HandlerFunc {
 func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.Request, fields []stationGroupDetailFields) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, group := r.PathValue("connection"), r.PathValue("group")
-	if !validStationGroup(group) || !artifactID(id, "wechat-") {
+	if !wechatapp.ValidGroup(group) || !artifactID(id, "wechat-") {
 		websession.Fail(w, http.StatusBadRequest, "连接或群编号无效")
 		return
 	}
@@ -380,7 +361,7 @@ func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.R
 				for _, field := range fields {
 					receipt, _ := result[field.operation].(apphost.ActionReceipt)
 					pending := receipt.OperationID != "" && !wechatapp.IsFinalActionState(receipt.State)
-					result[field.available] = canChange && !pending && stationGroupActionSupported(caps, field.action)
+					result[field.available] = canChange && !pending && wechatapp.GroupActionSupported(caps, field.action)
 					switch field.action {
 					case "mute":
 						if state.Muted != nil {

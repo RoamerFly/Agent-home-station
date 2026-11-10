@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/websession"
@@ -29,7 +30,7 @@ func (s *stationWechat) legacyGroupSettingRoutes(server *websession.Store, mux *
 	handle := server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		thread := r.PathValue("thread")
-		if !validStationGroup(thread) {
+		if !wechatapp.ValidGroup(thread) {
 			websession.Fail(w, http.StatusBadRequest, "请选择明确的群聊")
 			return
 		}
@@ -107,7 +108,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	current := worker.policy.GroupRules[thread]
 	attachment := worker.policy.AttachmentGrants[thread]
 	canEnableChannelsSummary := !attachment.IsZero() && current.SummarizeSince.IsZero()
-	if replyRule && current.hasReplySettings() {
+	if replyRule && current.HasReplySettings() {
 		return unavailable("conflict", "新站已有该群回复规则，保留现有内容")
 	}
 	if !replyRule && current.Note != "" {
@@ -225,7 +226,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	next := worker.policy
 	next.GroupRules = maps.Clone(next.GroupRules)
 	if next.GroupRules == nil {
-		next.GroupRules = make(map[string]stationWechatGroupRule)
+		next.GroupRules = make(map[string]wechatapp.GroupRule)
 	}
 	imports = maps.Clone(imports)
 	if imports == nil {
@@ -233,7 +234,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 	}
 	imports[thread] = legacyGroupSettingReceipt(want, enableChannelsSummary)
 	if replyRule {
-		if err := current.setReplySettings(*view.ReplySettings, time.Now().UTC()); err != nil {
+		if err := current.SetReplySettings(*view.ReplySettings, time.Now().UTC()); err != nil {
 			return legacyGroupSettingView{}, err
 		}
 		next.LegacyGroupReplyImports = imports
@@ -241,7 +242,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		current.Note = view.Note
 		if enableChannelsSummary {
 			current.SummarizeSince = time.Now().UTC()
-			if !validStationGroupRule(thread, current, next.Grants, next.AttachmentGrants) {
+			if !wechatapp.ValidGroupRule(thread, current, next.Grants, next.AttachmentGrants) {
 				return unavailable("conflict", "无法核对视频号自动总结的授权时间，请检查系统时间后重试")
 			}
 		}
@@ -300,7 +301,7 @@ func readLegacyGroupReplySettings(root *os.Root, config, thread string, guard *l
 		return legacyGroupSettingView{Status: "empty", Reason: "此群使用新站已有的默认回复方式"}, ""
 	}
 	settings := apphost.ConnectionGroupReplySettings{Mode: group.Mode, Prefix: group.Prefix, Persona: group.Persona, ForceReplyWhenMentioned: group.ForceReplyWhenMentioned}
-	if !validStationGroupReplySettings(settings) {
+	if !wechatapp.ValidGroupReplySettings(settings) {
 		return invalid, ""
 	}
 	// Only values affecting this group's reply behavior contribute to the
