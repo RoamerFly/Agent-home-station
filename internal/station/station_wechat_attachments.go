@@ -237,21 +237,23 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	native            *linuxnative.Sender
-	store             *companion.Store
-	dir               string
-	grants            map[string]time.Time
-	replies           map[string]time.Time
-	reads             map[string]time.Time
-	readCursors       map[string]stationReadCursor
-	legacyReadCursors map[string]stationLegacyReadCursor
-	blocked           func() bool
-	trace             companion.Input
-	prepared          map[string]companion.GeneratedMedia
-	work              *stationWorkAccess
-	fetchVideo        stationVideoFetch
-	shareHost         func() (*stationShareHost, error)
-	documents         stationDocumentTools
+	native             *linuxnative.Sender
+	store              *companion.Store
+	dir                string
+	grants             map[string]time.Time
+	replies            map[string]time.Time
+	reads              map[string]time.Time
+	readCursors        map[string]stationReadCursor
+	legacyReadCursors  map[string]stationLegacyReadCursor
+	blocked            func() bool
+	trace              companion.Input
+	prepared           map[string]companion.GeneratedMedia
+	work               *stationWorkAccess
+	fetchVideo         stationVideoFetch
+	shareHost          func() (*stationShareHost, error)
+	documents          stationDocumentTools
+	stationImageVision bool
+	localVision        stationLocalVision
 }
 
 func (*stationAttachmentTools) AutonomousActions() bool { return true }

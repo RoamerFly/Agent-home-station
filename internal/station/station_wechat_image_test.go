@@ -229,6 +229,39 @@ func TestStationWechatImageObservationUsesVerifiedIncomingImages(t *testing.T) {
 	if result, err := call("current", "permission revoked during observation", 123); err == nil || result != nil || modelCalls.Load() != beforeCalls+1 {
 		t.Fatalf("in-flight revocation leaked a visual result: %#v, %v, model calls=%d", result, err, modelCalls.Load())
 	}
+	// Exercise the same tool and automatic observer with the actual fish-owned
+	// bridge. Both stores are enabled, so a provider fallback would be observable.
+	blocked.Store(false)
+	home, _, publicCalls := newStationVisionBridgeFixture(t)
+	tools.stationImageVision = true
+	tools.localVision = stationLocalVision{version: home.localStationVisionVersion, observe: home.observeLocalStationImages}
+	legacyCalls := modelCalls.Load()
+	if result, err := call("current", "use the explicitly selected provider", 123); err != nil || result["observation"] != "synthetic visible image" || *publicCalls != 1 || modelCalls.Load() != legacyCalls {
+		t.Fatalf("shared vision did not use only the fish tool: %v, %v", result, err)
+	}
+	if result, err := call("foreign", "still out of scope", 123); err == nil || result != nil || *publicCalls != 1 {
+		t.Fatalf("shared vision obtained a foreign source: %v, %v", result, err)
+	}
+	text, evidence, err = observer.AnalyzeWithEvidence(companion.WithMediaSource(t.Context(), *storedCurrent), messages["current"])
+	if err != nil || text != "synthetic visible image" || !companion.HasFirsthandObservation(evidence.Parts) || *publicCalls != 2 {
+		t.Fatalf("shared automatic observation: %q, %v", text, err)
+	}
+
+	sharedPost := home.projectTools.visionPost
+	home.projectTools.visionPost = func(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, limit int64, timeout time.Duration) (json.RawMessage, error) {
+		result, err := sharedPost(ctx, endpoint, headers, body, limit, timeout)
+		blocked.Store(true)
+		return result, err
+	}
+	if result, err := call("current", "revoke this source during shared observation", 123); err == nil || result != nil || *publicCalls != 3 {
+		t.Fatalf("shared vision returned a result after revocation: %v, %v", result, err)
+	}
+	blocked.Store(false)
+	tools.localVision.version = func(context.Context) (string, error) { return "", errors.New("synthetic shared tool disabled") }
+	if result, err := call("current", "do not fall back", 123); err == nil || err.Error() != "media_station_vision_unavailable" || result != nil || *publicCalls != 3 || modelCalls.Load() != legacyCalls {
+		t.Fatalf("unavailable shared vision fell back: %v, %v", result, err)
+	}
+
 }
 
 func stationImageObservationHost(t *testing.T, root string, calls *atomic.Int32, expectedTokens int) *stationShareHost {

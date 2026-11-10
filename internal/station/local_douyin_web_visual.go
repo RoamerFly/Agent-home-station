@@ -17,22 +17,6 @@ import (
 	"wechat-bot/internal/mediaobserve"
 )
 
-type stationLocalVision struct {
-	version func(context.Context) (string, error)
-	observe func(context.Context, string, string, []deepseek.Image, int, func() error) (string, error)
-}
-
-func (v stationLocalVision) ready(ctx context.Context) (string, error) {
-	if v.version == nil || v.observe == nil {
-		return "", apphost.ErrObservationVisualUnavailable
-	}
-	version, err := v.version(ctx)
-	if err != nil || strings.TrimSpace(version) == "" {
-		return "", apphost.ErrObservationVisualUnavailable
-	}
-	return version, nil
-}
-
 func (h *localHomeService) localDouyinVisualVersion(ctx context.Context) (string, error) {
 	if h.projectTools == nil || !mediadecode.Available() || !h.projectTools.runtimeReady() {
 		return "", apphost.ErrObservationVisualUnavailable

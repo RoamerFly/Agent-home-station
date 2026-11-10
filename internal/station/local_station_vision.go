@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/localasr"
@@ -20,6 +21,22 @@ import (
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/workspacefs"
 )
+
+type stationLocalVision struct {
+	version func(context.Context) (string, error)
+	observe func(context.Context, string, string, []deepseek.Image, int, func() error) (string, error)
+}
+
+func (v stationLocalVision) ready(ctx context.Context) (string, error) {
+	if v.version == nil || v.observe == nil {
+		return "", apphost.ErrObservationVisualUnavailable
+	}
+	version, err := v.version(ctx)
+	if err != nil || strings.TrimSpace(version) == "" {
+		return "", apphost.ErrObservationVisualUnavailable
+	}
+	return version, nil
+}
 
 type localStationVisionBinding struct {
 	host                 *localProjectToolHost

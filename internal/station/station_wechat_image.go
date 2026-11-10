@@ -38,6 +38,10 @@ type stationImageObservation struct {
 }
 
 func (t *stationAttachmentTools) imageObservationAvailable(ctx context.Context, account string) bool {
+	if t.stationImageVision {
+		_, err := t.localVision.ready(ctx)
+		return err == nil
+	}
 	if t.shareHost == nil {
 		return false
 	}
@@ -85,32 +89,8 @@ func (t *stationAttachmentTools) readImageObservation(ctx context.Context, in st
 	if err != nil {
 		return out, err
 	}
-	if t.shareHost == nil {
-		return out, observationFailure("media_plugin_runtime_unavailable", "当前连接未准备媒体理解工具。")
-	}
-	host, err := t.shareHost()
-	if err != nil || host.store.Account() != source.Account || host.controller == nil {
-		return out, observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的媒体理解工具。")
-	}
-	installed, err := host.store.Installed(ctx, localasr.PluginID)
-	if err != nil || !installed.Enabled || installed.Removed {
-		return out, observationFailure("media_plugin_not_enabled", "请在当前微信连接启用媒体理解工具。")
-	}
-	config, err := host.store.Configuration(ctx, localasr.PluginID)
-	if err != nil || !stationVisionConfigured(config) {
-		return out, observationFailure("media_observation_configuration_required", "请为当前微信连接配置视觉接口、模型和密钥。")
-	}
-	version := max(access.ref.Revision, 1)
-	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "observe authorized WeChat image", Authorization: source.AssetID(), RequestKey: "station-image-" + source.AssetID(), EvidenceEpoch: epoch,
-		SourceVersions: map[string]int{"native:" + source.AssetID(): version}, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
-	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
-	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
-		return out, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
-	}
-	check := mediaobserve.BindSource(host.store, installed, config.Revision, func(ctx context.Context) error {
-		return access.confirmObservationSource(ctx, source, epoch)
-	})
-	if err := check(ctx); err != nil {
+	observe, err := t.bindImageObserver(ctx, access, source, epoch)
+	if err != nil {
 		return out, err
 	}
 	const maxImageBytes = 8 << 20 // Single-image transport limit shared with the visual tool.
@@ -146,33 +126,101 @@ func (t *stationAttachmentTools) readImageObservation(ctx context.Context, in st
 	if question := strings.TrimSpace(in.Question); question != "" {
 		prompt += "\n本次观察重点：" + question
 	}
-	p, err := mediaobserve.NewVisual(ctx, host.store, version, prompt, []deepseek.Image{{Data: data.Bytes()}}, in.Tokens)
+	observation, err := observe(record, prompt, deepseek.Image{Data: data.Bytes()}, in.Tokens)
 	if err != nil {
-		return out, stationImageFailure(err)
-	}
-	usage, err := host.mediaBilling(t.dir)
-	if err != nil {
-		return out, observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
-	}
-	post := host.postModel
-	if post == nil {
-		post = mcptools.PostPluginModel
-	}
-	invocation.RequestKey = "station-image-" + localCheckpointKey(t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, installed.Digest, installed.Revision, config.Revision, string(p.Arguments()))
-	p.Bind(mediaobserve.VisualBinding{Invocation: func() pluginhost.Invocation { return invocation }, CheckOrigin: check.CheckJob,
-		Controller: func() (*pluginruntime.Controller, error) { return host.controller, nil }, Billing: usage, Transport: post})
-	observation, err := p.Observe(ctx)
-	if checkErr := check(ctx); checkErr != nil {
-		return out, checkErr
-	}
-	if err != nil {
-		return out, stationImageFailure(err)
+		return out, err
 	}
 	coverage := "verified_image"
 	if strings.HasPrefix(observation, "[本次画面观察被模型截断，以下内容不完整]") {
 		coverage = "partial_image_observation"
 	}
 	return stationImageObservation{Message: source.Message, Asset: record.ID, Sender: source.Sender, Occurred: source.Occurred, SHA256: record.SHA256, Variant: record.Variant, Coverage: coverage, Observation: observation, Untrusted: true}, nil
+}
+
+// bindImageObserver fixes the destination before obtaining or copying any bytes.
+// A selected station provider fails closed. Only the owner can change the route.
+func (t *stationAttachmentTools) bindImageObserver(ctx context.Context, access stationAttachmentAccess, source wechatapp.AttachmentSource, epoch string) (func(stationAttachmentRecord, string, deepseek.Image, int) (string, error), error) {
+	origin := func(ctx context.Context) error { return access.confirmObservationSource(ctx, source, epoch) }
+	if t.stationImageVision {
+		if err := origin(ctx); err != nil {
+			return nil, err
+		}
+		version, err := t.localVision.ready(ctx)
+		if err != nil {
+			return nil, observationFailure("media_station_vision_unavailable", "请在项目工具中启用并配置工作站视觉服务。")
+		}
+		check := func() error {
+			if err := origin(ctx); err != nil {
+				return err
+			}
+			if current, err := t.localVision.ready(ctx); err != nil || current != version {
+				return observationFailure("media_station_vision_changed", "读取期间工作站视觉服务或授权已变更。")
+			}
+			return nil
+		}
+		return func(record stationAttachmentRecord, prompt string, image deepseek.Image, tokens int) (string, error) {
+			key := "wechat-image:" + localCheckpointKey(source.Account, source.Thread, source.Sender, t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, access.ref.Revision, version)
+			text, err := t.localVision.observe(ctx, key, prompt, []deepseek.Image{image}, tokens, check)
+			if e := check(); e != nil {
+				return "", e
+			}
+			if err != nil {
+				return "", stationImageFailure(err)
+			}
+			return text, nil
+		}, nil
+	}
+	if t.shareHost == nil {
+		return nil, observationFailure("media_plugin_runtime_unavailable", "当前连接未准备媒体理解工具。")
+	}
+	host, err := t.shareHost()
+	if err != nil || host.store.Account() != source.Account || host.controller == nil {
+		return nil, observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的媒体理解工具。")
+	}
+	installed, err := host.store.Installed(ctx, localasr.PluginID)
+	if err != nil || !installed.Enabled || installed.Removed {
+		return nil, observationFailure("media_plugin_not_enabled", "请在当前微信连接启用媒体理解工具。")
+	}
+	config, err := host.store.Configuration(ctx, localasr.PluginID)
+	if err != nil || !stationVisionConfigured(config) {
+		return nil, observationFailure("media_observation_configuration_required", "请为当前微信连接配置视觉接口、模型和密钥。")
+	}
+	version := max(access.ref.Revision, 1)
+	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "observe authorized WeChat image", Authorization: source.AssetID(), RequestKey: "station-image-" + source.AssetID(), EvidenceEpoch: epoch,
+		SourceVersions: map[string]int{"native:" + source.AssetID(): version}, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
+	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
+		return nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
+	}
+	check := mediaobserve.BindSource(host.store, installed, config.Revision, origin)
+	if err := check(ctx); err != nil {
+		return nil, err
+	}
+	return func(record stationAttachmentRecord, prompt string, image deepseek.Image, tokens int) (string, error) {
+		p, err := mediaobserve.NewVisual(ctx, host.store, version, prompt, []deepseek.Image{image}, tokens)
+		if err != nil {
+			return "", stationImageFailure(err)
+		}
+		usage, err := host.mediaBilling(t.dir)
+		if err != nil {
+			return "", observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
+		}
+		post := host.postModel
+		if post == nil {
+			post = mcptools.PostPluginModel
+		}
+		invocation.RequestKey = "station-image-" + localCheckpointKey(t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, installed.Digest, installed.Revision, config.Revision, string(p.Arguments()))
+		p.Bind(mediaobserve.VisualBinding{Invocation: func() pluginhost.Invocation { return invocation }, CheckOrigin: check.CheckJob,
+			Controller: func() (*pluginruntime.Controller, error) { return host.controller, nil }, Billing: usage, Transport: post})
+		observation, err := p.Observe(ctx)
+		if checkErr := check(ctx); checkErr != nil {
+			return "", checkErr
+		}
+		if err != nil {
+			return "", stationImageFailure(err)
+		}
+		return observation, nil
+	}, nil
 }
 
 func stationImageFailure(err error) error {
@@ -183,5 +231,5 @@ func stationImageFailure(err error) error {
 	if !strings.HasPrefix(code, "media_") || !wechatapp.SafeShareErrorCode(code) {
 		code = "media_image_observation_incomplete"
 	}
-	return observationFailure(code, "视觉工具未能完成图片观察，请检查当前连接的视觉服务或图片格式。")
+	return observationFailure(code, "视觉工具未能完成图片观察，请检查选用的视觉服务或图片格式。")
 }
