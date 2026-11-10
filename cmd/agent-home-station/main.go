@@ -79,6 +79,9 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	if len(args) > 0 && args[0] == "legacy-wechat-release" {
 		return runLegacyWechatRelease(ctx, args[1:], output)
 	}
+	if len(args) > 0 && args[0] == "legacy-wechat-relocation" {
+		return runLegacyWechatRelocation(ctx, args[1:], output)
+	}
 	if len(args) > 0 && args[0] == "legacy-wechat-snapshot" {
 		return runLegacyWechatSnapshot(ctx, args[1:], output)
 	}

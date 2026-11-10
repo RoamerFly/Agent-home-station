@@ -1215,7 +1215,36 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	releaseReq.AuditDigest = savedAudit["digest"].(string)
 	rejected("还有在途")
 	releaseReq.AuditDigest = settled["digest"].(string)
-	relocationTarget := strings.Repeat("a1", 32)
+	receiver := filepath.Join(t.TempDir(), "relocation receiver")
+	if err := os.CopyFS(receiver, os.DirFS(host)); err != nil {
+		t.Fatal(err)
+	}
+	prepareReq := LegacyWechatRelocationRequest{DataDir: receiver, ConnectionID: releaseReq.ConnectionID}
+	prepared, err := CheckLegacyWechatRelocation(t.Context(), prepareReq)
+	if err != nil || prepared.State != "target_prepared" || !legacyMemoryDigestValid(prepared.RelocationTarget) {
+		t.Fatal("target preparation failed", prepared, err)
+	}
+	if repeated, err := CheckLegacyWechatRelocation(t.Context(), prepareReq); err != nil || repeated != prepared {
+		t.Fatal("reopening a prepared target changed its identity", repeated, err)
+	}
+	if _, err := CheckLegacyWechatRelocation(t.Context(), LegacyWechatRelocationRequest{DataDir: host, ConnectionID: releaseReq.ConnectionID}); err == nil {
+		t.Fatal("source directory registered itself as a new receiver")
+	}
+	verifyReq := prepareReq
+	verifyReq.SourceDir, verifyReq.AuditDigest, verifyReq.AcceptUnknown = host, releaseReq.AuditDigest, true
+	verify := func() (LegacyWechatRelocationResult, error) {
+		return CheckLegacyWechatRelocation(t.Context(), verifyReq)
+	}
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "目标站缺少") {
+		t.Fatal("old import receipt passed target verification", err)
+	}
+	receiverApp := filepath.Join(receiver, "apps", "wechat")
+	receiverProfile := filepath.Join(receiverApp, "native", "accounts", "one", "profile")
+	write(filepath.Join(receiverApp, filepath.Base(receiptPath)), j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": receiverProfile}))
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "尚未为此目标") {
+		t.Fatal("target admitted an unfenced source", err)
+	}
+	relocationTarget := prepared.RelocationTarget
 	releaseReq.RelocationTarget = relocationTarget
 	for _, lease := range []string{stationLease, filepath.Join(legacyHost, legacyCutoverLockFile)} {
 		unlock, err := hostfile.TryLock(lease)
@@ -1271,6 +1300,29 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	if current, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(current, claimBytes) {
 		t.Fatal("relocation fence released the legacy desktop", err)
+	}
+	verified, err := verify()
+	if err != nil || verified.State != "source_verified" || verified.RelocationTarget != relocationTarget ||
+		verified.SourceFence != relocation.ApplyDigest || !legacyMemoryDigestValid(verified.TargetProfile) {
+		t.Fatal("fenced source and matched target did not verify", verified, err)
+	}
+	receiverWorker := filepath.Join(receiverApp, "workers", releaseReq.ConnectionID)
+	receiverPolicyPath := filepath.Join(receiverWorker, "worker.json")
+	receiverPolicy, err := os.ReadFile(receiverPolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(receiverPolicyPath, append(bytes.Clone(receiverPolicy), '\n'))
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "冻结设置或归档") {
+		t.Fatal("changed destination policy was accepted", err)
+	}
+	write(receiverPolicyPath, receiverPolicy)
+	write(filepath.Join(receiverWorker, "queue", "messages-v2.json"), []byte(newQueue+"\n"))
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "投递或群操作记录") {
+		t.Fatal("changed destination queue was accepted", err)
+	}
+	if after, err := os.ReadFile(receiverPolicyPath); err != nil || !bytes.Equal(after, receiverPolicy) {
+		t.Fatal("target verification changed the frozen policy", err)
 	}
 	if fenced, err := NewLocalHomeHandlerWithApps(host, work, "synthetic-local-password", "", registry); err == nil || !strings.Contains(err.Error(), "微信原生启动已禁用") {
 		if fenced != nil {

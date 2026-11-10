@@ -50,6 +50,10 @@ type legacyReleaseIntent struct {
 // ReleaseLegacyWechat performs the offline source step of a rollback or
 // relocation. Both desktop lifetime leases stay held through the commit.
 func ReleaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest) (LegacyWechatReleaseResult, error) {
+	return releaseLegacyWechat(ctx, req, nil)
+}
+
+func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, verifyTarget func(*os.Root, string) error) (LegacyWechatReleaseResult, error) {
 	var out LegacyWechatReleaseResult
 	if runtime.GOOS != "windows" {
 		return out, errors.New("微信交接解除仅支持 Windows 桌面")
@@ -132,7 +136,14 @@ func ReleaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest) (L
 	if profile != "import_receipt_matched" || hex.EncodeToString(digest[:]) != proof.ProfileDigest {
 		return out, errors.New("成长站的原生登录导入记录已变化")
 	}
-	return releaseLegacyClaim(ctx, req, stationRoot, oldRoot, *proof, archive.LegacyServer, hexDigest(markerRaw), counts.Unknown)
+	result, err := releaseLegacyClaim(ctx, req, stationRoot, oldRoot, *proof, archive.LegacyServer, hexDigest(markerRaw), counts.Unknown)
+	if err == nil && verifyTarget != nil {
+		if result.State != "relocation_fenced" {
+			return out, errors.New("源站尚未为此目标完成离线封存")
+		}
+		err = verifyTarget(worker, hexDigest(markerRaw))
+	}
+	return result, err
 }
 
 func lockReleaseRoot(root *os.Root, path, name string) (func(), error) {
