@@ -142,26 +142,14 @@ func (t *stationAttachmentTools) readImageObservation(ctx context.Context, in st
 func (t *stationAttachmentTools) bindImageObserver(ctx context.Context, access stationAttachmentAccess, source wechatapp.AttachmentSource, epoch string) (func(stationAttachmentRecord, string, deepseek.Image, int) (string, error), error) {
 	origin := func(ctx context.Context) error { return access.confirmObservationSource(ctx, source, epoch) }
 	if t.stationImageVision {
-		if err := origin(ctx); err != nil {
+		check, observe, err := t.localVision.bind(ctx, origin)
+		if err != nil {
 			return nil, err
 		}
-		version, err := t.localVision.ready(ctx)
-		if err != nil {
-			return nil, observationFailure("media_station_vision_unavailable", "请在项目工具中启用并配置工作站视觉服务。")
-		}
-		check := func() error {
-			if err := origin(ctx); err != nil {
-				return err
-			}
-			if current, err := t.localVision.ready(ctx); err != nil || current != version {
-				return observationFailure("media_station_vision_changed", "读取期间工作站视觉服务或授权已变更。")
-			}
-			return nil
-		}
 		return func(record stationAttachmentRecord, prompt string, image deepseek.Image, tokens int) (string, error) {
-			key := "wechat-image:" + localCheckpointKey(source.Account, source.Thread, source.Sender, t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, access.ref.Revision, version)
-			text, err := t.localVision.observe(ctx, key, prompt, []deepseek.Image{image}, tokens, check)
-			if e := check(); e != nil {
+			key := "wechat-image:" + localCheckpointKey(source.Account, source.Thread, source.Sender, t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, access.ref.Revision)
+			text, err := observe(ctx, key, prompt, []deepseek.Image{image}, tokens)
+			if e := check(ctx); e != nil {
 				return "", e
 			}
 			if err != nil {

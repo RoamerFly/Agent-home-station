@@ -40,6 +40,15 @@ type stationVideoObservationInput struct {
 	Timeout     int     `json:"timeout_seconds"`
 }
 
+type stationAnalyzeFrames func(context.Context, string, []deepseek.Image, int) (string, error)
+
+type stationVideoBackend struct {
+	check      mediaobserve.SourceCheck
+	frames     stationAnalyzeFrames
+	audio      func(context.Context, []byte) (string, error)
+	localAudio bool
+}
+
 func (h *stationShareHost) mediaBilling(dir string) (*billing.Store, error) {
 	h.usageMu.Lock()
 	defer h.usageMu.Unlock()
@@ -89,31 +98,87 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	checkSource := func(ctx context.Context) error {
 		return access.confirmObservationSource(ctx, source, epoch)
 	}
+	var backend stationVideoBackend
+	if in.Mode == "frames" && t.stationVideoVision {
+		key := "wechat-video:" + localCheckpointKey(source.Account, source.Thread, source.Sender, t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, access.ref.Revision)
+		var vision stationScopedVision
+		backend.check, vision, err = t.localVision.bind(ctx, checkSource)
+		backend.frames = func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
+			return vision(ctx, key, prompt, images, tokens)
+		}
+	} else {
+		backend, err = t.bindConnectionVideo(ctx, in, record, epoch, checkSource)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := backend.check(ctx); err != nil {
+		return "", err
+	}
+
+	dir, err := os.MkdirTemp(t.dir, "verified-video-")
+	if err != nil {
+		return "", observationFailure("media_staging_failed", "无法创建当前连接的私有解码目录。")
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "original.video")
+	if err := stageStationMedia(ctx, path, file, record, access.mediaCopyGrant(ctx, source.Thread)); err != nil {
+		return "", err
+	}
+	if err := backend.check(ctx); err != nil {
+		return "", err
+	}
+	meta, err := mediadecode.Probe(ctx, path)
+	if err != nil {
+		return "", stationProbeError(ctx, err)
+	}
+	out := map[string]any{"asset_id": record.ID, "message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred,
+		"sha256": record.SHA256, "mode": in.Mode, "untrusted_external_content": true}
+	if in.Mode == "frames" {
+		err = stationObserveFrames(ctx, path, dir, in, meta, backend.frames, out)
+	} else {
+		if backend.localAudio {
+			out["asr_backend"] = "local"
+		}
+		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, backend.audio, out)
+	}
+	if checkErr := backend.check(ctx); checkErr != nil {
+		return "", checkErr
+	}
+	if err != nil {
+		return "", err
+	}
+	result, err := json.Marshal(out)
+	return string(result), err
+}
+
+func (t *stationAttachmentTools) bindConnectionVideo(ctx context.Context, in stationVideoObservationInput, record stationAttachmentRecord, epoch string, checkSource mediaobserve.SourceCheck) (stationVideoBackend, error) {
+	source := record.Source
 	if t.shareHost == nil {
-		return "", observationFailure("media_plugin_runtime_unavailable", "当前连接未准备媒体理解工具宿主。")
+		return stationVideoBackend{}, observationFailure("media_plugin_runtime_unavailable", "当前连接未准备媒体理解工具宿主。")
 	}
 	host, err := t.shareHost()
 	if err != nil || host.store.Account() != source.Account {
-		return "", observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的工具宿主。")
+		return stationVideoBackend{}, observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的工具宿主。")
 	}
 	installed, err := host.store.Installed(ctx, localasr.PluginID)
 	if err != nil || !installed.Enabled || installed.Removed {
-		return "", observationFailure("media_plugin_not_enabled", "请在当前微信连接中安装并启用媒体理解工具。")
+		return stationVideoBackend{}, observationFailure("media_plugin_not_enabled", "请在当前微信连接中安装并启用媒体理解工具。")
 	}
 	config, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
-		return "", observationFailure("media_plugin_configuration_invalid", "无法读取当前连接的媒体理解设置。")
+		return stationVideoBackend{}, observationFailure("media_plugin_configuration_invalid", "无法读取当前连接的媒体理解设置。")
 	}
 	backend, validBackend := stationASRBackend(config.Values)
 	if in.Mode == "audio" && !validBackend {
-		return "", observationFailure("media_transcription_configuration_invalid", "请在当前微信连接中重新保存语音识别方式。")
+		return stationVideoBackend{}, observationFailure("media_transcription_configuration_invalid", "请在当前微信连接中重新保存语音识别方式。")
 	}
 	localAudio := in.Mode == "audio" && backend == "local"
 	var usage *billing.Store
 	if !localAudio {
 		usage, err = host.mediaBilling(t.dir)
 		if err != nil {
-			return "", observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
+			return stationVideoBackend{}, observationFailure("media_usage_record_failed", "无法打开当前连接的模型用量记录。")
 		}
 	}
 	post := host.postModel
@@ -127,30 +192,9 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
 	}
 	check := mediaobserve.BindSource(host.store, installed, config.Revision, checkSource)
-	if err := check(ctx); err != nil {
-		return "", err
-	}
-
-	dir, err := os.MkdirTemp(t.dir, "verified-video-")
-	if err != nil {
-		return "", observationFailure("media_staging_failed", "无法创建当前连接的私有解码目录。")
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "original.video")
-	if err := stageStationMedia(ctx, path, file, record, access.mediaCopyGrant(ctx, source.Thread)); err != nil {
-		return "", err
-	}
-	if err := check(ctx); err != nil {
-		return "", err
-	}
-	meta, err := mediadecode.Probe(ctx, path)
-	if err != nil {
-		return "", stationProbeError(ctx, err)
-	}
-	out := map[string]any{"asset_id": record.ID, "message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred,
-		"sha256": record.SHA256, "mode": in.Mode, "untrusted_external_content": true}
+	bound := stationVideoBackend{check: check, localAudio: localAudio}
 	if in.Mode == "frames" {
-		analyze := func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
+		bound.frames = func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
 			p, err := mediaobserve.NewVisual(ctx, host.store, 1, prompt, images, tokens)
 			if err != nil {
 				return "", err
@@ -165,10 +209,8 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			})
 			return p.Observe(ctx)
 		}
-		err = stationObserveFrames(ctx, path, dir, in, meta, analyze, out)
 	} else if localAudio {
-		out["asr_backend"] = "local"
-		transcribe := func(ctx context.Context, wav []byte) (string, error) {
+		bound.audio = func(ctx context.Context, wav []byte) (string, error) {
 			grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 			if err := pluginhost.Authorize(installed.Package, grant, contextFor(nil), []string{"artifact.read", "model.invoke"}); err != nil {
 				return "", observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
@@ -181,9 +223,8 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			}
 			return host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
 		}
-		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, transcribe, out)
 	} else {
-		transcribe := func(ctx context.Context, wav []byte) (string, error) {
+		bound.audio = func(ctx context.Context, wav []byte) (string, error) {
 			var invocation pluginhost.Invocation
 			p, err := mediatranscribe.New(ctx, mediatranscribe.Dependencies{
 				Store:       host.store,
@@ -201,16 +242,8 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			invocation = contextFor(p.Arguments())
 			return p.Transcribe(ctx)
 		}
-		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, transcribe, out)
 	}
-	if checkErr := check(ctx); checkErr != nil {
-		return "", checkErr
-	}
-	if err != nil {
-		return "", err
-	}
-	result, err := json.Marshal(out)
-	return string(result), err
+	return bound, nil
 }
 
 func stageStationMedia(ctx context.Context, path string, original *os.File, record stationAttachmentRecord, grant func() error) error {
@@ -233,7 +266,7 @@ func stageStationMedia(ctx context.Context, path string, original *os.File, reco
 	return nil
 }
 
-func stationObserveFrames(ctx context.Context, path, dir string, in stationVideoObservationInput, meta mediadecode.Metadata, analyze func(context.Context, string, []deepseek.Image, int) (string, error), out map[string]any) error {
+func stationObserveFrames(ctx context.Context, path, dir string, in stationVideoObservationInput, meta mediadecode.Metadata, analyze stationAnalyzeFrames, out map[string]any) error {
 	count := min(in.Page, mediaobserve.RemainingFrames(meta.Frames, in.Start, in.Step))
 	settings := mediaobserve.FrameOptions{Start: in.Start, Step: in.Step, BatchSize: in.Batch, MaxDimension: in.Dimension, Tokens: in.Tokens, Question: in.Question}
 	rows, next, err := mediaobserve.InspectFrames(ctx, path, dir, settings, count, meta.Frames, analyze)

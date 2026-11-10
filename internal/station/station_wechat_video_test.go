@@ -20,6 +20,7 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
@@ -434,6 +435,31 @@ func testStationLocalVideoASR(t *testing.T, tools *stationAttachmentTools, asset
 			!strings.Contains(evidence.Parts[0].Excerpt, "Automatic ordinary video transcript.") || !strings.Contains(evidence.ObservedRange, "视频音轨") {
 			t.Fatalf("unexpected typed evidence: %#v", evidence)
 		}
+
+		// An authorized visual-only configuration must work without the
+		// connection's media plugin, using the already verified ordinary video.
+		autoTools.shareHost = nil
+		autoTools.stationVideoVision = true
+		visualCalls := 0
+		autoTools.localVision = stationLocalVision{
+			version: func(context.Context) (string, error) { return "fixture-station-vision", nil },
+			observe: func(_ context.Context, _ string, _ string, images []deepseek.Image, _ int, verify func() error) (string, error) {
+				visualCalls++
+				if len(images) == 0 {
+					t.Fatal("automatic visual observer did not receive decoded frames")
+				}
+				return "Synthetic ordinary video frames.", verify()
+			},
+		}
+		if !observer.SupportsMedia(ctx, message) {
+			t.Fatal("automatic ordinary video excluded explicitly selected station vision")
+		}
+		text, evidence, err = observer.AnalyzeWithEvidence(companion.WithMediaSource(ctx, *stored), message)
+		if err != nil || visualCalls != 1 || !strings.Contains(text, "Synthetic ordinary video frames.") ||
+			len(evidence.Parts) != 1 || evidence.Parts[0].Kind != companion.ObservationVisualFrames ||
+			strings.Contains(evidence.ObservedRange, "视频音轨") || localCalls != 1 || remoteCalls != 0 {
+			t.Fatalf("automatic video frames were not independent of audio: %q, %#v, %v", text, evidence, err)
+		}
 	})
 	observe := func(message, asset string) (string, error) {
 		t.Helper()
@@ -610,6 +636,62 @@ func testStationVideoObservation(t *testing.T, tools *stationAttachmentTools, ho
 	if _, err = observe("card", asset, `"mode":"frames","question":"synthetic-revoke"`); err == nil || vision != 3 {
 		t.Fatal("in-flight revocation returned observation", vision, err)
 	}
+
+	t.Run("station_vision_is_separately_authorized", func(t *testing.T) {
+		blocked.Store(false)
+		defer blocked.Store(false)
+		originalHost := tools.shareHost
+		defer func() {
+			tools.shareHost = originalHost
+			tools.stationVideoVision = false
+			tools.localVision = stationLocalVision{}
+		}()
+		home, _, _ := newStationVisionBridgeFixture(t)
+		sharedCalls := 0
+		home.projectTools.visionPost = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
+			sharedCalls++
+			raw := string(body)
+			if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-owner-visual-key" ||
+				!strings.Contains(raw, "data:image/jpeg;base64,") || strings.Contains(raw, "data:audio/") || strings.Contains(raw, asset) {
+				t.Fatal("public provider received unexpected source or credentials")
+			}
+			if strings.Contains(raw, "fixture-revoke-shared") {
+				blocked.Store(true)
+			}
+			return json.RawMessage(`{"choices":[{"finish_reason":"stop","message":{"content":"synthetic visible image"}}]}`), nil
+		}
+		tools.stationVideoVision = true
+		tools.localVision = stationLocalVision{version: home.localStationVisionVersion, observe: home.observeLocalStationImages}
+		tools.shareHost = nil
+		const sharedPage = `"mode":"frames","start_frame":1,"step":2,"page_size":2,"batch_size":1`
+		out, err := observe("card", asset, sharedPage)
+		if err != nil || out["coverage"] != "sampled_frames" || out["next_start_frame"] != float64(5) ||
+			out["audio_complete"] != nil || sharedCalls != 2 || vision != 3 {
+			t.Fatalf("shared visual output: %#v, shared=%d legacy=%d, %v", out, sharedCalls, vision, err)
+		}
+		rows := out["batches"].([]any)
+		if len(rows) != 2 || !strings.Contains(fmt.Sprint(rows), "synthetic visible image") {
+			t.Fatal(rows)
+		}
+		for i, expected := range []float64{1, 3} {
+			if indexes := rows[i].(map[string]any)["frame_indexes"].([]any); len(indexes) != 1 || indexes[0] != expected {
+				t.Fatal("wrong shared visual frame index", indexes, expected)
+			}
+		}
+		tools.shareHost = originalHost
+		beforeAudio := audio
+		if out, err := observe("card", asset, `"mode":"audio","start_seconds":0.1,"duration_seconds":0.3`); err != nil || out["text"] != "Synthetic line." || audio != beforeAudio+1 || sharedCalls != 2 {
+			t.Fatalf("video audio was rerouted to vision: %#v, %v", out, err)
+		}
+		if out, err := observe("card", asset, sharedPage+`,"question":"fixture-revoke-shared"`); out != nil || err == nil || sharedCalls != 3 {
+			t.Fatalf("shared vision did not stop after the first revoked batch: %#v, %v", out, err)
+		}
+		blocked.Store(false)
+		tools.localVision = stationLocalVision{}
+		if out, err := observe("card", asset, sharedPage); out != nil || err == nil || err.Error() != "media_station_vision_unavailable" || vision != 3 {
+			t.Fatalf("disabled public vision fell back to connection vision: %#v, %v", out, err)
+		}
+	})
 }
 
 func stationShareTestHost(t *testing.T, root string, send pluginruntime.RouteTransport) *stationShareHost {

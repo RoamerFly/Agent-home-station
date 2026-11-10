@@ -59,7 +59,7 @@
     return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), poll: 0 };
   }
   function newAppView() {
-    return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
+    return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       wechatRelocation: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
@@ -379,8 +379,16 @@
     autoVideos.addEventListener("change", () => apps.autoVideosDrafts.set(id, autoVideos.checked));
     const autoVideosLabel = appElement("label", "", "switch-row");
     const autoVideosCopy = appElement("span");
-    autoVideosCopy.append(appElement("strong", "自动读视频"), appElement("small", "把获准会话中符合回复条件的新视频交给此连接配置的音频与视觉工具。"));
+    autoVideosCopy.append(appElement("strong", "自动读视频"), appElement("small", "自动观察获准会话中符合回复条件的新视频。"));
     autoVideosLabel.append(autoVideos, autoVideosCopy);
+    const stationVideoVision = document.createElement("input");
+    stationVideoVision.type = "checkbox";
+    stationVideoVision.checked = apps.stationVideoVisionDrafts.get(id) ?? (status.configured_policy?.station_video_vision === true);
+    stationVideoVision.addEventListener("change", () => apps.stationVideoVisionDrafts.set(id, stationVideoVision.checked));
+    const stationVideoVisionLabel = appElement("label", "", "switch-row");
+    const stationVideoVisionCopy = appElement("span");
+    stationVideoVisionCopy.append(appElement("strong", "使用工作站视觉服务看视频"), appElement("small", "允许将本连接获准读取的微信视频采样帧交给工作站视觉服务。音轨转写继续使用原来的设置。"));
+    stationVideoVisionLabel.append(stationVideoVision, stationVideoVisionCopy);
     const mediaReplies = document.createElement("textarea");
     mediaReplies.rows = 2;
     mediaReplies.placeholder = "可留空，或填入已允许读取附件的会话 ID";
@@ -519,6 +527,7 @@
       autoImages.disabled = noAttachmentScope;
       stationImageVision.disabled = noAttachmentScope;
       autoVideos.disabled = noAttachmentScope;
+      stationVideoVision.disabled = noAttachmentScope;
     };
     field.addEventListener("input", renderGroupRules);
     attachments.addEventListener("input", renderGroupRules);
@@ -538,11 +547,11 @@
         if (rule.reply_settings !== undefined) payload.reply_settings = rule.reply_settings;
         return payload;
       });
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, station_image_vision: attachment_threads.length > 0 && stationImageVision.checked, auto_observe_images: attachment_threads.length > 0 && autoImages.checked, auto_observe_videos: attachment_threads.length > 0 && autoVideos.checked, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, station_image_vision: attachment_threads.length > 0 && stationImageVision.checked, auto_observe_images: attachment_threads.length > 0 && autoImages.checked, auto_observe_videos: attachment_threads.length > 0 && autoVideos.checked, station_video_vision: attachment_threads.length > 0 && stationVideoVision.checked, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
     });
     panel.append(appElement("p", "每行一个会话 ID。群聊默认在被提及时回复。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
-      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, stationImageVisionLabel, autoImagesLabel, autoVideosLabel,
+      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, stationImageVisionLabel, autoImagesLabel, stationVideoVisionLabel, autoVideosLabel,
       groupRules,
       appElement("p", "附件回复须单独授权，只能把附件发回原会话。撤销附件读取时同时撤销附件回复。"), mediaReplies,
       contactReadLabel,
@@ -1396,6 +1405,7 @@
         current.attachmentDrafts.delete(id);
         current.autoImagesDrafts.delete(id);
         current.stationImageVisionDrafts.delete(id);
+        current.stationVideoVisionDrafts.delete(id);
         current.autoVideosDrafts.delete(id);
         current.mediaReplyDrafts.delete(id);
         current.groupMuteDrafts.delete(id);

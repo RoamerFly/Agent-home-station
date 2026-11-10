@@ -56,6 +56,7 @@ type stationWechatPolicy struct {
 	Paused             bool                           `json:"paused"`
 	Grants             map[string]time.Time           `json:"reply_grants"`
 	AttachmentGrants   map[string]time.Time           `json:"attachment_grants,omitempty"`
+	StationVideoVision bool                           `json:"station_video_vision,omitempty"`
 	StationImageVision bool                           `json:"station_image_vision,omitempty"`
 	AutoImagesSince    time.Time                      `json:"auto_images_since,omitzero"`
 	AutoVideosSince    time.Time                      `json:"auto_videos_since,omitzero"`
@@ -421,7 +422,7 @@ func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
 	for _, thread := range slices.Sorted(maps.Keys(w.policy.GroupRules)) {
 		groupRules = append(groupRules, w.policy.GroupRules[thread].View(thread))
 	}
-	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, AutoObserveImages: !w.policy.AutoImagesSince.IsZero(), StationImageVision: w.policy.StationImageVision, AutoObserveVideos: !w.policy.AutoVideosSince.IsZero(), MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
+	return &apphost.ConfiguredPolicy{WorkerEnabled: w.policy.Enabled, ConversationEnabled: len(threads) != 0, ToolsEnabled: len(attachments) > 0 || len(history) > 0 || contactRead || len(groupMute) > 0, Grants: grants, ReplyThreads: threads, AttachmentThreads: attachments, AutoObserveImages: !w.policy.AutoImagesSince.IsZero(), StationImageVision: w.policy.StationImageVision, StationVideoVision: w.policy.StationVideoVision, AutoObserveVideos: !w.policy.AutoVideosSince.IsZero(), MediaReplyThreads: mediaReplies, HistoryThreads: history, ContactRead: contactRead, GroupMuteThreads: groupMute, GroupRules: groupRules}
 }
 
 func (s *stationWechat) Inspect(ctx context.Context, id string) (apphost.ConnectionStatus, error) {
@@ -505,11 +506,8 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	}
 	next := w.policy
 	next.GroupRules = groupRules
-	if len(attachments) == 0 {
-		next.StationImageVision = false
-	} else if policy.StationImageVision != nil {
-		next.StationImageVision = *policy.StationImageVision
-	}
+	next.StationImageVision = stationScopedOption(len(attachments) > 0, policy.StationImageVision, next.StationImageVision)
+	next.StationVideoVision = stationScopedOption(len(attachments) > 0, policy.StationVideoVision, next.StationVideoVision)
 	next.AutoImagesSince = stationAutoMediaSince(len(attachments) > 0, policy.AutoObserveImages, next.AutoImagesSince, now)
 	next.AutoVideosSince = stationAutoMediaSince(len(attachments) > 0, policy.AutoObserveVideos, next.AutoVideosSince, now)
 	if policy.GroupMuteThreads != nil {
@@ -536,7 +534,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 			next.ContactGrant = now
 		}
 	}
-	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules) || next.StationImageVision != w.policy.StationImageVision || next.AutoImagesSince != w.policy.AutoImagesSince || next.AutoVideosSince != w.policy.AutoVideosSince
+	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules) || next.StationVideoVision != w.policy.StationVideoVision || next.StationImageVision != w.policy.StationImageVision || next.AutoImagesSince != w.policy.AutoImagesSince || next.AutoVideosSince != w.policy.AutoVideosSince
 	if workerScopeChanged {
 		next.Grants, next.AttachmentGrants, next.MediaReplyGrants, next.HistoryGrants = grants, attachments, mediaReplies, history
 		// Require explicit resume after a scope change on an enabled worker.
@@ -555,6 +553,13 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 	view.Configuration, view.Worker = "worker-configured", w.state()
 	view.SubmissionsPaused, view.Policy = w.policy.Paused, w.policyView()
 	return view, nil
+}
+
+func stationScopedOption(hasAttachments bool, requested *bool, previous bool) bool {
+	if requested != nil {
+		previous = *requested
+	}
+	return hasAttachments && previous
 }
 
 func stationAutoMediaSince(hasAttachments bool, requested *bool, previous, now time.Time) time.Time {
@@ -738,7 +743,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		return groups.ConversationNote(native.Account(), in)
 	}
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.Blocked, documents: s.documents}
-	attachment.stationImageVision, attachment.localVision = policy.StationImageVision, s.localVision
+	attachment.stationImageVision, attachment.stationVideoVision, attachment.localVision = policy.StationImageVision, policy.StationVideoVision, s.localVision
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}

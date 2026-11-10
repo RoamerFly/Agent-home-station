@@ -312,6 +312,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	groupInput["auto_observe_images"] = true
 	groupInput["station_image_vision"] = true
 	groupInput["auto_observe_videos"] = true
+	groupInput["station_video_vision"] = true
 	request(f, "PUT", path("one")+"/policy", groupInput, false, 403)
 	request(f, "PUT", path("one")+"/policy", groupInput, true, 200)
 	policy(f, "one", "person-one", room)
@@ -326,6 +327,9 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	if state(f, "one")["configured_policy"].(map[string]any)["station_image_vision"] != true || state(f, "two")["configured_policy"].(map[string]any)["station_image_vision"] != nil {
 		t.Fatal("station image vision permission was lost or shared between connections")
 	}
+	if state(f, "one")["configured_policy"].(map[string]any)["station_video_vision"] != true || state(f, "two")["configured_policy"].(map[string]any)["station_video_vision"] != nil {
+		t.Fatal("station video vision permission was lost or shared between connections")
+	}
 	if state(f, "one")["configured_policy"].(map[string]any)["auto_observe_videos"] != true || state(f, "two")["configured_policy"].(map[string]any)["auto_observe_videos"] != nil {
 		t.Fatal("automatic video permission was lost or shared between connections")
 	}
@@ -338,6 +342,9 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	}
 	if state(f, "one")["configured_policy"].(map[string]any)["station_image_vision"] != nil {
 		t.Fatal("station image vision permission survived removing all attachment grants")
+	}
+	if state(f, "one")["configured_policy"].(map[string]any)["station_video_vision"] != nil {
+		t.Fatal("station video vision permission survived removing all attachment grants")
 	}
 	if state(f, "one")["configured_policy"].(map[string]any)["auto_observe_videos"] != nil {
 		t.Fatal("automatic video processing retained permission after removing all attachment grants")

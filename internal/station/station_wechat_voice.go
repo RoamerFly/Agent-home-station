@@ -40,7 +40,7 @@ func (a stationMediaObserver) HandlesType(kind int) bool {
 }
 
 func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.Message) bool {
-	if !a.HandlesType(m.Type) || m.Direction != "incoming" || !a.tools.scopeAllowed(companion.Input{Account: m.AccountID, Thread: m.ThreadID, MessageTime: m.CreatedAt}, a.tools.grants) || a.tools.shareHost == nil {
+	if !a.HandlesType(m.Type) || m.Direction != "incoming" || !a.tools.scopeAllowed(companion.Input{Account: m.AccountID, Thread: m.ThreadID, MessageTime: m.CreatedAt}, a.tools.grants) {
 		return false
 	}
 	if m.Type == 3 {
@@ -50,6 +50,9 @@ func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.M
 	if m.Type == 43 {
 		audio, vision := a.videoObservationModes(ctx, m)
 		return audio || vision
+	}
+	if a.tools.shareHost == nil {
+		return false
 	}
 	host, err := a.tools.shareHost()
 	if err != nil || host.store.Account() != m.AccountID {
@@ -66,23 +69,32 @@ func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.M
 
 func (a stationMediaObserver) videoObservationModes(ctx context.Context, m linuxnative.Message) (audio, vision bool) {
 	at, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
-	if err != nil || a.videoSince.IsZero() || at.Before(a.videoSince) || a.tools.shareHost == nil {
+	if err != nil || a.videoSince.IsZero() || at.Before(a.videoSince) {
 		return false, false
+	}
+	if a.tools.stationVideoVision {
+		_, err := a.tools.localVision.ready(ctx)
+		vision = err == nil
+	}
+	if a.tools.shareHost == nil {
+		return false, vision
 	}
 	host, err := a.tools.shareHost()
 	if err != nil || host.store.Account() != m.AccountID {
-		return false, false
+		return false, vision
 	}
 	p, err := host.store.Installed(ctx, localasr.PluginID)
 	if err != nil || !p.Enabled || p.Removed {
-		return false, false
+		return false, vision
 	}
 	c, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
-		return false, false
+		return false, vision
 	}
 	backend, _ := stationASRBackend(c.Values)
-	vision = host.controller != nil && stationVisionConfigured(c)
+	if !a.tools.stationVideoVision {
+		vision = host.controller != nil && stationVisionConfigured(c)
+	}
 	if backend == "local" {
 		return host.localASR.transcribe != nil, vision
 	}

@@ -253,6 +253,7 @@ type stationAttachmentTools struct {
 	shareHost          func() (*stationShareHost, error)
 	documents          stationDocumentTools
 	stationImageVision bool
+	stationVideoVision bool
 	localVision        stationLocalVision
 }
 

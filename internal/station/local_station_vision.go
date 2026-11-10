@@ -38,6 +38,33 @@ func (v stationLocalVision) ready(ctx context.Context) (string, error) {
 	return version, nil
 }
 
+// bind pins the selected vision route while the application retains ownership
+// of its source checks. The invocation key is opaque to the provider.
+func (v stationLocalVision) bind(ctx context.Context, origin mediaobserve.SourceCheck) (mediaobserve.SourceCheck, stationScopedVision, error) {
+	if err := origin(ctx); err != nil {
+		return nil, nil, err
+	}
+	version, err := v.ready(ctx)
+	if err != nil {
+		return nil, nil, observationFailure("media_station_vision_unavailable", "请在项目工具中启用并配置工作站视觉服务。")
+	}
+	check := mediaobserve.SourceCheck(func(ctx context.Context) error {
+		if err := origin(ctx); err != nil {
+			return err
+		}
+		if current, err := v.ready(ctx); err != nil || current != version {
+			return observationFailure("media_station_vision_changed", "读取期间工作站视觉服务或授权已变更。")
+		}
+		return nil
+	})
+	return check, func(ctx context.Context, sourceKey, prompt string, images []deepseek.Image, tokens int) (string, error) {
+		key := "app-visual:" + localCheckpointKey(sourceKey, version)
+		return v.observe(ctx, key, prompt, images, tokens, func() error { return check(ctx) })
+	}, nil
+}
+
+type stationScopedVision func(ctx context.Context, sourceKey, prompt string, images []deepseek.Image, tokens int) (string, error)
+
 type localStationVisionBinding struct {
 	host                 *localProjectToolHost
 	installed            pluginhost.InstalledPackage
