@@ -2,96 +2,21 @@ package station
 
 import (
 	"context"
-	"errors"
-	"net/http"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/stationservices"
-
-	"wechat-bot/internal/websession"
 )
 
-var errStationGroupActionPending = errors.New("previous group action outcome pending")
-var errStationGroupActionTarget = errors.New("group target is not verified")
-var errStationGroupActionUnsupported = errors.New("group action is not advertised")
 var errStationMuteGrant = &stationContactError{"wechat_group_mute_not_authorized", "本地聊天没有该连接和群的免打扰授权，或本轮授权已变更。"}
-
-type stationGroupActionInput struct {
-	Action string  `json:"action"`
-	Name   *string `json:"name"`
-	Group  string  `json:"group_id"`
-	Muted  *bool   `json:"muted"`
-	Key    string  `json:"request_key"`
-}
 
 type stationGroupActionAuthority struct {
 	requester string
 	trace     string
 	grant     time.Time
 	active    func(context.Context) bool
-}
-
-func (s *stationWechat) submitGroupActionHandler(owner *websession.Store, readOwner stationservices.OwnerReader) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		var in stationGroupActionInput
-		if !websession.Decode(w, r, &in) {
-			return
-		}
-		action := linuxnative.AdminAction{Kind: in.Action, ThreadID: in.Group}
-		if action.Kind == "" {
-			action.Kind = "mute"
-		}
-		if !wechatapp.ValidGroup(in.Group) || !identity.ValidPathID(in.Key) || !artifactID(r.PathValue("connection"), "wechat-") {
-			websession.Fail(w, http.StatusBadRequest, "请提供有效的连接、群 ID 和请求编号")
-			return
-		}
-		switch {
-		case action.Kind == "mute" && in.Muted != nil && (in.Name == nil || *in.Name == ""):
-			action.Muted = *in.Muted
-		case (action.Kind == "rename" || action.Kind == "my_name") && in.Muted == nil &&
-			in.Name != nil && wechatapp.ValidGroupName(*in.Name, action.Kind == "my_name"):
-			action.Text = *in.Name
-		default:
-			websession.Fail(w, http.StatusBadRequest, "请提供有效的群操作。群名称须非空，本人群昵称可明确提交空字符串。名称最多 512 UTF-8 字节，且不能含控制字符")
-			return
-		}
-		record, err := readOwner()
-		if err != nil {
-			websession.Fail(w, http.StatusConflict, "请先准备本地主人身份")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		stop := context.AfterFunc(s.ctx, cancel)
-		defer stop()
-		authority := stationGroupActionAuthority{requester: record.ID, active: func(context.Context) bool {
-			_, _, ok := owner.Lookup(r)
-			current, err := readOwner()
-			return ok && err == nil && current == record
-		}}
-		out, err := s.submitStationGroupAction(ctx, r.PathValue("connection"), action, in.Key, authority)
-		switch {
-		case err == nil:
-			websession.Respond(w, http.StatusAccepted, out)
-		case errors.Is(err, errStationGroupActionPending):
-			websession.Fail(w, http.StatusConflict, "此群已有结果待核对的操作，请先查询原操作")
-		case errors.Is(err, errStationGroupActionUnsupported):
-			websession.Fail(w, http.StatusConflict, "当前微信后台未声明此群操作")
-		case errors.Is(err, errStationGroupActionTarget), errors.Is(err, linuxnative.ErrToolNotFound), errors.Is(err, apphost.ErrNotFound):
-			websession.Fail(w, http.StatusNotFound, "未能在该连接核对所选群")
-		case errors.Is(err, apphost.ErrLifecycleCutover):
-			websession.Fail(w, http.StatusConflict, "旧微信接续未获启用或凭证已失效，群操作未提交")
-		case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
-			websession.Fail(w, http.StatusConflict, "连接已暂停、未登录或请求内容变化，未提交操作")
-		default:
-			websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对操作，请查看该群的原操作记录")
-		}
-	}
 }
 
 func (w *stationWechatWorker) actionLedgerLocked() (*wechatapp.ActionLedger, error) {
@@ -123,21 +48,21 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 		return out, err
 	}
 	if !wechatapp.GroupActionSupported(caps, action.Kind) {
-		return out, errStationGroupActionUnsupported
+		return out, wechatapp.ErrGroupActionUnsupported
 	}
 	group, err := native.GroupProfile(ctx, action.ThreadID)
 	if err != nil {
 		return out, err
 	}
 	if group.InGroup != nil && !*group.InGroup {
-		return out, errStationGroupActionTarget
+		return out, wechatapp.ErrGroupActionTarget
 	}
 	current, err := s.signedInAccount(ctx, connection)
 	if err != nil {
 		return out, err
 	}
 	if current != account {
-		return out, errStationGroupActionTarget
+		return out, wechatapp.ErrGroupActionTarget
 	}
 	w, err := s.worker(connection, true)
 	if err != nil {
@@ -196,7 +121,7 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	previous, ok := ledger.FindConnected(s.installation, connection, "", action.ThreadID, action.Kind)
 	if ok && !wechatapp.IsFinalActionState(previous.State) {
 		w.mu.Unlock()
-		return out, errStationGroupActionPending
+		return out, wechatapp.ErrGroupActionPending
 	}
 	p.Created = time.Now().UTC()
 	if ok && !p.Created.After(previous.Created) {
@@ -247,103 +172,40 @@ func (s *stationWechat) ReadAction(ctx context.Context, connection, id string) (
 	return s.lookupStationAction(ctx, ledger, p), nil
 }
 
-type stationGroupDetailFields struct {
-	action, available, operation string
-}
-
-func (s *stationWechat) stationGroupDetails(kinds ...string) http.HandlerFunc {
-	fields := make([]stationGroupDetailFields, 0, len(kinds))
-	for _, kind := range kinds {
-		f := stationGroupDetailFields{action: kind, available: "can_change", operation: "operation"}
-		switch kind {
-		case "rename":
-			f.available = "can_rename"
-		case "my_name":
-			f.available, f.operation = "can_set_my_name", "my_name_operation"
-		}
-		fields = append(fields, f)
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.readStationGroupDetails(w, r, fields)
-	}
-}
-
-func (s *stationWechat) readStationGroupDetails(w http.ResponseWriter, r *http.Request, fields []stationGroupDetailFields) {
-	w.Header().Set("Cache-Control", "no-store")
-	id, group := r.PathValue("connection"), r.PathValue("group")
-	if !wechatapp.ValidGroup(group) || !artifactID(id, "wechat-") {
-		websession.Fail(w, http.StatusBadRequest, "连接或群编号无效")
-		return
-	}
+func (s *stationWechat) stationGroupDetails(ctx context.Context, id, group string, kinds []string) (wechatapp.GroupManagementDetails, error) {
+	out := wechatapp.GroupManagementDetails{Receipts: make(map[string]apphost.ActionReceipt)}
 	ledger, paused, err := s.stationActionLedger(id)
 	if err != nil {
-		websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对该群操作记录")
-		return
+		return out, wechatapp.ErrGroupDetailsLedger
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	result := map[string]any{}
-	hasReceipt := false
-	for _, field := range fields {
-		result[field.available] = false
-		if ledger == nil {
-			continue
-		}
-		if p, ok := ledger.FindConnected(s.installation, id, "", group, field.action); ok {
-			lookupCtx, cancelLookup := context.WithTimeout(ctx, 3*time.Second)
-			result[field.operation] = s.lookupStationAction(lookupCtx, ledger, p)
-			cancelLookup()
-			hasReceipt = true
-		}
-	}
-
-	account, err := s.signedInAccount(ctx, id)
-	if err == nil {
-		var native *linuxnative.Sender
-		native, err = s.WorkerSender(ctx, id)
-		if err == nil && native.Account() == account {
-			var state linuxnative.GroupProfile
-			state, err = native.GroupProfile(ctx, group)
-			if err == nil {
-				var caps linuxnative.Capabilities
-				canChange := !paused && (state.InGroup == nil || *state.InGroup)
-				if canChange {
-					caps, err = native.Capabilities(ctx)
-					canChange = err == nil
-				}
-				for _, field := range fields {
-					receipt, _ := result[field.operation].(apphost.ActionReceipt)
-					pending := receipt.OperationID != "" && !wechatapp.IsFinalActionState(receipt.State)
-					result[field.available] = canChange && !pending && wechatapp.GroupActionSupported(caps, field.action)
-					switch field.action {
-					case "mute":
-						if state.Muted != nil {
-							result["muted"] = *state.Muted
-						}
-					case "rename":
-						if state.Name != "" {
-							result["name"] = state.Name
-						}
-					case "my_name":
-						if state.MyDisplayName != nil {
-							result["my_display_name"] = *state.MyDisplayName
-						}
-					}
-				}
-				result["coverage"] = "cached"
-				websession.Respond(w, http.StatusOK, result)
-				return
+	if ledger != nil {
+		for _, kind := range kinds {
+			if p, ok := ledger.FindConnected(s.installation, id, "", group, kind); ok {
+				lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
+				out.Receipts[kind] = s.lookupStationAction(lookup, ledger, p)
+				cancel()
 			}
 		}
 	}
-	if hasReceipt {
-		result["coverage"] = "unavailable"
-		websession.Respond(w, http.StatusOK, result)
-		return
+	account, err := s.signedInAccount(ctx, id)
+	if err != nil {
+		return out, err
 	}
-	if errors.Is(err, apphost.ErrNotFound) || errors.Is(err, linuxnative.ErrToolNotFound) {
-		websession.Fail(w, http.StatusNotFound, "未能在该连接核对所选群")
-		return
+	native, err := s.WorkerSender(ctx, id)
+	if err != nil {
+		return out, err
 	}
-	websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对所选群资料")
+	if native.Account() != account {
+		return out, apphost.ErrUnavailable
+	}
+	profile, err := native.GroupProfile(ctx, group)
+	if err != nil {
+		return out, err
+	}
+	out.Profile = &profile
+	if !paused && (profile.InGroup == nil || *profile.InGroup) {
+		out.Capabilities, err = native.Capabilities(ctx)
+		out.CanChange = err == nil
+	}
+	return out, nil
 }

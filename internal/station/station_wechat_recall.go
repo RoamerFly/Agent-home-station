@@ -4,106 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/stationservices"
-
-	"wechat-bot/internal/websession"
 )
 
 type stationRecallSource struct {
 	worker                                 *stationWechatWorker
 	account, thread, deliveryKey, serverID string
-}
-
-type stationRecallView struct {
-	MessageID  string                 `json:"message_id,omitempty"`
-	NextCursor string                 `json:"next_cursor,omitempty"`
-	Operation  *apphost.ActionReceipt `json:"operation,omitempty"`
-}
-
-var errStationRecallCursor = errors.New("invalid recall cursor")
-
-func (s *stationWechat) readRecallHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
-	id, key, server := r.PathValue("connection"), r.PathValue("receipt"), r.URL.Query().Get("server_id")
-	source, err := s.stationRecallEvidence(ctx, id, key, server)
-	if err == nil {
-		var view stationRecallView
-		view, err = s.readStationRecall(ctx, id, source, r.URL.Query().Get("cursor"))
-		if err == nil {
-			websession.Respond(w, http.StatusOK, view)
-			return
-		}
-	}
-	stationRecallFailure(w, err)
-}
-
-func (s *stationWechat) submitRecallHandler(owner *websession.Store, identity stationservices.OwnerReader) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		var in struct {
-			ServerID  string `json:"server_id"`
-			MessageID string `json:"message_id"`
-		}
-		if !websession.Decode(w, r, &in) {
-			return
-		}
-		if !wechatapp.ValidServerReceiptID(in.ServerID) || !validStationRecallMessageID(in.MessageID) {
-			websession.Fail(w, http.StatusBadRequest, "请从投递记录中选择已核对的原消息")
-			return
-		}
-		record, err := identity()
-		if err != nil {
-			websession.Fail(w, http.StatusConflict, "请先准备本地主人身份")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		stop := context.AfterFunc(s.ctx, cancel)
-		defer stop()
-		id, key := r.PathValue("connection"), r.PathValue("receipt")
-		source, err := s.stationRecallEvidence(ctx, id, key, in.ServerID)
-		if err == nil {
-			var result apphost.ActionReceipt
-			result, err = s.submitStationRecall(ctx, id, source, in.MessageID, record.ID, func() bool {
-				_, _, ok := owner.Lookup(r)
-				current, err := identity()
-				return ok && err == nil && current == record
-			})
-			if err == nil {
-				websession.Respond(w, http.StatusAccepted, result)
-				return
-			}
-		}
-		stationRecallFailure(w, err)
-	}
-}
-
-func stationRecallFailure(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, apphost.ErrNotFound):
-		websession.Fail(w, http.StatusNotFound, "未找到该连接中匹配的已接受投递")
-	case errors.Is(err, errStationRecallCursor):
-		websession.Fail(w, http.StatusBadRequest, "此查询位置已失效，请从首批重新查找")
-	case errors.Is(err, apphost.ErrLifecycleCutover):
-		websession.Fail(w, http.StatusConflict, "旧微信接续未获启用或凭证已失效，撤回未提交")
-	case errors.Is(err, apphost.ErrLifecycleConflict), errors.Is(err, errContactLogin):
-		websession.Fail(w, http.StatusConflict, "账号未登录、连接已暂停或原消息身份无法核对")
-	default:
-		websession.Fail(w, http.StatusServiceUnavailable, "暂时无法核对撤回，请查询原操作")
-	}
 }
 
 func (s *stationWechat) stationRecallEvidence(ctx context.Context, id, key, server string) (stationRecallSource, error) {
@@ -152,19 +64,6 @@ func stationRecallAccepted(receipt apphost.DeliveryReceipt, server string) bool 
 	return false
 }
 
-func validStationRecallMessageID(id string) bool {
-	raw, ok := strings.CutPrefix(id, "msg_")
-	if !ok || raw == "" || len(id) > 8192 {
-		return false
-	}
-	for _, c := range raw {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
-}
-
 func (source stationRecallSource) operationID(id string) string {
 	return "station-recall-" + localCheckpointKey(id, source.thread, source.serverID)
 }
@@ -187,8 +86,8 @@ func (s *stationWechat) stationRecallNative(ctx context.Context, id, account str
 	return native, nil
 }
 
-func (s *stationWechat) readStationRecall(ctx context.Context, id string, source stationRecallSource, cursor string) (stationRecallView, error) {
-	var view stationRecallView
+func (s *stationWechat) readStationRecall(ctx context.Context, id string, source stationRecallSource, cursor string) (wechatapp.RecallView, error) {
+	var view wechatapp.RecallView
 	ledger, paused, err := s.stationActionLedger(id)
 	if err != nil {
 		return view, err
@@ -205,15 +104,15 @@ func (s *stationWechat) readStationRecall(ctx context.Context, id string, source
 	platformCursor := ""
 	if cursor != "" {
 		if len(cursor) > stationContactCursorLimit {
-			return view, errStationRecallCursor
+			return view, wechatapp.ErrRecallCursor
 		}
 		packet, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil {
-			return view, errStationRecallCursor
+			return view, wechatapp.ErrRecallCursor
 		}
 		plain, err := s.contactCursor.Open(nil, nil, packet, scope)
 		if err != nil || len(plain) == 0 || len(plain) > 8192 {
-			return view, errStationRecallCursor
+			return view, wechatapp.ErrRecallCursor
 		}
 		platformCursor = string(plain)
 	}
@@ -225,24 +124,24 @@ func (s *stationWechat) readStationRecall(ctx context.Context, id string, source
 	if err != nil {
 		var catalog *linuxnative.CatalogError
 		if errors.As(err, &catalog) && catalog.Code == "catalog_cursor_invalid" {
-			return view, errStationRecallCursor
+			return view, wechatapp.ErrRecallCursor
 		}
 		return view, err
 	}
 	for _, item := range page.Items {
 		message, _ := item["id"].(string)
 		if item["serverId"] != source.serverID || item["threadId"] != source.thread ||
-			item["direction"] != "outgoing" || !validStationRecallMessageID(message) {
+			item["direction"] != "outgoing" || !wechatapp.ValidRecallMessageID(message) {
 			continue
 		}
 		if view.MessageID != "" && view.MessageID != message {
-			return stationRecallView{}, apphost.ErrLifecycleConflict
+			return wechatapp.RecallView{}, apphost.ErrLifecycleConflict
 		}
 		view.MessageID = message
 	}
 	if view.MessageID == "" && page.NextCursor != nil && *page.NextCursor != "" {
 		if len(*page.NextCursor) > 8192 || *page.NextCursor == platformCursor {
-			return view, errStationRecallCursor
+			return view, wechatapp.ErrRecallCursor
 		}
 		view.NextCursor = base64.RawURLEncoding.EncodeToString(s.contactCursor.Seal(nil, nil, []byte(*page.NextCursor), scope))
 	}
