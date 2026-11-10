@@ -3,7 +3,6 @@ package station
 import (
 	"errors"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"wechat-bot/internal/apphost"
@@ -52,13 +51,13 @@ func (w *stationWechatWorker) cancelResumeControls(stop stationDeliveryStop) (ma
 		}
 	}
 	if changed {
-		err = writeStationControlJournal(w.dir, "delivery-resumes.json", rows)
+		err = writeStationControlJournal(w.runtimeStateDir(), "delivery-resumes.json", rows)
 	}
 	return traces, err
 }
 
 func (w *stationWechatWorker) readResumeControls() (map[string]stationResumeControl, error) {
-	rows, err := readStationControlJournal[stationResumeControl](w.dir, "delivery-resumes.json")
+	rows, err := readStationControlJournal[stationResumeControl](w.runtimeStateDir(), "delivery-resumes.json")
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func (w *stationWechatWorker) mediaResumeResult(request bot.MediaResumeRequest, 
 		r.Next = time.Now().Add(bot.DeliveryRetryBackoff(1))
 	}
 	rows[request.Key] = r
-	return writeStationControlJournal(w.dir, "delivery-resumes.json", rows)
+	return writeStationControlJournal(w.runtimeStateDir(), "delivery-resumes.json", rows)
 }
 
 func resumeControlView(r stationResumeControl) *apphost.ReceiptContinuation {
@@ -186,7 +185,7 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 		websession.Fail(w, 409, "连接已为回退停发，未登记新续发")
 		return
 	}
-	evidence, err := bot.ReadDeliveryEvidence(filepath.Join(worker.dir, "queue"), account, []string{key})
+	evidence, err := bot.ReadDeliveryEvidence(worker.queueDir(), account, []string{key})
 	old, exists := evidence[key]
 	if err != nil || !exists || old.Trace == "" {
 		websession.Fail(w, 404, "原投递记录不存在")
@@ -214,7 +213,7 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 	id := "resume-" + localCheckpointKey(account, key, input.RequestKey)
 	saved := stationResumeControl{MediaResumeRequest: bot.MediaResumeRequest{ID: id, Account: account, Thread: old.Status.ThreadID, Key: key, Trace: "owner-" + id}, MediaResumeResult: bot.MediaResumeResult{State: "requested"}, RequestKey: input.RequestKey, ParentTrace: old.Trace, Created: time.Now().UTC()}
 	rows[key] = saved
-	if err := writeStationControlJournal(worker.dir, "delivery-resumes.json", rows); err != nil {
+	if err := writeStationControlJournal(worker.runtimeStateDir(), "delivery-resumes.json", rows); err != nil {
 		websession.Fail(w, 503, "续办请求尚未保存，请重试")
 		return
 	}

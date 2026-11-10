@@ -107,7 +107,7 @@ func (s *stationWechat) groupActionRoutes(owner *websession.Store, mux *http.Ser
 
 func (w *stationWechatWorker) actionLedgerLocked() (*wechatapp.ActionLedger, error) {
 	if w.actions == nil {
-		ledger, err := wechatapp.OpenActionLedger(w.dir)
+		ledger, err := wechatapp.OpenActionLedger(w.runtimeStateDir())
 		if err != nil {
 			return nil, err
 		}

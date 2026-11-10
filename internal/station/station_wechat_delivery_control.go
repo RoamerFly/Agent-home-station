@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -41,7 +40,7 @@ func (s *stationWechat) deliveryCheckpoint(id string) (*stationWechatWorker, str
 	if w == nil {
 		return nil, "", apphost.ErrNotFound
 	}
-	root, err := workspacefs.OpenPath(w.dir)
+	root, err := workspacefs.OpenPath(w.runtimeStateDir())
 	if err != nil {
 		return nil, "", apphost.ErrUnavailable
 	}
@@ -68,7 +67,7 @@ func deliveryStopID(in companion.Input) string {
 // deliveryMu serializes the journal commit with entry to a native submission.
 // It is separate from worker.mu: shutdown waits for the actor under worker.mu.
 func (w *stationWechatWorker) readDeliveryStops() (map[string]stationDeliveryStop, error) {
-	rows, err := readStationControlJournal[stationDeliveryStop](w.dir, "delivery-stops.json")
+	rows, err := readStationControlJournal[stationDeliveryStop](w.runtimeStateDir(), "delivery-stops.json")
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +125,7 @@ func (w *stationWechatWorker) saveDeliveryStop(stop stationDeliveryStop) error {
 		return errors.New("delivery cancellation journal full")
 	}
 	rows[id] = stop
-	return writeStationControlJournal(w.dir, "delivery-stops.json", rows)
+	return writeStationControlJournal(w.runtimeStateDir(), "delivery-stops.json", rows)
 }
 
 func (s *stationWechat) deliveryControlRoutes(owner *websession.Store, mux *http.ServeMux) {
@@ -147,7 +146,7 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	worker.deliveryMu.Lock()
-	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(worker.dir, "queue"), account, "", 5000)
+	rows, err := bot.ReadDeliveryEvidencePage(worker.queueDir(), account, "", 5000)
 	row, found := rows.Records[key]
 	if err != nil || !found || row.Trace == "" {
 		worker.deliveryMu.Unlock()

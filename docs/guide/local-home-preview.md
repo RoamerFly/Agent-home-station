@@ -345,7 +345,7 @@ Windows 桌面在启动站和原生端之前取得数据根运行锁，并写入
 .\agent-home-station-server.exe legacy-wechat-relocation --data '<目标数据目录>' --source '<源站数据目录>' --connection '<原连接标识>' --audit-digest '<源站封存时的核对摘要>'
 ```
 
-源站封存时确认了未知结果的，在这一步也传入 `--accept-unknown`。`source_verified` 表示封存、原交接、复制数据和新档案回执通过了离线核验。给同一条命令追加 `--apply '<预检返回的 apply_digest>'` 后，`archive_prepared` 表示接收站已经固定原投递核对报告。启动管理页后，本机主人可用 `GET /api/apps/wechat/connections/{connection}/legacy-import/relocation/receipts/{key}` 按原幂等键读取，未确认结果保留原状态。目标站仍处于冻结状态，当前只在隔离副本演练。
+源站封存时确认了未知结果的，在这一步也传入 `--accept-unknown`。`source_verified` 表示封存、原交接、复制数据和新档案回执通过了离线核验。给同一条命令追加 `--apply '<预检返回的 apply_digest>'` 后，`archive_prepared` 表示接收站已经固定原投递核对报告。启动管理页后，本机主人可用 `GET /api/apps/wechat/connections/{connection}/legacy-import/relocation/receipts/{key}` 按原幂等键读取，未确认结果保留原状态。同次确认还会准备独立的运行目录，后续入站游标、待发队列、取消与续发、群操作从这里读写。旧投递保留在原报告中。此前已确认归档的隔离副本可以用同一令牌再次执行，补齐运行目录绑定。目标站仍处于冻结状态，当前只在隔离副本演练。
 
 ### Windows 切换与回退演练清单
 

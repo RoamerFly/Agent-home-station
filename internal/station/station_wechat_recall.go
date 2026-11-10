@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -120,7 +119,7 @@ func (s *stationWechat) stationRecallEvidence(ctx context.Context, id, key, serv
 	if err != nil {
 		return out, err
 	}
-	rows, err := bot.ReadDeliveryEvidence(filepath.Join(w.dir, "queue"), account, []string{key})
+	rows, err := bot.ReadDeliveryEvidence(w.queueDir(), account, []string{key})
 	if err != nil {
 		return out, apphost.ErrUnavailable
 	}

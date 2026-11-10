@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -29,7 +28,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 	if w == nil {
 		return page, nil
 	}
-	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), account, after, limit)
+	rows, err := bot.ReadDeliveryEvidencePage(w.queueDir(), account, after, limit)
 	if err != nil {
 		return page, apphost.ErrUnavailable
 	}
@@ -86,7 +85,7 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if w == nil {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
-	evidence, err := bot.ReadDeliveryEvidence(filepath.Join(w.dir, "queue"), account, []string{key})
+	evidence, err := bot.ReadDeliveryEvidence(w.queueDir(), account, []string{key})
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}

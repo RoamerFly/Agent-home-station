@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -170,7 +169,7 @@ func (target legacyRollbackTarget) checkpoint(after string, limit int) (rollback
 	w := target.worker
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
-	rows, err := bot.ReadDeliveryEvidencePage(filepath.Join(w.dir, "queue"), target.ref.AccountID, after, limit)
+	rows, err := bot.ReadDeliveryEvidencePage(w.queueDir(), target.ref.AccountID, after, limit)
 	stops, stopErr := w.readDeliveryStops()
 	controls, controlErr := w.readResumeControls()
 	if err != nil || stopErr != nil || controlErr != nil {

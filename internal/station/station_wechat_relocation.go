@@ -192,6 +192,9 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		if err := saveLegacyRelocationEvidence(worker, evidence); err != nil {
 			return err
 		}
+		if err := prepareLegacyRelocationRuntime(worker, evidence.ApplyDigest); err != nil {
+			return err
+		}
 		out.State = "archive_prepared"
 		return nil
 	})

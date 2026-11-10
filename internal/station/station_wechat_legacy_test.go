@@ -1326,6 +1326,15 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("preview or rejected apply wrote an archive", err)
 	}
 	verifyReq.ApplyDigest = verified.ApplyDigest
+	runtimeDir := filepath.Join(receiverWorker, legacyRelocationRuntimeDir)
+	unexpected := filepath.Join(runtimeDir, "unexpected.json")
+	write(unexpected, j("synthetic-preexisting-file"))
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "新投递目录须为空") {
+		t.Fatal("apply adopted a nonempty, unbound runtime", err)
+	}
+	if err := os.Remove(unexpected); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if applied, err := verify(); err != nil || applied.State != "archive_prepared" || applied.ApplyDigest != verified.ApplyDigest {
 			t.Fatal("verified relocation archive did not persist idempotently", applied, err)
@@ -1341,6 +1350,22 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("relocation archive was readable without the owner session", code)
 	}
 	receiverFixture.login()
+	receiverWechat := receiverHandler.chat.wechat
+	movedWorker, err := receiverWechat.worker(releaseReq.ConnectionID, false)
+	if err != nil || movedWorker == nil || movedWorker.runtimeStateDir() != runtimeDir ||
+		!movedWorker.policy.Paused || movedWorker.policy.RollbackFrozenAt.IsZero() {
+		t.Fatal("relocation did not select the isolated runtime while keeping the worker frozen", err)
+	}
+	if _, err := os.Lstat(movedWorker.queueDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("new runtime already held a copied event cursor or queue", err)
+	}
+	if page, err := receiverWechat.ListReceipts(t.Context(), releaseReq.ConnectionID, "", 10); err != nil || len(page.Items) != 0 {
+		t.Fatal("current receipt list included old work", page, err)
+	}
+	movedLedger, err := movedWorker.actionLedgerLocked()
+	if err != nil || len(movedLedger.List("one")) != 0 {
+		t.Fatal("new action ledger inherited copied group actions", err)
+	}
 	if code, row := receiverFixture.request("GET", acceptedArchive, nil, false); code != 200 ||
 		row["lookup"] != "relocation_snapshot" || row["state"] != "accepted" || row["server_id"] != "91234" ||
 		row["operation_id"] != "job-sent" || bytes.Contains(j(row), []byte("synthetic-private-text")) {
@@ -1357,7 +1382,44 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := receiverHandler.Close(); err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(receiverWorker, "queue", "messages-v2.json"), []byte(newQueue+"\n"))
+	runtimeQueue := filepath.Join(runtimeDir, "queue", "messages-v2.json")
+	freshQueue := []byte(`{"version":2,"server":"relocated-dataset","account":"one","deliveries":[{"key":"fresh-accepted","id":"fresh-job","thread":"filehelper","state":"accepted","server_id":"91235","input":{"account":"one","thread":"filehelper"}}]}`)
+	write(runtimeQueue, freshQueue)
+	if applied, err := verify(); err != nil || applied.State != "archive_prepared" {
+		t.Fatal("apply retry rejected an already bound runtime", applied, err)
+	}
+	reopened, reopenedFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), movedApps)
+	page, err := reopened.chat.wechat.ListReceipts(t.Context(), releaseReq.ConnectionID, "", 10)
+	if err != nil || len(page.Items) != 1 || page.Items[0].IdempotencyKey != "fresh-accepted" {
+		t.Fatal("restart did not read just the relocated runtime queue", page, err)
+	}
+	if stored, err := reopened.chat.wechat.legacyRelocationReceipt(releaseReq.ConnectionID, "a-accepted"); err != nil || stored.ServerID != "91234" {
+		t.Fatal("restart lost the original archived receipt", stored, err)
+	}
+	reopenedFixture.server.Close()
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtimeMarker := filepath.Join(runtimeDir, legacyRelocationRuntimeMarker)
+	savedMarker, err := os.ReadFile(runtimeMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(runtimeMarker, j(strings.Repeat("9", 64)))
+	bad, badFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), movedApps)
+	if _, err := bad.chat.wechat.ListReceipts(t.Context(), releaseReq.ConnectionID, "", 10); !errors.Is(err, apphost.ErrUnavailable) {
+		t.Fatal("invalid runtime binding fell back to the old queue", err)
+	}
+	badFixture.server.Close()
+	if err := bad.Close(); err != nil {
+		t.Fatal(err)
+	}
+	write(runtimeMarker, savedMarker)
+	copiedQueue := filepath.Join(receiverWorker, "queue", "messages-v2.json")
+	if old, err := os.ReadFile(copiedQueue); err != nil || !bytes.Equal(old, []byte(newQueue)) {
+		t.Fatal("runtime setup changed copied delivery evidence", err)
+	}
+	write(copiedQueue, []byte(newQueue+"\n"))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "投递或群操作记录") {
 		t.Fatal("changed destination queue was accepted", err)
 	}

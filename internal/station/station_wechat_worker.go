@@ -88,6 +88,7 @@ type stationWechatWorker struct {
 	shareMu         sync.Mutex
 	share           *stationShareHost
 	dir             string
+	runtimeDir      string
 	policy          stationWechatPolicy
 	actions         *wechatapp.ActionLedger
 	run             *stationWechatRun
@@ -237,9 +238,24 @@ func (s *stationWechat) worker(id string, create bool) (*stationWechatWorker, er
 	if err != nil {
 		return nil, apphost.ErrUnavailable
 	}
-	w := &stationWechatWorker{dir: dir, policy: policy}
+	runtimeDir, err := s.relocationRuntime(root, id)
+	if err != nil {
+		return nil, err
+	}
+	w := &stationWechatWorker{dir: dir, runtimeDir: runtimeDir, policy: policy}
 	s.workers[id] = w
 	return w, nil
+}
+
+func (w *stationWechatWorker) runtimeStateDir() string {
+	if w.runtimeDir != "" {
+		return w.runtimeDir
+	}
+	return w.dir
+}
+
+func (w *stationWechatWorker) queueDir() string {
+	return filepath.Join(w.runtimeStateDir(), "queue")
 }
 
 func readStationWechatPolicy(root *os.Root) (stationWechatPolicy, error) {
@@ -794,7 +810,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 		},
 		NextMediaResume:   station.nextMediaResume,
 		MediaResumeResult: station.mediaResumeResult,
-		StateDir:          filepath.Join(dir, "queue"), AllowedThreads: threads, GroupRules: rules,
+		StateDir:          station.queueDir(), AllowedThreads: threads, GroupRules: rules,
 		Options: &options, Prefix: "/ai ", ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		OnDemandAttachment: func(m linuxnative.Message) bool {
 			kind, _ := stationAttachmentKind(m)
