@@ -52,6 +52,9 @@ func TestManagedLiveSourceUsesOnlyItsSessionAndActualSignal(t *testing.T) {
 		return source, nil
 	}, nil)
 	ref := LiveReference{ID: "source-fixture", MediaMode: LiveMediaLocalSource, Deadline: time.Now().Add(time.Minute)}
+	if err := output.CheckLiveOutput(t.Context(), ref); !errors.Is(err, ErrLiveUnavailable) {
+		t.Fatal("a source without a lease appeared ready", err)
+	}
 	if err := output.PrepareLiveSource(t.Context(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +63,9 @@ func TestManagedLiveSourceUsesOnlyItsSessionAndActualSignal(t *testing.T) {
 	}
 	wrong := ref
 	wrong.ProgramLoop = true
+	if err := output.CheckLiveOutput(t.Context(), wrong); !errors.Is(err, ErrLiveUnavailable) {
+		t.Fatal("another reference inherited the ready signal", err)
+	}
 	if err := output.StopLiveOutput(t.Context(), wrong); err != nil || source.stops.Load() != 0 {
 		t.Fatal("another reference stopped this signal", err)
 	}

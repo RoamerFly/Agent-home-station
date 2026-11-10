@@ -11,6 +11,7 @@ import (
 type liveSourceTestProvider struct {
 	*liveTestProvider
 	beforeStart func(context.Context, LiveReference)
+	beforeQuery func()
 	startMode   *string
 	queried     chan LiveReference
 	stopped     chan LiveReference
@@ -31,6 +32,9 @@ func (p *liveSourceTestProvider) StartLive(ctx context.Context, ref LiveReferenc
 
 func (p *liveSourceTestProvider) QueryLive(ctx context.Context, ref LiveReference) (LiveReceipt, error) {
 	p.queried <- ref
+	if p.beforeQuery != nil {
+		p.beforeQuery()
+	}
 	return p.liveTestProvider.QueryLive(ctx, ref)
 }
 
@@ -163,6 +167,61 @@ func TestLiveSourceChecksReadinessAfterPreparation(t *testing.T) {
 	view, err := f.control.Start(f.ctx, liveTestOwner, liveSourceTestInput("prepare-before-ready"))
 	if err != nil || !prepared || view.State != "live" {
 		t.Fatalf("readiness prevented source preparation: %#v %v", view, err)
+	}
+}
+
+func TestLiveSourceLossDuringPlatformQueryStopsOriginalSession(t *testing.T) {
+	f, provider, output := newLiveSourceTestFixture(t, func(context.Context, LiveReference) error { return nil })
+	live, err := f.control.Start(f.ctx, liveTestOwner, liveSourceTestInput("source-lost-during-query"))
+	if err != nil || live.State != "live" {
+		t.Fatalf("start: %#v %v", live, err)
+	}
+	provider.beforeQuery = func() { output.setCheck(errors.New("camera queue stopped advancing")) }
+	stopped, err := f.control.Reconcile(f.ctx, liveTestOwner, live.ID)
+	if err != nil || stopped.State != "ended" || stopped.StopReason != "output-unavailable" || !stopped.LocalStopped || !stopped.RemoteEnded {
+		t.Fatalf("a late live receipt masked the lost signal: %#v %v", stopped, err)
+	}
+	ref := awaitLiveSourceTestValue(t, output.stopped)
+	if remote := awaitLiveSourceTestValue(t, provider.stopped); ref.ID != live.ID || !sameLiveReference(ref, remote) {
+		t.Fatalf("stop did not use the original session: local %#v remote %#v", ref, remote)
+	}
+	if starts, queries, stops := provider.calls(); starts != 1 || queries != 1 || stops != 1 {
+		t.Fatalf("unexpected platform calls: %d starts, %d queries, %d stops", starts, queries, stops)
+	}
+}
+
+func TestLiveSourceEmergencyStopDoesNotWaitForPlatformQuery(t *testing.T) {
+	f, provider, output := newLiveSourceTestFixture(t, func(context.Context, LiveReference) error { return nil })
+	live, err := f.control.Start(f.ctx, liveTestOwner, liveSourceTestInput("source-stop-during-query"))
+	if err != nil || live.State != "live" {
+		t.Fatalf("start: %#v %v", live, err)
+	}
+	queryCtx, cancel := context.WithCancel(t.Context())
+	queryFinished := make(chan struct{})
+	provider.beforeQuery = func() { <-queryCtx.Done() }
+	go func() {
+		defer close(queryFinished)
+		if _, err := f.control.Reconcile(f.ctx, liveTestOwner, live.ID); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		cancel()
+		awaitLiveSourceTestValue(t, queryFinished)
+	}()
+	awaitLiveSourceTestValue(t, provider.queried)
+	stopped, err := f.control.Stop(f.ctx, liveTestOwner, live.ID)
+	if err != nil || stopped.State != "stopping" || stopped.StopReason != "owner-stop" || !stopped.LocalStopped || stopped.RemoteEnded {
+		t.Fatalf("stop did not settle local output independently: %#v %v", stopped, err)
+	}
+	if ref := awaitLiveSourceTestValue(t, output.stopped); ref.ID != live.ID {
+		t.Fatalf("stopped an unrelated output: %#v", ref)
+	}
+	cancel()
+	awaitLiveSourceTestValue(t, queryFinished)
+	f.requireEnded(live.ID)
+	if starts, _, stops := provider.calls(); starts != 1 || stops != 1 {
+		t.Fatalf("unexpected platform calls: %d starts, %d stops", starts, stops)
 	}
 }
 

@@ -390,7 +390,8 @@ func (l *LiveController) inspect(ctx context.Context, s liveState) (liveState, e
 		return l.stopSession(ctx, s, "platform-unreachable")
 	}
 	if receipt.State == "live" {
-		if reason := l.checkGrant(ctx, s.Reference); reason != "" {
+		// The output can fail while the platform query is in flight.
+		if reason := l.check(ctx, s.Reference); reason != "" {
 			s, err = l.requestStop(ctx, s, reason)
 			if err != nil {
 				return s, err

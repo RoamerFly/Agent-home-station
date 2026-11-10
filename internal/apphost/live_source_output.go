@@ -116,7 +116,7 @@ func (o *ManagedLiveSource) CheckLiveOutput(ctx context.Context, ref LiveReferen
 	}
 	lease := o.current(ref)
 	if lease == nil {
-		return nil
+		return ErrLiveUnavailable
 	}
 	select {
 	case <-lease.ready:
