@@ -72,6 +72,7 @@ type ConfiguredPolicy struct {
 	AutoObserveImages   bool                  `json:"auto_observe_images,omitempty"`
 	StationImageVision  bool                  `json:"station_image_vision,omitempty"`
 	StationVideoVision  bool                  `json:"station_video_vision,omitempty"`
+	StationLocalAudio   bool                  `json:"station_local_audio,omitempty"`
 	AutoObserveVideos   bool                  `json:"auto_observe_videos,omitempty"`
 	MediaReplyThreads   []string              `json:"media_reply_threads,omitempty"`
 	HistoryThreads      []string              `json:"history_threads,omitempty"`
@@ -116,6 +117,7 @@ type ConnectionPolicyInput struct {
 	AutoObserveImages  *bool
 	StationImageVision *bool
 	StationVideoVision *bool
+	StationLocalAudio  *bool
 	AutoObserveVideos  *bool
 	MediaReplyThreads  *[]string
 	HistoryThreads     *[]string

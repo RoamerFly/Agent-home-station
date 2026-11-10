@@ -249,4 +249,55 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 	if host.usage != nil {
 		t.Fatal("local speech unexpectedly opened remote model billing")
 	}
+
+	t.Run("workstation_ASR_does_not_require_connection_media_plugin", func(t *testing.T) {
+		blocked.Store(false)
+		noSpeech, revokeDuringASR := false, false
+		version := "fixture-asr-v1"
+		stationCalls := 0
+		tools.stationLocalAudio = true
+		tools.shareHost = nil
+		tools.localASR = stationLocalASR{
+			version: func(context.Context) (string, error) { return version, nil },
+			transcribe: func(_ context.Context, wav []byte, verify func() error) (string, error) {
+				if err := verify(); err != nil {
+					return "", err
+				}
+				if !bytes.HasPrefix(wav, []byte("RIFF")) || len(wav) < 1000 {
+					t.Fatal("workstation ASR received unverified audio")
+				}
+				stationCalls++
+				if revokeDuringASR {
+					version = "fixture-asr-v2"
+				}
+				if noSpeech {
+					return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+				}
+				return "工作站本机识别。", nil
+			},
+		}
+		if !observer.SupportsMedia(t.Context(), message) {
+			t.Fatal("workstation audio was not available without a connection tool")
+		}
+		if text, evidence, err := observer.AnalyzeWithEvidence(ctx, message); err != nil || !strings.Contains(text, "工作站本机识别") ||
+			!companion.HasFirsthandObservation(evidence.Parts) || stationCalls != 1 {
+			t.Fatalf("automatic workstation ASR: %q, %+v, %v", text, evidence, err)
+		}
+		noSpeech = true
+		if out, err := call(quoted, `{"message_id":"voice-normal"}`); err != nil || !strings.Contains(out, `"transcription_state":"no_recognizable_speech"`) || stationCalls != 2 {
+			t.Fatalf("quoted audio lost no-speech outcome: %q, %v", out, err)
+		}
+		noSpeech, revokeDuringASR = false, true
+		if out, err := call(direct, `{"message_id":"voice-normal"}`); out != "" || err == nil || err.Error() != "media_station_asr_changed" || stationCalls != 3 {
+			t.Fatalf("old model result survived a profile change: %q, %v", out, err)
+		}
+		tools.shareHost = func() (*stationShareHost, error) {
+			t.Fatal("workstation failure fell back to connection tool")
+			return nil, nil
+		}
+		tools.localASR = stationLocalASR{}
+		if out, err := call(direct, `{"message_id":"voice-normal"}`); out != "" || err == nil || err.Error() != "media_station_asr_unavailable" || stationCalls != 3 || localCalls.Load() != 5 {
+			t.Fatalf("unavailable workstation profile routed elsewhere: %q, %v", out, err)
+		}
+	})
 }

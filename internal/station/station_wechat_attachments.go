@@ -254,6 +254,8 @@ type stationAttachmentTools struct {
 	documents          stationDocumentTools
 	stationImageVision bool
 	stationVideoVision bool
+	stationLocalAudio  bool
+	localASR           stationLocalASR
 	localVision        stationLocalVision
 }
 

@@ -45,7 +45,7 @@ type stationAnalyzeFrames func(context.Context, string, []deepseek.Image, int) (
 type stationVideoBackend struct {
 	check      mediaobserve.SourceCheck
 	frames     stationAnalyzeFrames
-	audio      func(context.Context, []byte) (string, error)
+	audio      stationAudioTranscriber
 	localAudio bool
 }
 
@@ -106,6 +106,9 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		backend.frames = func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
 			return vision(ctx, key, prompt, images, tokens)
 		}
+	} else if in.Mode == "audio" && t.stationLocalAudio {
+		backend.localAudio = true
+		backend.check, backend.audio, err = t.localASR.bind(ctx, checkSource)
 	} else {
 		backend, err = t.bindConnectionVideo(ctx, in, record, epoch, checkSource)
 	}
@@ -210,6 +213,7 @@ func (t *stationAttachmentTools) bindConnectionVideo(ctx context.Context, in sta
 			return p.Observe(ctx)
 		}
 	} else if localAudio {
+		transcribe := host.localASR.withSource(check)
 		bound.audio = func(ctx context.Context, wav []byte) (string, error) {
 			grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 			if err := pluginhost.Authorize(installed.Package, grant, contextFor(nil), []string{"artifact.read", "model.invoke"}); err != nil {
@@ -218,10 +222,7 @@ func (t *stationAttachmentTools) bindConnectionVideo(ctx context.Context, in sta
 			if host.localASR.transcribe == nil {
 				return "", observationFailure("station_asr_host_unavailable", "本机识别不可用。请核对已登记的资源及项目工具中的本地媒体识别。")
 			}
-			if err := check(ctx); err != nil {
-				return "", err
-			}
-			return host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
+			return transcribe(ctx, wav)
 		}
 	} else {
 		bound.audio = func(ctx context.Context, wav []byte) (string, error) {

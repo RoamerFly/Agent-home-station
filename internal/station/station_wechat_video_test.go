@@ -436,6 +436,17 @@ func testStationLocalVideoASR(t *testing.T, tools *stationAttachmentTools, asset
 			t.Fatalf("unexpected typed evidence: %#v", evidence)
 		}
 
+		autoTools.stationLocalAudio = true
+		autoTools.shareHost = nil
+		autoTools.localASR = autoHost.localASR
+		autoTools.localASR.version = func(context.Context) (string, error) { return "fixture-asr-v1", nil }
+		text, evidence, err = observer.AnalyzeWithEvidence(companion.WithMediaSource(ctx, *stored), message)
+		if err != nil || localCalls != 2 || remoteCalls != 0 || !strings.Contains(text, "Automatic ordinary video transcript.") ||
+			len(evidence.Parts) != 1 || evidence.Parts[0].Kind != companion.ObservationAudioTranscript {
+			t.Fatalf("workstation audio-only automatic video failed: %q, %#v, %v", text, evidence, err)
+		}
+
+		autoTools.stationLocalAudio = false
 		// An authorized visual-only configuration must work without the
 		// connection's media plugin, using the already verified ordinary video.
 		autoTools.shareHost = nil
@@ -457,7 +468,7 @@ func testStationLocalVideoASR(t *testing.T, tools *stationAttachmentTools, asset
 		text, evidence, err = observer.AnalyzeWithEvidence(companion.WithMediaSource(ctx, *stored), message)
 		if err != nil || visualCalls != 1 || !strings.Contains(text, "Synthetic ordinary video frames.") ||
 			len(evidence.Parts) != 1 || evidence.Parts[0].Kind != companion.ObservationVisualFrames ||
-			strings.Contains(evidence.ObservedRange, "视频音轨") || localCalls != 1 || remoteCalls != 0 {
+			strings.Contains(evidence.ObservedRange, "视频音轨") || localCalls != 2 || remoteCalls != 0 {
 			t.Fatalf("automatic video frames were not independent of audio: %q, %#v, %v", text, evidence, err)
 		}
 	})
@@ -691,6 +702,24 @@ func testStationVideoObservation(t *testing.T, tools *stationAttachmentTools, ho
 		if out, err := observe("card", asset, sharedPage); out != nil || err == nil || err.Error() != "media_station_vision_unavailable" || vision != 3 {
 			t.Fatalf("disabled public vision fell back to connection vision: %#v, %v", out, err)
 		}
+		tools.stationLocalAudio = true
+		defer func() { tools.stationLocalAudio = false; tools.localASR = stationLocalASR{} }()
+		tools.shareHost = nil
+		tools.localASR = stationLocalASR{
+			version: func(context.Context) (string, error) { return "fixture-asr-v1", nil },
+			transcribe: func(_ context.Context, wav []byte, verify func() error) (string, error) {
+				if len(wav) < 1000 || !bytes.HasPrefix(wav, []byte("RIFF")) {
+					t.Fatal("workstation Channels ASR did not receive WAV")
+				}
+				return "Workstation Channels transcript.", verify()
+			},
+		}
+		beforeAudio = audio
+		if out, err := observe("card", asset, `"mode":"audio","duration_seconds":0.4`); err != nil || out["asr_backend"] != "local" ||
+			out["text"] != "Workstation Channels transcript." || out["next_start_seconds"] != 0.4 || out["audio_complete"] != false || audio != beforeAudio {
+			t.Fatalf("workstation ASR lost its authorized audio range: %#v, %v", out, err)
+		}
+
 	})
 }
 

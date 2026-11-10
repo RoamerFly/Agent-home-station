@@ -16,6 +16,7 @@ import (
 
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/localasr"
+	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 )
@@ -51,7 +52,49 @@ func (a stationLocalASR) ready(ctx context.Context) (string, error) {
 	if a.version == nil || a.transcribe == nil {
 		return "", errors.New("station_asr_host_unavailable")
 	}
-	return a.version(ctx)
+	version, err := a.version(ctx)
+	if err != nil {
+		return "", err
+	}
+	if version == "" {
+		return "", errors.New("station_asr_host_unavailable")
+	}
+	return version, nil
+}
+
+type stationAudioTranscriber func(context.Context, []byte) (string, error)
+
+func (a stationLocalASR) bind(ctx context.Context, origin mediaobserve.SourceCheck) (mediaobserve.SourceCheck, stationAudioTranscriber, error) {
+	if err := origin(ctx); err != nil {
+		return nil, nil, err
+	}
+	version, err := a.ready(ctx)
+	if err != nil {
+		return nil, nil, observationFailure("media_station_asr_unavailable", "请在项目工具中启用工作站本机识别并核对已登记的资源。")
+	}
+	check := mediaobserve.SourceCheck(func(ctx context.Context) error {
+		if err := origin(ctx); err != nil {
+			return err
+		}
+		if current, err := a.ready(ctx); err != nil || current != version {
+			return observationFailure("media_station_asr_changed", "读取期间工作站本机识别配置或授权已变更。")
+		}
+		return nil
+	})
+	return check, a.withSource(check), nil
+}
+
+func (a stationLocalASR) withSource(check mediaobserve.SourceCheck) stationAudioTranscriber {
+	return func(ctx context.Context, wav []byte) (string, error) {
+		if err := check(ctx); err != nil {
+			return "", err
+		}
+		text, err := a.transcribe(ctx, wav, func() error { return check(ctx) })
+		if e := check(ctx); e != nil {
+			return "", e
+		}
+		return text, err
+	}
 }
 
 func (h *localHomeService) localStationASRVersion(ctx context.Context) (string, error) {

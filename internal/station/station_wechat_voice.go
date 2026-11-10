@@ -51,6 +51,10 @@ func (a stationMediaObserver) SupportsMedia(ctx context.Context, m linuxnative.M
 		audio, vision := a.videoObservationModes(ctx, m)
 		return audio || vision
 	}
+	if a.tools.stationLocalAudio {
+		_, err := a.tools.localASR.ready(ctx)
+		return err == nil
+	}
 	if a.tools.shareHost == nil {
 		return false
 	}
@@ -76,24 +80,34 @@ func (a stationMediaObserver) videoObservationModes(ctx context.Context, m linux
 		_, err := a.tools.localVision.ready(ctx)
 		vision = err == nil
 	}
+	if a.tools.stationLocalAudio {
+		_, err := a.tools.localASR.ready(ctx)
+		audio = err == nil
+	}
+	if a.tools.stationLocalAudio && a.tools.stationVideoVision {
+		return audio, vision
+	}
 	if a.tools.shareHost == nil {
-		return false, vision
+		return audio, vision
 	}
 	host, err := a.tools.shareHost()
 	if err != nil || host.store.Account() != m.AccountID {
-		return false, vision
+		return audio, vision
 	}
 	p, err := host.store.Installed(ctx, localasr.PluginID)
 	if err != nil || !p.Enabled || p.Removed {
-		return false, vision
+		return audio, vision
 	}
 	c, err := host.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
-		return false, vision
+		return audio, vision
 	}
 	backend, _ := stationASRBackend(c.Values)
 	if !a.tools.stationVideoVision {
 		vision = host.controller != nil && stationVisionConfigured(c)
+	}
+	if a.tools.stationLocalAudio {
+		return audio, vision
 	}
 	if backend == "local" {
 		return host.localASR.transcribe != nil, vision
@@ -189,30 +203,17 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	if err != nil {
 		return nil, err
 	}
-	if t.shareHost == nil {
-		return nil, observationFailure("media_plugin_runtime_unavailable", "当前微信连接未准备媒体理解工具。")
+	origin := func(ctx context.Context) error { return access.confirmObservationSource(ctx, source, epoch) }
+	var check mediaobserve.SourceCheck
+	var transcribe stationAudioTranscriber
+	if t.stationLocalAudio {
+		check, transcribe, err = t.localASR.bind(ctx, origin)
+	} else {
+		check, transcribe, err = t.bindConnectionVoice(ctx, source, epoch, origin)
 	}
-	host, err := t.shareHost()
-	if err != nil || host.store.Account() != source.Account {
-		return nil, observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的媒体理解工具。")
+	if err != nil {
+		return nil, err
 	}
-	installed, err := host.store.Installed(ctx, localasr.PluginID)
-	if err != nil || !installed.Enabled || installed.Removed {
-		return nil, observationFailure("media_plugin_not_enabled", "请在当前微信连接启用媒体理解工具。")
-	}
-	config, err := host.store.Configuration(ctx, localasr.PluginID)
-	backend, _ := stationASRBackend(config.Values)
-	if err != nil || backend != "local" || host.localASR.transcribe == nil {
-		return nil, observationFailure("incoming_voice_local_asr_unavailable", "请为当前微信连接选择本机识别，并启用站点的本地媒体识别工具。")
-	}
-	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat voice", RequestKey: "station-voice-" + source.AssetID(), Authorization: source.AssetID(), OriginSourceSender: source.Sender, RequestThread: t.trace.Thread, EvidenceEpoch: epoch}
-	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
-	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
-		return nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
-	}
-	check := mediaobserve.BindSource(host.store, installed, config.Revision, func(ctx context.Context) error {
-		return access.confirmObservationSource(ctx, source, epoch)
-	})
 	if err := check(ctx); err != nil {
 		return nil, err
 	}
@@ -241,10 +242,7 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	out := map[string]any{"message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred, "sha256": rendered.SHA256,
 		"source_variant": rendered.Variant, "asr_backend": "local", "untrusted_external_content": true}
 	err = stationObserveAudio(ctx, path, dir, in.Start, in.Duration, duration, true, func(ctx context.Context, wav []byte) (string, error) {
-		if err := check(ctx); err != nil {
-			return "", err
-		}
-		text, err := host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
+		text, err := transcribe(ctx, wav)
 		if err != nil && !mediaspec.IsNoSpeech(err) {
 			return "", observationFailure("incoming_voice_local_asr_failed", "语音已解码，但本机语音识别未完成。请核对已登记的本机识别资源。")
 		}
@@ -254,4 +252,30 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 		return nil, checkErr
 	}
 	return out, err
+}
+
+func (t *stationAttachmentTools) bindConnectionVoice(ctx context.Context, source wechatapp.AttachmentSource, epoch string, origin mediaobserve.SourceCheck) (mediaobserve.SourceCheck, stationAudioTranscriber, error) {
+	if t.shareHost == nil {
+		return nil, nil, observationFailure("media_plugin_runtime_unavailable", "当前微信连接未准备媒体理解工具。")
+	}
+	host, err := t.shareHost()
+	if err != nil || host.store.Account() != source.Account {
+		return nil, nil, observationFailure("media_plugin_runtime_unavailable", "无法打开当前连接的媒体理解工具。")
+	}
+	installed, err := host.store.Installed(ctx, localasr.PluginID)
+	if err != nil || !installed.Enabled || installed.Removed {
+		return nil, nil, observationFailure("media_plugin_not_enabled", "请在当前微信连接启用媒体理解工具。")
+	}
+	config, err := host.store.Configuration(ctx, localasr.PluginID)
+	backend, _ := stationASRBackend(config.Values)
+	if err != nil || backend != "local" || host.localASR.transcribe == nil {
+		return nil, nil, observationFailure("incoming_voice_local_asr_unavailable", "请为当前微信连接选择本机识别，并启用站点的本地媒体识别工具。")
+	}
+	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat voice", RequestKey: "station-voice-" + source.AssetID(), Authorization: source.AssetID(), OriginSourceSender: source.Sender, RequestThread: t.trace.Thread, EvidenceEpoch: epoch}
+	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
+	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
+		return nil, nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
+	}
+	check := mediaobserve.BindSource(host.store, installed, config.Revision, origin)
+	return check, host.localASR.withSource(check), nil
 }
