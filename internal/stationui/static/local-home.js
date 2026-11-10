@@ -1095,12 +1095,23 @@
     panel.append(list, records);
     return panel;
   }
-  function deliveryRecords(id) {
-    const panel = appElement("details", "", "identity-details delivery-records");
+  function deliveryRecords(id, readOnly = false) {
+    const panel = appElement("details", "", readOnly ? "identity-details delivery-records delivery-records-offline" : "identity-details delivery-records");
     panel.append(appElement("summary", "投递记录"));
     const records = appElement("div", "", "work-records");
-    const note = appElement("small", "核对只查询原任务。停止作用于本回合的剩余投递，已接受的消息保留。");
-    const base = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/receipts";
+    const note = appElement("small", readOnly ? "当前只读取本机保存的证据，未确认的发送仍待核对。" : "核对只查询原任务。停止作用于本回合的剩余投递，已接受的消息保留。");
+    const connection = "/api/apps/wechat/connections/" + encodeURIComponent(id);
+    const base = connection + "/receipts";
+    let source;
+    if (readOnly) {
+      source = document.createElement("select");
+      source.setAttribute("aria-label", "投递记录来源");
+      for (const [value, label] of [["", "本机投递"], ["agent", "旧助手投递"], ["management", "旧管理页投递"]]) {
+        const option = appElement("option", label);
+        option.value = value;
+        source.append(option);
+      }
+    }
     let after = "", snapshot = "", loading = false;
     function describe(item) {
       const labels = { accepted: "微信已接受", not_submitted: "待发送", submitted_pending: "等待微信回执", submission_unknown: "发送结果待核对", failed: "发送失败", cancelled: "已取消" };
@@ -1122,6 +1133,11 @@
     function append(item) {
       const row = appElement("div", "", "work-record");
       const text = appElement("small", describe(item));
+      if (readOnly) {
+        row.append(text, appElement("small", item.idempotency_key, "publication-reference"));
+        records.append(row);
+        return;
+      }
       const recall = appElement("div", "", "delivery-recall");
       const recallState = { serverID: "", cursor: "", messageID: "", operation: null, submitting: false, lookingUp: false, checked: false };
       function acceptedServers(receipt) {
@@ -1305,8 +1321,13 @@
     const more = appSetupButton("查看投递记录", async () => {
       if (loading) return;
       loading = true; more.disabled = true; more.textContent = "正在读取…";
+      if (source) source.disabled = true;
       try {
-        const result = await request(base + "?limit=20&after=" + encodeURIComponent(after));
+        const origin = source?.value;
+        const endpoint = origin ? connection + "/legacy-import/receipts" : base;
+        const query = new URLSearchParams({ limit: "20", after });
+        if (origin) query.set("origin", origin);
+        const result = await request(endpoint + "?" + query);
         if (after && snapshot !== (result.snapshot || "")) {
           after = ""; snapshot = "";
           note.textContent = "投递记录已更新，请重新查看。";
@@ -1317,11 +1338,26 @@
         for (const item of result.items || []) append(item);
         if (!records.children.length) records.append(appElement("small", "此连接还没有当前投递记录。"));
         snapshot = result.snapshot || ""; after = result.next_after || "";
-        note.textContent = "仅含当前连接队列保存的记录；旧版导入回执仍可按原编号查询。";
+        if (!readOnly) note.textContent = "仅含当前连接队列保存的记录；旧版导入回执仍可按原编号查询。";
         more.textContent = after ? "继续查看" : "重新查看";
-      } catch (error) { appFeedback(error.message, true); more.textContent = "重新查看"; }
-      finally { loading = false; more.disabled = false; }
+      } catch (error) {
+        if (source?.value && error.status === 404) records.replaceChildren(appElement("small", "此连接没有这类投递归档。"));
+        else appFeedback(error.message, true);
+        more.textContent = "重新查看";
+      } finally {
+        loading = false; more.disabled = false;
+        if (source) source.disabled = false;
+      }
     });
+    if (source) {
+      source.addEventListener("change", () => {
+        after = ""; snapshot = "";
+        records.replaceChildren();
+        note.textContent = "当前只读取本机保存的证据，未确认的发送仍待核对。";
+        more.textContent = "查看投递记录";
+      });
+      panel.append(source);
+    }
     panel.append(note, records, more);
     return panel;
   }
@@ -1373,6 +1409,7 @@
     const row = appElement("div", "", "app-layer app-connection-layer");
     const detail = appElement("div", "");
     const connection = apps.connections.get(record.id);
+    const archiveOnly = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.registration === "station-archive");
     const canSetup = record.id === "wechat" && apps.registered?.some((app) => app.id === record.id && app.account_setup);
     if (!apps.registered || connection === null) {
       detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
@@ -1381,11 +1418,12 @@
       detail.append(appElement("strong", "账号未接入"),
         appElement("p", nativeReady ? "原生服务已就绪，暂无已登记账号。" : "账号接入后会显示在这里。"));
     } else {
-      detail.append(appElement("strong", `已有 ${connection.length} 个账号连接`));
+      detail.append(appElement("strong", archiveOnly ? `可查看 ${connection.length} 个账号的投递归档` : `已有 ${connection.length} 个账号连接`));
+      if (archiveOnly) detail.append(appElement("p", "微信原生服务未启动，登录状态待重新连接后核对。"));
       const list = appElement("ul", "", "app-accounts");
       for (const [index, account] of connection.entries()) {
         const item = appElement("li", "");
-        item.append(appElement("span", account.label || `账号 ${index + 1}`));
+        item.append(appElement("span", account.label || (archiveOnly && account.account_id) || `账号 ${index + 1}`));
         if (account.primary) item.append(appElement("small", "主连接"));
         const status = apps.accountStatuses.get(account.id);
         if (apps.accountStatuses.has(account.id)) {
@@ -1401,6 +1439,7 @@
           item.append(renderAppLogin(account.id, entry.op));
         }
         if (canSetup && status && appWorkerLabels[status.worker]) item.append(appWorkerControls(account.id, status));
+        if (archiveOnly) item.append(deliveryRecords(account.id, true));
         list.append(item);
       }
       detail.append(list);
@@ -1926,16 +1965,18 @@
       const accounts = apps.connections.get(record.id) || [];
       const authorization = record.id === "bilibili" ? apps.bilibiliAuthorization : null;
       const officialAccount = record.id === "bilibili";
+      const archiveOnly = record.id === "wechat" && apps.registered?.some((item) => item.id === "wechat" && item.registration === "station-archive");
       const douyinLogin = record.id === "douyin" ? apps.douyinWebLogin?.value : null;
       const detached = record.id === "douyin" && douyinIsDetached(apps);
       const paused = douyinLogin?.paused === true;
       const authenticated = accounts.filter((account) => apps.accountStatuses.get(account.id)?.login === "authenticated").length;
       const connected = record.id === "douyin" ? douyinLogin?.state === "saved" : officialAccount ? authorization?.status === "ready" : authenticated > 0;
-      const status = appElement("span", detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
+      const status = appElement("span", archiveOnly ? "仅可查看归档" : detached ? "已撤下" : paused ? "网页已暂停" : connected ? "已接入" : record.id === "douyin" && douyinLogin?.state === "unconfirmed" ? "等待确认" : authorization?.status === "expired" ? "登录已过期" : !officialAccount && accounts.length ? "账号已登记" : "待接入", "app-card-status");
       status.classList.toggle("is-connected", connected && !paused && !detached);
       head.append(status);
       const summary = appElement("p", record.id === "douyin" && connected ? "网页登录资料已保存，可在授权范围内使用抖音功能。" : officialAccount && connected ? (authorization.label || "账号已授权，可管理使用范围。") : !officialAccount && accounts.length ? `${accounts.length} 个账号 · ${authenticated} 个已登录` : "连接账号后，大肥鱼就能在这里活动。", "app-card-summary");
-      if (detached) summary.textContent = "可在账号与使用中重新登记。";
+      if (archiveOnly) summary.textContent = "微信原生服务未启动，已保存的投递记录仍可查看。";
+      else if (detached) summary.textContent = "可在账号与使用中重新登记。";
       else if (paused) summary.textContent = "网页能力可从账号与使用中恢复。";
       const source = catalog.get(record.id);
       const foot = appElement("div", "", "app-card-footer");

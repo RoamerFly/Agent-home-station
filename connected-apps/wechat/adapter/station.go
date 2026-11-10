@@ -37,7 +37,7 @@ func StationRegistration(ctx context.Context, endpoint string, pid int, stationD
 		return apphost.Registration{}, errors.New("微信原生实例归属核验失败")
 	}
 	return apphost.Registration{
-		Application: apphost.Application{ID: ID, Name: "微信", InstallationID: "wechat-station-native", Registration: "station-native"},
+		Application: apphost.Application{ID: ID, Name: "微信", InstallationID: StationInstallationID, Registration: "station-native"},
 		Provider:    &stationNativeProvider{client: client, status: status},
 	}, nil
 }

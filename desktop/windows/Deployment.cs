@@ -17,11 +17,12 @@ namespace WechatAgent.Desktop {
         internal string Workspace, Distro, User, Root, Account, Music;
         internal string Backend = "wsl", NativeUrl = "http://127.0.0.1:6174";
         internal string NativeExe, AdminExe, StationExe, StationWorkspace, StationNativeExe, StationNativeUrl;
+        internal bool StationNativeEnabled = true;
         internal bool Windows { get { return Backend == "windows-native"; } }
         internal bool LocalStation { get { return Backend == "local-station"; } }
         // The local station starts no WeChat-native runtime unless the owner
-        // explicitly opts in through wechat_native_url.
-        internal bool LocalStationNative { get { return LocalStation && StationNativeUrl != ""; } }
+        // explicitly opts in through wechat_native_url and has not disabled startup.
+        internal bool LocalStationNative { get { return LocalStation && StationNativeEnabled && StationNativeUrl != ""; } }
         internal string StationNativeRoot { get { return Path.Combine(Root, "apps", "wechat", "native"); } }
         internal bool UsesPortableStationData(string launcherDirectory) {
             if (!LocalStation) return false;
@@ -48,10 +49,16 @@ namespace WechatAgent.Desktop {
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "admin_url") != "") local.Url = LocalUrl(Text(data, "admin_url"));
                 if (Text(data, "wechat_native_url") != "") local.StationNativeUrl = LocalUrl(Text(data, "wechat_native_url"), true);
+                object nativeEnabled;
+                if (data.TryGetValue("wechat_native_enabled", out nativeEnabled)) {
+                    if (!(nativeEnabled is bool) || ((bool)nativeEnabled && local.StationNativeUrl == ""))
+                        throw new InvalidOperationException("微信启动开关必须是布尔值；启用时需要填写 wechat_native_url。");
+                    local.StationNativeEnabled = (bool)nativeEnabled;
+                }
                 // native_url belonged to the retired all-in-one desktop
                 // configuration. Do not silently reinterpret it, otherwise a
                 // station can accidentally attach to an unrelated daemon.
-                if (Text(data, "native_url") != "" || Text(data, "account") != "" || Text(data, "music_service") != "" || (local.LocalStationNative && new Uri(local.StationNativeUrl).Port == new Uri(local.Url).Port)) throw new InvalidOperationException("本机成长站配置无效：微信原生服务必须使用独立的 wechat_native_url，且不能包含账号或音乐服务参数。");
+                if (Text(data, "native_url") != "" || Text(data, "account") != "" || Text(data, "music_service") != "" || (local.StationNativeUrl != "" && new Uri(local.StationNativeUrl).Port == new Uri(local.Url).Port)) throw new InvalidOperationException("本机成长站配置无效：微信原生服务必须使用独立的 wechat_native_url，且不能包含账号或音乐服务参数。");
                 return local;
             }
             if (Text(data, "backend") == "windows-native") {

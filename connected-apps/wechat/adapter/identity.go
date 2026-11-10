@@ -11,6 +11,7 @@ import (
 
 const ID = "wechat"
 const LegacyInstallationID = "wechat-legacy"
+const StationInstallationID = "wechat-station-native"
 
 func Application() apphost.Application {
 	return apphost.Application{ID: ID, Name: "微信", InstallationID: LegacyInstallationID, Registration: "legacy"}

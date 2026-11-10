@@ -294,6 +294,11 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .work-record { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .delivery-records .work-records { grid-template-columns: minmax(0, 1fr); }
 .delivery-records .work-record { min-width: 0; }
+.delivery-records-offline { flex-basis: 100%; }
+.delivery-records-offline > select { display: block; margin-block: 6px; max-width: 100%; }
+.delivery-records-offline > small { display: block; margin-bottom: 6px; }
+.delivery-records-offline .work-record { display: grid; gap: 2px; padding-block: 4px; }
+.delivery-records-offline > .button { margin-top: 6px; }
 .delivery-recall { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 0; max-width: 100%; }
 .delivery-recall:empty { display: none; }
 .delivery-recall select { min-width: 0; max-width: 100%; }

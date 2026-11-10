@@ -195,12 +195,15 @@ namespace WechatAgent.Desktop {
                 ExpectRefused(() => current.Start(CancellationToken.None).GetAwaiter().GetResult(), "拒绝重新启动微信原生服务");
                 ControllerTests.Assert(current.PID == 0 && current.NativePID == 0 && newProof.SequenceEqual(File.ReadAllBytes(newMarker)), "new runtime cannot start a child or change its stop proof after release");
 
-                next.StationNativeUrl = "";
+                next.StationNativeEnabled = false;
                 current.Start(CancellationToken.None).GetAwaiter().GetResult();
                 WaitHealthy(client, next.Url, current.CheckAlive);
                 AuthenticateStation(client, next.Url);
-                ControllerTests.Assert(otherApps.SequenceEqual(AssertWithoutWeChat(client, next, current)),
+                ControllerTests.Assert(otherApps.SequenceEqual(AssertWithoutWeChat(client, next, current, true)),
                     "the same independently bundled apps remain registered after WeChat release");
+                ControllerTests.Assert(Deployment.Text(Read(client, connectionUrl + "/receipts/" + OldKey), "server_id") == "87111" &&
+                    Deployment.Text(Read(client, connectionUrl + "/receipts/" + NewKey), "server_id") == "87222",
+                    "both the archived old receipt and the current station receipt are readable without a native child");
                 settings = Read(client, next.Url + "/api/local/model");
                 settings["base_url"] = "https://model.invalid";
                 settings["clear_key"] = true;
@@ -234,14 +237,18 @@ namespace WechatAgent.Desktop {
             client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(login, "csrf"));
         }
 
-        static string[] AssertWithoutWeChat(HttpClient client, Deployment deployment, LocalStationRuntime runtime) {
+        static string[] AssertWithoutWeChat(HttpClient client, Deployment deployment, LocalStationRuntime runtime, bool withArchive = false) {
             var apps = ((IList)Read(client, deployment.Url + "/api/apps")["items"]).Cast<Dictionary<string, object>>()
-                .Select(app => Deployment.Text(app, "id")).OrderBy(id => id, StringComparer.Ordinal).ToArray();
+                .ToArray();
+            var wechat = apps.SingleOrDefault(app => Deployment.Text(app, "id") == "wechat");
             using (var response = client.GetAsync(deployment.Url + "/api/apps/wechat/connections").GetAwaiter().GetResult()) {
-                ControllerTests.Assert(!apps.Contains("wechat") && response.StatusCode == HttpStatusCode.NotFound && runtime.NativePID == 0,
-                    "the desktop without WeChat has no WeChat registration, routes or native child");
+                ControllerTests.Assert(runtime.NativePID == 0 && (withArchive
+                    ? wechat != null && Deployment.Text(wechat, "registration") == "station-archive" && response.StatusCode == HttpStatusCode.OK
+                    : wechat == null && response.StatusCode == HttpStatusCode.NotFound),
+                    "the desktop without a native child only exposes WeChat if saved evidence is present");
             }
-            return apps;
+            return apps.Where(app => Deployment.Text(app, "id") != "wechat")
+                .Select(app => Deployment.Text(app, "id")).OrderBy(id => id, StringComparer.Ordinal).ToArray();
         }
 
         static void AssertSameHome(HttpClient client, string url, Dictionary<string, object> expected) {

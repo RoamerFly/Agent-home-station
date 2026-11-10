@@ -353,6 +353,13 @@ namespace WechatAgent.Desktop {
                 var local = Deployment.Load(root);
                 Assert(local.LocalStationNative && local.StationNativeUrl.EndsWith(":18174") && local.StationNativeExe == Path.Combine(root, "runtimes", "windows-x64", "wx.exe"), "local station native runtime is explicit and package local");
                 Assert(local.StationNativeRoot == Path.Combine(root, "data", "station", "apps", "wechat", "native"), "local station native data is private and separate");
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":false}");
+                var paused = Deployment.Load(root);
+                Assert(!paused.LocalStationNative && paused.StationNativeUrl.EndsWith(":18174") && paused.StationNativeRoot == local.StationNativeRoot, "disabling native startup preserves the configured URL and data root");
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_enabled\":true}");
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
+                File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":\"false\"}");
+                await Reject(() => { Deployment.Load(root); return Task.FromResult(0); });
                 Assert(local.UsesPortableStationData(root), "default data follows the relocated launcher package");
                 Assert(!local.UsesPortableStationData(Path.Combine(root, "different launcher")), "a launcher pointed at another directory cannot adopt its data");
                 local.Root = Path.Combine(root, "custom-data");
@@ -511,6 +518,13 @@ namespace WechatAgent.Desktop {
                     // password; the managed value must win over that same env.
                     Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
                     Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
+                    d.StationNativeUrl = CycleUrl();
+                    d.StationNativeEnabled = false;
+                    var profile = Path.Combine(d.StationNativeRoot, "accounts", "synthetic", "profile");
+                    Directory.CreateDirectory(profile);
+                    var loginMarker = Path.Combine(profile, "synthetic-login");
+                    File.WriteAllText(loginMarker, "preserve login evidence");
+                    d.StationNativeExe = Path.Combine(d.Root, "unavailable-synthetic-wx.exe");
                     var reserved = new TcpListener(IPAddress.Loopback, new Uri(d.Url).Port);
                     try {
                         reserved.Start();
@@ -520,6 +534,8 @@ namespace WechatAgent.Desktop {
                         for (int i = 0; i < 2; i++) {
                             c.Start(CancellationToken.None).GetAwaiter().GetResult();
                             Assert(c.Healthy().GetAwaiter().GetResult(), "local station health after start");
+                            Assert(!File.Exists(Path.Combine(d.Root, "station-native-stop.json")) && !File.Exists(Path.Combine(d.StationNativeRoot, "native-server.toml")) &&
+                                File.ReadAllText(loginMarker) == "preserve login evidence", "disabled native runtime never creates native startup files or changes retained profile data");
                             c.Stop(CancellationToken.None).GetAwaiter().GetResult();
                             if (i == 0) {
                                 Assert(!File.Exists(Path.Combine(d.Root, "admin-token")) && !File.Exists(Path.Combine(d.Root, "admin-password")), "env-only first login did not create or replace a managed credential");

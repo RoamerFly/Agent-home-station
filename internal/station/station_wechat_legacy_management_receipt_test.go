@@ -150,4 +150,30 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 		t.Fatal("offline archive read contacted the native service")
 	}
 	req("GET", "/api/apps/wechat/connections/"+wechatapp.ConnectionID(fixture.primary)+"/receipts/management-only", nil, 404)
+
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	beforeOffline := nativeCalls.Load()
+	f = newLocalHomeFixture(t, host, home)
+	req("GET", primary+"/receipts"+origin, nil, 401)
+	f.login()
+	apps := req("GET", "/api/apps", nil, 200)["items"].([]any)
+	if len(apps) != 1 || apps[0].(map[string]any)["registration"] != "station-archive" {
+		t.Fatal("archive was lost with the native registration", apps)
+	}
+	rows := req("GET", "/api/apps/wechat/connections", nil, 200)["items"].([]any)
+	if len(rows) != 2 {
+		t.Fatal("previously saved accounts were not independently available", rows)
+	}
+	offline := req("GET", primary+"/receipts/management-only"+origin, nil, 200)
+	if offline["lookup"] != legacyManagementReceiptLookup || offline["state"] != "submitted_pending" {
+		t.Fatal("offline mode changed the archived evidence", offline)
+	}
+	req("GET", secondary+"/receipts/management-only"+origin, nil, 404)
+	connection := "/api/apps/wechat/connections/" + wechatapp.ConnectionID(fixture.primary)
+	req("POST", connection+"/lifecycle", map[string]string{"action": "start"}, http.StatusNotImplemented)
+	if nativeCalls.Load() != beforeOffline || f.handler.chat.wechat != nil {
+		t.Fatalf("offline receipt retrieval contacted or started an application worker: calls before=%d after=%d", beforeOffline, nativeCalls.Load())
+	}
 }

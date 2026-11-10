@@ -32,6 +32,11 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 	}}}
 	if h.wechat != nil {
 		apps = append(apps, h.wechat.attachment(h.home.applicationOwner))
+	} else {
+		registry, apps, err = attachStationWechatArchive(registry, h.home.dataDir, apps)
+		if err != nil {
+			return apphost.Registry{}, nil, err
+		}
 	}
 	return registry.WithVisibility(h.home.applicationVisible), apps, nil
 }

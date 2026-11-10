@@ -451,6 +451,9 @@ func (s *stationWechat) admitPlatformWrite(ctx context.Context, id string, nativ
 }
 
 func (s *stationWechat) WorkerSender(ctx context.Context, id string) (*linuxnative.Sender, error) {
+	if s.stationWechatNative == nil {
+		return nil, apphost.ErrUnavailable
+	}
 	native, err := s.stationWechatNative.WorkerSender(ctx, id)
 	if err != nil {
 		return nil, err
