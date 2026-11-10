@@ -36,6 +36,29 @@ func CheckManagedWriteTarget(ctx context.Context, native *linuxnative.Sender, da
 	return nil
 }
 
+// SameNativeOwnership checks the full process and data identity, including the
+// ownership generation. A matching dataset alone does not identify a daemon.
+func SameNativeOwnership(ctx context.Context, native *linuxnative.Sender, expected linuxnative.DaemonStatus) bool {
+	if native == nil || ctx.Err() != nil {
+		return false
+	}
+	current, err := native.DaemonStatus(ctx)
+	return err == nil && ctx.Err() == nil && current == expected
+}
+
+// ReadManagedLogin requires a status observation for the requested managed
+// account. Offline and signed-out are valid observations for the caller.
+func ReadManagedLogin(ctx context.Context, native *linuxnative.Sender, account string) (linuxnative.Status, error) {
+	if native == nil || account == "" || native.Account() != account {
+		return linuxnative.Status{}, apphost.ErrLifecycleCutover
+	}
+	login, err := native.Status(ctx)
+	if err != nil || login.AccountID != account || login.StorageMode != "managed" || !login.LoginObserved || ctx.Err() != nil {
+		return linuxnative.Status{}, apphost.ErrLifecycleCutover
+	}
+	return login, nil
+}
+
 // TargetLoginState describes the observed login of the exact account.
 func TargetLoginState(status linuxnative.Status, account string) string {
 	login := "pending"

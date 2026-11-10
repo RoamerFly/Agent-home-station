@@ -143,17 +143,16 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmatio
 	if err != nil || !sameStationNativeRoot(s.dataDir, daemon) {
 		return blocked("微信原生实例不属于接收站本次运行")
 	}
-	login, err := native.Status(ctx)
-	if err != nil || login.AccountID != archive.Plan.Account || login.StorageMode != "managed" || !login.LoginObserved {
+	login, err := wechatapp.ReadManagedLogin(ctx, native, archive.Plan.Account)
+	if err != nil {
 		return blocked("未取得接收站匹配账号的托管登录状态")
 	}
 	view.NativeLogin = wechatapp.TargetLoginState(login, archive.Plan.Account)
 	if view.NativeLogin != "online" {
 		return blocked("接收站微信账号尚未在线")
 	}
-	latest, err := native.DaemonStatus(ctx)
 	profile, profileDigest = s.nativeImportReceipt(id, archive.Plan.Account)
-	if err != nil || latest != daemon || s.runningDesktopEpoch() != epoch ||
+	if !wechatapp.SameNativeOwnership(ctx, native, daemon) || s.runningDesktopEpoch() != epoch ||
 		profile != "import_receipt_matched" || hex.EncodeToString(profileDigest[:]) != evidence.ProfileDigest ||
 		ctx.Err() != nil || s.ctx.Err() != nil {
 		view.NativeLogin = "pending"

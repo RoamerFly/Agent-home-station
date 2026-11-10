@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
@@ -218,8 +219,7 @@ func (s *stationWechat) legacyMemoryImport(ctx context.Context, id, thread, dige
 		return conflict("旧记忆来源或目标授权已变化，请重新预演")
 	}
 	latest, latestEvidence := s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
-	status, err := native.DaemonStatus(ctx)
-	if err != nil || status != daemon || !legacyMemoryCutoverReady(latest) || latestEvidence != evidence {
+	if !wechatapp.SameNativeOwnership(ctx, native, daemon) || !legacyMemoryCutoverReady(latest) || latestEvidence != evidence {
 		return conflict("切换前置条件已变化，请重新预演")
 	}
 	if ctx.Err() != nil || s.ctx.Err() != nil {

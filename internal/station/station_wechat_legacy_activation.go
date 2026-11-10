@@ -221,10 +221,9 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	if (view.PendingReceipts != 0 || view.ManagementPendingReceipts != 0) && !input.ReviewedReceipts {
 		return blocked("请确认未核对的旧回执只保留归档")
 	}
-	fresh, daemonErr := native.DaemonStatus(ctx)
-	login, loginErr := native.Status(ctx)
+	login, loginErr := wechatapp.ReadManagedLogin(ctx, native, account)
 	profile, profileDigest := s.nativeImportReceipt(id, account)
-	if daemonErr != nil || fresh != daemon || loginErr != nil || login.StorageMode != "managed" || wechatapp.TargetLoginState(login, account) != "online" ||
+	if loginErr != nil || wechatapp.TargetLoginState(login, account) != "online" || !wechatapp.SameNativeOwnership(ctx, native, daemon) ||
 		profile != "import_receipt_matched" || hex.EncodeToString(profileDigest[:]) != proof.ProfileDigest || ctx.Err() != nil || s.ctx.Err() != nil {
 		return blocked("原生实例或切换证据已变化，请重新核对")
 	}

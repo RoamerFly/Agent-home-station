@@ -211,8 +211,7 @@ func (s *stationWechat) legacyGroupSetting(ctx context.Context, id, thread, dige
 		return unavailable("conflict", "旧资料或目标权限已变化，请重新预演")
 	}
 	latest, latestEvidence := s.checkLegacyCutover(ctx, id, native, snapshot, source, archive.LegacyServer)
-	status, err := native.DaemonStatus(ctx)
-	if err != nil || status != daemon || !legacyMemoryCutoverReady(latest) || latestEvidence != evidence {
+	if !wechatapp.SameNativeOwnership(ctx, native, daemon) || !legacyMemoryCutoverReady(latest) || latestEvidence != evidence {
 		return unavailable("conflict", "切换前置条件已变化，请重新预演")
 	}
 	if !verifySource() {

@@ -231,9 +231,9 @@ func (s *stationWechat) captureRollbackAudit(ctx context.Context, target legacyR
 		NativeState: state, DeliveryDataset: checkpoint.Dataset(), Deliveries: deliveries, Actions: actions}
 	if epoch != "" && native != nil {
 		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
-		latest, err := native.DaemonStatus(probe)
+		unchanged := wechatapp.SameNativeOwnership(probe, native, daemon)
 		cancel()
-		if err == nil && latest == daemon && sameStationNativeRoot(s.dataDir, daemon) && s.runningDesktopEpoch() == epoch {
+		if unchanged && sameStationNativeRoot(s.dataDir, daemon) && s.runningDesktopEpoch() == epoch {
 			audit.DesktopEpoch, audit.NativeGeneration = epoch, daemon.OwnershipGeneration
 		}
 	}
