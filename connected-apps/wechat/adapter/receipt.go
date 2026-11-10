@@ -8,12 +8,60 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 )
 
 type wechatReceiptReader interface {
 	LookupSend(context.Context, string) (linuxnative.ToolStatus, error)
+}
+
+// StoredWorkerReceipt projects evidence without contacting the native service.
+func StoredWorkerReceipt(ref apphost.ConnectionRef, key string, row bot.DeliveryEvidence) apphost.Receipt {
+	receipt := apphost.Receipt{
+		ConnectionRef:  ref,
+		ConversationID: row.Status.ThreadID,
+		ResumedFrom:    row.ResumedFrom,
+		DeliveryReceipt: apphost.DeliveryReceipt{
+			IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored",
+		},
+	}
+	ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
+	return receipt
+}
+
+// LookupWorkerReceipt only queries the original submission. For scoped media
+// it also checks the original source and rejects the parent job of a continuation.
+func LookupWorkerReceipt(ctx context.Context, native *linuxnative.Sender, row bot.DeliveryEvidence, receipt *apphost.DeliveryReceipt) {
+	var reader any
+	if native != nil {
+		reader = native
+		if row.StrictSource || row.ResumeOriginID != "" {
+			reader = workerMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
+		}
+	}
+	LookupDeliveryReceipt(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", receipt)
+}
+
+type workerMediaReceiptReader struct {
+	native               *linuxnative.Sender
+	source, kind, origin string
+}
+
+func (r workerMediaReceiptReader) validate(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
+	if err == nil && (r.source == "" || status.SourceID != r.source || status.AccountID != r.native.Account() || status.Kind != "send" && status.Kind != r.kind || r.origin != "" && status.ID == r.origin) {
+		return linuxnative.ToolStatus{}, errors.New("station_media_receipt_identity_mismatch")
+	}
+	return status, err
+}
+
+func (r workerMediaReceiptReader) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
+	return r.validate(r.native.LookupSend(ctx, key))
+}
+
+func (r workerMediaReceiptReader) ToolSendStatus(ctx context.Context, id string) (linuxnative.ToolStatus, error) {
+	return r.validate(r.native.ToolSendStatus(ctx, id))
 }
 
 // LookupDeliveryReceipt checks a stored receipt and optionally refreshes its original key.

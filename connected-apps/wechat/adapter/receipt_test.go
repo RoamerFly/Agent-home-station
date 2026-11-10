@@ -1,11 +1,33 @@
 package adapter
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/linuxnative"
 )
+
+func TestWorkerContinuationReceiptCannotBorrowOriginalJob(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("synthetic-continuation-receipt-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: token, Account: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := workerMediaReceiptReader{native: native, source: "source", kind: "voice", origin: "original-job"}
+	value := linuxnative.ToolStatus{ID: "original-job", AccountID: "fixture", SourceID: "source", Kind: "send", State: "accepted", ServerID: "100"}
+	if _, err := reader.validate(value, nil); err == nil {
+		t.Fatal("original accepted receipt assigned to continuation")
+	}
+	value.ID = "new-job"
+	if _, err := reader.validate(value, nil); err != nil {
+		t.Fatal("valid independent continuation rejected", err)
+	}
+}
 
 func TestApplicationReceiptRetainsAcceptedPartsWhenRemainingSendIsCancelled(t *testing.T) {
 	part := linuxnative.VoiceChunkStatus{Index: 0, State: "accepted", HasReceipt: true, ServerID: "111"}

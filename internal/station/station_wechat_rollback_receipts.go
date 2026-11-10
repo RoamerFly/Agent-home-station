@@ -18,17 +18,7 @@ import (
 // The adapter projects the stored status before looking up the native job, so
 // verified accepted voice parts survive a later stale or partial result.
 func projectRollbackReceipt(ctx context.Context, native *linuxnative.Sender, ref apphost.ConnectionRef, key string, row bot.DeliveryEvidence) (receipt apphost.Receipt, active bool) {
-	receipt = apphost.Receipt{
-		ConnectionRef:  ref,
-		ConversationID: row.Status.ThreadID,
-		ResumedFrom:    row.ResumedFrom,
-		DeliveryReceipt: apphost.DeliveryReceipt{
-			IdempotencyKey: key,
-			Kind:           row.Status.Kind,
-			Lookup:         "stored",
-		},
-	}
-	wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
+	receipt = wechatapp.StoredWorkerReceipt(ref, key, row)
 
 	// A missing current transport is a valid offline rollback condition: retain
 	// the checkpoint projection as durable evidence, but do not invent a native
@@ -39,11 +29,7 @@ func projectRollbackReceipt(ctx context.Context, native *linuxnative.Sender, ref
 	priorPending := append([]apphost.ReceiptPart(nil), receipt.UnconfirmedParts...)
 	priorIncomplete := receipt.PartsIncomplete
 
-	var reader any = native
-	if row.StrictSource || row.ResumeOriginID != "" {
-		reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
-	}
-	wechatapp.LookupDeliveryReceipt(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &receipt.DeliveryReceipt)
+	wechatapp.LookupWorkerReceipt(ctx, native, row, &receipt.DeliveryReceipt)
 	if receipt.DeliveryReceipt.Lookup != "platform" {
 		return receipt, false
 	}

@@ -69,18 +69,6 @@ type legacyActivationInput struct {
 	ReviewedReceipts bool   `json:"reviewed_receipts"`
 }
 
-type legacyActivationSource struct {
-	*linuxnative.Sender
-	check func() error
-}
-
-func (s legacyActivationSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
-	if err := s.check(); err != nil {
-		return linuxnative.EventPage{}, err
-	}
-	return s.Sender.Events(ctx, after)
-}
-
 func (s *stationWechat) legacyActivationRoutes(server *websession.Store, mux *http.ServeMux, path string) {
 	handle := server.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

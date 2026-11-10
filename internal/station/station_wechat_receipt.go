@@ -10,7 +10,6 @@ import (
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
-	"wechat-bot/internal/linuxnative"
 )
 
 func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (apphost.ReceiptPage, error) {
@@ -43,10 +42,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 	page.Snapshot = localCheckpointKey(rows.Snapshot, stops, controls)
 	for _, key := range rows.Keys {
 		row := rows.Records[key]
-		receipt := apphost.Receipt{ConnectionRef: s.connectionRef(id, account), ConversationID: row.Status.ThreadID,
-			DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"}}
-		wechatapp.ProjectDeliveryReceipt(&receipt.DeliveryReceipt, row.Status)
-		receipt.ResumedFrom = row.ResumedFrom
+		receipt := wechatapp.StoredWorkerReceipt(s.connectionRef(id, account), key, row)
 		if control, exists := controls[key]; exists {
 			receipt.Continuation = resumeControlView(control)
 		}
@@ -93,20 +89,8 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if !found {
 		return s.readLegacyReceipt(ctx, id, key, native)
 	}
-	result := apphost.Receipt{
-		ResumedFrom:     row.ResumedFrom,
-		ConnectionRef:   s.connectionRef(id, account),
-		ConversationID:  row.Status.ThreadID,
-		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"},
-	}
-	var reader any
-	if native != nil {
-		reader = native
-		if row.StrictSource || row.ResumeOriginID != "" {
-			reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
-		}
-	}
-	wechatapp.LookupDeliveryReceipt(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
+	result := wechatapp.StoredWorkerReceipt(s.connectionRef(id, account), key, row)
+	wechatapp.LookupWorkerReceipt(ctx, native, row, &result.DeliveryReceipt)
 	cancelled, err := w.deliveryCancelled(companion.Input{Account: account, Thread: row.Status.ThreadID, TraceID: row.Trace})
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable
@@ -122,24 +106,4 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 		result.Continuation = resumeControlView(control)
 	}
 	return result, nil
-}
-
-type stationMediaReceiptReader struct {
-	native               *linuxnative.Sender
-	source, kind, origin string
-}
-
-func (r stationMediaReceiptReader) validate(status linuxnative.ToolStatus, err error) (linuxnative.ToolStatus, error) {
-	if err == nil && (r.source == "" || status.SourceID != r.source || status.AccountID != r.native.Account() || status.Kind != "send" && status.Kind != r.kind || r.origin != "" && status.ID == r.origin) {
-		return linuxnative.ToolStatus{}, errors.New("station_media_receipt_identity_mismatch")
-	}
-	return status, err
-}
-
-func (r stationMediaReceiptReader) LookupSend(ctx context.Context, key string) (linuxnative.ToolStatus, error) {
-	return r.validate(r.native.LookupSend(ctx, key))
-}
-
-func (r stationMediaReceiptReader) ToolSendStatus(ctx context.Context, id string) (linuxnative.ToolStatus, error) {
-	return r.validate(r.native.ToolSendStatus(ctx, id))
 }

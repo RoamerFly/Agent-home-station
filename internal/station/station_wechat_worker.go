@@ -723,28 +723,13 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
 		character.Tools = attachment
 	}
-	options := bot.DefaultOptions()
-	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
-	var source bot.Source = native
-	if activationGuard != nil {
-		source = legacyActivationSource{Sender: native, check: activationAllowed}
-	}
-	worker, err := bot.New(bot.Config{
-		DeliveryCancelled: station.deliveryCancelled,
-		WithDeliverySubmit: func(ctx context.Context, in companion.Input, submit func() error) error {
-			// Re-check inside the existing delivery serialization immediately
-			// before the native handoff. This closes a queue-to-send race.
-			return station.withDeliverySubmit(ctx, in, func() error {
-				if err := activationAllowed(); err != nil {
-					return err
-				}
-				return submit()
-			})
-		},
-		NextMediaResume:   station.nextMediaResume,
-		MediaResumeResult: station.mediaResumeResult,
-		StateDir:          station.queueDir(), AllowedThreads: threads, GroupRules: rules,
-		Options: &options, Prefix: "/ai ", ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
+	return run.RunQueue(ctx, native, character, bot.Config{
+		DeliveryCancelled:  station.deliveryCancelled,
+		WithDeliverySubmit: station.withDeliverySubmit,
+		NextMediaResume:    station.nextMediaResume,
+		MediaResumeResult:  station.mediaResumeResult,
+		StateDir:           station.queueDir(), AllowedThreads: threads, GroupRules: rules,
+		ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		OnDemandAttachment: func(m linuxnative.Message) bool {
 			kind, _ := stationAttachmentKind(m)
 			grant := policy.AttachmentGrants[m.ThreadID]
@@ -760,25 +745,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			}
 			return attachment.readGroupShareEvidence(ctx, in, m)
 		},
-		Log: func(event string) {
-			if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
-				run.MarkRunning()
-			}
-		},
-		BeforeSubmit: func(ctx context.Context) error {
-			if run.Blocked() {
-				return apphost.ErrLifecycleConflict
-			}
-			if err := activationAllowed(); err != nil {
-				return err
-			}
-			return ctx.Err()
-		},
 		AuthorizeThread: func(ctx context.Context, thread string) (bool, error) {
-			if err := activationAllowed(); err != nil {
-				return false, err
-			}
-			return !run.Blocked() && !policy.Grants[thread].IsZero(), ctx.Err()
+			return !policy.Grants[thread].IsZero(), ctx.Err()
 		},
 		AuthorizeReply: func(in companion.Input) bool {
 			if in.GroupShareSummary && !policy.groupShareAllowed(in.Thread, in.MessageTime) {
@@ -798,9 +766,5 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		PrepareMediaSource:   attachment.stageReply,
 		AuthorizeMediaAsset:  attachment.workAllowed,
 		AuthorizeMediaSubmit: attachment.canSubmitMedia,
-	}, source, character, native)
-	if err != nil {
-		return err
-	}
-	return worker.Run(ctx)
+	}, activationAllowed)
 }

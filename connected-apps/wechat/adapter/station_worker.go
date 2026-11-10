@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -131,7 +133,6 @@ func (r *WorkerRun) Status(paused bool) string {
 
 func (r *WorkerRun) Blocked() bool                { return r.block.Load() }
 func (r *WorkerRun) SetBlocked(blocked bool) bool { return r.block.Swap(blocked) }
-func (r *WorkerRun) MarkRunning()                 { r.state.Store("running") }
 func (r *WorkerRun) Done() <-chan struct{}        { return r.done }
 
 func (r *WorkerRun) Cancel() {
@@ -171,4 +172,67 @@ func WaitWorkerLogin(ctx context.Context, native *linuxnative.Sender) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// RunQueue assembles the existing message engine around one WeChat account.
+// The host supplies its durable grants, delivery fence and media operations.
+func (r *WorkerRun) RunQueue(ctx context.Context, native *linuxnative.Sender, model bot.Model, config bot.Config, checkActivation func() error) error {
+	if native == nil || checkActivation == nil || config.AuthorizeThread == nil || config.WithDeliverySubmit == nil {
+		return apphost.ErrLifecycleNotReady
+	}
+	options := bot.DefaultOptions()
+	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
+	config.Options, config.Prefix = &options, "/ai "
+	config.Log = func(event string) {
+		if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
+			r.state.Store("running")
+		}
+	}
+	config.BeforeSubmit = func(ctx context.Context) error {
+		if r.Blocked() {
+			return apphost.ErrLifecycleConflict
+		}
+		if err := checkActivation(); err != nil {
+			return err
+		}
+		return ctx.Err()
+	}
+	authorizeThread := config.AuthorizeThread
+	config.AuthorizeThread = func(ctx context.Context, thread string) (bool, error) {
+		if err := checkActivation(); err != nil {
+			return false, err
+		}
+		if r.Blocked() {
+			return false, ctx.Err()
+		}
+		return authorizeThread(ctx, thread)
+	}
+	withDeliverySubmit := config.WithDeliverySubmit
+	config.WithDeliverySubmit = func(ctx context.Context, in companion.Input, submit func() error) error {
+		// Recheck while the durable cancellation fence is held, immediately
+		// before handing the original delivery to the native account.
+		return withDeliverySubmit(ctx, in, func() error {
+			if err := checkActivation(); err != nil {
+				return err
+			}
+			return submit()
+		})
+	}
+	worker, err := bot.New(config, activationCheckedSource{Sender: native, check: checkActivation}, model, native)
+	if err != nil {
+		return err
+	}
+	return worker.Run(ctx)
+}
+
+type activationCheckedSource struct {
+	*linuxnative.Sender
+	check func() error
+}
+
+func (s activationCheckedSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
+	if err := s.check(); err != nil {
+		return linuxnative.EventPage{}, err
+	}
+	return s.Sender.Events(ctx, after)
 }

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
-	"wechat-bot/internal/linuxnative"
 )
 
 func TestStationListsResumeLineageWithoutNativeService(t *testing.T) {
@@ -33,25 +32,5 @@ func TestStationListsResumeLineageWithoutNativeService(t *testing.T) {
 	row := page.Items[0]
 	if row.ResumedFrom != "original-key" || row.IdempotencyKey != "resume-key" || row.State != "not_submitted" || row.ConversationID != "room" {
 		t.Fatal("continuation lineage or preparation state lost", row)
-	}
-}
-
-func TestStationContinuationReceiptCannotBorrowOriginalJob(t *testing.T) {
-	token := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(token, []byte("synthetic-continuation-receipt-token"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: token, Account: "fixture"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := stationMediaReceiptReader{native: native, source: "source", kind: "voice", origin: "original-job"}
-	value := linuxnative.ToolStatus{ID: "original-job", AccountID: "fixture", SourceID: "source", Kind: "send", State: "accepted", ServerID: "100"}
-	if _, err := reader.validate(value, nil); err == nil {
-		t.Fatal("original accepted receipt assigned to continuation")
-	}
-	value.ID = "new-job"
-	if _, err := reader.validate(value, nil); err != nil {
-		t.Fatal("valid independent continuation rejected", err)
 	}
 }
