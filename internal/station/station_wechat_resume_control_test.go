@@ -104,7 +104,10 @@ func TestStationOwnerResumeIsAuthenticatedPersistentAndCancelable(t *testing.T) 
 	if err != nil || request == nil || request.Account != "fixture" || request.Thread != "room" {
 		t.Fatal(request, err)
 	}
-	rows, err := worker.readResumeControls()
+	if request.ID != "resume-"+localCheckpointKey("fixture", "original-key", "request-one") {
+		t.Fatal("existing resume identity changed", request.ID)
+	}
+	rows, err := worker.deliveryJournal().ReadResumes()
 	if err != nil || len(rows) != 1 || rows["original-key"].RequestKey != "request-one" {
 		t.Fatal(rows, err)
 	}
@@ -125,7 +128,7 @@ func TestStationOwnerResumeIsAuthenticatedPersistentAndCancelable(t *testing.T) 
 	if err := worker.mediaResumeResult(*request, bot.MediaResumeResult{State: "tracking", DeliveryKey: "new-key"}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = worker.readResumeControls()
+	rows, err = worker.deliveryJournal().ReadResumes()
 	if err != nil || rows["original-key"].State != "cancelled" {
 		t.Fatal("late result revived stopped resume", rows, err)
 	}

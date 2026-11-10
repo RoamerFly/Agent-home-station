@@ -163,8 +163,8 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 
 type rollbackCheckpoint struct {
 	rows     bot.DeliveryEvidencePage
-	stops    map[string]stationDeliveryStop
-	controls map[string]stationResumeControl
+	stops    map[string]wechatapp.DeliveryStop
+	controls map[string]wechatapp.ResumeControl
 	digest   string
 }
 
@@ -173,8 +173,8 @@ func (target legacyRollbackTarget) checkpoint(after string, limit int) (rollback
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
 	rows, err := wechatapp.ReadWorkerDeliveryPage(w.runtimeStateDir(), target.ref.AccountID, after, limit)
-	stops, stopErr := w.readDeliveryStops()
-	controls, controlErr := w.readResumeControls()
+	stops, stopErr := w.deliveryJournal().ReadStops()
+	controls, controlErr := w.deliveryJournal().ReadResumes()
 	if err != nil || stopErr != nil || controlErr != nil {
 		return rollbackCheckpoint{}, apphost.ErrUnavailable
 	}
@@ -238,10 +238,10 @@ func (c rollbackCheckpoint) project(ctx context.Context, ref apphost.ConnectionR
 		row := c.rows.Records[key]
 		receipt, active := wechatapp.ProjectRollbackReceipt(lookupCtx, native, ref, key, row)
 		cancel()
-		_, stopped := c.stops[deliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
+		_, stopped := c.stops[wechatapp.DeliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
 		receipt.CancelRequested = receipt.CancelRequested || stopped
 		if control, exists := c.controls[key]; exists {
-			receipt.Continuation = resumeControlView(control)
+			receipt.Continuation = wechatapp.ResumeControlView(control)
 		}
 		items = append(items, rollbackReceipt{Receipt: receipt, Disposition: rollbackDisposition(receipt, active)})
 	}

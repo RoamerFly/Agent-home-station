@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -20,7 +21,7 @@ import (
 func TestStationDeliveryStopIsPersistentScopedAndOrderedWithSubmit(t *testing.T) {
 	w := &stationWechatWorker{dir: t.TempDir()}
 	in := companion.Input{Account: "one", Thread: "room", TraceID: "original"}
-	stop := stationDeliveryStop{Account: in.Account, Thread: in.Thread, Trace: in.TraceID, Key: "first-bubble", At: time.Now().UTC()}
+	stop := wechatapp.DeliveryStop{Account: in.Account, Thread: in.Thread, Trace: in.TraceID, Key: "first-bubble", At: time.Now().UTC()}
 	entered, release, sent := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
 		sent <- w.withDeliverySubmit(t.Context(), in, func() error { close(entered); <-release; return nil })
@@ -31,7 +32,7 @@ func TestStationDeliveryStopIsPersistentScopedAndOrderedWithSubmit(t *testing.T)
 		close(started)
 		w.deliveryMu.Lock()
 		defer w.deliveryMu.Unlock()
-		saved <- w.saveDeliveryStop(stop)
+		saved <- w.deliveryJournal().SaveStop(stop)
 	}()
 	<-started
 	select {
@@ -59,12 +60,12 @@ func TestStationDeliveryStopIsPersistentScopedAndOrderedWithSubmit(t *testing.T)
 		}
 	}
 	w.deliveryMu.Lock()
-	if err := w.saveDeliveryStop(stop); err != nil {
+	if err := w.deliveryJournal().SaveStop(stop); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := w.readDeliveryStops()
+	rows, err := w.deliveryJournal().ReadStops()
 	w.deliveryMu.Unlock()
-	if err != nil || len(rows) != 1 {
+	if err != nil || len(rows) != 1 || !rows[localCheckpointKey(in.Account, in.Thread, in.TraceID)].At.Equal(stop.At) {
 		t.Fatal("duplicate cancellation was not idempotent", rows, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -123,7 +124,7 @@ func TestStationStopsOnlyOriginalVerifiedNativeMedia(t *testing.T) {
 			if scenario == "lost-job-id" || scenario == "lookup-missing" {
 				row.Status.ID = ""
 			}
-			(&stationWechat{}).cancelNativeDelivery(t.Context(), native, "original-key", row)
+			wechatapp.CancelWorkerMedia(t.Context(), native, "original-key", row)
 			want := 0
 			if scenario == "known-job" || scenario == "lost-job-id" {
 				want = 1

@@ -499,7 +499,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	request(f2, "POST", path("two")+"/receipts/offline-stop-target/cancel", map[string]any{}, true, 202)
-	stops, err := pausedWorker.readDeliveryStops()
+	stops, err := pausedWorker.deliveryJournal().ReadStops()
 	if err != nil || len(stops) != 2 {
 		t.Fatal("new offline stop not persisted", stops, err)
 	}

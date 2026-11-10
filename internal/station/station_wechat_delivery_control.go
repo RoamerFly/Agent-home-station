@@ -2,27 +2,17 @@ package station
 
 import (
 	"context"
-	"errors"
+	"math"
 	"net/http"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
-	"wechat-bot/internal/linuxnative"
 
 	"wechat-bot/internal/websession"
 )
-
-type stationDeliveryStop struct {
-	Account string    `json:"account"`
-	Thread  string    `json:"thread"`
-	Trace   string    `json:"trace"`
-	Key     string    `json:"key"`
-	At      time.Time `json:"at"`
-}
 
 // The persisted worker identity is sufficient to stop local work while the
 // native service is offline. It is never sufficient to authorize a native send.
@@ -44,72 +34,24 @@ func (s *stationWechat) deliveryCheckpoint(id string) (*stationWechatWorker, str
 	return w, account, nil
 }
 
-func deliveryStopID(in companion.Input) string {
-	return localCheckpointKey(in.Account, in.Thread, in.TraceID)
+func (w *stationWechatWorker) deliveryJournal() wechatapp.DeliveryJournal {
+	return wechatapp.DeliveryJournal(w.runtimeStateDir())
 }
 
 // deliveryMu serializes the journal commit with entry to a native submission.
 // It is separate from worker.mu: shutdown waits for the actor under worker.mu.
-func (w *stationWechatWorker) readDeliveryStops() (map[string]stationDeliveryStop, error) {
-	rows, err := readStationControlJournal[stationDeliveryStop](w.runtimeStateDir(), "delivery-stops.json")
-	if err != nil {
-		return nil, err
-	}
-	for key, row := range rows {
-		if row.Account == "" || row.Thread == "" || row.Trace == "" || row.Key == "" || row.At.IsZero() || key != deliveryStopID(companion.Input{Account: row.Account, Thread: row.Thread, TraceID: row.Trace}) {
-			return nil, errors.New("invalid delivery cancellation identity")
-		}
-	}
-	return rows, nil
+func (w *stationWechatWorker) withDeliverySubmit(ctx context.Context, in companion.Input, submit func() error) error {
+	w.deliveryMu.Lock()
+	defer w.deliveryMu.Unlock()
+	return w.deliveryJournal().WithSubmit(ctx, in, submit)
 }
 
 func (w *stationWechatWorker) deliveryCancelled(in companion.Input) (bool, error) {
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
-	rows, err := w.readDeliveryStops()
-	_, cancelled := rows[deliveryStopID(in)]
+	rows, err := w.deliveryJournal().ReadStops()
+	_, cancelled := rows[wechatapp.DeliveryStopID(in)]
 	return cancelled, err
-}
-
-func (w *stationWechatWorker) withDeliverySubmit(ctx context.Context, in companion.Input, submit func() error) error {
-	w.deliveryMu.Lock()
-	defer w.deliveryMu.Unlock()
-	rows, err := w.readDeliveryStops()
-	if err != nil {
-		return err
-	}
-	if _, cancelled := rows[deliveryStopID(in)]; cancelled {
-		return bot.ErrDeliveryCancelled
-	}
-	controls, err := w.readResumeControls()
-	if err != nil {
-		return err
-	}
-	for _, r := range controls {
-		if r.Trace == in.TraceID && r.State == "cancelled" {
-			return bot.ErrDeliveryCancelled
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return submit()
-}
-
-func (w *stationWechatWorker) saveDeliveryStop(stop stationDeliveryStop) error {
-	rows, err := w.readDeliveryStops()
-	if err != nil {
-		return err
-	}
-	id := deliveryStopID(companion.Input{Account: stop.Account, Thread: stop.Thread, TraceID: stop.Trace})
-	if _, exists := rows[id]; exists {
-		return nil
-	}
-	if len(rows) >= 5000 {
-		return errors.New("delivery cancellation journal full")
-	}
-	rows[id] = stop
-	return writeStationControlJournal(w.runtimeStateDir(), "delivery-stops.json", rows)
 }
 
 func (s *stationWechat) deliveryControlRoutes(owner *websession.Store, mux *http.ServeMux) {
@@ -130,18 +72,19 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	worker.deliveryMu.Lock()
-	rows, err := wechatapp.ReadWorkerDeliveryPage(worker.runtimeStateDir(), account, "", 5000)
+	// Cancellation needs the complete bounded checkpoint, not a UI page.
+	rows, err := wechatapp.ReadWorkerDeliveryPage(worker.runtimeStateDir(), account, "", math.MaxInt)
 	row, found := rows.Records[key]
 	if err != nil || !found || row.Trace == "" {
 		worker.deliveryMu.Unlock()
 		websession.Fail(w, 404, "投递记录不存在或无法核对原请求")
 		return
 	}
-	stop := stationDeliveryStop{Account: account, Thread: row.Status.ThreadID, Trace: row.Trace, Key: key, At: time.Now().UTC()}
-	err = worker.saveDeliveryStop(stop)
+	stop := wechatapp.DeliveryStop{Account: account, Thread: row.Status.ThreadID, Trace: row.Trace, Key: key, At: time.Now().UTC()}
+	err = worker.deliveryJournal().SaveStop(stop)
 	traces := map[string]bool{stop.Trace: true}
 	if err == nil {
-		traces, err = worker.cancelResumeControls(stop)
+		traces, err = worker.deliveryJournal().CancelResumes(stop)
 	}
 	worker.deliveryMu.Unlock()
 	if err != nil {
@@ -153,42 +96,17 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 	cancelCtx, stopCancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer stopCancel()
 	native, nativeErr := s.WorkerSender(cancelCtx, id)
-	for itemKey, item := range rows.Records {
-		if nativeErr != nil || native.Account() != account {
-			break
+	if nativeErr == nil && native.Account() == account {
+		wechatapp.CancelWorkerMedia(cancelCtx, native, key, row)
+		for _, itemKey := range rows.Keys {
+			if cancelCtx.Err() != nil {
+				break
+			}
+			item := rows.Records[itemKey]
+			if itemKey != key && traces[item.Trace] && item.Status.ThreadID == stop.Thread {
+				wechatapp.CancelWorkerMedia(cancelCtx, native, itemKey, item)
+			}
 		}
-		if cancelCtx.Err() != nil {
-			break
-		}
-		if !traces[item.Trace] || item.Status.ThreadID != stop.Thread || item.Status.Kind == "text" || item.Status.State == "accepted" {
-			continue
-		}
-		s.cancelNativeDelivery(cancelCtx, native, itemKey, item)
 	}
 	websession.Respond(w, http.StatusAccepted, map[string]any{"idempotency_key": key, "state": "cancellation_requested", "cancel_requested": true, "scope": "originating_turn"})
-}
-
-func (s *stationWechat) cancelNativeDelivery(ctx context.Context, native *linuxnative.Sender, key string, row bot.DeliveryEvidence) {
-	if row.Status.State == "prepared" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	var status linuxnative.ToolStatus
-	var err error
-	if row.Status.ID != "" {
-		status, err = native.ToolSendStatus(ctx, row.Status.ID)
-	} else {
-		status, err = native.LookupSend(ctx, key)
-	}
-	if err != nil || status.ID == "" || row.Status.ID != "" && status.ID != row.Status.ID || status.ThreadID != row.Status.ThreadID || status.State == "accepted" {
-		return
-	}
-	if row.ResumeOriginID != "" && status.ID == row.ResumeOriginID {
-		return
-	}
-	if row.StrictSource && (status.SourceID == "" || status.SourceID != row.SourceID || status.AccountID != native.Account() || status.Kind != "send" && status.Kind != row.Status.Kind) {
-		return
-	}
-	_, _ = native.CancelMediaJob(ctx, status.ID)
 }
