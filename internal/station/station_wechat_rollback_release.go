@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -22,29 +23,32 @@ const stationNativeReleaseFile = "station-native-release.json"
 
 type LegacyWechatReleaseRequest struct {
 	DataDir, ConnectionID, AuditDigest, ApplyDigest string
+	RelocationTarget                                string
 	AcceptUnknown                                   bool
 }
 
 type LegacyWechatReleaseResult struct {
-	State        string `json:"state"`
-	ConnectionID string `json:"connection"`
-	AuditDigest  string `json:"audit_digest"`
-	ApplyDigest  string `json:"apply_digest"`
-	Unknown      int    `json:"unknown_count"`
-	NativeFenced bool   `json:"native_runtime_fenced"`
+	State            string `json:"state"`
+	ConnectionID     string `json:"connection"`
+	AuditDigest      string `json:"audit_digest"`
+	ApplyDigest      string `json:"apply_digest"`
+	Unknown          int    `json:"unknown_count"`
+	NativeFenced     bool   `json:"native_runtime_fenced"`
+	RelocationTarget string `json:"relocation_target,omitempty"`
 }
 
 type legacyReleaseIntent struct {
-	Version       int    `json:"version"`
-	ConnectionID  string `json:"connection"`
-	AuditDigest   string `json:"audit_digest"`
-	ApplyDigest   string `json:"apply_digest"`
-	ClaimDigest   string `json:"claim_digest"`
-	AcceptUnknown bool   `json:"accept_unknown"`
+	Version          int    `json:"version"`
+	ConnectionID     string `json:"connection"`
+	AuditDigest      string `json:"audit_digest"`
+	ApplyDigest      string `json:"apply_digest"`
+	ClaimDigest      string `json:"claim_digest"`
+	AcceptUnknown    bool   `json:"accept_unknown"`
+	RelocationTarget string `json:"relocation_target,omitempty"`
 }
 
-// ReleaseLegacyWechat performs an offline handoff. Both desktop lifetime
-// leases stay held until the new native fence and old claim agree.
+// ReleaseLegacyWechat performs the offline source step of a rollback or
+// relocation. Both desktop lifetime leases stay held through the commit.
 func ReleaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest) (LegacyWechatReleaseResult, error) {
 	var out LegacyWechatReleaseResult
 	if runtime.GOOS != "windows" {
@@ -52,7 +56,8 @@ func ReleaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest) (L
 	}
 	dataDir := cutoverPath(req.DataDir)
 	if !sameCutoverPath(dataDir, dataDir) || !identity.ValidPathID(req.ConnectionID) || !legacyMemoryDigestValid(req.AuditDigest) ||
-		req.ApplyDigest != "" && !legacyMemoryDigestValid(req.ApplyDigest) {
+		req.ApplyDigest != "" && !legacyMemoryDigestValid(req.ApplyDigest) ||
+		req.RelocationTarget != "" && (!legacyMemoryDigestValid(req.RelocationTarget) || strings.ToLower(req.RelocationTarget) != req.RelocationTarget) {
 		return out, errors.New("数据目录、连接或核对摘要无效")
 	}
 	stationRoot, err := workspacefs.OpenPath(dataDir)
@@ -156,10 +161,14 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 	}
 	claimDigest := hexDigest(claimRaw)
 	applyDigest := localCheckpointKey("wechat-rollback-release-v1", proof, req.AuditDigest, stopDigest, claimDigest, req.AcceptUnknown)
+	if req.RelocationTarget != "" {
+		applyDigest = localCheckpointKey("wechat-relocation-fence-v1", proof, req.AuditDigest, stopDigest, claimDigest, req.AcceptUnknown, req.RelocationTarget)
+	}
 	if req.ApplyDigest != "" && req.ApplyDigest != applyDigest {
 		return out, errors.New("执行令牌已变化，请重新预演")
 	}
-	intent := legacyReleaseIntent{Version: 1, ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest, ApplyDigest: applyDigest, ClaimDigest: claimDigest, AcceptUnknown: req.AcceptUnknown}
+	intent := legacyReleaseIntent{Version: 1, ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest, ApplyDigest: applyDigest,
+		ClaimDigest: claimDigest, AcceptUnknown: req.AcceptUnknown, RelocationTarget: req.RelocationTarget}
 	intentRaw, intentErr := readLegacyImportFile(stationRoot, stationNativeReleaseFile, 4096)
 	hasIntent := intentErr == nil
 	var saved legacyReleaseIntent
@@ -169,9 +178,10 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 	archiveName := "legacy-cutover-released-" + applyDigest + ".json"
 	archived, archiveErr := readLegacyImportFile(oldRoot, archiveName, 512)
 	claim, claimErr := readLegacyImportFile(oldRoot, legacyCutoverClaimFile, 512)
-	out = LegacyWechatReleaseResult{State: "ready", ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest, ApplyDigest: applyDigest, Unknown: unknown, NativeFenced: hasIntent}
+	out = LegacyWechatReleaseResult{State: "ready", ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest, ApplyDigest: applyDigest,
+		Unknown: unknown, NativeFenced: hasIntent, RelocationTarget: req.RelocationTarget}
 	if archiveErr == nil {
-		if !hasIntent || hexDigest(archived) != claimDigest || !errors.Is(claimErr, os.ErrNotExist) {
+		if req.RelocationTarget != "" || !hasIntent || hexDigest(archived) != claimDigest || !errors.Is(claimErr, os.ErrNotExist) {
 			return LegacyWechatReleaseResult{}, errors.New("旧微信桌面的解除存档与交接凭证不一致")
 		}
 		out.State = "released"
@@ -190,6 +200,10 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 		return LegacyWechatReleaseResult{}, errors.New("旧微信桌面的正常停机记录已变化")
 	}
 	if hasIntent {
+		if req.RelocationTarget != "" {
+			out.State = "relocation_fenced"
+			return out, nil
+		}
 		out.State = "resume_required"
 	}
 	if req.ApplyDigest == "" {
@@ -207,6 +221,12 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 		if err := stationRoot.Rename(stage, stationNativeReleaseFile); err != nil {
 			return LegacyWechatReleaseResult{}, errors.New("无法启用成长站微信原生启动禁用记录")
 		}
+	}
+	if req.RelocationTarget != "" {
+		// The receiving station must prove its own binding later. Keep the
+		// earlier legacy desktop fenced throughout the transition.
+		out.State, out.NativeFenced = "relocation_fenced", true
+		return out, nil
 	}
 	if err := oldRoot.Rename(legacyCutoverClaimFile, archiveName); err != nil {
 		return LegacyWechatReleaseResult{}, errors.New("成长站微信原生启动已禁用；旧交接凭证尚未归档，请用同一令牌续办")

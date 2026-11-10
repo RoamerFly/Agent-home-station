@@ -8,16 +8,18 @@ import (
 	"flag"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"wechat-bot/internal/station"
 )
 
 type legacyWechatReleaseArgs struct {
-	dataDir       string
-	connectionID  string
-	auditDigest   string
-	acceptUnknown bool
-	applyDigest   string
+	dataDir          string
+	connectionID     string
+	auditDigest      string
+	acceptUnknown    bool
+	applyDigest      string
+	relocationTarget string
 }
 
 func parseLegacyWechatReleaseArgs(args []string) (legacyWechatReleaseArgs, error) {
@@ -27,7 +29,8 @@ func parseLegacyWechatReleaseArgs(args []string) (legacyWechatReleaseArgs, error
 	connectionID := flags.String("connection", "", "需要释放的微信连接标识")
 	auditDigest := flags.String("audit-digest", "", "已核对的 SHA-256 审计摘要")
 	acceptUnknown := flags.Bool("accept-unknown", false, "接受审计中不能自动判定的项目")
-	applyDigest := flags.String("apply", "", "确认预演返回的令牌后执行释放")
+	applyDigest := flags.String("apply", "", "确认预演返回的令牌后执行")
+	relocationTarget := flags.String("relocation-target", "", "搬迁目标的 64 位小写十六进制标识；只封存原站，保留旧交接")
 	if err := flags.Parse(args); err != nil {
 		return legacyWechatReleaseArgs{}, err
 	}
@@ -37,9 +40,21 @@ func parseLegacyWechatReleaseArgs(args []string) (legacyWechatReleaseArgs, error
 	if digest, err := hex.DecodeString(*auditDigest); err != nil || len(digest) != 32 {
 		return legacyWechatReleaseArgs{}, errors.New("请提供完整的 SHA-256 审计摘要")
 	}
+	relocationRequested := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "relocation-target" {
+			relocationRequested = true
+		}
+	})
+	if relocationRequested {
+		digest, err := hex.DecodeString(*relocationTarget)
+		if err != nil || len(digest) != 32 || strings.ToLower(*relocationTarget) != *relocationTarget {
+			return legacyWechatReleaseArgs{}, errors.New("请提供 64 位小写十六进制搬迁目标标识")
+		}
+	}
 	return legacyWechatReleaseArgs{
 		dataDir: *dataDir, connectionID: *connectionID, auditDigest: *auditDigest,
-		acceptUnknown: *acceptUnknown, applyDigest: *applyDigest,
+		acceptUnknown: *acceptUnknown, applyDigest: *applyDigest, relocationTarget: *relocationTarget,
 	}, nil
 }
 
@@ -53,7 +68,7 @@ func runLegacyWechatRelease(ctx context.Context, args []string, output io.Writer
 	}
 	result, err := station.ReleaseLegacyWechat(ctx, station.LegacyWechatReleaseRequest{
 		DataDir: request.dataDir, ConnectionID: request.connectionID, AuditDigest: request.auditDigest,
-		AcceptUnknown: request.acceptUnknown, ApplyDigest: request.applyDigest,
+		AcceptUnknown: request.acceptUnknown, ApplyDigest: request.applyDigest, RelocationTarget: request.relocationTarget,
 	})
 	if err != nil {
 		return err

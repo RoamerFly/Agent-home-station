@@ -1215,6 +1215,8 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	releaseReq.AuditDigest = savedAudit["digest"].(string)
 	rejected("还有在途")
 	releaseReq.AuditDigest = settled["digest"].(string)
+	relocationTarget := strings.Repeat("a1", 32)
+	releaseReq.RelocationTarget = relocationTarget
 	for _, lease := range []string{stationLease, filepath.Join(legacyHost, legacyCutoverLockFile)} {
 		unlock, err := hostfile.TryLock(lease)
 		if err != nil {
@@ -1226,8 +1228,14 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			t.Fatal("release bypassed a held desktop lease", releaseErr)
 		}
 	}
+	relocation, err := release()
+	if err != nil || relocation.State != "ready" || relocation.NativeFenced || relocation.RelocationTarget != relocationTarget {
+		t.Fatal("unexpected offline relocation preview", relocation, err)
+	}
+	releaseReq.RelocationTarget = ""
 	preview, err := release()
-	if err != nil || preview.State != "ready" || preview.Unknown != 2 || preview.NativeFenced || !legacyMemoryDigestValid(preview.ApplyDigest) {
+	if err != nil || preview.State != "ready" || preview.Unknown != 2 || preview.NativeFenced ||
+		!legacyMemoryDigestValid(preview.ApplyDigest) || preview.ApplyDigest == relocation.ApplyDigest {
 		t.Fatal("unexpected offline release preview", preview, err)
 	}
 	if _, err := os.Lstat(intentPath); !errors.Is(err, os.ErrNotExist) {
@@ -1246,6 +1254,36 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	rejected("令牌已变化")
 	if _, err := os.Lstat(intentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("rejected apply wrote a release intent", err)
+	}
+	releaseReq.ApplyDigest = relocation.ApplyDigest
+	releaseReq.RelocationTarget = strings.Repeat("b2", 32)
+	rejected("令牌已变化")
+	releaseReq.RelocationTarget = relocationTarget
+	for range 2 {
+		if done, err := release(); err != nil || done.State != "relocation_fenced" || !done.NativeFenced || done.RelocationTarget != relocationTarget {
+			t.Fatal("relocation fence or idempotent repeat failed", done, err)
+		}
+	}
+	var intent legacyReleaseIntent
+	if raw, err := os.ReadFile(intentPath); err != nil || json.Unmarshal(raw, &intent) != nil ||
+		intent.RelocationTarget != relocationTarget || intent.ApplyDigest != relocation.ApplyDigest || intent.ClaimDigest != hexDigest(claimBytes) {
+		t.Fatal("relocation record lost its intended target or original claim binding", err)
+	}
+	if current, err := os.ReadFile(claimPath); err != nil || !bytes.Equal(current, claimBytes) {
+		t.Fatal("relocation fence released the legacy desktop", err)
+	}
+	if fenced, err := NewLocalHomeHandlerWithApps(host, work, "synthetic-local-password", "", registry); err == nil || !strings.Contains(err.Error(), "微信原生启动已禁用") {
+		if fenced != nil {
+			_ = fenced.Close()
+		}
+		t.Fatal("relocation fence allowed original native startup", err)
+	}
+	releaseReq.RelocationTarget = ""
+	releaseReq.ApplyDigest = ""
+	rejected("已有不同")
+	// Reset the synthetic source to exercise the alternative rollback path.
+	if err := os.Remove(intentPath); err != nil {
+		t.Fatal(err)
 	}
 	releaseReq.ApplyDigest = preview.ApplyDigest
 	if done, err := release(); err != nil || done.State != "released" || !done.NativeFenced {

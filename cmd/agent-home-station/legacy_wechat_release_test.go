@@ -19,6 +19,10 @@ func TestParseLegacyWechatReleaseArgs(t *testing.T) {
 	if err != nil || !parsed.acceptUnknown || parsed.applyDigest != "preview-token" {
 		t.Fatalf("apply arguments = %#v, %v", parsed, err)
 	}
+	parsed, err = parseLegacyWechatReleaseArgs([]string{"--data", data, "--connection", "wechat-primary", "--audit-digest", digest, "--relocation-target", digest})
+	if err != nil || parsed.relocationTarget != digest || parsed.applyDigest != "" {
+		t.Fatalf("relocation arguments = %#v, %v", parsed, err)
+	}
 }
 
 func TestParseLegacyWechatReleaseArgsRejectsUnsafeOrAmbiguousInput(t *testing.T) {
@@ -27,6 +31,8 @@ func TestParseLegacyWechatReleaseArgsRejectsUnsafeOrAmbiguousInput(t *testing.T)
 		{"--data", "relative", "--connection", "wechat-primary", "--audit-digest", digest},
 		{"--data", t.TempDir(), "--audit-digest", digest},
 		{"--data", t.TempDir(), "--connection", "wechat-primary", "--audit-digest", "not-a-sha256"},
+		{"--data", t.TempDir(), "--connection", "wechat-primary", "--audit-digest", digest, "--relocation-target", ""},
+		{"--data", t.TempDir(), "--connection", "wechat-primary", "--audit-digest", digest, "--relocation-target", "relative"},
 		{"--data", t.TempDir(), "--connection", "wechat-primary", "--audit-digest", digest, "unexpected"},
 	} {
 		if _, err := parseLegacyWechatReleaseArgs(args); err == nil {
