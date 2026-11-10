@@ -51,7 +51,16 @@ func ReadDeliveryEvidencePage(dir, account, after string, limit int) (DeliveryEv
 		return page, err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, MaxDeliveryCheckpointBytes+1))
+	return ReadDeliveryEvidencePageFrom(f, account, after, limit)
+}
+
+// ReadDeliveryEvidencePageFrom projects a checkpoint opened by the caller.
+func ReadDeliveryEvidencePageFrom(r io.Reader, account, after string, limit int) (DeliveryEvidencePage, error) {
+	page := DeliveryEvidencePage{Keys: []string{}, Records: map[string]DeliveryEvidence{}}
+	if limit < 1 {
+		return page, errors.New("delivery page size must be positive")
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, MaxDeliveryCheckpointBytes+1))
 	if err != nil {
 		return page, err
 	}
@@ -100,7 +109,15 @@ func ReadDeliveryEvidence(dir, account string, keys []string) (map[string]Delive
 		return nil, err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, MaxDeliveryCheckpointBytes+1))
+	return ReadDeliveryEvidenceFrom(f, account, keys)
+}
+
+// ReadDeliveryEvidenceFrom projects selected keys from an already opened checkpoint.
+func ReadDeliveryEvidenceFrom(r io.Reader, account string, keys []string) (map[string]DeliveryEvidence, error) {
+	if len(keys) == 0 {
+		return map[string]DeliveryEvidence{}, nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, MaxDeliveryCheckpointBytes+1))
 	if err != nil {
 		return nil, err
 	}

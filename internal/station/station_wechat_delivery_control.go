@@ -2,9 +2,7 @@ package station
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
@@ -14,7 +12,6 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
-	"wechat-bot/internal/workspacefs"
 
 	"wechat-bot/internal/websession"
 )
@@ -40,24 +37,11 @@ func (s *stationWechat) deliveryCheckpoint(id string) (*stationWechatWorker, str
 	if w == nil {
 		return nil, "", apphost.ErrNotFound
 	}
-	root, err := workspacefs.OpenPath(w.runtimeStateDir())
-	if err != nil {
-		return nil, "", apphost.ErrUnavailable
-	}
-	defer root.Close()
-	f, err := root.Open("queue/messages-v2.json")
+	account, err := wechatapp.WorkerCheckpointAccount(w.runtimeStateDir(), id)
 	if err != nil {
 		return w, "", err
 	}
-	defer f.Close()
-	var identity struct {
-		Version int
-		Account string
-	}
-	if json.NewDecoder(io.LimitReader(f, bot.MaxDeliveryCheckpointBytes+1)).Decode(&identity) != nil || !bot.SupportedDeliveryCheckpointVersion(identity.Version) || identity.Account == "" || wechatapp.ConnectionID(identity.Account) != id {
-		return nil, "", apphost.ErrUnavailable
-	}
-	return w, identity.Account, nil
+	return w, account, nil
 }
 
 func deliveryStopID(in companion.Input) string {
@@ -146,7 +130,7 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	worker.deliveryMu.Lock()
-	rows, err := bot.ReadDeliveryEvidencePage(worker.queueDir(), account, "", 5000)
+	rows, err := wechatapp.ReadWorkerDeliveryPage(worker.runtimeStateDir(), account, "", 5000)
 	row, found := rows.Records[key]
 	if err != nil || !found || row.Trace == "" {
 		worker.deliveryMu.Unlock()

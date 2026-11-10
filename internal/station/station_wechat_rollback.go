@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -171,7 +172,7 @@ func (target legacyRollbackTarget) checkpoint(after string, limit int) (rollback
 	w := target.worker
 	w.deliveryMu.Lock()
 	defer w.deliveryMu.Unlock()
-	rows, err := bot.ReadDeliveryEvidencePage(w.queueDir(), target.ref.AccountID, after, limit)
+	rows, err := wechatapp.ReadWorkerDeliveryPage(w.runtimeStateDir(), target.ref.AccountID, after, limit)
 	stops, stopErr := w.readDeliveryStops()
 	controls, controlErr := w.readResumeControls()
 	if err != nil || stopErr != nil || controlErr != nil {
@@ -235,7 +236,7 @@ func (c rollbackCheckpoint) project(ctx context.Context, ref apphost.ConnectionR
 		// exhaust their deadline. The remaining records retain stored evidence.
 		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		row := c.rows.Records[key]
-		receipt, active := projectRollbackReceipt(lookupCtx, native, ref, key, row)
+		receipt, active := wechatapp.ProjectRollbackReceipt(lookupCtx, native, ref, key, row)
 		cancel()
 		_, stopped := c.stops[deliveryStopID(companion.Input{Account: ref.AccountID, Thread: row.Status.ThreadID, TraceID: row.Trace})]
 		receipt.CancelRequested = receipt.CancelRequested || stopped

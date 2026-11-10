@@ -7,7 +7,6 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 )
@@ -27,7 +26,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 	if w == nil {
 		return page, nil
 	}
-	rows, err := bot.ReadDeliveryEvidencePage(w.queueDir(), account, after, limit)
+	rows, err := wechatapp.ReadWorkerDeliveryPage(w.runtimeStateDir(), account, after, limit)
 	if err != nil {
 		return page, apphost.ErrUnavailable
 	}
@@ -81,11 +80,10 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if w == nil {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
-	evidence, err := bot.ReadDeliveryEvidence(w.queueDir(), account, []string{key})
+	row, found, err := wechatapp.ReadWorkerDelivery(w.runtimeStateDir(), account, key)
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}
-	row, found := evidence[key]
 	if !found {
 		return s.readLegacyReceipt(ctx, id, key, native)
 	}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -185,8 +186,7 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 		websession.Fail(w, 409, "连接已为回退停发，未登记新续发")
 		return
 	}
-	evidence, err := bot.ReadDeliveryEvidence(worker.queueDir(), account, []string{key})
-	old, exists := evidence[key]
+	old, exists, err := wechatapp.ReadWorkerDelivery(worker.runtimeStateDir(), account, key)
 	if err != nil || !exists || old.Trace == "" {
 		websession.Fail(w, 404, "原投递记录不存在")
 		return

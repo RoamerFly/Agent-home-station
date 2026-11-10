@@ -11,7 +11,6 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/stationservices"
@@ -119,11 +118,10 @@ func (s *stationWechat) stationRecallEvidence(ctx context.Context, id, key, serv
 	if err != nil {
 		return out, err
 	}
-	rows, err := bot.ReadDeliveryEvidence(w.queueDir(), account, []string{key})
+	row, ok, err := wechatapp.ReadWorkerDelivery(w.runtimeStateDir(), account, key)
 	if err != nil {
 		return out, apphost.ErrUnavailable
 	}
-	row, ok := rows[key]
 	if !ok || !identity.ValidPathID(row.Status.ThreadID) {
 		return out, apphost.ErrNotFound
 	}

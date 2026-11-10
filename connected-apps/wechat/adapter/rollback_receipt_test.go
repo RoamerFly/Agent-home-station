@@ -1,4 +1,4 @@
-package station
+package adapter
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func TestProjectRollbackReceiptSeparatesActiveFromUnknownAndRetainsParts(t *test
 		},
 	}}
 	ref := apphost.ConnectionRef{AppID: "wechat", InstallationID: "local", ConnectionID: "wechat-one", AccountID: "one"}
-	receipt, active := projectRollbackReceipt(context.Background(), native, ref, "delivery-one", row)
+	receipt, active := ProjectRollbackReceipt(context.Background(), native, ref, "delivery-one", row)
 	if !active || receipt.Lookup != "platform" || receipt.PlatformState != "running" || receipt.State != "submitted_pending" {
 		t.Fatalf("running native operation was not projected as active: %#v active=%v", receipt, active)
 	}
@@ -61,7 +61,7 @@ func TestProjectRollbackReceiptSeparatesActiveFromUnknownAndRetainsParts(t *test
 		t.Fatalf("a native response that omitted a pending position erased evidence: %#v", receipt)
 	}
 
-	unknown, active := projectRollbackReceipt(context.Background(), nil, ref, "delivery-one", row)
+	unknown, active := ProjectRollbackReceipt(context.Background(), nil, ref, "delivery-one", row)
 	if active || unknown.Lookup != "stored" || unknown.State != "submission_unknown" {
 		t.Fatalf("offline checkpoint must remain unknown rather than active: %#v active=%v", unknown, active)
 	}
