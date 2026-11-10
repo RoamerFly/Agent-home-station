@@ -37,7 +37,8 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 		websession.Fail(w, 400, "请提供有效的原投递编号和请求编号")
 		return
 	}
-	worker, account, err := s.deliveryCheckpoint(r.PathValue("connection"))
+	id := r.PathValue("connection")
+	worker, account, err := s.deliveryCheckpoint(id)
 	if err != nil || worker == nil {
 		websession.Fail(w, 404, "原投递记录不存在")
 		return
@@ -53,8 +54,9 @@ func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Req
 		websession.Respond(w, 202, map[string]any{"idempotency_key": key, "continuation": wechatapp.ResumeControlView(saved)})
 		return
 	}
-	worker.platformMu.RLock()
-	defer worker.platformMu.RUnlock()
+	fence := s.platformFence(id)
+	fence.RLock()
+	defer fence.RUnlock()
 	root, err := workspacefs.OpenPath(worker.dir)
 	if err != nil {
 		websession.Fail(w, 503, "连接状态暂不可读")

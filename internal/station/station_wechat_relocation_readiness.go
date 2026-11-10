@@ -151,7 +151,7 @@ func (s *stationWechat) relocationReadiness(ctx context.Context, id, confirmatio
 	if err != nil || login.AccountID != archive.Plan.Account || login.StorageMode != "managed" || !login.LoginObserved {
 		return blocked("未取得接收站匹配账号的托管登录状态")
 	}
-	view.NativeLogin = targetLoginState(login, archive.Plan.Account)
+	view.NativeLogin = wechatapp.TargetLoginState(login, archive.Plan.Account)
 	if view.NativeLogin != "online" {
 		return blocked("接收站微信账号尚未在线")
 	}
@@ -244,13 +244,13 @@ func (s *stationWechat) relocationActivationGuard(ctx context.Context, id string
 		return nil, apphost.ErrLifecycleCutover
 	}
 	epoch := s.runningDesktopEpoch()
-	daemon, err := native.DaemonStatus(ctx)
-	if epoch == "" || err != nil || daemon.ServerID != approval.TargetDataset || !sameStationNativeRoot(s.dataDir, daemon) {
+	if epoch == "" {
 		return nil, apphost.ErrLifecycleCutover
 	}
-	status, err := native.Status(ctx)
-	if err != nil || status.StorageMode != "managed" || targetLoginState(status, native.Account()) != "online" ||
-		s.runningDesktopEpoch() != epoch || ctx.Err() != nil {
+	err := wechatapp.CheckManagedWriteTarget(ctx, native, approval.TargetDataset, true, func(daemon linuxnative.DaemonStatus) bool {
+		return sameStationNativeRoot(s.dataDir, daemon)
+	})
+	if err != nil || s.runningDesktopEpoch() != epoch || ctx.Err() != nil {
 		return nil, apphost.ErrLifecycleCutover
 	}
 	return func() bool {

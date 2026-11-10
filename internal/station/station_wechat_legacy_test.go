@@ -1735,3 +1735,81 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 }
 
 func planDigest(plan map[string]any) map[string]any { return map[string]any{"digest": plan["digest"]} }
+
+type earlyWriteFixtureNative struct {
+	stationWechatNative
+	sender *linuxnative.Sender
+}
+
+func (f earlyWriteFixtureNative) WorkerSender(context.Context, string) (*linuxnative.Sender, error) {
+	return f.sender, nil
+}
+
+func TestWechatPlatformFenceKeepsWritesAdmittedBeforeWorkerCreation(t *testing.T) {
+	started, finish := make(chan struct{}), make(chan struct{})
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		w.(http.Flusher).Flush()
+		select {
+		case <-finish:
+			_, _ = w.Write([]byte("{\"id\":\"fixture-action\",\"accountId\":\"one\",\"state\":\"succeeded\"}"))
+		case <-r.Context().Done():
+		}
+	}))
+	defer daemon.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	base := t.TempDir()
+	token := filepath.Join(base, "token")
+	if err := os.WriteFile(token, []byte("synthetic-fence-fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := linuxnative.New(linuxnative.Config{URL: daemon.URL, TokenFile: token, Account: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := &stationWechat{stationWechatNative: earlyWriteFixtureNative{sender: raw}, ctx: ctx,
+		root: filepath.Join(base, "workers"), workers: map[string]*stationWechatWorker{}}
+	id, other := wechatapp.ConnectionID("one"), wechatapp.ConnectionID("other")
+	if _, err := host.WorkerSender(ctx, other); !errors.Is(err, apphost.ErrLifecycleCutover) {
+		t.Fatal("an account-scoped sender was bound to another connection", err)
+	}
+	sender, err := host.WorkerSender(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := sender.ExecuteAction(ctx, linuxnative.AdminAction{Kind: "mute", ThreadID: "room", Muted: true}, "before-worker")
+		result <- err
+	}()
+	select {
+	case <-started:
+	case err := <-result:
+		t.Fatal("native dispatch did not start", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	worker, err := host.worker(id, true)
+	if err != nil || worker == nil {
+		t.Fatal("fixture worker was not created", err)
+	}
+	if fence := host.platformFence(id); fence.TryLock() {
+		fence.Unlock()
+		t.Fatal("rollback could finish with an earlier response still open")
+	}
+	if fence := host.platformFence(other); !fence.TryLock() {
+		t.Fatal("an unrelated connection was fenced")
+	} else {
+		fence.Unlock()
+	}
+	close(finish)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if fence := host.platformFence(id); !fence.TryLock() {
+		t.Fatal("the fence survived the closed response")
+	} else {
+		fence.Unlock()
+	}
+}

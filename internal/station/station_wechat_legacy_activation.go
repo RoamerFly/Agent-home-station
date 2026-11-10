@@ -13,6 +13,7 @@ import (
 	"slices"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/identity"
@@ -150,7 +151,7 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	}
 	account := native.Account()
 	status, _ := native.Status(ctx)
-	view.TargetLogin = targetLoginState(status, account)
+	view.TargetLogin = wechatapp.TargetLoginState(status, account)
 	view.NativeProfile, _ = s.nativeImportEvidence(id, account, status)
 	if view.NativeProfile == nativeImportPathChanged {
 		// An existing claim may still fence the old host even when the copied
@@ -227,7 +228,7 @@ func (s *stationWechat) legacyActivation(ctx context.Context, id string, input l
 	fresh, daemonErr := native.DaemonStatus(ctx)
 	login, loginErr := native.Status(ctx)
 	profile, profileDigest := s.nativeImportReceipt(id, account)
-	if daemonErr != nil || fresh != daemon || loginErr != nil || login.StorageMode != "managed" || targetLoginState(login, account) != "online" ||
+	if daemonErr != nil || fresh != daemon || loginErr != nil || login.StorageMode != "managed" || wechatapp.TargetLoginState(login, account) != "online" ||
 		profile != "import_receipt_matched" || hex.EncodeToString(profileDigest[:]) != proof.ProfileDigest || ctx.Err() != nil || s.ctx.Err() != nil {
 		return blocked("原生实例或切换证据已变化，请重新核对")
 	}
@@ -383,15 +384,17 @@ func (s *stationWechat) legacyActivationCheck(ctx context.Context, id string, na
 		}
 	}
 	proof := *policy.LegacyActivation
-	daemon, err := native.DaemonStatus(ctx)
-	if err != nil || !s.activationMatches(proof, id, archive.Plan, daemon.ServerID) {
+	if !s.activationBound(proof, id, archive.Plan, proof.TargetDataset) {
 		return nil, apphost.ErrLifecycleCutover
 	}
-	status, err := native.Status(ctx)
-	if err != nil || status.AccountID != native.Account() || status.StorageMode != "managed" {
-		return nil, apphost.ErrLifecycleCutover
+	evidenceCurrent := func() bool { return s.localActivationEvidence(id, proof) }
+	err = wechatapp.CheckManagedWriteTarget(ctx, native, proof.TargetDataset, false, func(linuxnative.DaemonStatus) bool {
+		return evidenceCurrent()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return func() bool { return s.localActivationEvidence(id, proof) }, nil
+	return evidenceCurrent, nil
 }
 
 func (s *stationWechat) checkUnarchivedNativeProfile(id string) error {
@@ -446,20 +449,20 @@ func (s *stationWechat) WorkerSender(ctx context.Context, id string) (*linuxnati
 	if err != nil {
 		return nil, err
 	}
-	native.GuardChanges(func(ctx context.Context) (func(), error) {
-		w, err := s.worker(id, false)
-		if err != nil {
+	err = wechatapp.GuardWorkerWrites(native, id, func(ctx context.Context) (func(), error) {
+		if _, err := s.worker(id, false); err != nil {
 			return nil, err
 		}
-		if w == nil {
-			return nil, s.admitPlatformWrite(ctx, id, native)
-		}
-		w.platformMu.RLock()
+		fence := s.platformFence(id)
+		fence.RLock()
 		if err := s.admitPlatformWrite(ctx, id, native); err != nil {
-			w.platformMu.RUnlock()
+			fence.RUnlock()
 			return nil, err
 		}
-		return w.platformMu.RUnlock, nil
+		return fence.RUnlock, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	return native, nil
 }

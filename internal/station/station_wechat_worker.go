@@ -42,6 +42,7 @@ type stationWechat struct {
 	lifecycle              *wechatapp.WorkerLifecycle
 	mu                     sync.Mutex
 	workers                map[string]*stationWechatWorker
+	platformFences         map[string]*sync.RWMutex
 	artifacts              stationservices.Artifacts
 	shareOptions           pluginruntime.Options
 	localASR               stationLocalASR
@@ -82,7 +83,6 @@ const stationWechatPolicyLimit = 128 << 10
 type stationWechatWorker struct {
 	mu              sync.Mutex
 	deliveryMu      sync.Mutex
-	platformMu      sync.RWMutex
 	rollbackAuditMu sync.Mutex
 	shareMu         sync.Mutex
 	share           *stationShareHost
@@ -175,6 +175,22 @@ func (s *stationWechat) restoreWorker(id string) {
 		w.cutoverBlocked.Store(false)
 		_ = s.launch(w, native, guard)
 	}
+}
+
+// The fence belongs to the connection, including writes admitted before its
+// worker exists. Rollback waits for those requests and newly admitted ones.
+func (s *stationWechat) platformFence(id string) *sync.RWMutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fence := s.platformFences[id]
+	if fence == nil {
+		if s.platformFences == nil {
+			s.platformFences = make(map[string]*sync.RWMutex)
+		}
+		fence = new(sync.RWMutex)
+		s.platformFences[id] = fence
+	}
+	return fence
 }
 
 func (s *stationWechat) worker(id string, create bool) (*stationWechatWorker, error) {

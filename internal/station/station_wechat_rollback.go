@@ -143,12 +143,13 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 		}
 	}
 	view.State = "draining"
-	if !workerStopped || !w.platformMu.TryLock() {
+	fence := s.platformFence(id)
+	if !workerStopped || !fence.TryLock() {
 		return view, nil
 	}
 	// The persisted policy denies new platform requests. Acquiring this lock
 	// proves previously admitted requests have returned and closed their bodies.
-	w.platformMu.Unlock()
+	fence.Unlock()
 	view.State = "frozen"
 	return view, nil
 }

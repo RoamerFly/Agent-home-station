@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,7 +39,7 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "2c0fdec0e50a997bc20b98a2593a833d361c1e651d1972f98662ece2214f372d",
+    "CHANGELOG.md": "8e42fa7e515dbefd8ae7bffe30ea3e259c865cdb45c1c36abb85482a9d56e3e3",
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "8e6334a50c7e1fff4c4f2aa47a049f0dc4d4f09583fc069338730a4379f398bb",
@@ -85,6 +85,7 @@
     "adapter/worker_checkpoint.go": "be44c24863347fd689f0cb127d4db56183395da831cf60b5a0a2c31a41adb5d6",
     "adapter/worker_checkpoint_test.go": "e9a3bb1aaa15e49a7b3ee36493b54852156390548a38d38ae7734059977244a8",
     "adapter/worker_checkpoint_windows_test.go": "4bcdf45f600ccb5dc6d793738a1a5b19b739385ba0074d0cf1d90e0ef94c7e51",
+    "adapter/write_guard.go": "283426482905e7023a91cf8a24cee58e6826be3f4d6a32232b727c1dc21ba979",
     "capabilities.json": "bbdeb872b36220639af35e56a1bf1a67356e8d0f55235b2b88378eaa55072ccb",
     "config.schema.json": "8491177ce18b8c2860389a81e3022162f5ba7d98024abf04251bf0eb8d16bd57",
     "config/README.md": "b8abc4aaf42f02970bb3b7db56301c2444dc4a180ff8f249648a795bf662a5d7",

@@ -156,23 +156,8 @@ func (s *stationWechat) checkLegacyCutover(ctx context.Context, id string, nativ
 	legacy, marker := s.legacyHostEvidence(snapshot, source, oldServer)
 	status, _ := native.Status(ctx)
 	profile, receipt := s.nativeImportEvidence(id, native.Account(), status)
-	login := targetLoginState(status, native.Account())
+	login := wechatapp.TargetLoginState(status, native.Account())
 	return &legacyCutover{
 		LegacyHost: legacy, NativeProfile: profile, TargetLogin: login, TargetIdentity: "owner_check_pending",
 	}, [2][32]byte{marker, receipt}
-}
-
-func targetLoginState(status linuxnative.Status, account string) string {
-	login := "pending"
-	if status.AccountID == account && status.LoginObserved {
-		switch {
-		case !status.Authenticated:
-			login = "signed_out"
-		case status.Connection == "online" || status.Connection == "connected":
-			login = "online"
-		default:
-			login = "authenticated_offline"
-		}
-	}
-	return login
 }
