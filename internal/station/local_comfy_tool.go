@@ -169,7 +169,7 @@ func (e localComfyInvocation) start(ctx context.Context, raw json.RawMessage) (s
 	}
 	args := localComfyJobInput{Origin: source, Trace: t.traceID, Binding: e.deployment.Binding, Workflow: in.Workflow,
 		Approval: workflow.Fingerprint, GraphSHA256: digest, SaveNode: workflow.SaveNode, Title: in.Title}
-	op := companion.LocalToolCheckpoint{Tool: localComfyStartTool, Target: in.Workflow, Grant: localCheckpointKey(g),
+	op := companion.LocalToolCheckpoint{Tool: localComfyStartTool, Target: in.Workflow, Grant: g.projectJobAuthorization(),
 		Key: localCheckpointKey(localComfyStartTool, source.EventID, source.Revision, args)}
 	call := pluginhost.Invocation{Account: g.FishID, Thread: g.OwnerID, Requester: g.OwnerID, Purpose: "local ComfyUI creation",
 		RequestKey: op.Key, Authorization: op.Grant, SourceVersions: map[string]int{source.EventID: source.Revision}}

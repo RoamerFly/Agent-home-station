@@ -226,6 +226,12 @@ func TestLiveLocalProjectAudioRecoversOutputAfterReplyFailure(t *testing.T) {
 	if runtime.GOOS != "windows" || os.Getenv("AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST") != "1" {
 		t.Skip("set AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST=1 on Windows for audio LPAC acceptance")
 	}
+	t.Run("restart", func(t *testing.T) { testLocalProjectAudioRecovery(t, false) })
+	t.Run("relocate", func(t *testing.T) { testLocalProjectAudioRecovery(t, true) })
+}
+
+func testLocalProjectAudioRecovery(t *testing.T, relocate bool) {
+	t.Helper()
 	options := localProjectToolWindowsOptionsFor(t, localAudioPackage)
 	base := t.TempDir()
 	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
@@ -289,11 +295,14 @@ func TestLiveLocalProjectAudioRecoversOutputAfterReplyFailure(t *testing.T) {
 		t.Fatalf("interrupted audio provenance: %d %#v", code, view)
 	}
 
-	// This models a desktop/service restart after the result is durable but
-	// before the final natural-language reply commits. The retry repeats the
-	// original tool call; it must read the registered output through the
-	// checkpoint rather than launch another audio process.
-	next := localRestartChat(t, f)
+	// Repeat the original tool call after reopening the durable store.
+	// Recovery must read the original result without starting the runtime.
+	var next *localHomeFixture
+	if relocate {
+		next = localRelocateChat(t, f)
+	} else {
+		next = localRestartChat(t, f)
+	}
 	next.handler.chat.projectTools.options = options
 	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
 		round := 0

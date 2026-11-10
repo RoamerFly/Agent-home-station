@@ -143,11 +143,11 @@ func (e localYuEInvocation) start(ctx context.Context, raw json.RawMessage) (str
 	if !ok {
 		return "", errors.New("本轮来源已变化")
 	}
-	op := companion.LocalToolCheckpoint{Tool: localYuEStartTool, Target: string(in.Mode), Grant: localCheckpointKey(g),
+	op := companion.LocalToolCheckpoint{Tool: localYuEStartTool, Target: string(in.Mode), Grant: g.projectJobAuthorization(),
 		Key: localCheckpointKey(localYuEStartTool, source.EventID, source.Revision, in)}
 	for _, previous := range t.run.Operations {
 		if previous.Key == op.Key {
-			return localProcessJSON(t.yueCheckpointView(previous, g))
+			return localProcessJSON(t.checkpointView(previous, g))
 		}
 	}
 	deploy, err := t.projectTools.yue.Info(ctx, g.FishID)

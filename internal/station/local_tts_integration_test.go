@@ -174,6 +174,12 @@ func TestLocalSpeechDisableCancelsAndWithholdsLateWAV(t *testing.T) {
 }
 
 func TestLocalSpeechJobStatusAndCancelAfterRestartNeverReplays(t *testing.T) {
+	t.Run("restart", func(t *testing.T) { testLocalSpeechJobRecovery(t, false) })
+	t.Run("relocate", func(t *testing.T) { testLocalSpeechJobRecovery(t, true) })
+}
+
+func testLocalSpeechJobRecovery(t *testing.T, relocate bool) {
+	t.Helper()
 	f, backend := newLocalTTSFixture(t)
 	var observed string
 	args := map[string]any{"voice_id": backend.voice.ID, "text": "A synthetic test.", "speed": 0.8, "text_language": "en"}
@@ -208,8 +214,20 @@ func TestLocalSpeechJobStatusAndCancelAfterRestartNeverReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := localRestartChat(t, f)
+	var next *localHomeFixture
+	if relocate {
+		next = localRelocateChat(t, f)
+	} else {
+		next = localRestartChat(t, f)
+	}
+	next.handler.chat.projectTools.tts = backend
 	before := backend.calls.Load()
+	installLocalTTSModel(next, localTTSJobTool, map[string]any{"job_id": original.ID, "action": "status"}, &observed)
+	if code, out := localChatSend(next, "speech-job-completed", "查一下已完成的语音任务"); code != http.StatusOK ||
+		out["status"] != "completed" || len(original.Artifacts) != 1 ||
+		!strings.Contains(observed, original.Artifacts[0]) || backend.calls.Load() != before {
+		t.Fatalf("completed job lost its original artifact: %d %#v calls=%d observed=%s", code, out, backend.calls.Load(), observed)
+	}
 	installLocalTTSModel(next, localTTSJobTool, map[string]any{"job_id": pending.ID, "action": "status"}, &observed)
 	if code, out := localChatSend(next, "speech-job-status", "查一下刚才语音任务的状态"); code != http.StatusOK || out["status"] != "completed" || !strings.Contains(observed, "original_worker_not_queryable") || backend.calls.Load() != before {
 		t.Fatalf("restart status replayed or hid durable state: %d %#v calls=%d observed=%s", code, out, backend.calls.Load(), observed)
@@ -225,5 +243,18 @@ func TestLocalSpeechJobStatusAndCancelAfterRestartNeverReplays(t *testing.T) {
 	finished, err := nextHost.store.Job(context.Background(), pending.ID)
 	if err != nil || finished.State != "cancelled" || len(finished.Artifacts) != 0 {
 		t.Fatalf("orphaned speech job did not become a safe terminal cancellation: %#v err=%v", finished, err)
+	}
+	_, home := next.request("GET", "/api/local/home", nil, false)
+	if code, out := next.request("POST", "/api/local/home", map[string]any{"action": "pause", "revision": home["revision"]}, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	_, paused := next.request("GET", "/api/local/home", nil, false)
+	if code, out := next.request("POST", "/api/local/home", map[string]any{"action": "authorize", "revision": paused["revision"]}, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	installLocalTTSModel(next, localTTSJobTool, map[string]any{"job_id": original.ID, "action": "status"}, &observed)
+	if code, out := localChatSend(next, "speech-job-revoked", "再查旧任务"); code != http.StatusOK ||
+		!strings.Contains(observed, "本次没有取得结果") || strings.Contains(observed, original.Artifacts[0]) || backend.calls.Load() != before {
+		t.Fatalf("old job remained usable after grant revision changed: %d %#v", code, out)
 	}
 }

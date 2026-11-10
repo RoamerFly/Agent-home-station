@@ -25,6 +25,17 @@ type localWorkspaceGrant struct {
 	Revision  uint64
 }
 
+// A project job follows the persisted owner grant. Filesystem operations still
+// resolve the current directory and pin it separately at their execution boundary.
+func (g localWorkspaceGrant) projectJobAuthorization() string {
+	return localCheckpointKey("local-project-job-grant-v1", g.FishID, g.OwnerID, g.Revision)
+}
+
+func (g localWorkspaceGrant) matchesProjectJobAuthorization(key string) bool {
+	// Previous versions hashed the full grant, including its absolute root.
+	return key == g.projectJobAuthorization() || key == localCheckpointKey(g)
+}
+
 // localWorkspaceAccess exposes the fish's own home only.  It deliberately has
 // no account, conversation, or platform identity: applications are connected
 // resources, not the owner of the fish's private working directory.

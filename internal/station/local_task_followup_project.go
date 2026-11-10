@@ -47,14 +47,13 @@ func (t *localToolSet) projectFollowupJob(ctx context.Context, resultTool, jobID
 		return empty, errProjectFollowupAuthority
 	}
 	call := job.Context
-	grantKey := localCheckpointKey(grant)
 	if call.Account != grant.FishID || call.Thread != grant.OwnerID || call.Requester != grant.OwnerID ||
-		call.Authorization != grantKey || call.SourceVersions[source.EventID] != source.Revision {
+		!grant.matchesProjectJobAuthorization(call.Authorization) || call.SourceVersions[source.EventID] != source.Revision {
 		return empty, errProjectFollowupAuthority
 	}
 	bound := false
 	for _, op := range t.run.Operations {
-		if op.Tool == start && op.Key == call.RequestKey && op.Grant == grantKey {
+		if op.Tool == start && op.Key == call.RequestKey && op.Grant == call.Authorization {
 			bound = true
 			break
 		}

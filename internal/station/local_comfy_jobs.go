@@ -25,7 +25,7 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	job, err := e.host.store.Job(ctx, in.ID)
 	g := e.grant
 	if err != nil || job.Plugin != localComfyPackage || job.Tool != localComfyCapability || job.Context.Account != g.FishID ||
-		job.Context.Requester != g.OwnerID || job.Context.Thread != g.OwnerID || job.Context.Authorization != localCheckpointKey(g) ||
+		job.Context.Requester != g.OwnerID || job.Context.Thread != g.OwnerID || !g.matchesProjectJobAuthorization(job.Context.Authorization) ||
 		job.PackageDigest != e.installed.Digest || job.ConfigRevision != e.configRevision || e.authorize(job.Context) != nil {
 		return "", errors.New("ComfyUI 任务不存在或原授权、版本已变化")
 	}

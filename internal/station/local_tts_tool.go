@@ -185,7 +185,7 @@ func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.R
 	if !ok {
 		return "", errors.New("本轮来源已变化")
 	}
-	op := companion.LocalToolCheckpoint{Tool: localTTSStartTool, Grant: localCheckpointKey(grant),
+	op := companion.LocalToolCheckpoint{Tool: localTTSStartTool, Grant: grant.projectJobAuthorization(),
 		Key: localCheckpointKey(localTTSStartTool, source.EventID, source.Revision, request)}
 	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
 		job, err := t.runLocalTTS(ctx, s, host, grant, installed, source, op, info.Binding, selected, request)
@@ -359,7 +359,7 @@ func (t *localToolSet) localTTSJobAction(ctx context.Context, s *localProjectToo
 	job, err := host.store.Job(ctx, in.ID)
 	if err != nil || job.Plugin != localTTSPackage || job.Tool != localTTSCapability ||
 		job.Context.Account != grant.FishID || job.Context.Requester != grant.OwnerID || job.Context.Thread != grant.OwnerID ||
-		job.Context.Authorization != localCheckpointKey(grant) {
+		!grant.matchesProjectJobAuthorization(job.Context.Authorization) {
 		return "", errors.New("本机语音任务不存在或原授权已变化")
 	}
 	legacy, err := localTTSJobPackage(host, installed, job)

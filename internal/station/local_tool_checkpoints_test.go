@@ -161,6 +161,25 @@ func TestLocalFileCheckpointGrantKeepsOwnerAndRevisionBound(t *testing.T) {
 	}
 }
 
+func TestLocalProjectJobAuthorizationRemainsScopedAfterRelocation(t *testing.T) {
+	original := localWorkspaceGrant{FishID: "fish", OwnerID: "owner", Directory: "original", Revision: 2}
+	legacy := localCheckpointKey(original)
+	current := original.projectJobAuthorization()
+	if !original.matchesProjectJobAuthorization(legacy) {
+		t.Fatal("legacy job lost its authorization at the original root")
+	}
+	moved := original
+	moved.Directory = "relocated"
+	if !moved.matchesProjectJobAuthorization(current) || moved.matchesProjectJobAuthorization(legacy) ||
+		moved.matchesProjectJobAuthorization(localFileCheckpointGrant(moved)) {
+		t.Fatal("relocation confused legacy, file, and project grants")
+	}
+	moved.Revision++
+	if moved.matchesProjectJobAuthorization(current) {
+		t.Fatal("a new revision accepted a revoked project grant")
+	}
+}
+
 func TestLocalToolCheckpointFindsInterruptedProcessBeforeModelRetry(t *testing.T) {
 	f := localChatFixture(t)
 	const request, original = "process-once", "启动项目程序"

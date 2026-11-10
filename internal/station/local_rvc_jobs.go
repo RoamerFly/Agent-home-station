@@ -111,7 +111,7 @@ func (e localRVCInvocation) readJob(ctx context.Context, id string, cancelOnly b
 	job, err := e.host.store.Job(ctx, id)
 	if err != nil || job.Plugin != localRVCPackage || job.Tool != localRVCCapability || job.Context.Account != g.FishID ||
 		job.Context.Thread != g.OwnerID || job.Context.Requester != g.OwnerID ||
-		job.Context.Authorization != localCheckpointKey(g) || job.PackageDigest != e.installed.Digest ||
+		!g.matchesProjectJobAuthorization(job.Context.Authorization) || job.PackageDigest != e.installed.Digest ||
 		job.ConfigRevision != e.configRevision || json.Unmarshal(job.Arguments, &args) != nil ||
 		args.Origin == nil || !args.Pin.valid() || job.Context.SourceVersions[args.Origin.EventID] != args.Origin.Revision {
 		return job, args, nil, errors.New("原 RVC 任务不可用或授权已变化")
@@ -197,7 +197,7 @@ func (e localRVCInvocation) resume(ctx context.Context, job pluginhost.Job, args
 	if err = e.checkSource(ctx, args, bound); err != nil {
 		return "", err
 	}
-	op := companion.LocalToolCheckpoint{Tool: localRVCJobTool, Grant: localCheckpointKey(e.grant), Target: job.ID,
+	op := companion.LocalToolCheckpoint{Tool: localRVCJobTool, Grant: job.Context.Authorization, Target: job.ID,
 		Key: localCheckpointKey(localRVCJobTool, e.tool.traceID, job.ID, "resume")}
 	return e.tool.dispatchCheckpointed(ctx, op, e.grant, func() (string, string, error) {
 		result, err := e.action(ctx, job, args, "resume")

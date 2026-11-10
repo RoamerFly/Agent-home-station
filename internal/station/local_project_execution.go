@@ -120,7 +120,7 @@ func (t *localToolSet) invokeLocalProjectTool(ctx context.Context, tool string, 
 		args["artifact"], _ = json.Marshal(localArtifactLink{ID: artifact.ID, SHA256: artifact.SHA256})
 		arguments, _ = json.Marshal(args)
 	}
-	op := companion.LocalToolCheckpoint{Tool: tool, Grant: localCheckpointKey(grant), Target: inputID,
+	op := companion.LocalToolCheckpoint{Tool: tool, Grant: grant.projectJobAuthorization(), Target: inputID,
 		Key: localCheckpointKey(tool, source.EventID, source.Revision, json.RawMessage(arguments))}
 	for _, previous := range t.run.Operations {
 		if previous.Key == op.Key {

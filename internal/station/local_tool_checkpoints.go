@@ -281,8 +281,12 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		return view
 	}
 	homeOperation := op.Tool == "server_write" || op.Tool == "server_edit" || op.Tool == localArtifactPublishTool
+	project := projectOperation(op.Tool)
+	projectJob := project.capability != "" || op.Tool == localRVCStartTool || op.Tool == localRVCJobTool ||
+		op.Tool == localComfyStartTool || op.Tool == localYuEStartTool || op.Tool == localTTSStartTool
 	if grant.Directory == "" || (op.Grant != localCheckpointKey(grant) &&
-		(!homeOperation || op.Grant != localFileCheckpointGrant(grant))) {
+		(!homeOperation || op.Grant != localFileCheckpointGrant(grant)) &&
+		(!projectJob || op.Grant != grant.projectJobAuthorization())) {
 		view["state"] = "grant_changed"
 		return view
 	}
@@ -301,7 +305,7 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 	if op.Tool == localTTSStartTool {
 		return t.ttsCheckpointView(op, grant)
 	}
-	if projectOperation(op.Tool).capability != "" {
+	if project.capability != "" {
 		return t.projectCheckpointView(op, grant)
 	}
 	view["path"] = op.Target

@@ -280,11 +280,11 @@ func (e localRVCInvocation) start(ctx context.Context, raw json.RawMessage) (str
 	if !ok {
 		return "", errors.New("本轮来源已变化，未提交换声")
 	}
-	op := companion.LocalToolCheckpoint{Tool: localRVCStartTool, Grant: localCheckpointKey(g), Target: in.Artifact,
+	op := companion.LocalToolCheckpoint{Tool: localRVCStartTool, Grant: g.projectJobAuthorization(), Target: in.Artifact,
 		Key: localCheckpointKey(localRVCStartTool, source.EventID, source.Revision, in)}
 	for _, previous := range t.run.Operations {
 		if previous.Key == op.Key {
-			return localProcessJSON(t.rvcCheckpointView(previous, g))
+			return localProcessJSON(t.checkpointView(previous, g))
 		}
 	}
 	if t.inspectOnly {

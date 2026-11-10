@@ -43,7 +43,7 @@ func (e localYuEInvocation) jobAction(ctx context.Context, raw json.RawMessage) 
 	g := e.grant
 	if err != nil || job.Plugin != localYuEPackage || job.Tool != localYuECapability ||
 		job.Context.Account != g.FishID || job.Context.Requester != g.OwnerID || job.Context.Thread != g.OwnerID ||
-		job.Context.Authorization != localCheckpointKey(g) || job.PackageDigest != e.installed.Digest ||
+		!g.matchesProjectJobAuthorization(job.Context.Authorization) || job.PackageDigest != e.installed.Digest ||
 		job.ConfigRevision != e.configRevision || e.authorize(job.Context) != nil {
 		return "", errors.New("YuE 任务不存在或原授权、版本已变化")
 	}
