@@ -13,17 +13,23 @@ import (
 type attachmentSourceFixture struct {
 	message       linuxnative.Message
 	onChannelRead func()
+	dataset       string
 }
 
 func (f attachmentSourceFixture) Account() string { return "fixture" }
 func (f attachmentSourceFixture) Identity(context.Context) (string, error) {
+	if f.dataset != "" {
+		return f.dataset, nil
+	}
 	return "fixture-data", nil
 }
 func (f attachmentSourceFixture) Message(context.Context, string) (linuxnative.Message, error) {
 	return f.message, nil
 }
 func (f attachmentSourceFixture) ChannelsMedia(_ context.Context, message string) (linuxnative.ChannelsSource, error) {
-	f.onChannelRead()
+	if f.onChannelRead != nil {
+		f.onChannelRead()
+	}
 	return linuxnative.ChannelsSource{AccountID: f.Account(), MessageID: message, ThreadID: f.message.ThreadID, ObjectID: "fixture-object"}, nil
 }
 
@@ -58,5 +64,32 @@ func TestAttachmentSourceKeepsAssetIdentityAndHonorsRevocation(t *testing.T) {
 	fixture := attachmentSourceFixture{message: m, onChannelRead: func() { authorized = false }}
 	if _, err := ResolveAttachmentSource(t.Context(), fixture, req, allowed, nil); !errors.Is(err, ErrAttachmentDenied) {
 		t.Fatal("a Channels locator outlived the original grant", err)
+	}
+}
+
+func TestReadBoundChannelsAttachmentRejectsChangedDatasetAndGrant(t *testing.T) {
+	subtype := 51
+	message := linuxnative.Message{ID: "fixture-msg", AccountID: "fixture", ThreadID: "room@chatroom",
+		SenderID: "member", Direction: "incoming", Type: 49, AppMessageType: &subtype}
+	fixture := attachmentSourceFixture{message: message}
+	active := true
+	allowed := func(_ context.Context, thread string) bool { return active && thread == message.ThreadID }
+	req := AttachmentSourceRequest{AttachmentRequest: AttachmentRequest{Thread: message.ThreadID, Message: message.ID},
+		Grant: time.Now().UTC(), VideoOnly: true}
+	original, err := ResolveAttachmentSource(t.Context(), fixture, req, allowed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual, locator, err := ReadBoundChannelsAttachment(t.Context(), fixture, original, allowed); err != nil || actual.ID != message.ID || locator.ObjectID != "fixture-object" {
+		t.Fatal("the original locator did not resume", actual.ID, locator.ObjectID, err)
+	}
+	fixture.dataset = "replacement-data"
+	if actual, locator, err := ReadBoundChannelsAttachment(t.Context(), fixture, original, allowed); !errors.Is(err, ErrAttachmentDenied) || actual.ID != "" || locator.ObjectID != "" {
+		t.Fatal("a replacement data set supplied a locator", err)
+	}
+	fixture.dataset = ""
+	fixture.onChannelRead = func() { active = false }
+	if actual, locator, err := ReadBoundChannelsAttachment(t.Context(), fixture, original, allowed); !errors.Is(err, ErrAttachmentDenied) || actual.ID != "" || locator.ObjectID != "" {
+		t.Fatal("a locator escaped the revoked grant", err)
 	}
 }

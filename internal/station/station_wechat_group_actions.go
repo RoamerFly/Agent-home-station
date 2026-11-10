@@ -32,38 +32,11 @@ func (w *stationWechatWorker) actionLedgerLocked() (*wechatapp.ActionLedger, err
 
 func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection string, action linuxnative.AdminAction, requestKey string, authority stationGroupActionAuthority) (apphost.ActionReceipt, error) {
 	var out apphost.ActionReceipt
-	account, err := s.signedInAccount(ctx, connection)
+	native, err := s.directoryAccess().PrepareGroupAction(ctx, connection, action)
 	if err != nil {
 		return out, err
 	}
-	native, err := s.WorkerSender(ctx, connection)
-	if err != nil {
-		return out, err
-	}
-	if native.Account() != account {
-		return out, apphost.ErrUnavailable
-	}
-	caps, err := native.Capabilities(ctx)
-	if err != nil {
-		return out, err
-	}
-	if !wechatapp.GroupActionSupported(caps, action.Kind) {
-		return out, wechatapp.ErrGroupActionUnsupported
-	}
-	group, err := native.GroupProfile(ctx, action.ThreadID)
-	if err != nil {
-		return out, err
-	}
-	if group.InGroup != nil && !*group.InGroup {
-		return out, wechatapp.ErrGroupActionTarget
-	}
-	current, err := s.signedInAccount(ctx, connection)
-	if err != nil {
-		return out, err
-	}
-	if current != account {
-		return out, wechatapp.ErrGroupActionTarget
-	}
+	account := native.Account()
 	w, err := s.worker(connection, true)
 	if err != nil {
 		return out, err
@@ -187,25 +160,7 @@ func (s *stationWechat) stationGroupDetails(ctx context.Context, id, group strin
 			}
 		}
 	}
-	account, err := s.signedInAccount(ctx, id)
-	if err != nil {
-		return out, err
-	}
-	native, err := s.WorkerSender(ctx, id)
-	if err != nil {
-		return out, err
-	}
-	if native.Account() != account {
-		return out, apphost.ErrUnavailable
-	}
-	profile, err := native.GroupProfile(ctx, group)
-	if err != nil {
-		return out, err
-	}
-	out.Profile = &profile
-	if !paused && (profile.InGroup == nil || *profile.InGroup) {
-		out.Capabilities, err = native.Capabilities(ctx)
-		out.CanChange = err == nil
-	}
-	return out, nil
+	details, err := s.directoryAccess().ReadGroupDetails(ctx, id, group, paused)
+	details.Receipts = out.Receipts
+	return details, err
 }

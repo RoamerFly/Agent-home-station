@@ -64,6 +64,27 @@ type StationDirectoryAccess struct {
 	Sender          func(context.Context, string) (*linuxnative.Sender, error)
 }
 
+func (a StationDirectoryAccess) accountSender(ctx context.Context, connection, account string) (*linuxnative.Sender, error) {
+	if a.SignedInAccount == nil || a.Sender == nil {
+		return nil, apphost.ErrUnavailable
+	}
+	current, err := a.SignedInAccount(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+	if account != "" && current != account {
+		return nil, apphost.ErrLifecycleConflict
+	}
+	native, err := a.Sender(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+	if native == nil || native.Account() != current {
+		return nil, apphost.ErrUnavailable
+	}
+	return native, nil
+}
+
 func ParseStationDirectoryQuery(connection, rawQuery string) (StationDirectoryQuery, error) {
 	in := StationDirectoryQuery{Connection: connection, Limit: 50}
 	values, err := url.ParseQuery(rawQuery)
@@ -103,17 +124,11 @@ func (a StationDirectoryAccess) Read(ctx context.Context, in StationDirectoryQue
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	account, err := a.SignedInAccount(ctx, in.Connection)
+	native, err := a.accountSender(ctx, in.Connection, "")
 	if err != nil {
 		return out, err
 	}
-	native, err := a.Sender(ctx, in.Connection)
-	if err != nil {
-		return out, err
-	}
-	if native == nil || native.Account() != account {
-		return out, apphost.ErrUnavailable
-	}
+	account := native.Account()
 	if err := check(ctx); err != nil {
 		return out, err
 	}

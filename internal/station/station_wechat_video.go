@@ -32,16 +32,9 @@ func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, orig
 	if limit == 0 {
 		limit = 50 << 20
 	}
-	message, err := a.native.Message(ctx, original.Message)
+	message, source, err := wechatapp.ReadBoundChannelsAttachment(ctx, a.native, original, a.Allowed)
 	if err != nil {
 		return linuxnative.VerifiedIncomingMedia{}, err
-	}
-	source, err := wechatapp.ReadChannelsSource(ctx, message, a.native.Account(), a.native)
-	if err != nil {
-		return linuxnative.VerifiedIncomingMedia{}, err
-	}
-	if wechatapp.ChannelsVideoBinding(message, source) != original.Binding || !a.Allowed(ctx, original.Thread) {
-		return linuxnative.VerifiedIncomingMedia{}, wechatapp.ErrAttachmentDenied
 	}
 	result, directErr := a.fetchChannelsVideo(ctx, original, source, limit, file)
 	var stage *stationVideoError

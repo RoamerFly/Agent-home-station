@@ -35,7 +35,7 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	const racingGroup = "room-race@chatroom"
 	const renameGroup = "room-rename@chatroom"
 	var submissions, receiptReads atomic.Int32
-	var ready, wrongTarget, nativeOffline atomic.Bool
+	var ready, wrongTarget, nativeOffline, leftGroup atomic.Bool
 	var unsupported, renameUnsupported, renameVisible atomic.Bool
 	var renameSubmissions, renameLookups atomic.Int32
 	var renameKey atomic.Value
@@ -83,7 +83,7 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 			out(map[string]any{"items": []map[string]any{{"id": group, "roomId": group, "displayName": "测试群", "announcement": "synthetic-private-announcement"}},
 				"coverage": map[string]any{"partial": true, "databases": []string{"synthetic-private-db"}}, "nextCursor": "synthetic-native-group-cursor"})
 		case "GET /v1/accounts/one/groups/" + group:
-			out(map[string]any{"id": group, "roomId": group, "muted": ready.Load(), "isInGroup": true})
+			out(map[string]any{"id": group, "roomId": group, "muted": ready.Load(), "isInGroup": !leftGroup.Load()})
 		case "GET /v1/accounts/one/groups/" + lostGroup:
 			out(map[string]any{"id": lostGroup, "roomId": lostGroup})
 		case "GET /v1/accounts/one/groups/" + agentGroup:
@@ -270,6 +270,12 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	}
 	request("POST", path, mute(group, "first", true), true, 409)
 	unsupported.Store(false)
+	leftGroup.Store(true)
+	if state := request("GET", notify, nil, false, 200); state["coverage"] != "cached" || state["can_change"] != false {
+		t.Fatal("a cached group the account left advertised an action", state)
+	}
+	request("POST", path, mute(group, "first", true), true, 404)
+	leftGroup.Store(false)
 	if submissions.Load() != 0 {
 		t.Fatal("unauthorized mute reached native")
 	}

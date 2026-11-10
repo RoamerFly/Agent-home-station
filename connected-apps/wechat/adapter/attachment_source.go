@@ -99,6 +99,39 @@ func ResolveAttachmentSource(ctx context.Context, reader AttachmentSourceReader,
 	return source, nil
 }
 
+// ReadBoundChannelsAttachment reopens only the verified card's locator.
+// The caller retains authorization over downloading and publishing bytes.
+func ReadBoundChannelsAttachment(ctx context.Context, reader AttachmentSourceReader, original AttachmentSource, allowed func(context.Context, string) bool) (linuxnative.Message, linuxnative.ChannelsSource, error) {
+	var emptyMessage linuxnative.Message
+	var emptySource linuxnative.ChannelsSource
+	if reader == nil || original.Origin != "channels" || original.Kind != "video" || original.Binding == "" ||
+		original.Account != reader.Account() || allowed == nil || !allowed(ctx, original.Thread) {
+		return emptyMessage, emptySource, ErrAttachmentDenied
+	}
+	message, err := reader.Message(ctx, original.Message)
+	if err != nil {
+		return emptyMessage, emptySource, err
+	}
+	if message.AccountID != original.Account || message.ThreadID != original.Thread || message.ID != original.Message || !allowed(ctx, original.Thread) {
+		return emptyMessage, emptySource, ErrAttachmentDenied
+	}
+	source, err := ReadChannelsSource(ctx, message, original.Account, reader)
+	if err != nil {
+		return emptyMessage, emptySource, err
+	}
+	if ChannelsVideoBinding(message, source) != original.Binding || !allowed(ctx, original.Thread) {
+		return emptyMessage, emptySource, ErrAttachmentDenied
+	}
+	dataset, err := reader.Identity(ctx)
+	if err != nil {
+		return emptyMessage, emptySource, err
+	}
+	if dataset != original.Dataset || !allowed(ctx, original.Thread) {
+		return emptyMessage, emptySource, ErrAttachmentDenied
+	}
+	return message, source, nil
+}
+
 func AttachmentKind(m linuxnative.Message) (kind, filename string) {
 	switch m.Type {
 	case 3:

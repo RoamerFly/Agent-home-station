@@ -29,27 +29,6 @@ func AcceptedRecallReceipt(receipt apphost.DeliveryReceipt, server string) bool 
 	return false
 }
 
-func (a StationDirectoryAccess) recallSender(ctx context.Context, connection, account string) (*linuxnative.Sender, error) {
-	if a.SignedInAccount == nil || a.Sender == nil {
-		return nil, apphost.ErrUnavailable
-	}
-	current, err := a.SignedInAccount(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	if current != account {
-		return nil, apphost.ErrLifecycleConflict
-	}
-	native, err := a.Sender(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	if native == nil || native.Account() != account {
-		return nil, apphost.ErrUnavailable
-	}
-	return native, nil
-}
-
 // ReadRecall projects only the exact outgoing candidate from a native page.
 func (a StationDirectoryAccess) ReadRecall(ctx context.Context, connection string, target StationRecallTarget, cursor string) (RecallView, error) {
 	if a.Cursor == nil {
@@ -60,7 +39,7 @@ func (a StationDirectoryAccess) ReadRecall(ctx context.Context, connection strin
 	if err != nil {
 		return RecallView{}, ErrRecallCursor
 	}
-	native, err := a.recallSender(ctx, connection, target.Account)
+	native, err := a.accountSender(ctx, connection, target.Account)
 	if err != nil {
 		return RecallView{}, err
 	}
@@ -104,7 +83,7 @@ func (a StationDirectoryAccess) PrepareRecall(ctx context.Context, connection st
 	if !ValidRecallMessageID(messageID) {
 		return nil, request, apphost.ErrLifecycleConflict
 	}
-	native, err := a.recallSender(ctx, connection, target.Account)
+	native, err := a.accountSender(ctx, connection, target.Account)
 	if err != nil {
 		return nil, request, err
 	}
