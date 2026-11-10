@@ -50,6 +50,15 @@ func (a stationAttachmentAccess) Allowed(ctx context.Context, thread string) boo
 	return ctx.Err() == nil && thread == a.thread && !a.grant.IsZero() && a.allowed()
 }
 
+func (a stationAttachmentAccess) mediaCopyGrant(ctx context.Context, thread string) func() error {
+	return func() error {
+		if !a.Allowed(ctx, thread) {
+			return wechatapp.ErrAttachmentDenied
+		}
+		return nil
+	}
+}
+
 func (a stationAttachmentAccess) source(ctx context.Context, thread, message string) (wechatapp.AttachmentSource, error) {
 	if message != a.message {
 		return wechatapp.AttachmentSource{}, wechatapp.ErrAttachmentDenied

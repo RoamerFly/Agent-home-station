@@ -17,6 +17,7 @@ import (
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mediadecode"
+	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 )
@@ -197,21 +198,10 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
 		return nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")
 	}
-	check := func() error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err := access.confirmObservationSource(ctx, source, epoch); err != nil {
-			return err
-		}
-		p, pErr := host.store.Installed(ctx, localasr.PluginID)
-		c, cErr := host.store.Configuration(ctx, localasr.PluginID)
-		if pErr != nil || cErr != nil || !p.Enabled || p.Removed || p.Revision != installed.Revision || p.Digest != installed.Digest || c.Revision != config.Revision {
-			return observationFailure("media_plugin_configuration_changed", "转写期间媒体理解工具或授权已变更。")
-		}
-		return nil
-	}
-	if err := check(); err != nil {
+	check := mediaobserve.BindSource(host.store, installed, config.Revision, func(ctx context.Context) error {
+		return access.confirmObservationSource(ctx, source, epoch)
+	})
+	if err := check(ctx); err != nil {
 		return nil, err
 	}
 	dir, err := os.MkdirTemp(t.dir, "verified-voice-")
@@ -226,7 +216,7 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	}
 	rendered, transferErr := t.native.StreamVerifiedPlayableVoice(ctx, source.Message, stationAttachmentLimit, attachmentGrantWriter{allow: func() bool { return access.Allowed(ctx, source.Thread) }, out: file})
 	closeErr := file.Close()
-	if err := check(); err != nil {
+	if err := check(ctx); err != nil {
 		return nil, err
 	}
 	if transferErr != nil || closeErr != nil {
@@ -239,13 +229,16 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	out := map[string]any{"message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred, "sha256": rendered.SHA256,
 		"source_variant": rendered.Variant, "asr_backend": "local", "untrusted_external_content": true}
 	err = stationObserveAudio(ctx, path, dir, in.Start, in.Duration, duration, true, func(ctx context.Context, wav []byte) (string, error) {
-		text, err := host.localASR.transcribe(ctx, wav, check)
+		if err := check(ctx); err != nil {
+			return "", err
+		}
+		text, err := host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
 		if err != nil && !mediaspec.IsNoSpeech(err) {
 			return "", observationFailure("incoming_voice_local_asr_failed", "语音已解码，但本机语音识别未完成。请核对已登记的本机识别资源。")
 		}
 		return text, err
 	}, out)
-	if checkErr := check(); checkErr != nil {
+	if checkErr := check(ctx); checkErr != nil {
 		return nil, checkErr
 	}
 	return out, err

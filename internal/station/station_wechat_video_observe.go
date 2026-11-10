@@ -2,12 +2,9 @@ package station
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -129,21 +126,10 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		return pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: purpose, RequestKey: "station-media-" + key,
 			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
 	}
-	check := func(ctx context.Context) error {
-		if err := checkSource(ctx); err != nil {
-			return err
-		}
-		p, err := host.store.Installed(ctx, localasr.PluginID)
-		if err != nil || !p.Enabled || p.Removed || p.Revision != installed.Revision || p.Digest != installed.Digest {
-			return observationFailure("media_plugin_version_changed", "读取期间工具版本、授权或启用状态已变更。")
-		}
-		c, err := host.store.Configuration(ctx, localasr.PluginID)
-		if err != nil || c.Revision != config.Revision {
-			return observationFailure("media_plugin_configuration_changed", "读取期间媒体理解配置已变更。")
-		}
-		return nil
+	check := mediaobserve.BindSource(host.store, installed, config.Revision, checkSource)
+	if err := check(ctx); err != nil {
+		return "", err
 	}
-	origin := func(ctx context.Context, _ pluginhost.Job, _ pluginhost.Capability) error { return check(ctx) }
 
 	dir, err := os.MkdirTemp(t.dir, "verified-video-")
 	if err != nil {
@@ -151,7 +137,10 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "original.video")
-	if err := stageStationMedia(ctx, path, file, record); err != nil {
+	if err := stageStationMedia(ctx, path, file, record, access.mediaCopyGrant(ctx, source.Thread)); err != nil {
+		return "", err
+	}
+	if err := check(ctx); err != nil {
 		return "", err
 	}
 	meta, err := mediadecode.Probe(ctx, path)
@@ -169,7 +158,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			invocation := contextFor(p.Arguments())
 			p.Bind(mediaobserve.VisualBinding{
 				Invocation:  func() pluginhost.Invocation { return invocation },
-				CheckOrigin: origin,
+				CheckOrigin: check.CheckJob,
 				Controller:  func() (*pluginruntime.Controller, error) { return host.controller, nil },
 				Billing:     usage,
 				Transport:   post,
@@ -187,6 +176,9 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			if host.localASR.transcribe == nil {
 				return "", observationFailure("station_asr_host_unavailable", "本机识别不可用。请核对已登记的资源及项目工具中的本地媒体识别。")
 			}
+			if err := check(ctx); err != nil {
+				return "", err
+			}
 			return host.localASR.transcribe(ctx, wav, func() error { return check(ctx) })
 		}
 		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, transcribe, out)
@@ -196,7 +188,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 			p, err := mediatranscribe.New(ctx, mediatranscribe.Dependencies{
 				Store:       host.store,
 				Invocation:  func() pluginhost.Invocation { return invocation },
-				OriginCheck: origin,
+				OriginCheck: check.CheckJob,
 				Runtime: func(context.Context) (*pluginruntime.Controller, bool, error) {
 					return host.controller, host.controller != nil, nil
 				},
@@ -221,16 +213,21 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 	return string(result), err
 }
 
-func stageStationMedia(ctx context.Context, path string, original *os.File, record stationAttachmentRecord) error {
+func stageStationMedia(ctx context.Context, path string, original *os.File, record stationAttachmentRecord, grant func() error) error {
 	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return observationFailure("media_staging_failed", "无法创建当前连接的私有解码副本。")
 	}
-	hash := sha256.New()
-	writer := attachmentGrantWriter{allow: func() bool { return ctx.Err() == nil }, out: io.MultiWriter(out, hash)}
-	count, err := io.Copy(writer, io.LimitReader(original, record.Bytes+1))
+	err = mediaobserve.CopyVerifiedSource(ctx, out, original, record.Bytes, record.SHA256, grant)
 	closeErr := out.Close()
-	if err != nil || closeErr != nil || count != record.Bytes || hex.EncodeToString(hash.Sum(nil)) != record.SHA256 {
+	if err != nil || closeErr != nil {
+		_ = os.Remove(path)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, wechatapp.ErrAttachmentDenied) {
+			return err
+		}
 		return observationFailure("media_staging_integrity_failed", "解码副本未通过原件长度与哈希核对。")
 	}
 	return nil

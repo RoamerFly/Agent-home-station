@@ -241,7 +241,7 @@ func (in stationDocumentInput) materialize(ctx context.Context, dir string) (loc
 		return localProjectArtifactMaterialized{}, err
 	}
 	path := filepath.Join(dir, "input"+in.extension)
-	err := stageStationMedia(ctx, path, in.file, in.record)
+	err := stageStationMedia(ctx, path, in.file, in.record, ctx.Err)
 	if err == nil {
 		err = in.check(ctx)
 	}
