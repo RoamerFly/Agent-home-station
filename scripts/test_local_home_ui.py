@@ -273,10 +273,10 @@ def verify(binary, output):
                 page.get_by_text("文档工坊已安装。", exact=True).wait_for()
                 page.get_by_role("button", name="启用", exact=True).click()
                 page.get_by_text("文档工坊已启用。", exact=True).wait_for()
-                page.get_by_text("已启用，待命", exact=True).wait_for()
+                page.locator("#tool-dialog").get_by_text("已启用，待命", exact=True).wait_for()
                 page.get_by_role("button", name="停用", exact=True).click()
                 page.get_by_text("文档工坊已停用。", exact=True).wait_for()
-                page.get_by_text("已安装，可更新", exact=True).wait_for()
+                page.locator("#tool-dialog").get_by_text("已安装，可更新", exact=True).wait_for()
                 upgrade = page.get_by_role("button", name="更新", exact=True)
                 assert upgrade.is_disabled(), "artifact confirmation must gate project-tool update"
                 page.get_by_role("checkbox", name="确认本机素材读写", exact=True).check()
@@ -381,7 +381,7 @@ def verify(binary, output):
                             "sha256": hashlib.sha256(graph).hexdigest(), "save_node": "9", "parameters": [],
                         }],
                     }, ensure_ascii=False), encoding="utf-8")
-                    page.locator("#project-tools-refresh").click()
+                    page.locator("#tool-dialog-refresh").click()
                     card.get_by_text("离线图像样例", exact=True).wait_for()
                     card.get_by_role("button", name="启用", exact=True).click()
                     page.get_by_text("ComfyUI 创作已启用。", exact=True).wait_for()
@@ -438,10 +438,11 @@ def verify(binary, output):
                 page.locator("#apps-view").wait_for(state="visible")
                 assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
                 page.locator("#apps-list[aria-busy='false']").wait_for()
-                source_state = page.locator("#apps-list").inner_text()
+                source_state = page.get_by_role("button", name="管理微信", exact=True).inner_text()
                 catalog = context.request.get(origin + "/api/local/apps/catalog").json()["applications"]
-                assert len(catalog) == 1 and catalog[0]["id"] == "wechat"
-                source_available = catalog[0]["source_available"]
+                wechat = [app for app in catalog if app["id"] == "wechat"]
+                assert len(wechat) == 1
+                source_available = wechat[0]["source_available"]
                 if source_available:
                     assert "有可用版本" in source_state, source_state
                     open_application(page, section="接入版本管理")

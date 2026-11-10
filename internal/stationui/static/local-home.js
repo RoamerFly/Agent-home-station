@@ -3876,9 +3876,12 @@
   }
   function projectToolDetails(tool, current) {
       const card = appElement("article", "", "project-tool-record");
-      const [, note] = projectToolStatus(tool);
+      const [status, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
-      if (note && tool.id !== "obs-preview") detail.append(appElement("p", note));
+      const summary = appElement("div", "", "project-tool-permissions");
+      summary.append(appElement("strong", status));
+      if (note && tool.id !== "obs-preview") summary.append(appElement("span", note));
+      detail.append(summary);
       if (tool.id === "media-understanding" && tool.installed) detail.append(renderLocalVision(tool));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
