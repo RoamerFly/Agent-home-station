@@ -219,7 +219,7 @@ func legacyHomePrivateEntry(name string) bool {
 			"conversations", "secrets", "memory.sqlite", "memory.json", "voice-library",
 			"media-assets", "media-assets.json", "media-history", "manual-uploads",
 			"station-native-stop.json", "station-native-release.json", "legacy-cutover-state.json", "legacy-cutover-claim.json",
-			legacyRelocationTargetFile,
+			legacyRelocationTargetFile, legacyRelocationEvidenceFile,
 		}, part) {
 			return true
 		}

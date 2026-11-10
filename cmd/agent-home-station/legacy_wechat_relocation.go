@@ -18,6 +18,7 @@ func runLegacyWechatRelocation(ctx context.Context, args []string, output io.Wri
 	flags.StringVar(&request.SourceDir, "source", "", "原站数据绝对目录；不提供时只准备目标标识")
 	flags.StringVar(&request.ConnectionID, "connection", "", "原微信连接标识")
 	flags.StringVar(&request.AuditDigest, "audit-digest", "", "封存时使用的原站投递核对摘要")
+	flags.StringVar(&request.ApplyDigest, "apply", "", "使用预检令牌固定旧投递归档，连接保持冻结")
 	flags.BoolVar(&request.AcceptUnknown, "accept-unknown", false, "沿用原站封存时对未知结果的确认")
 	if err := flags.Parse(args); err != nil {
 		return err

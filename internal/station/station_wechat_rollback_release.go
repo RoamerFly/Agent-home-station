@@ -53,7 +53,7 @@ func ReleaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest) (L
 	return releaseLegacyWechat(ctx, req, nil)
 }
 
-func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, verifyTarget func(*os.Root, string) error) (LegacyWechatReleaseResult, error) {
+func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, verifyTarget func(*os.Root, string, LegacyWechatReleaseResult) error) (LegacyWechatReleaseResult, error) {
 	var out LegacyWechatReleaseResult
 	if runtime.GOOS != "windows" {
 		return out, errors.New("微信交接解除仅支持 Windows 桌面")
@@ -141,7 +141,7 @@ func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, ve
 		if result.State != "relocation_fenced" {
 			return out, errors.New("源站尚未为此目标完成离线封存")
 		}
-		err = verifyTarget(worker, hexDigest(markerRaw))
+		err = verifyTarget(worker, hexDigest(markerRaw), result)
 	}
 	return result, err
 }

@@ -1303,7 +1303,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	}
 	verified, err := verify()
 	if err != nil || verified.State != "source_verified" || verified.RelocationTarget != relocationTarget ||
-		verified.SourceFence != relocation.ApplyDigest || !legacyMemoryDigestValid(verified.TargetProfile) {
+		verified.SourceFence != relocation.ApplyDigest || !legacyMemoryDigestValid(verified.TargetProfile) || !legacyMemoryDigestValid(verified.ApplyDigest) {
 		t.Fatal("fenced source and matched target did not verify", verified, err)
 	}
 	receiverWorker := filepath.Join(receiverApp, "workers", releaseReq.ConnectionID)
@@ -1317,6 +1317,46 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		t.Fatal("changed destination policy was accepted", err)
 	}
 	write(receiverPolicyPath, receiverPolicy)
+	evidencePath := filepath.Join(receiverWorker, legacyRelocationEvidenceFile)
+	verifyReq.ApplyDigest = strings.Repeat("3", 64)
+	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "令牌已变化") {
+		t.Fatal("stale target archive token was accepted", err)
+	}
+	if _, err := os.Lstat(evidencePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("preview or rejected apply wrote an archive", err)
+	}
+	verifyReq.ApplyDigest = verified.ApplyDigest
+	for range 2 {
+		if applied, err := verify(); err != nil || applied.State != "archive_prepared" || applied.ApplyDigest != verified.ApplyDigest {
+			t.Fatal("verified relocation archive did not persist idempotently", applied, err)
+		}
+	}
+	// The archived source receipts must still be readable with no live
+	// transport, independently of what happens to the copied work queue.
+	daemonReady.Store(false)
+	receiverHandler, receiverFixture := openAt(receiver, filepath.Join(receiver, "managed-workspaces"), movedApps)
+	receiptSuffix := "/relocation/receipts/"
+	acceptedArchive := planRoute("one") + receiptSuffix + "a-accepted"
+	if code, _ := receiverFixture.request("GET", acceptedArchive, nil, false); code != 401 {
+		t.Fatal("relocation archive was readable without the owner session", code)
+	}
+	receiverFixture.login()
+	if code, row := receiverFixture.request("GET", acceptedArchive, nil, false); code != 200 ||
+		row["lookup"] != "relocation_snapshot" || row["state"] != "accepted" || row["server_id"] != "91234" ||
+		row["operation_id"] != "job-sent" || bytes.Contains(j(row), []byte("synthetic-private-text")) {
+		t.Fatal("accepted source receipt was not retained safely", code, row)
+	}
+	if code, row := receiverFixture.request("GET", planRoute("one")+receiptSuffix+"c-unknown", nil, false); code != 200 ||
+		row["lookup"] != "relocation_snapshot" || row["disposition"] != "unknown" || row["state"] == "accepted" {
+		t.Fatal("uncertain source receipt was changed", code, row)
+	}
+	if code, _ := receiverFixture.request("GET", planRoute("four")+receiptSuffix+"a-accepted", nil, false); code != 404 {
+		t.Fatal("relocation receipt crossed its connection", code)
+	}
+	receiverFixture.server.Close()
+	if err := receiverHandler.Close(); err != nil {
+		t.Fatal(err)
+	}
 	write(filepath.Join(receiverWorker, "queue", "messages-v2.json"), []byte(newQueue+"\n"))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "投递或群操作记录") {
 		t.Fatal("changed destination queue was accepted", err)

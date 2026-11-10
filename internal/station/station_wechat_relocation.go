@@ -20,6 +20,7 @@ const legacyRelocationTargetFile = "legacy-relocation-target.json"
 
 type LegacyWechatRelocationRequest struct {
 	DataDir, SourceDir, ConnectionID, AuditDigest string
+	ApplyDigest                                   string
 	AcceptUnknown                                 bool
 }
 
@@ -29,6 +30,7 @@ type LegacyWechatRelocationResult struct {
 	RelocationTarget string `json:"relocation_target"`
 	SourceFence      string `json:"source_fence_digest,omitempty"`
 	TargetProfile    string `json:"target_profile_digest,omitempty"`
+	ApplyDigest      string `json:"apply_digest,omitempty"`
 }
 
 type legacyRelocationTarget struct {
@@ -51,7 +53,8 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 	}
 	dir, source := cutoverPath(req.DataDir), cutoverPath(req.SourceDir)
 	if !sameCutoverPath(dir, dir) || !artifactID(req.ConnectionID, "wechat-") ||
-		req.SourceDir == "" && (req.AuditDigest != "" || req.AcceptUnknown) ||
+		req.SourceDir == "" && (req.AuditDigest != "" || req.ApplyDigest != "" || req.AcceptUnknown) ||
+		req.ApplyDigest != "" && !legacyMemoryDigestValid(req.ApplyDigest) ||
 		req.SourceDir != "" && (!sameCutoverPath(source, source) || legacyImportOverlap(dir, source) || !legacyMemoryDigestValid(req.AuditDigest)) {
 		return out, errors.New("目标目录、源站目录、微信连接或核对摘要无效")
 	}
@@ -131,10 +134,11 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 	if state != "import_receipt_matched" {
 		return LegacyWechatRelocationResult{}, errors.New("目标站缺少与新目录匹配的原生档案导入回执")
 	}
-	verified, err := releaseLegacyWechat(ctx, LegacyWechatReleaseRequest{
+	out.TargetProfile = hex.EncodeToString(targetProfile[:])
+	_, err = releaseLegacyWechat(ctx, LegacyWechatReleaseRequest{
 		DataDir: source, ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest,
 		AcceptUnknown: req.AcceptUnknown, RelocationTarget: want.ID,
-	}, func(sourceWorker *os.Root, sourceStop string) error {
+	}, func(sourceWorker *os.Root, sourceStop string, verified LegacyWechatReleaseResult) error {
 		if sourceStop != want.SourceStop {
 			return errors.New("源站停机记录与目标副本不一致")
 		}
@@ -165,11 +169,34 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		if current, err := targetHost.rollbackAuditCurrent(ctx, target, audit); err != nil || !current {
 			return errors.New("目标站的投递或群操作记录与已封存报告不一致")
 		}
+		currentProfile, currentDigest := targetHost.nativeImportReceipt(req.ConnectionID, archive.Plan.Account)
+		if currentProfile != "import_receipt_matched" || currentDigest != targetProfile {
+			return errors.New("目标站的原生档案导入回执已变化")
+		}
+		if copied, err := readRollbackAudit(worker, req.AuditDigest); err != nil || !bytes.Equal(copied, auditRaw) {
+			return errors.New("目标站未保留原站核对报告的完整副本")
+		}
+		evidence := legacyRelocationEvidence{Version: 1, Target: want, SourceDir: source, SourceFence: verified.ApplyDigest,
+			ProfileDigest: out.TargetProfile, AuditDigest: req.AuditDigest, FrozenAt: policy.RollbackFrozenAt, SourceDataset: proof.TargetDataset}
+		evidence.ApplyDigest = evidence.digest()
+		out.State, out.SourceFence, out.ApplyDigest = "source_verified", verified.ApplyDigest, evidence.ApplyDigest
+		if req.ApplyDigest == "" {
+			return nil
+		}
+		if req.ApplyDigest != evidence.ApplyDigest {
+			return errors.New("归档确认令牌已变化，请重新预演")
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := saveLegacyRelocationEvidence(worker, evidence); err != nil {
+			return err
+		}
+		out.State = "archive_prepared"
 		return nil
 	})
 	if err != nil {
 		return LegacyWechatRelocationResult{}, err
 	}
-	out.State, out.SourceFence, out.TargetProfile = "source_verified", verified.ApplyDigest, hex.EncodeToString(targetProfile[:])
 	return out, nil
 }
