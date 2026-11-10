@@ -308,10 +308,10 @@ func (s *stationWechat) submitStationRecall(ctx context.Context, id string, sour
 		w.mu.Unlock()
 		return out, err
 	}
-	err = ledger.Save(p)
+	submit, err := ledger.ReserveConnected(p, native)
 	w.mu.Unlock()
 	if err != nil {
 		return out, err
 	}
-	return submitReservedStationAction(ctx, native, ledger, p)
+	return submit(ctx)
 }

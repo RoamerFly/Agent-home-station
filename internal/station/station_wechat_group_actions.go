@@ -205,62 +205,18 @@ func (s *stationWechat) submitStationGroupAction(ctx context.Context, connection
 	if ok && !p.Created.After(previous.Created) {
 		p.Created = previous.Created.Add(time.Nanosecond)
 	}
-	err = ledger.Save(p)
+	submit, err := ledger.ReserveConnected(p, native)
 	w.mu.Unlock()
 	if err != nil {
 		return out, err
 	}
 	// Reservation is durable and unique before handing the action to native.
 	// A lost response leaves the original reservation for read-only inspection.
-	return submitReservedStationAction(ctx, native, ledger, p)
-}
-
-func submitReservedStationAction(ctx context.Context, native *linuxnative.Sender, ledger *wechatapp.ActionLedger, p wechatapp.ActionProposal) (apphost.ActionReceipt, error) {
-	status, err := native.ExecuteAction(ctx, p.Request, p.AppAction.IdempotencyKey)
-	if errors.Is(err, linuxnative.ErrWriteNotAdmitted) {
-		if err := ledger.RejectUnsubmitted(p); err != nil {
-			return p.Receipt(), nil
-		}
-		return apphost.ActionReceipt{}, apphost.ErrLifecycleCutover
-	}
-	if err != nil || !p.MatchesReceipt(status) {
-		return p.Receipt(), nil
-	}
-	return ledger.RecordConnectedReceipt(p, status)
+	return submit(ctx)
 }
 
 func (s *stationWechat) lookupStationAction(ctx context.Context, ledger *wechatapp.ActionLedger, p wechatapp.ActionProposal) apphost.ActionReceipt {
-	out := p.Receipt()
-	if wechatapp.IsFinalActionState(p.State) || p.Request.Kind == "recall" && p.Result.ID == "" {
-		return out
-	}
-	native, err := s.WorkerSender(ctx, p.AppAction.ConnectionID)
-	if err != nil || native.Account() != p.Account {
-		out.Lookup = "unavailable"
-		return out
-	}
-	var status linuxnative.ActionStatus
-	if p.Result.ID == "" {
-		status, err = native.InspectGroupActionKey(ctx, p.AppAction.IdempotencyKey)
-		if errors.Is(err, linuxnative.ErrToolNotFound) {
-			return out
-		}
-	} else {
-		status, err = native.InspectAction(ctx, p.Result.ID)
-	}
-	if err != nil {
-		out.Lookup = "unavailable"
-		return out
-	}
-	if !p.MatchesReceipt(status) {
-		out.Lookup = "identity_mismatch"
-		return out
-	}
-	out, err = ledger.RecordConnectedReceipt(p, status)
-	if err != nil {
-		out.Lookup = "unavailable"
-	}
-	return out
+	return ledger.RefreshConnected(ctx, p, s.WorkerSender)
 }
 
 func (s *stationWechat) stationActionLedger(connection string) (*wechatapp.ActionLedger, bool, error) {

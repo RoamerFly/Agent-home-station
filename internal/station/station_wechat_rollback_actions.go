@@ -2,8 +2,6 @@ package station
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -33,51 +31,5 @@ func (s *stationWechat) rollbackActionEvidence(ctx context.Context, w *stationWe
 	if err != nil {
 		return nil, "", err
 	}
-	out := make([]apphost.ActionReceipt, 0, len(proposals))
-	for _, proposal := range proposals {
-		out = append(out, projectRollbackActionReceipt(ctx, native, proposal))
-	}
-	return out, snapshot, nil
-}
-
-func projectRollbackActionReceipt(ctx context.Context, native *linuxnative.Sender, proposal wechatapp.ActionProposal) apphost.ActionReceipt {
-	out := proposal.Receipt()
-	// A terminal durable action is authoritative. Do not permit a stale native
-	// response to downgrade it during a read-only rollback audit.
-	if native == nil || actionReceiptTerminal(out.State) {
-		return out
-	}
-	if native.Account() != proposal.Account || ctx.Err() != nil {
-		out.Lookup = "unavailable"
-		return out
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	var status linuxnative.ActionStatus
-	var err error
-	if proposal.Result.ID != "" {
-		status, err = native.InspectAction(lookupCtx, proposal.Result.ID)
-	} else if proposal.Request.Kind != "recall" {
-		status, err = native.InspectGroupActionKey(lookupCtx, proposal.ID)
-	} else {
-		// The native API has no recall lookup by request key. Preserve this
-		// durable unknown reservation rather than creating any new action.
-		return out
-	}
-	switch {
-	case errors.Is(err, linuxnative.ErrToolNotFound):
-		out.Lookup = "not_found"
-	case err != nil:
-		out.Lookup = "unavailable"
-	case !proposal.MatchesReceipt(status):
-		out.Lookup = "identity_mismatch"
-	default:
-		out.Lookup = "platform"
-		wechatapp.ProjectActionReceipt(&out, status)
-	}
-	return out
-}
-
-func actionReceiptTerminal(state string) bool {
-	return state == "succeeded" || state == "failed" || state == "cancelled" || state == "rejected"
+	return wechatapp.ProjectRollbackActions(ctx, native, proposals), snapshot, nil
 }
