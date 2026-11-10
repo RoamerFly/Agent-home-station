@@ -1964,6 +1964,12 @@
       const file = draft.result.file || {};
       const identity = [file.product_name, file.version, file.architecture].filter(value => typeof value === "string" && value).join(" · ");
       if (identity) result.append(appElement("p", identity));
+      const signature = file.signature;
+      const signatureLabels = { unsigned: "未找到可验证的签名", untrusted: "Windows 拒绝信任签名", inconclusive: "签名暂无法核对" };
+      if (signature?.state === "trusted" && typeof signature.publisher === "string" && signature.publisher)
+        result.append(appElement("p", "签名发布者 " + signature.publisher));
+      else if (signature && Object.hasOwn(signatureLabels, signature.state))
+        result.append(appElement("p", signatureLabels[signature.state]));
       result.append(appElement("p", draft.result.reason || "已检查文件，直播控制尚未验证。"));
     }
     const actions = appElement("div", "", "publication-actions");

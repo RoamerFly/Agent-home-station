@@ -24,21 +24,23 @@ import (
 
 var (
 	ErrInput       = errors.New("native client executable path is invalid")
-	ErrInvalid     = errors.New("native client is not a regular Windows x64 executable")
+	ErrInvalid     = errors.New("native client is not a supported regular Windows executable")
 	ErrVersion     = errors.New("native client version metadata is missing or invalid")
 	ErrUnavailable = errors.New("native client executable cannot be read")
 )
 
-// Info contains no local path. Metadata and a digest identify the inspected
-// bytes; they do not authenticate a publisher or imply a supported control API.
+// Info contains no local path. Signature describes offline Windows trust
+// evidence for the inspected bytes. It grants no control permission.
 type Info struct {
-	SHA256           string `json:"sha256"`
-	Bytes            int64  `json:"bytes"`
-	Architecture     string `json:"architecture"`
-	Version          string `json:"version"`
-	ProductName      string `json:"product_name"`
-	CompanyName      string `json:"company_name"`
-	OriginalFilename string `json:"original_filename"`
+	SHA256           string    `json:"sha256"`
+	Bytes            int64     `json:"bytes"`
+	Architecture     string    `json:"architecture"`
+	Version          string    `json:"version"`
+	ProductName      string    `json:"product_name"`
+	CompanyName      string    `json:"company_name"`
+	OriginalFilename string    `json:"original_filename"`
+	FileDescription  string    `json:"file_description,omitempty"`
+	Signature        Signature `json:"signature"`
 }
 
 // Inspect keeps the executable and every ancestor pinned against replacement
@@ -92,10 +94,21 @@ func Inspect(ctx context.Context, path string) (Info, error) {
 		return info, ErrInvalid
 	}
 	defer parsed.Close()
-	if parsed.Machine != pe.IMAGE_FILE_MACHINE_AMD64 || parsed.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || parsed.Characteristics&pe.IMAGE_FILE_DLL != 0 {
+	if parsed.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || parsed.Characteristics&pe.IMAGE_FILE_DLL != 0 {
 		return info, ErrInvalid
 	}
-	if _, ok := parsed.OptionalHeader.(*pe.OptionalHeader64); !ok {
+	var architecture string
+	switch header := parsed.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		if parsed.Machine == pe.IMAGE_FILE_MACHINE_AMD64 && header.Magic == 0x20b {
+			architecture = "x64"
+		}
+	case *pe.OptionalHeader32:
+		if parsed.Machine == pe.IMAGE_FILE_MACHINE_I386 && header.Magic == 0x10b {
+			architecture = "x86"
+		}
+	}
+	if architecture == "" {
 		return info, ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
@@ -118,8 +131,12 @@ func Inspect(ctx context.Context, path string) (Info, error) {
 			return Info{}, ErrUnavailable
 		}
 	}
-	info.SHA256, info.Bytes, info.Architecture = hex.EncodeToString(hash.Sum(nil)), stat.Size(), "x64"
+	info.SHA256, info.Bytes, info.Architecture = hex.EncodeToString(hash.Sum(nil)), stat.Size(), architecture
 	versionErr := inspectVersion(path, &info)
+	if err := ctx.Err(); err != nil {
+		return Info{}, err
+	}
+	info.Signature = inspectSignature(name, h)
 	if err := ctx.Err(); err != nil {
 		return Info{}, err
 	}
@@ -224,8 +241,8 @@ func inspectVersion(path string, info *Info) error {
 	}
 	translations := unsafe.Slice((*uint16)(pointer), int(count)/2)
 	for i := 0; i+1 < len(translations); i += 2 {
-		values := make([]string, 3)
-		for j, field := range []string{"ProductName", "CompanyName", "OriginalFilename"} {
+		var values [4]string
+		for j, field := range []string{"ProductName", "CompanyName", "OriginalFilename", "FileDescription"} {
 			key := fmt.Sprintf(`\StringFileInfo\%04x%04x\%s`, translations[i], translations[i+1], field)
 			p, n, found := query(key, 2)
 			if !found || n > 513 {
@@ -243,8 +260,8 @@ func inspectVersion(path string, info *Info) error {
 				values[j] = value
 			}
 		}
-		if values[0] != "" && values[1] != "" && values[2] != "" {
-			info.ProductName, info.CompanyName, info.OriginalFilename = values[0], values[1], values[2]
+		if values[0] != "" && values[1] != "" && (values[2] != "" || values[3] != "") {
+			info.ProductName, info.CompanyName, info.OriginalFilename, info.FileDescription = values[0], values[1], values[2], values[3]
 			return nil
 		}
 	}

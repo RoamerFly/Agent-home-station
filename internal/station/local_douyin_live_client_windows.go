@@ -17,8 +17,8 @@ import (
 const douyinLiveClientInspectRoute = "/api/local/apps/douyin/live-client/inspect"
 
 // Inspection is a private owner action, separate from the website login and
-// from LiveProvider. File metadata does not establish publisher authenticity,
-// a logged-in account, capture readiness or permission to begin a broadcast.
+// from LiveProvider. Even a trusted main executable does not establish an
+// account, capture readiness or permission to begin a broadcast.
 func (h *localHomeService) douyinLiveClientRoutes(owner *websession.Store, mux *http.ServeMux, service context.Context) {
 	mux.HandleFunc("POST "+douyinLiveClientInspectRoute, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -44,20 +44,53 @@ func (h *localHomeService) douyinLiveClientRoutes(owner *websession.Store, mux *
 		defer stop()
 		info, err := nativeclient.Inspect(ctx, in.Executable)
 		switch {
-		case err == nil:
-			websession.Respond(w, http.StatusOK, map[string]any{"state": "inspected", "file": info,
-				"control_available": false, "reason": "已读取程序版本及指纹；发布者、客户端登录和直播控制仍待核对"})
-		case errors.Is(err, nativeclient.ErrVersion):
-			websession.Respond(w, http.StatusOK, map[string]any{"state": "metadata_missing", "file": info,
-				"control_available": false, "reason": "这是可读取的 Windows 程序，但版本资料不完整，请确认选中了直播伴侣主程序"})
+		case err == nil || errors.Is(err, nativeclient.ErrVersion):
+			state := "inspected"
+			if err != nil {
+				state = "metadata_missing"
+			}
+			identity, reason := douyinLiveClientIdentity(info)
+			if err != nil {
+				reason = "版本资料不完整。请选择已安装的直播伴侣主程序。"
+			}
+			websession.Respond(w, http.StatusOK, map[string]any{"state": state, "file": info, "client_identity": identity,
+				"control_available": false, "reason": reason})
 		case errors.Is(err, nativeclient.ErrInput):
 			websession.Fail(w, http.StatusBadRequest, "程序路径无效，请选择本机已安装的 EXE 文件")
 		case errors.Is(err, nativeclient.ErrInvalid):
-			websession.Fail(w, http.StatusUnprocessableEntity, "该文件不是可核对的 Windows x64 主程序，请勿选择安装包、快捷方式或 DLL")
+			websession.Fail(w, http.StatusUnprocessableEntity, "该文件不是可核对的 Windows 程序，请勿选择快捷方式或 DLL")
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			websession.Fail(w, http.StatusRequestTimeout, "程序检查未完成，可在文件可用后重新检查")
 		default:
 			websession.Fail(w, http.StatusServiceUnavailable, "无法读取程序，请检查文件是否存在、是否被占用及本机访问权限")
 		}
 	}))
+}
+
+func douyinLiveClientIdentity(info nativeclient.Info) (string, string) {
+	signature := info.Signature
+	switch signature.State {
+	case "unsigned":
+		return "unverified", "此程序没有可验证的 Authenticode 签名。请选择官方安装的直播伴侣主程序。"
+	case "untrusted":
+		return "unverified", "Windows 拒绝信任此程序的签名。"
+	case "trusted":
+	default:
+		return "unverified", "本机信任缓存不足或无法核对签名，发布者尚未确认。"
+	}
+	const publisher = "Douyin Vision Co., Ltd."
+	if !strings.EqualFold(signature.Publisher, publisher) || !strings.EqualFold(signature.Organization, publisher) {
+		return "other_publisher", "Windows 已核验此文件的签名。签名发布者与已知直播伴侣发布者不匹配。"
+	}
+	if info.ProductName == "直播伴侣" {
+		switch info.FileDescription {
+		case "直播伴侣":
+			if info.Architecture == "x64" {
+				return "main", "已核验直播伴侣主程序。账号登录、画面输入及直播控制仍待核对。"
+			}
+		case "直播伴侣 Launcher":
+			return "launcher", "已核验直播伴侣启动器。继续检查时请选择版本目录里的主程序。"
+		}
+	}
+	return "unrecognized_binary", "签名发布者匹配，但文件的程序类型未识别。请选择直播伴侣主程序。"
 }

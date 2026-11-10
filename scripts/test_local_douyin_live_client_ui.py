@@ -38,7 +38,8 @@ def verify(binary, output):
                     page.route(re.compile(r".*/api/local/publications\?app_id=douyin.*$"), fulfill_json({"tasks": {"items": [], "has_more": False}, "targets": []}))
                     calls = []
                     payload = {"state": "inspected", "control_available": False,
-                               "file": {"product_name": "合成客户端", "version": "1.2.3.4", "architecture": "x64"},
+                               "file": {"product_name": "合成客户端", "version": "1.2.3.4", "architecture": "x64",
+                                        "signature": {"state": "trusted", "publisher": "Douyin Vision Co., Ltd."}},
                                "reason": "已读取程序版本及指纹；发布者、客户端登录和直播控制仍待核对"}
                     status = 200
 
@@ -64,8 +65,11 @@ def verify(binary, output):
                     path.fill(r"E:\synthetic\直播伴侣.exe")
                     button.click()
                     expect(form).to_contain_text("合成客户端 · 1.2.3.4 · x64")
+                    expect(form).to_contain_text("签名发布者 Douyin Vision Co., Ltd.")
                     expect(form).to_contain_text("仍待核对")
                     assert calls == [{"executable": r"E:\synthetic\直播伴侣.exe"}]
+                    form.scroll_into_view_if_needed()
+                    page.locator("#app-dialog").screenshot(path=str(output / f"live-client-trusted-{width}-{color}.png"))
                     # Editing a draft invalidates the old result; refreshing keeps the draft.
                     path.fill(r"E:\synthetic\other.exe")
                     expect(form).not_to_contain_text("1.2.3.4")
