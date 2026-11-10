@@ -270,6 +270,18 @@ namespace WechatAgent.Desktop {
                     Reject(() => forced.Stop()).GetAwaiter().GetResult();
                     Assert(File.ReadAllText(markerPath) == startingBytes, "forced station exit leaves no usable stopped proof");
                 }
+                using (var restart = new LocalStationRuntime(d)) {
+                    restart.Start(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(restart.NativeAvailable && WaitLocalHealth(d.Url), "station ready before testing restart");
+                    var oldNative = restart.NativePID;
+                    using (var child = Process.GetProcessById(restart.PID)) {
+                        child.Kill();
+                        Assert(child.WaitForExit(5000), "owned station child exited before restart");
+                    }
+                    restart.Start(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert(!ProcessAlive(oldNative) && restart.NativeAvailable && WaitLocalHealth(d.Url), "restart settles the old native child and releases its lease before starting a new pair");
+                    restart.Stop().GetAwaiter().GetResult();
+                }
                 var stopProofBeforeRelease = File.ReadAllText(Path.Combine(d.Root, "station-native-stop.json"));
                 var releaseIntent = Path.Combine(d.Root, "station-native-release.json");
                 File.WriteAllText(releaseIntent, Deployment.Json.Serialize(new { version = 1, state = "released" }));
@@ -569,7 +581,8 @@ namespace WechatAgent.Desktop {
                     // password; the managed value must win over that same env.
                     Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
                     Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
-                    d.StationNativeUrl = CycleUrl();
+                    d.Url = CycleUrl();
+                    do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
                     d.StationNativeEnabled = false;
                     var profile = Path.Combine(d.StationNativeRoot, "accounts", "synthetic", "profile");
                     Directory.CreateDirectory(profile);

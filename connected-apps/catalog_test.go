@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 
 	"path/filepath"
@@ -23,6 +24,27 @@ func TestOfficialAppSource(t *testing.T) {
 	p, err := pluginhost.VerifyDescriptor(filepath.Join("wechat"), "app.json")
 	if err != nil || p.ID != contract.Package.ID || p.Status != "migration-pending" || p.Runtime.Transport != "unbound" {
 		t.Fatalf("invalid source bundle: %#v %v", p, err)
+	}
+	var entry struct {
+		StationRuntime struct {
+			Transport  string `json:"transport"`
+			Activation string `json:"activation"`
+			Checkout   string `json:"checkout"`
+			Supervisor string `json:"windows_supervisor_source"`
+		} `json:"station_runtime"`
+	}
+	raw, err := os.ReadFile(filepath.Join("wechat", p.Runtime.Entrypoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		t.Fatal(err)
+	}
+	runtime := entry.StationRuntime
+	if runtime.Transport != "desktop-owned-native" || runtime.Activation != "desktop-opt-in" ||
+		runtime.Checkout != "editable-source" || runtime.Supervisor != "adapter/windows/WechatStationRuntime.cs" ||
+		p.Files[runtime.Supervisor] == "" {
+		t.Fatalf("installed source and running transport must remain separate: %#v", runtime)
 	}
 	if _, err := Lookup("../wechat"); err == nil {
 		t.Fatal("untrusted catalog path accepted")

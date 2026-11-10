@@ -24,5 +24,11 @@
   "station_history_source": "adapter/station_read.go",
   "station_contacts_source": "adapter/station_contacts.go",
   "station_video_source": "adapter/station_video.go",
-  "channels_payload_source": "adapter/channels_media.go"
+  "channels_payload_source": "adapter/channels_media.go",
+  "station_runtime": {
+    "transport": "desktop-owned-native",
+    "activation": "desktop-opt-in",
+    "checkout": "editable-source",
+    "windows_supervisor_source": "adapter/windows/WechatStationRuntime.cs"
+  }
 }
