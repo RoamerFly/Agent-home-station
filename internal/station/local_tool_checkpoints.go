@@ -24,6 +24,10 @@ func localCheckpointKey(values ...any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func localFileCheckpointGrant(grant localWorkspaceGrant) string {
+	return localCheckpointKey("local-home-file-grant-v1", grant.FishID, grant.OwnerID, grant.Revision)
+}
+
 func (t *localToolSet) writeCheckpointed(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in localWorkspaceFileInput
 	if err := strictLocalMemoryDecode(raw, &in); err != nil {
@@ -38,14 +42,25 @@ func (t *localToolSet) writeCheckpointed(ctx context.Context, name string, raw j
 		return "", err
 	}
 	target, _ := filepath.Rel(grant.Directory, in.Path)
+	target = filepath.ToSlash(target)
 	// Ignore fields that do not affect the write/edit.
-	var key string
-	if name == "server_write" {
-		key = localCheckpointKey(name, in.Path, in.Content)
-	} else {
-		key = localCheckpointKey(name, in.Path, in.Expected, in.Old, in.New)
+	args := []any{in.Content}
+	if name == "server_edit" {
+		args = []any{in.Expected, in.Old, in.New}
 	}
-	op := companion.LocalToolCheckpoint{Key: key, Tool: name, Grant: localCheckpointKey(grant), Target: target}
+	op := companion.LocalToolCheckpoint{
+		Key:  localCheckpointKey(append([]any{"local-home-file-v1", name, target}, args...)...),
+		Tool: name, Grant: localFileCheckpointGrant(grant), Target: target,
+	}
+	// Match legacy rows only while their absolute path still proves the grant.
+	legacyKey := localCheckpointKey(append([]any{name, in.Path}, args...)...)
+	legacyGrant := localCheckpointKey(grant)
+	for _, previous := range t.run.Operations {
+		if previous.Key == legacyKey && previous.Tool == name && previous.Grant == legacyGrant {
+			op = previous
+			break
+		}
+	}
 	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
 		result, err := t.files.call(ctx, name, in, grant)
 		return result, result, err
@@ -242,7 +257,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		}
 		return view
 	}
-	if grant.Directory == "" || op.Grant != localCheckpointKey(grant) {
+	fileOperation := op.Tool == "server_write" || op.Tool == "server_edit"
+	if grant.Directory == "" || (op.Grant != localCheckpointKey(grant) &&
+		(!fileOperation || op.Grant != localFileCheckpointGrant(grant))) {
 		view["state"] = "grant_changed"
 		return view
 	}

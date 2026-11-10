@@ -39,6 +39,12 @@ func localRestartChat(t *testing.T, f *localHomeFixture) *localHomeFixture {
 }
 
 func TestLocalToolCheckpointRecoversWrittenFileWithoutWritingAgain(t *testing.T) {
+	t.Run("restart", func(t *testing.T) { testRecoverWrittenFile(t, false) })
+	t.Run("relocate", func(t *testing.T) { testRecoverWrittenFile(t, true) })
+}
+
+func testRecoverWrittenFile(t *testing.T, relocate bool) {
+	t.Helper()
 	f := localChatFixture(t)
 	_, home := f.request("GET", "/api/local/home", nil, true)
 	dir := home["directory"].(string)
@@ -64,7 +70,28 @@ func TestLocalToolCheckpointRecoversWrittenFileWithoutWritingAgain(t *testing.T)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	next := localRestartChat(t, f)
+	var next *localHomeFixture
+	if relocate {
+		f.server.Close()
+		if err := f.handler.Close(); err != nil {
+			t.Fatal(err)
+		}
+		moved := filepath.Join(t.TempDir(), "relocated package")
+		if err := os.CopyFS(moved, os.DirFS(filepath.Dir(f.dir))); err != nil {
+			t.Fatal(err)
+		}
+		next = newLocalHomeFixture(t, filepath.Join(moved, "host"), filepath.Join(moved, "workspace"))
+		next.login()
+		_, relocated := next.request("GET", "/api/local/home", nil, true)
+		if relocated["fish_id"] != home["fish_id"] || relocated["owner_id"] != home["owner_id"] ||
+			relocated["revision"] != home["revision"] || relocated["directory"] == dir {
+			t.Fatal("relocation did not retain the identity and move the home")
+		}
+		dir = relocated["directory"].(string)
+		path = filepath.Join(dir, "works", "once.txt")
+	} else {
+		next = localRestartChat(t, f)
+	}
 	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
 		calls := 0
 		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
@@ -96,6 +123,34 @@ func TestLocalToolCheckpointRecoversWrittenFileWithoutWritingAgain(t *testing.T)
 	for _, file := range []string{path, filepath.Join(dir, "works", "extra.txt")} {
 		if _, err := os.Stat(file); !os.IsNotExist(err) {
 			t.Fatalf("retry touched %q: %v", file, err)
+		}
+	}
+}
+
+func TestLocalFileCheckpointGrantKeepsOwnerAndRevisionBound(t *testing.T) {
+	tool := &localToolSet{}
+	grant := localWorkspaceGrant{FishID: "original-fish", OwnerID: "original-owner", Directory: "original", Revision: 2}
+	op := companion.LocalToolCheckpoint{Tool: "server_edit", Grant: localFileCheckpointGrant(grant), Result: `{"updated":true}`}
+	legacy := op
+	legacy.Grant = localCheckpointKey(grant)
+	if view := tool.checkpointView(legacy, grant); view["state"] != "recorded" {
+		t.Fatal("existing checkpoint lost at original root", view)
+	}
+	moved := grant
+	moved.Directory = "moved"
+	if view := tool.checkpointView(legacy, moved); view["state"] != "grant_changed" {
+		t.Fatal("legacy root was guessed", view)
+	}
+	if view := tool.checkpointView(op, moved); view["state"] != "recorded" {
+		t.Fatal("portable checkpoint could not be recovered", view)
+	}
+	for _, changed := range []localWorkspaceGrant{
+		{FishID: "other-fish", OwnerID: grant.OwnerID, Directory: moved.Directory, Revision: grant.Revision},
+		{FishID: grant.FishID, OwnerID: "other-owner", Directory: moved.Directory, Revision: grant.Revision},
+		{FishID: grant.FishID, OwnerID: grant.OwnerID, Directory: moved.Directory, Revision: grant.Revision + 1},
+	} {
+		if view := tool.checkpointView(op, changed); view["state"] != "grant_changed" || view["previous_result"] != nil {
+			t.Fatal("checkpoint disclosed a previous grant's result", view)
 		}
 	}
 }
