@@ -62,18 +62,31 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if !identity.ValidPathID(key) {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
-	native, err := s.WorkerSender(ctx, id)
-	if err != nil {
-		return apphost.Receipt{}, err
+	native, nativeErr := s.WorkerSender(ctx, id)
+	if nativeErr != nil && (!errors.Is(nativeErr, apphost.ErrUnavailable) || ctx.Err() != nil) {
+		return apphost.Receipt{}, nativeErr
 	}
-	w, err := s.worker(id, false)
+	var w *stationWechatWorker
+	var account string
+	var err error
+	if native != nil {
+		account = native.Account()
+		w, err = s.worker(id, false)
+	} else {
+		// The owner can read host-held evidence during a native outage. A
+		// missing queue is different from an invalid or foreign checkpoint.
+		w, account, err = s.deliveryCheckpoint(id)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, apphost.ErrNotFound) {
+			return s.readLegacyReceipt(ctx, id, key, nil)
+		}
+	}
 	if err != nil {
 		return apphost.Receipt{}, err
 	}
 	if w == nil {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
-	evidence, err := bot.ReadDeliveryEvidence(filepath.Join(w.dir, "queue"), native.Account(), []string{key})
+	evidence, err := bot.ReadDeliveryEvidence(filepath.Join(w.dir, "queue"), account, []string{key})
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}
@@ -83,16 +96,19 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	}
 	result := apphost.Receipt{
 		ResumedFrom:     row.ResumedFrom,
-		ConnectionRef:   s.connectionRef(id, native.Account()),
+		ConnectionRef:   s.connectionRef(id, account),
 		ConversationID:  row.Status.ThreadID,
 		DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: key, Kind: row.Status.Kind, Lookup: "stored"},
 	}
-	var reader any = native
-	if row.StrictSource || row.ResumeOriginID != "" {
-		reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
+	var reader any
+	if native != nil {
+		reader = native
+		if row.StrictSource || row.ResumeOriginID != "" {
+			reader = stationMediaReceiptReader{native: native, source: row.SourceID, kind: row.Status.Kind, origin: row.ResumeOriginID}
+		}
 	}
 	wechatapp.LookupDeliveryReceipt(ctx, reader, row.Status.ThreadID, row.SourceID, row.Status, row.StrictSource && row.Status.ID != "", &result.DeliveryReceipt)
-	cancelled, err := w.deliveryCancelled(companion.Input{Account: native.Account(), Thread: row.Status.ThreadID, TraceID: row.Trace})
+	cancelled, err := w.deliveryCancelled(companion.Input{Account: account, Thread: row.Status.ThreadID, TraceID: row.Trace})
 	if err != nil {
 		return apphost.Receipt{}, apphost.ErrUnavailable
 	}

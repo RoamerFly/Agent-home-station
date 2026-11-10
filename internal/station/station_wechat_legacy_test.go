@@ -176,9 +176,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	open := func() (*LocalHomeHandler, *localHomeFixture) {
+	openAt := func(data, workspace string, apps apphost.Registry) (*LocalHomeHandler, *localHomeFixture) {
 		t.Helper()
-		handler, err := NewLocalHomeHandlerWithApps(host, work, "synthetic-local-password", "", registry)
+		handler, err := NewLocalHomeHandlerWithApps(data, workspace, "synthetic-local-password", "", apps)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,8 +190,9 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 			}
 		})
 		jar, _ := cookiejar.New(nil)
-		return handler, &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: host, root: work, handler: handler}
+		return handler, &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}, dir: data, root: workspace, handler: handler}
 	}
+	open := func() (*LocalHomeHandler, *localHomeFixture) { return openAt(host, work, registry) }
 	h, f := open()
 	route := func(id string) string { return "/api/apps/wechat/connections/" + wechatapp.ConnectionID(id) }
 	planRoute := func(id string) string { return route(id) + "/legacy-import" }
@@ -745,7 +746,76 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		}
 	}
 	checkRule(expectedRule)
+	f.server.Close()
 	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "portable package")
+	movedHost, movedWork := filepath.Join(moved, "host"), filepath.Join(moved, "workspace")
+	if err := os.CopyFS(movedHost, os.DirFS(host)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(movedWork, os.DirFS(work)); err != nil {
+		t.Fatal(err)
+	}
+	movedNative := filepath.Join(movedHost, "apps", "wechat", "native")
+	var daemonReady, unexpectedRequest atomic.Bool
+	daemonReady.Store(true)
+	movedDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/status" || r.Header.Get("Authorization") != "Bearer synthetic-legacy-native-token" {
+			unexpectedRequest.Store(true)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if !daemonReady.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"pid": 9433, "dataDir": movedNative, "serverId": "new-dataset", "ownershipGeneration": "synthetic-relocated-generation"})
+	}))
+	defer movedDaemon.Close()
+	movedEntry, err := wechatapp.StationRegistration(t.Context(), movedDaemon.URL, 9433, movedHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedApps, err := apphost.New(movedEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemonReady.Store(false)
+	movedHandler, movedFixture := openAt(movedHost, movedWork, movedApps)
+	acceptedPath := route("one") + "/receipts/legacy-accepted"
+	if code, _ := movedFixture.request("GET", acceptedPath, nil, false); code != 401 {
+		t.Fatal("offline archive bypassed owner authentication", code)
+	}
+	movedFixture.login()
+	if code, row := movedFixture.request("GET", acceptedPath, nil, false); code != 200 || !bytes.Equal(j(row), j(accepted)) {
+		t.Fatal("relocated receipt changed identity or required a native connection", code, row)
+	}
+	if code, row := movedFixture.request("GET", route("one")+"/receipts/legacy-pending", nil, false); code != 200 ||
+		row["lookup"] != "legacy_native_unavailable" || row["state"] != "submission_unknown" || row["operation_id"] != "job-pending" {
+		t.Fatal("offline receipt lost its pending operation", code, row)
+	}
+	if code, row := movedFixture.request("GET", route("four")+"/receipts/legacy-pending", nil, false); code != 200 ||
+		row["lookup"] != "stored" || row["operation_id"] != "current-job" || row["server_id"] != "70000" {
+		t.Fatal("offline lookup did not keep current evidence ahead of the archive", code, row)
+	}
+	if code, _ := movedFixture.request("GET", route("three")+"/receipts/legacy-accepted", nil, false); code != 404 {
+		t.Fatal("offline lookup escaped its connection", code)
+	}
+	movedTarget := filepath.Join(movedHost, "apps", "wechat", "workers", wechatapp.ConnectionID("one"))
+	copied, err := readStationLegacyMemory(movedTarget, "one", "123@chatroom", bundle.Grant)
+	if err != nil || !bytes.Equal(j(copied), j(bundle)) {
+		t.Fatal("relocated history changed its source identity, revision or text", err)
+	}
+	if state, _ := movedHandler.chat.wechat.nativeImportReceipt(wechatapp.ConnectionID("one"), "one"); state != "mismatch" {
+		t.Fatal("an old absolute native-profile receipt authorized a new path", state)
+	}
+	if unexpectedRequest.Load() {
+		t.Fatal("offline receipt or history read contacted an unrelated endpoint")
+	}
+	movedFixture.server.Close()
+	if err := movedHandler.Close(); err != nil {
 		t.Fatal(err)
 	}
 	h, f = open()

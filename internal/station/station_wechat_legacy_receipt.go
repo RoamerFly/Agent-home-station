@@ -263,6 +263,10 @@ func (s *stationWechat) readLegacyReceipt(ctx context.Context, id, key string, n
 	if err != nil || !legacyReceiptPending(receipt) || receipt.OperationID == "" || archive.LegacyServer == "" {
 		return receipt, err
 	}
+	if native == nil {
+		receipt.Lookup = "legacy_native_unavailable"
+		return receipt, nil
+	}
 	receipt = checkLegacyReceipt(ctx, native, archive, receipt)
 	// Keep the original fallback API's local snapshot result when the
 	// native instance or dataset cannot be verified.
