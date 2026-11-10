@@ -337,7 +337,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	}
 	row := acquire(200)
 	asset, _ := row["asset_id"].(string)
-	if !stationAttachmentID(asset) || row["sha256"] != hash || row["kind"] != "image" || row["variant"] != "original" || row["status"] != "original_available" || row["path"] != nil {
+	if !wechatapp.ValidAttachmentAssetID(asset) || row["sha256"] != hash || row["kind"] != "image" || row["variant"] != "original" || row["status"] != "original_available" || row["path"] != nil {
 		t.Fatal(row)
 	}
 	if acquire(200)["asset_id"] != asset || transfers.Load() != 3 {

@@ -10,7 +10,6 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -18,22 +17,14 @@ import (
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/workspacefs"
 )
 
 const stationAttachmentLimit = 512 << 20
 
-type stationAttachmentSource struct {
-	Account, Dataset, Thread, Message, Sender, Server, Occurred, BodyHash, Kind, Filename string
-	Grant                                                                                 time.Time
-	Origin                                                                                string `json:"origin,omitempty"`
-	Binding                                                                               string `json:"binding,omitempty"`
-}
-
 type stationAttachmentRecord struct {
 	ID                    string
-	Source                stationAttachmentSource
+	Source                wechatapp.AttachmentSource
 	Bytes                 int64
 	MIME, SHA256, Variant string
 }
@@ -59,100 +50,24 @@ func (a stationAttachmentAccess) Allowed(ctx context.Context, thread string) boo
 	return ctx.Err() == nil && thread == a.thread && !a.grant.IsZero() && a.allowed()
 }
 
-func stationAttachmentKind(m linuxnative.Message) (kind, filename string) {
-	switch m.Type {
-	case 3:
-		kind = "image"
-	case 34:
-		kind = "voice"
-	case 43:
-		kind = "video"
-	case 49:
-		if wechatapp.IsChannelsShare(m) {
-			return "video", "shared-video.mp4"
-		}
-		name := m.FileAttachmentName()
-		if mediaspec.SafeFilename(name) && name != "." && name != ".." && !strings.ContainsAny(name, ":*?<>|") {
-			return "file", name
-		}
+func (a stationAttachmentAccess) source(ctx context.Context, thread, message string) (wechatapp.AttachmentSource, error) {
+	if message != a.message {
+		return wechatapp.AttachmentSource{}, wechatapp.ErrAttachmentDenied
 	}
-	if kind == "" {
-		return "", ""
-	}
-	for _, attachment := range m.Attachments {
-		if attachment.Kind == kind && mediaspec.SafeFilename(attachment.Filename) && attachment.Filename != "." && attachment.Filename != ".." && !strings.ContainsAny(attachment.Filename, ":*?<>|") {
-			return kind, attachment.Filename
-		}
-	}
-	return kind, kind + ".bin"
-}
-
-func (a stationAttachmentAccess) source(ctx context.Context, thread, message string) (stationAttachmentSource, error) {
-	denied := wechatapp.ErrAttachmentDenied
-	if message != a.message || !a.Allowed(ctx, thread) {
-		return stationAttachmentSource{}, denied
-	}
-	m, err := a.native.Message(ctx, message)
-	if err != nil {
-		return stationAttachmentSource{}, err
-	}
-	kind, filename := stationAttachmentKind(m)
-	if kind == "" || m.ID != message || m.AccountID != a.native.Account() || m.ThreadID != thread || m.Direction != "incoming" || m.SenderID == "" {
-		return stationAttachmentSource{}, denied
-	}
-	channels := wechatapp.IsChannelsShare(m)
-	if a.videoOnly && kind != "video" || channels && !a.videoOnly {
-		return stationAttachmentSource{}, denied
-	}
-	sum := sha256.Sum256([]byte(m.Body))
-	bodyHash := hex.EncodeToString(sum[:])
-	if a.ref != nil {
-		r := a.ref
-		occurred, timeErr := time.Parse(time.RFC3339Nano, m.CreatedAt)
-		referenced, refTimeErr := time.Parse(time.RFC3339Nano, r.OccurredAt)
-		if r.MessageID != message || r.Sender != m.SenderID || r.Account != m.AccountID || r.Thread != m.ThreadID ||
-			r.ServerID != m.ServerID || r.MessageType != m.Type || timeErr != nil || refTimeErr != nil || !referenced.Equal(occurred) ||
-			r.EventID == "" && r.BodyHash != bodyHash {
-			return stationAttachmentSource{}, denied
-		}
-		in := companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID, Sender: m.SenderID, TraceID: m.ID, MessageTime: m.CreatedAt, Source: r}
+	return wechatapp.ResolveAttachmentSource(ctx, a.native, wechatapp.AttachmentSourceRequest{
+		AttachmentRequest: wechatapp.AttachmentRequest{Thread: thread, Message: message},
+		Grant:             a.grant, Reference: a.ref, VideoOnly: a.videoOnly,
+	}, a.Allowed, func(ctx context.Context, in companion.Input) bool {
 		if a.history {
-			if visible, err := a.store.NativeRecallAllowed(ctx, in); err != nil || !visible {
-				return stationAttachmentSource{}, denied
-			}
-		} else {
-			if _, ok := a.store.SourceForInput(in); !ok {
-				return stationAttachmentSource{}, denied
-			}
+			visible, err := a.store.NativeRecallAllowed(ctx, in)
+			return err == nil && visible
 		}
-	}
-	dataset, err := a.native.Identity(ctx)
-	if err != nil {
-		return stationAttachmentSource{}, err
-	}
-	if !a.Allowed(ctx, thread) {
-		return stationAttachmentSource{}, denied
-	}
-	source := stationAttachmentSource{Account: m.AccountID, Dataset: dataset, Thread: thread, Message: message, Sender: m.SenderID, Server: m.ServerID, Occurred: m.CreatedAt,
-		BodyHash: bodyHash, Kind: kind, Filename: filename, Grant: a.grant}
-	if channels {
-		channel, err := wechatapp.ReadChannelsSource(ctx, m, a.native.Account(), a.native)
-		if err != nil {
-			return stationAttachmentSource{}, err
-		}
-		source.Origin = "channels"
-		source.Binding = channelsVideoBinding(m, channel)
-	}
-	return source, nil
+		_, ok := a.store.SourceForInput(in)
+		return ok
+	})
 }
 
-func (source stationAttachmentSource) id() string {
-	raw, _ := json.Marshal(source)
-	sum := sha256.Sum256(raw)
-	return "wa-" + hex.EncodeToString(sum[:])
-}
-
-func (a stationAttachmentAccess) confirmObservationSource(ctx context.Context, source stationAttachmentSource, epoch string) error {
+func (a stationAttachmentAccess) confirmObservationSource(ctx context.Context, source wechatapp.AttachmentSource, epoch string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -170,11 +85,6 @@ func (a stationAttachmentAccess) confirmObservationSource(ctx context.Context, s
 	return nil
 }
 
-func stationAttachmentID(id string) bool {
-	raw, err := hex.DecodeString(strings.TrimPrefix(id, "wa-"))
-	return strings.HasPrefix(id, "wa-") && err == nil && len(raw) == sha256.Size && strings.ToLower(id) == id
-}
-
 func readStationAttachmentRecord(root *os.Root) (stationAttachmentRecord, error) {
 	var record stationAttachmentRecord
 	file, err := workspacefs.OpenRegular(root, "record.json")
@@ -183,18 +93,18 @@ func readStationAttachmentRecord(root *os.Root) (stationAttachmentRecord, error)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, 32<<10))
-	if err != nil || len(data) >= 32<<10 || json.Unmarshal(data, &record) != nil || record.ID != record.Source.id() ||
+	if err != nil || len(data) >= 32<<10 || json.Unmarshal(data, &record) != nil || record.ID != record.Source.AssetID() ||
 		record.Bytes <= 0 || record.Bytes > stationAttachmentLimit {
 		return stationAttachmentRecord{}, errors.New("station_attachment_record_invalid")
 	}
 	return record, nil
 }
 
-func (a stationAttachmentAccess) open(ctx context.Context, source stationAttachmentSource) (stationAttachmentRecord, *os.File, error) {
+func (a stationAttachmentAccess) open(ctx context.Context, source wechatapp.AttachmentSource) (stationAttachmentRecord, *os.File, error) {
 	if !a.Allowed(ctx, source.Thread) {
 		return stationAttachmentRecord{}, nil, wechatapp.ErrAttachmentDenied
 	}
-	root, err := workspacefs.OpenPath(filepath.Join(a.dir, "attachments", source.id()))
+	root, err := workspacefs.OpenPath(filepath.Join(a.dir, "attachments", source.AssetID()))
 	if err != nil {
 		return stationAttachmentRecord{}, nil, err
 	}
@@ -299,7 +209,7 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 	if err != nil || typ == "" {
 		typ = "application/octet-stream"
 	}
-	record := stationAttachmentRecord{ID: source.id(), Source: source, MIME: typ, Bytes: result.Bytes, SHA256: result.SHA256, Variant: result.Variant}
+	record := stationAttachmentRecord{ID: source.AssetID(), Source: source, MIME: typ, Bytes: result.Bytes, SHA256: result.SHA256, Variant: result.Variant}
 	if err := writeLegacyStagedFile(root, metadata, record); err != nil {
 		return err
 	}

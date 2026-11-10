@@ -47,7 +47,7 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 	if req.Format == "file" {
 		kind = "file"
 	}
-	if !stationAttachmentID(asset) || kind == "" || !allowed() {
+	if !wechatapp.ValidAttachmentAssetID(asset) || kind == "" || !allowed() {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	media := companion.GeneratedMedia{ID: "reply-" + asset + "-" + kind, AssetID: asset, Kind: kind, Title: filename}
@@ -70,7 +70,7 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 		return t.stageWork(ctx, in, kind, asset)
 	}
 	allowed := func() bool { return t.replyAllowed(in) }
-	if !allowed() || !stationAttachmentID(asset) {
+	if !allowed() || !wechatapp.ValidAttachmentAssetID(asset) {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	for _, ref := range []*companion.SourceRef{in.Source, in.QuotedSource} {
@@ -82,7 +82,7 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 			continue
 		}
 		source, err := access.source(ctx, in.Thread, ref.MessageID)
-		if err != nil || source.id() != asset || kind != source.Kind && kind != "file" {
+		if err != nil || source.AssetID() != asset || kind != source.Kind && kind != "file" {
 			continue
 		}
 		record, original, err := access.open(ctx, source)

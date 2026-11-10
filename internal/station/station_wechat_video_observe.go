@@ -58,7 +58,7 @@ func (h *stationShareHost) mediaBilling(dir string) (*billing.Store, error) {
 
 func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawMessage) (string, error) {
 	in := stationVideoObservationInput{Step: 1, Page: 12, Batch: 6, Dimension: 960, Tokens: 1024, AudioLength: 90, Timeout: 240}
-	if strictLocalMemoryDecode(raw, &in) != nil || in.Message == "" || len(in.Message) > 8192 || !stationAttachmentID(in.Asset) ||
+	if strictLocalMemoryDecode(raw, &in) != nil || in.Message == "" || len(in.Message) > 8192 || !wechatapp.ValidAttachmentAssetID(in.Asset) ||
 		(in.Mode != "frames" && in.Mode != "audio") || in.Start < 0 || in.Step < 1 || in.Page < 1 || in.Batch < 1 || in.Dimension < 1 || in.Tokens < 1 ||
 		in.AudioStart < 0 || in.AudioLength <= 0 || utf8.RuneCountInString(in.Question) > 4096 || in.Timeout < 0 || int64(in.Timeout) > int64((1<<63-1)/int64(time.Second)) {
 		return "", errors.New("wechat_video_observation_parameters_invalid")
@@ -77,7 +77,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		return "", err
 	}
 	source, err := access.source(ctx, access.thread, access.message)
-	if err != nil || source.id() != in.Asset {
+	if err != nil || source.AssetID() != in.Asset {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	record, file, err := access.open(ctx, source)

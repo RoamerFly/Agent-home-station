@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"testing"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 )
 
 // This is intentionally an isolated Windows acceptance: it calls the same
@@ -55,7 +56,7 @@ func TestLiveStationDocumentExportPDFLPAC(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	in := stationDocumentInput{
 		record: stationAttachmentRecord{ID: "asset-station-export-fixture", Bytes: int64(len(docx)), MIME: localDOCXMIME, SHA256: digest,
-			Source: stationAttachmentSource{Account: "fixture", Dataset: "fixture", Thread: "thread", Message: "message", Sender: "owner", Occurred: now, Filename: "source.docx"}},
+			Source: wechatapp.AttachmentSource{Account: "fixture", Dataset: "fixture", Thread: "thread", Message: "message", Sender: "owner", Occurred: now, Filename: "source.docx"}},
 		file: inputFile, extension: ".docx", epoch: "fixture-epoch", requester: "owner", trace: "fixture-trace", handoffKey: "fixture-handoff",
 		check: func(context.Context) error { return nil },
 	}

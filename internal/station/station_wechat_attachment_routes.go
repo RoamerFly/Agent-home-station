@@ -2,7 +2,6 @@ package station
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -58,9 +57,8 @@ func (s *stationWechat) acquireAttachment(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	access, err := s.ownerAttachmentAccess(ctx, id, worker, in)
 	if err == nil {
-		raw, _ := json.Marshal(in)
 		var result map[string]any
-		result, err = wechatapp.ReadAttachment(ctx, raw, access)
+		result, err = wechatapp.AcquireAttachment(ctx, in, access)
 		if err == nil {
 			websession.Respond(w, http.StatusOK, result)
 			return
@@ -76,7 +74,7 @@ func (s *stationWechat) acquireAttachment(w http.ResponseWriter, r *http.Request
 func (s *stationWechat) downloadAttachment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	id, asset := r.PathValue("connection"), r.PathValue("asset")
-	if !identity.ValidPathID(id) || !stationAttachmentID(asset) {
+	if !identity.ValidPathID(id) || !wechatapp.ValidAttachmentAssetID(asset) {
 		http.NotFound(w, r)
 		return
 	}

@@ -36,7 +36,7 @@ type stationDocumentProduct struct {
 }
 
 type stationDocumentReply struct {
-	Source                          stationAttachmentSource
+	Source                          wechatapp.AttachmentSource
 	Reference                       companion.SourceRef
 	OriginalSHA, Epoch, Trace, User string
 	MediaGrant, HistoryGrant        time.Time
@@ -54,7 +54,7 @@ func (r stationDocumentReply) id() string {
 	if r.extension() == ".docx" {
 		prefix = stationDOCXPrefix
 	}
-	key := []any{r.Source.id(), r.Reference.EventID, r.Reference.Revision,
+	key := []any{r.Source.AssetID(), r.Reference.EventID, r.Reference.Revision,
 		r.OriginalSHA, r.Epoch, r.Trace, r.User, r.MediaGrant, r.HistoryGrant, r.Name}
 	if r.ParentAsset != "" {
 		key = append(key, r.ParentAsset)
@@ -76,7 +76,7 @@ func stationDocumentReplyID(id string) bool {
 
 func (r stationDocumentReply) media() companion.GeneratedMedia {
 	id := r.id()
-	parent, mimeType := r.Source.id(), "application/pdf"
+	parent, mimeType := r.Source.AssetID(), "application/pdf"
 	if r.ParentAsset != "" {
 		parent = r.ParentAsset
 	}

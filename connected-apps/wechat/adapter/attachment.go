@@ -53,10 +53,21 @@ type AttachmentHost interface {
 // preview.
 func ReadAttachment(ctx context.Context, raw json.RawMessage, host AttachmentHost) (map[string]any, error) {
 	var in AttachmentRequest
-	if host == nil || json.Unmarshal(raw, &in) != nil || in.Message == "" {
-		if host == nil {
-			return nil, errors.New("attachment host unavailable")
-		}
+	if host == nil {
+		return nil, errors.New("attachment host unavailable")
+	}
+	if json.Unmarshal(raw, &in) != nil {
+		return nil, host.InvalidAttachment("invalid attachment request")
+	}
+	return AcquireAttachment(ctx, in, host)
+}
+
+// AcquireAttachment accepts an already parsed request from the owner API.
+func AcquireAttachment(ctx context.Context, in AttachmentRequest, host AttachmentHost) (map[string]any, error) {
+	if host == nil {
+		return nil, errors.New("attachment host unavailable")
+	}
+	if in.Message == "" {
 		return nil, host.InvalidAttachment("invalid attachment request")
 	}
 	if in.Thread == "" {

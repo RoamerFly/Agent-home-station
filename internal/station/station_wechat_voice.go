@@ -192,7 +192,7 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	if err != nil || backend != "local" || host.localASR.transcribe == nil {
 		return nil, observationFailure("incoming_voice_local_asr_unavailable", "请为当前微信连接选择本机识别，并启用站点的本地媒体识别工具。")
 	}
-	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat voice", RequestKey: "station-voice-" + source.id(), Authorization: source.id(), OriginSourceSender: source.Sender, RequestThread: t.trace.Thread, EvidenceEpoch: epoch}
+	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat voice", RequestKey: "station-voice-" + source.AssetID(), Authorization: source.AssetID(), OriginSourceSender: source.Sender, RequestThread: t.trace.Thread, EvidenceEpoch: epoch}
 	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
 		return nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")

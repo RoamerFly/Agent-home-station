@@ -746,7 +746,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		StateDir:           station.queueDir(), AllowedThreads: threads, GroupRules: rules,
 		ScopedAnalyzer: stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		OnDemandAttachment: func(m linuxnative.Message) bool {
-			kind, _ := stationAttachmentKind(m)
+			kind, _ := wechatapp.AttachmentKind(m)
 			grant := policy.AttachmentGrants[m.ThreadID]
 			stamp, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
 			return kind == "file" && m.Direction == "incoming" && !run.Blocked() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)

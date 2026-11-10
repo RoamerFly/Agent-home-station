@@ -103,8 +103,8 @@ func (t *stationAttachmentTools) readImageObservation(ctx context.Context, in st
 		return out, observationFailure("media_observation_configuration_required", "请为当前微信连接配置视觉接口、模型和密钥。")
 	}
 	version := max(access.ref.Revision, 1)
-	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "observe authorized WeChat image", Authorization: source.id(), RequestKey: "station-image-" + source.id(), EvidenceEpoch: epoch,
-		SourceVersions: map[string]int{"native:" + source.id(): version}, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
+	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "observe authorized WeChat image", Authorization: source.AssetID(), RequestKey: "station-image-" + source.AssetID(), EvidenceEpoch: epoch,
+		SourceVersions: map[string]int{"native:" + source.AssetID(): version}, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
 	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
 		return out, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")

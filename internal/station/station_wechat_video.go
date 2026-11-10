@@ -27,16 +27,7 @@ func (e *stationVideoError) SafeToolFailure() (string, string) {
 }
 func videoReadError(code, stage string) error { return &stationVideoError{code: code, stage: stage} }
 
-func channelsVideoBinding(message linuxnative.Message, source linuxnative.ChannelsSource) string {
-	if source.ObjectID == "" {
-		// Some incoming cards supply only an exact locator. Never reuse those
-		// cached bytes if the locator or key changes.
-		return localCheckpointKey(wechatapp.NativeShareFingerprint(message), source.MediaURL, source.DecodeKey, source.ObjectNonceID)
-	}
-	return localCheckpointKey(wechatapp.NativeShareFingerprint(message), source.ObjectID, source.ObjectNonceID)
-}
-
-func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, original stationAttachmentSource, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {
+func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, original wechatapp.AttachmentSource, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {
 	limit := a.maxBytes
 	if limit == 0 {
 		limit = 50 << 20
@@ -49,7 +40,7 @@ func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, orig
 	if err != nil {
 		return linuxnative.VerifiedIncomingMedia{}, err
 	}
-	if channelsVideoBinding(message, source) != original.Binding || !a.Allowed(ctx, original.Thread) {
+	if wechatapp.ChannelsVideoBinding(message, source) != original.Binding || !a.Allowed(ctx, original.Thread) {
 		return linuxnative.VerifiedIncomingMedia{}, wechatapp.ErrAttachmentDenied
 	}
 	result, directErr := a.fetchChannelsVideo(ctx, original, source, limit, file)
@@ -79,7 +70,7 @@ func (a stationAttachmentAccess) downloadChannelsVideo(ctx context.Context, orig
 	return a.fetchChannelsVideo(ctx, original, resolved, limit, file)
 }
 
-func (a stationAttachmentAccess) fetchChannelsVideo(ctx context.Context, original stationAttachmentSource, source linuxnative.ChannelsSource, limit int64, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {
+func (a stationAttachmentAccess) fetchChannelsVideo(ctx context.Context, original wechatapp.AttachmentSource, source linuxnative.ChannelsSource, limit int64, file *os.File) (linuxnative.VerifiedIncomingMedia, error) {
 	if !a.Allowed(ctx, original.Thread) {
 		return linuxnative.VerifiedIncomingMedia{}, wechatapp.ErrAttachmentDenied
 	}

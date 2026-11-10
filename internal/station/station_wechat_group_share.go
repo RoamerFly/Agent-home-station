@@ -180,7 +180,7 @@ func stationGroupShareRead(ctx context.Context, tools *stationAttachmentTools, m
 			Frames   int     `json:"total_frames"`
 		} `json:"metadata"`
 	}
-	if json.Unmarshal([]byte(raw), &result) != nil || !stationAttachmentID(result.Asset) || result.Metadata.Duration <= 0 {
+	if json.Unmarshal([]byte(raw), &result) != nil || !wechatapp.ValidAttachmentAssetID(result.Asset) || result.Metadata.Duration <= 0 {
 		return "", 0, 0, errors.New("share_auto_summary_read_invalid")
 	}
 	return result.Asset, result.Metadata.Duration, result.Metadata.Frames, nil

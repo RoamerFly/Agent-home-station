@@ -192,7 +192,7 @@ func TestStationVideoOriginalFromNativeChannels(t *testing.T) {
 			Transcribed bool               `json:"audio_transcribed"`
 			Metadata    map[string]float64 `json:"metadata"`
 		}
-		if err = json.Unmarshal([]byte(result), &value); err != nil || !stationAttachmentID(value.Asset) || value.Hash != hash || value.Observed || value.Transcribed || value.Metadata["total_frames"] != 5 || value.Metadata["width"] != 64 {
+		if err = json.Unmarshal([]byte(result), &value); err != nil || !wechatapp.ValidAttachmentAssetID(value.Asset) || value.Hash != hash || value.Observed || value.Transcribed || value.Metadata["total_frames"] != 5 || value.Metadata["width"] != 64 {
 			t.Fatal(value, err)
 		}
 		stored, err := os.ReadFile(filepath.Join(root, "attachments", value.Asset, "original"))
