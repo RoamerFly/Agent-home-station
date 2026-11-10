@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +57,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	var requestAt atomic.Value
 	requestAt.Store("")
 	submitted := make(chan string, 2)
+	var acceptedSends sync.Map
 	contentStarted, releaseContent := make(chan struct{}, 1), make(chan struct{})
 	originalMessage := func(body string) linuxnative.Message {
 		return linuxnative.Message{ID: "msg", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1234",
@@ -218,13 +220,29 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			operationID, serverID := "synthetic-send-"+fmt.Sprint(body["kind"]), "2311"
 			if body["sourceId"] == "upload-document" {
-				out(map[string]any{"id": "synthetic-send-document", "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": "upload-document", "state": "accepted", "serverMessageId": "2419"})
-				submitted <- key
+				operationID, serverID = "synthetic-send-document", "2419"
+			}
+			receipt := map[string]any{"id": operationID, "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": body["sourceId"], "state": "accepted", "serverMessageId": serverID}
+			if _, repeated := acceptedSends.LoadOrStore(key, receipt); repeated {
+				t.Error("duplicated native attachment submission", key)
+				w.WriteHeader(http.StatusConflict)
 				return
 			}
-			out(map[string]any{"id": "synthetic-send-" + fmt.Sprint(body["kind"]), "accountId": "one", "threadId": "room@chatroom", "kind": "send", "sourceId": body["sourceId"], "state": "accepted", "serverMessageId": "2311"})
+			if body["sourceId"] == "upload-work" {
+				// The platform accepted the work, but the original HTTP reply did not arrive.
+				w.WriteHeader(http.StatusBadGateway)
+			} else {
+				out(receipt)
+			}
 			submitted <- key
+		case "GET /v1/accounts/one/sends/by-idempotency-key":
+			if receipt, found := acceptedSends.Load(r.URL.Query().Get("key")); found {
+				out(receipt)
+				return
+			}
+			http.NotFound(w, r)
 		default:
 			http.NotFound(w, r)
 		}

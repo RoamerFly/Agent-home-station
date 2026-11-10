@@ -21,6 +21,6 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			s.deliveryControlRoutes(owner, mux)
 		},
 		Restore:   s.restore,
-		Lifecycle: s,
+		Lifecycle: s.lifecycle,
 	}
 }

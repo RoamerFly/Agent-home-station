@@ -39,11 +39,9 @@ type stationWechat struct {
 	modelPersona           func() (string, error)
 	model                  companion.LanguageModel
 	ctx                    context.Context
-	cancel                 context.CancelFunc
+	lifecycle              *wechatapp.WorkerLifecycle
 	mu                     sync.Mutex
 	workers                map[string]*stationWechatWorker
-	wg                     sync.WaitGroup
-	done                   chan struct{}
 	artifacts              stationservices.Artifacts
 	shareOptions           pluginruntime.Options
 	localASR               stationLocalASR
@@ -92,19 +90,12 @@ type stationWechatWorker struct {
 	runtimeDir      string
 	policy          stationWechatPolicy
 	actions         *wechatapp.ActionLedger
-	run             *stationWechatRun
+	run             *wechatapp.WorkerRun
 	// cutoverBlocked records a failed automatic preflight for older imported
 	// archives that predate LegacyArchiveDigest. It is intentionally transient:
 	// the archive evidence remains the authority and an explicit successful
 	// activation clears this display state.
 	cutoverBlocked atomic.Bool
-}
-
-type stationWechatRun struct {
-	state  atomic.Value
-	block  atomic.Bool
-	cancel context.CancelFunc
-	done   chan struct{}
 }
 
 func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, localASR stationLocalASR, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
@@ -113,19 +104,20 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 	if !ok || !supported || entry.Registration != "station-native" {
 		return registry, nil, nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	shareOptions := stationruntime.PackagedToolOptions()
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(dataDir, "apps", wechatapp.ID, "workers"),
 		dataDir: dataDir, workspaceRoot: workspaceRoot,
 		installation: entry.InstallationID, modelPersona: model.Persona, model: model.Client,
-		ctx: ctx, cancel: cancel, workers: map[string]*stationWechatWorker{}, done: make(chan struct{}),
+		workers:   map[string]*stationWechatWorker{},
 		artifacts: artifacts, shareOptions: shareOptions, localASR: localASR, documents: documents,
 	}
+	host.lifecycle = wechatapp.NewWorkerLifecycle(host.closeWorkerResources)
+	host.ctx = host.lifecycle.Context()
 	var err error
 	host.contactCursor, err = newStationContactCursor()
 	if err != nil {
-		cancel()
+		host.lifecycle.BeginShutdown()
 		return registry, nil, err
 	}
 	registrations := make([]apphost.Registration, 0, len(registry.Applications()))
@@ -138,56 +130,27 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 	}
 	bound, err := apphost.New(registrations...)
 	if err != nil {
-		cancel()
+		host.lifecycle.BeginShutdown()
 		return registry, nil, err
 	}
 	return bound, host, nil
 }
 
-func (s *stationWechat) BeginShutdown() {
+func (s *stationWechat) closeWorkerResources() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ctx.Err() == nil {
-		s.cancel()
-		go func() {
-			s.wg.Wait()
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			for _, worker := range s.workers {
-				worker.shareMu.Lock()
-				if worker.share != nil {
-					_ = worker.share.controller.Close()
-					_ = worker.share.store.Close()
-				}
-				worker.shareMu.Unlock()
-			}
-			close(s.done)
-		}()
-	}
-}
-
-func (s *stationWechat) CloseContext(ctx context.Context) error {
-	select {
-	case <-s.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, worker := range s.workers {
+		worker.shareMu.Lock()
+		if worker.share != nil {
+			_ = worker.share.controller.Close()
+			_ = worker.share.store.Close()
+		}
+		worker.shareMu.Unlock()
 	}
 }
 
 func (s *stationWechat) restore() {
-	// Called during construction, before the handler is published.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		items, err := s.Connections(s.ctx)
-		if err != nil {
-			return
-		}
-		for _, item := range items {
-			s.restoreWorker(item.ID)
-		}
-	}()
+	s.lifecycle.Restore(s.Connections, s.restoreWorker)
 }
 
 func (s *stationWechat) restoreWorker(id string) {
@@ -369,16 +332,8 @@ func (w *stationWechatWorker) save(policy stationWechatPolicy) error {
 
 func (w *stationWechatWorker) state() string {
 	if w.run != nil {
-		select {
-		case <-w.run.done:
-			if !w.policy.Paused {
-				return w.run.state.Load().(string)
-			}
-		default:
-			if w.run.block.Load() {
-				return "stopping"
-			}
-			return w.run.state.Load().(string)
+		if state := w.run.Status(w.policy.Paused); state != "" {
+			return state
 		}
 	}
 	switch {
@@ -403,17 +358,11 @@ func (w *stationWechatWorker) stop(ctx context.Context) error {
 	if w.run == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	w.run.block.Store(true)
-	w.run.cancel()
-	select {
-	case <-w.run.done:
-		w.run = nil
-		return nil
-	case <-ctx.Done():
-		return apphost.ErrLifecycleConflict
+	if err := w.run.Drain(ctx); err != nil {
+		return err
 	}
+	w.run = nil
+	return nil
 }
 
 func (w *stationWechatWorker) policyView() *apphost.ConfiguredPolicy {
@@ -623,11 +572,11 @@ func stationScopedGrants(parent, previous map[string]time.Time, requested *[]str
 func (w *stationWechatWorker) changePolicy(next stationWechatPolicy) error {
 	var wasBlocked bool
 	if w.run != nil {
-		wasBlocked = w.run.block.Swap(true)
+		wasBlocked = w.run.SetBlocked(true)
 	}
 	if err := w.save(next); err != nil {
 		if w.run != nil {
-			w.run.block.Store(wasBlocked)
+			w.run.SetBlocked(wasBlocked)
 		}
 		return err
 	}
@@ -668,9 +617,7 @@ func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, run
 		if guardErr != nil {
 			w.cutoverBlocked.Store(true)
 			if w.run != nil {
-				w.run.block.Store(true)
-				w.run.state.Store("cutover_blocked")
-				w.run.cancel()
+				w.run.BlockCutover()
 			}
 			return apphost.ConnectionLifecycle{}, guardErr
 		}
@@ -711,55 +658,34 @@ func (s *stationWechat) launch(w *stationWechatWorker, native *linuxnative.Sende
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ctx.Err() != nil {
-		return apphost.ErrLifecycleConflict
-	}
-	ctx, cancel := context.WithCancel(s.ctx)
-	run := &stationWechatRun{cancel: cancel, done: make(chan struct{})}
-	run.state.Store("waiting_login")
-	w.run = run
 	policy := w.policy
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer close(run.done)
-		defer cancel()
-		if err := s.runWorker(ctx, run, w, native, persona, policy, activationGuard); err != nil && ctx.Err() == nil {
-			run.state.Store("error")
-		}
-	}()
+	run, err := s.lifecycle.Start(func(ctx context.Context, run *wechatapp.WorkerRun) error {
+		return s.runWorker(ctx, run, w, native, persona, policy, activationGuard)
+	})
+	if err != nil {
+		return err
+	}
+	w.run = run
 	return nil
 }
 
-func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, station *stationWechatWorker, native *linuxnative.Sender, persona string, policy stationWechatPolicy, activationGuard func() bool) error {
+func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun, station *stationWechatWorker, native *linuxnative.Sender, persona string, policy stationWechatPolicy, activationGuard func() bool) error {
 	activationAllowed := func() error {
 		if activationGuard == nil || activationGuard() {
 			return nil
 		}
 		// A local marker/profile can become invalid after an explicit start.
 		// Stop only future automated work; accepted receipts stay untouched.
-		run.state.Store("cutover_blocked")
 		station.cutoverBlocked.Store(true)
-		run.block.Store(true)
-		run.cancel()
+		run.BlockCutover()
 		return apphost.ErrLifecycleCutover
 	}
 	if err := activationAllowed(); err != nil {
 		return err
 	}
 	dir := station.dir
-	for {
-		statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		status, err := native.Status(statusCtx)
-		cancel()
-		if err == nil && status.Authenticated && (status.Connection == "online" || status.Connection == "connected") {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+	if err := wechatapp.WaitWorkerLogin(ctx, native); err != nil {
+		return err
 	}
 	if err := activationAllowed(); err != nil {
 		return err
@@ -784,12 +710,12 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 	}
 	character.Names = native
 	character.ConversationPreference = func(in companion.Input) (string, bool) {
-		if run.block.Load() || in.Preview || in.Channel != "wechat" || in.Account != native.Account() || !validStationGroup(in.Thread) || policy.Grants[in.Thread].IsZero() {
+		if run.Blocked() || in.Preview || in.Channel != "wechat" || in.Account != native.Account() || !validStationGroup(in.Thread) || policy.Grants[in.Thread].IsZero() {
 			return "", false
 		}
 		return policy.GroupRules[in.Thread].Note, true
 	}
-	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.block.Load, documents: s.documents}
+	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.Blocked, documents: s.documents}
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
@@ -823,24 +749,24 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			kind, _ := stationAttachmentKind(m)
 			grant := policy.AttachmentGrants[m.ThreadID]
 			stamp, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
-			return kind == "file" && m.Direction == "incoming" && !run.block.Load() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)
+			return kind == "file" && m.Direction == "incoming" && !run.Blocked() && m.AccountID == native.Account() && !grant.IsZero() && err == nil && !stamp.Before(grant)
 		},
 		PreferredGroupShare: func(m linuxnative.Message) bool {
-			return !run.block.Load() && policy.groupShareCandidate(native.Account(), m)
+			return !run.Blocked() && policy.groupShareCandidate(native.Account(), m)
 		},
 		ReadPreferredGroupShare: func(ctx context.Context, in companion.Input, m linuxnative.Message) (string, bot.MediaObservationEvidence, error) {
-			if run.block.Load() || !policy.groupShareCandidate(native.Account(), m) {
+			if run.Blocked() || !policy.groupShareCandidate(native.Account(), m) {
 				return "", bot.MediaObservationEvidence{}, errors.New("share_group_policy_changed")
 			}
 			return attachment.readGroupShareEvidence(ctx, in, m)
 		},
 		Log: func(event string) {
 			if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
-				run.state.Store("running")
+				run.MarkRunning()
 			}
 		},
 		BeforeSubmit: func(ctx context.Context) error {
-			if run.block.Load() {
+			if run.Blocked() {
 				return apphost.ErrLifecycleConflict
 			}
 			if err := activationAllowed(); err != nil {
@@ -852,7 +778,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *stationWechatRun, st
 			if err := activationAllowed(); err != nil {
 				return false, err
 			}
-			return !run.block.Load() && !policy.Grants[thread].IsZero(), ctx.Err()
+			return !run.Blocked() && !policy.Grants[thread].IsZero(), ctx.Err()
 		},
 		AuthorizeReply: func(in companion.Input) bool {
 			if in.GroupShareSummary && !policy.groupShareAllowed(in.Thread, in.MessageTime) {

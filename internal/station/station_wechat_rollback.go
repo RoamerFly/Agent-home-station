@@ -134,8 +134,7 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 	// exiting. A subsequent read can observe the drain without changing state.
 	run := w.run
 	if freeze && run != nil {
-		run.block.Store(true)
-		run.cancel()
+		run.Cancel()
 	}
 	view.dataset = proof.TargetDataset
 	if relocated := w.policy.RelocationActivation; relocated != nil {
@@ -145,7 +144,7 @@ func (s *stationWechat) rollbackTarget(ctx context.Context, id string, freeze bo
 	workerStopped := run == nil
 	if run != nil {
 		select {
-		case <-run.done:
+		case <-run.Done():
 			workerStopped = true
 		default:
 		}
