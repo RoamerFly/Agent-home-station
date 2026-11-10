@@ -14,6 +14,12 @@ import (
 )
 
 func TestLocalArtifactPublishComputesHashAndRecoversWithoutExecutor(t *testing.T) {
+	t.Run("restart", func(t *testing.T) { testRecoverHomeArtifact(t, false) })
+	t.Run("relocate", func(t *testing.T) { testRecoverHomeArtifact(t, true) })
+}
+
+func testRecoverHomeArtifact(t *testing.T, relocate bool) {
+	t.Helper()
 	f := localChatFixture(t)
 	_, home := f.request("GET", "/api/local/home", nil, false)
 	path := filepath.Join(home["directory"].(string), "works", "auto.txt")
@@ -35,10 +41,20 @@ func TestLocalArtifactPublishComputesHashAndRecoversWithoutExecutor(t *testing.T
 	if code, _ := localChatSend(f, "auto-hash-work", "登记现有成品"); code != 502 {
 		t.Fatal(code)
 	}
+	ids, err := os.ReadDir(filepath.Join(f.dir, "artifacts"))
+	if err != nil || len(ids) != 1 || !artifactID(ids[0].Name(), "work-") {
+		t.Fatal("original snapshot was not registered once", ids, err)
+	}
+	id := ids[0].Name()
 	if err := os.WriteFile(path, []byte("changed mutable file"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	next := localRestartChat(t, f)
+	var next *localHomeFixture
+	if relocate {
+		next = localRelocateChat(t, f)
+	} else {
+		next = localRestartChat(t, f)
+	}
 	next.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
 		calls := 0
 		return localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
@@ -47,7 +63,8 @@ func TestLocalArtifactPublishComputesHashAndRecoversWithoutExecutor(t *testing.T
 				return publish, nil
 			}
 			history := localModelHistory(turns)
-			if !strings.Contains(history, sha256Hex([]byte(body))) || !strings.Contains(history, "work-") {
+			if !strings.Contains(history, sha256Hex([]byte(body))) || !strings.Contains(history, id) ||
+				!strings.Contains(turns[len(turns)-1]["content"], id) {
 				t.Error("verified original snapshot and actual hash missing from recovery")
 			}
 			return `{"action":"reply","messages":["已登记原成品。"]}`, nil
@@ -55,6 +72,49 @@ func TestLocalArtifactPublishComputesHashAndRecoversWithoutExecutor(t *testing.T
 	}
 	if code, out := localChatSend(next, "auto-hash-work", "登记现有成品"); code != 200 {
 		t.Fatal(code, out)
+	}
+	after, err := os.ReadDir(filepath.Join(next.dir, "artifacts"))
+	if err != nil || len(after) != 1 || after[0].Name() != id {
+		t.Fatal("retry created another snapshot", after, err)
+	}
+	artifact, err := next.handler.home.artifacts.ReadArtifact(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := artifact.OpenVerified(t.Context(), func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	if data, err := io.ReadAll(original); err != nil || string(data) != body {
+		t.Fatal("recovered artifact did not retain the original bytes", err)
+	}
+}
+
+func TestLocalHomeArtifactKeepsExistingSnapshotIDAtOriginalRoot(t *testing.T) {
+	f := localChatFixture(t)
+	access := &localWorkspaceAccess{home: f.handler.home}
+	grant, err := access.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rel, body = "works/old.txt", "existing snapshot"
+	path := filepath.Join(grant.Directory, rel)
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := f.handler.home.artifacts
+	in := localArtifactInput{Path: rel, Key: "existing-work", Expected: sha256Hex([]byte(body))}
+	old, err := store.publishFile(t.Context(), in, nil, access, grant, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.publish(t.Context(), in, nil)
+	if err != nil || current.ID != old.ID {
+		t.Fatal("upgrade did not reuse legacy snapshot", current.ID, old.ID, err)
 	}
 }
 

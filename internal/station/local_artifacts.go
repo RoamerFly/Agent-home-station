@@ -50,6 +50,7 @@ type localArtifactInput struct {
 	Key      string `json:"request_key"`
 	parent   *localArtifactLink
 	project  string
+	homeFile bool
 }
 
 var errLocalArtifactDigestMismatch = errors.New("成品内容与指定的 SHA-256 不一致")
@@ -232,6 +233,7 @@ func (s *localArtifactStore) publish(ctx context.Context, in localArtifactInput,
 	if err != nil {
 		return localArtifact{}, err
 	}
+	in.homeFile = true
 	return s.publishFile(ctx, in, source, access, grant, path, nil)
 }
 
@@ -240,7 +242,15 @@ func localArtifactIdentity(in localArtifactInput, source *companion.SourceRef, g
 	if !mediaspec.SafeFilename(name) || len(name) > 255 || strings.ContainsAny(name, ":*?<>|") {
 		return localArtifact{}, errors.New("成品文件名无效")
 	}
-	a := localArtifact{Name: name, PathHash: localCheckpointKey(path), Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent, ProjectTool: in.project}
+	pathHash := localCheckpointKey(path)
+	if in.homeFile {
+		target, err := filepath.Rel(grant.Directory, path)
+		if err != nil || !filepath.IsLocal(target) {
+			return localArtifact{}, errors.New("成品路径不在家目录内")
+		}
+		pathHash = localCheckpointKey("local-home-artifact-v1", filepath.ToSlash(target))
+	}
+	a := localArtifact{Name: name, PathHash: pathHash, Fish: grant.FishID, Owner: grant.OwnerID, HomeRevision: grant.Revision, Request: in.Key, Source: source, Parent: in.parent, ProjectTool: in.project}
 	a.ID = a.id()
 	return a, nil
 }
@@ -259,7 +269,14 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	if in.project != "" {
 		read = s.readRecord
 	}
-	if cached, err := read(a.ID); err == nil {
+	cached, err := read(a.ID)
+	if in.homeFile && os.IsNotExist(err) {
+		// Existing snapshots keep their issued IDs when retried at the old root.
+		legacy := a
+		legacy.PathHash = localCheckpointKey(path)
+		cached, err = read(legacy.id())
+	}
+	if err == nil {
 		if in.Expected != "" && cached.SHA256 != in.Expected {
 			return localArtifact{}, errLocalArtifactDigestMismatch
 		}

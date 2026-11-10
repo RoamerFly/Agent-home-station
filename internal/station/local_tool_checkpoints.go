@@ -28,6 +28,16 @@ func localFileCheckpointGrant(grant localWorkspaceGrant) string {
 	return localCheckpointKey("local-home-file-grant-v1", grant.FishID, grant.OwnerID, grant.Revision)
 }
 
+func (t *localToolSet) matchLegacyHomeCheckpoint(op companion.LocalToolCheckpoint, legacyKey string, grant localWorkspaceGrant) companion.LocalToolCheckpoint {
+	legacyGrant := localCheckpointKey(grant)
+	for _, previous := range t.run.Operations {
+		if previous.Key == legacyKey && previous.Tool == op.Tool && previous.Grant == legacyGrant {
+			return previous
+		}
+	}
+	return op
+}
+
 func (t *localToolSet) writeCheckpointed(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var in localWorkspaceFileInput
 	if err := strictLocalMemoryDecode(raw, &in); err != nil {
@@ -53,14 +63,7 @@ func (t *localToolSet) writeCheckpointed(ctx context.Context, name string, raw j
 		Tool: name, Grant: localFileCheckpointGrant(grant), Target: target,
 	}
 	// Match legacy rows only while their absolute path still proves the grant.
-	legacyKey := localCheckpointKey(append([]any{name, in.Path}, args...)...)
-	legacyGrant := localCheckpointKey(grant)
-	for _, previous := range t.run.Operations {
-		if previous.Key == legacyKey && previous.Tool == name && previous.Grant == legacyGrant {
-			op = previous
-			break
-		}
-	}
+	op = t.matchLegacyHomeCheckpoint(op, localCheckpointKey(append([]any{name, in.Path}, args...)...), grant)
 	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
 		result, err := t.files.call(ctx, name, in, grant)
 		return result, result, err
@@ -147,11 +150,14 @@ func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMess
 		return "", errors.New("本轮来源已变化，无法登记成品")
 	}
 	target, _ := filepath.Rel(grant.Directory, path)
-	path = filepath.Join(grant.Directory, target)
-	op := companion.LocalToolCheckpoint{Key: localCheckpointKey(localArtifactPublishTool, path, in.Expected),
-		Tool: localArtifactPublishTool, Grant: localCheckpointKey(grant), Target: target}
+	target = filepath.ToSlash(target)
+	op := companion.LocalToolCheckpoint{
+		Key:  localCheckpointKey("local-home-artifact-v1", localArtifactPublishTool, target, in.Expected),
+		Tool: localArtifactPublishTool, Grant: localFileCheckpointGrant(grant), Target: target,
+	}
+	op = t.matchLegacyHomeCheckpoint(op, localCheckpointKey(localArtifactPublishTool, path, in.Expected), grant)
 	return t.dispatchCheckpointed(ctx, op, grant, func() (string, string, error) {
-		artifact, err := t.access.home.artifacts.publishFile(ctx, localArtifactInput{Expected: in.Expected, Key: t.traceID}, source, t.access, grant, path, nil)
+		artifact, err := t.access.home.artifacts.publishFile(ctx, localArtifactInput{Expected: in.Expected, Key: t.traceID, homeFile: true}, source, t.access, grant, path, nil)
 		if errors.Is(err, errLocalArtifactDigestMismatch) {
 			result, encodeErr := localProcessJSON(map[string]any{"state": "not_published", "reason": errLocalArtifactDigestMismatch.Error()})
 			return result, "hash_mismatch", encodeErr
@@ -160,7 +166,7 @@ func (t *localToolSet) publishCheckpointed(ctx context.Context, raw json.RawMess
 			return "", "", err
 		}
 		result, err := localProcessJSON(artifact.view())
-		return result, "registered", err
+		return result, artifact.ID, err
 	})
 }
 
@@ -183,13 +189,30 @@ func (t *localToolSet) artifactCheckpointView(op companion.LocalToolCheckpoint, 
 	if !ok {
 		return view
 	}
-	identity, err := localArtifactIdentity(localArtifactInput{Key: t.traceID}, source, grant, path)
+	portable := op.Grant == localFileCheckpointGrant(grant)
+	identity, err := localArtifactIdentity(localArtifactInput{Key: t.traceID, homeFile: portable}, source, grant, path)
 	if err != nil {
 		return view
 	}
+	id := identity.ID
+	if portable && artifactID(op.Result, "work-") {
+		// The checkpoint may have reused a pre-upgrade immutable snapshot.
+		id = op.Result
+	}
 	store := t.access.home.artifacts
-	artifact, err := store.read(identity.ID)
-	if err != nil || (localCheckpointKey(op.Tool, path, artifact.SHA256) != op.Key && localCheckpointKey(op.Tool, path, "") != op.Key) {
+	artifact, err := store.read(id)
+	if err != nil || artifact.Fish != grant.FishID || artifact.Owner != grant.OwnerID || artifact.HomeRevision != grant.Revision ||
+		artifact.Name != identity.Name || artifact.Request != t.traceID || artifact.Source == nil || *artifact.Source != *source ||
+		artifact.Parent != nil || artifact.ProjectTool != "" {
+		return view
+	}
+	key := func(expected string) string {
+		if portable {
+			return localCheckpointKey("local-home-artifact-v1", op.Tool, op.Target, expected)
+		}
+		return localCheckpointKey(op.Tool, path, expected)
+	}
+	if key(artifact.SHA256) != op.Key && key("") != op.Key {
 		return view
 	}
 	file, err := store.open(ctx, artifact, func() bool { return t.access.current(grant) && store.artifactLineageValid(artifact) })
@@ -257,9 +280,9 @@ func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant lo
 		}
 		return view
 	}
-	fileOperation := op.Tool == "server_write" || op.Tool == "server_edit"
+	homeOperation := op.Tool == "server_write" || op.Tool == "server_edit" || op.Tool == localArtifactPublishTool
 	if grant.Directory == "" || (op.Grant != localCheckpointKey(grant) &&
-		(!fileOperation || op.Grant != localFileCheckpointGrant(grant))) {
+		(!homeOperation || op.Grant != localFileCheckpointGrant(grant))) {
 		view["state"] = "grant_changed"
 		return view
 	}

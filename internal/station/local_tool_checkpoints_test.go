@@ -38,6 +38,21 @@ func localRestartChat(t *testing.T, f *localHomeFixture) *localHomeFixture {
 	return next
 }
 
+func localRelocateChat(t *testing.T, f *localHomeFixture) *localHomeFixture {
+	t.Helper()
+	f.server.Close()
+	if err := f.handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "relocated package")
+	if err := os.CopyFS(moved, os.DirFS(filepath.Dir(f.dir))); err != nil {
+		t.Fatal(err)
+	}
+	next := newLocalHomeFixture(t, filepath.Join(moved, "host"), filepath.Join(moved, "workspace"))
+	next.login()
+	return next
+}
+
 func TestLocalToolCheckpointRecoversWrittenFileWithoutWritingAgain(t *testing.T) {
 	t.Run("restart", func(t *testing.T) { testRecoverWrittenFile(t, false) })
 	t.Run("relocate", func(t *testing.T) { testRecoverWrittenFile(t, true) })
@@ -72,16 +87,7 @@ func testRecoverWrittenFile(t *testing.T, relocate bool) {
 	}
 	var next *localHomeFixture
 	if relocate {
-		f.server.Close()
-		if err := f.handler.Close(); err != nil {
-			t.Fatal(err)
-		}
-		moved := filepath.Join(t.TempDir(), "relocated package")
-		if err := os.CopyFS(moved, os.DirFS(filepath.Dir(f.dir))); err != nil {
-			t.Fatal(err)
-		}
-		next = newLocalHomeFixture(t, filepath.Join(moved, "host"), filepath.Join(moved, "workspace"))
-		next.login()
+		next = localRelocateChat(t, f)
 		_, relocated := next.request("GET", "/api/local/home", nil, true)
 		if relocated["fish_id"] != home["fish_id"] || relocated["owner_id"] != home["owner_id"] ||
 			relocated["revision"] != home["revision"] || relocated["directory"] == dir {
