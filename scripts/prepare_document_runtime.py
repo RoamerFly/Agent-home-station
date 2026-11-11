@@ -29,8 +29,11 @@ def reject_links(path: Path) -> None:
 
 
 def digest(path: Path) -> str:
+    result = hashlib.sha256()
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
 
 
 def checked_source(value: str | None, label: str, required: bool = False) -> Path | None:

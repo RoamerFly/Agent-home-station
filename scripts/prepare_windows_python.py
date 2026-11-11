@@ -22,8 +22,11 @@ URL = f"https://www.python.org/ftp/python/{VERSION}/python-{VERSION}-embed-amd64
 
 
 def digest(path):
+    result = hashlib.sha256()
     with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
 
 
 def remove_startup_manifest(path, resource):
