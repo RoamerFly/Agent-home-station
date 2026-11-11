@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -17,7 +16,7 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 	if !artifactID(id, "wechat-") || after != "" && !identity.ValidPathID(after) || limit < 1 {
 		return page, apphost.ErrNotFound
 	}
-	if strings.HasPrefix(after, "cross-reply-") {
+	if stationCrossReceiptKey(after) {
 		return s.listCrossMemoryReceipts(ctx, id, after, limit)
 	}
 	defer func() {
@@ -82,7 +81,7 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	if !identity.ValidPathID(key) {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
-	if strings.HasPrefix(key, "cross-reply-") {
+	if stationCrossReceiptKey(key) {
 		return s.readCrossMemoryReceipt(ctx, id, key)
 	}
 	native, nativeErr := s.WorkerSender(ctx, id)

@@ -304,6 +304,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	tools := []mcptools.Tool{}
 	if t.crossAuthorization() != "" {
 		tools = append(tools, stationWechatCrossTool())
+		if _, ok := stationWechatForwardCommand(t.trace); ok && !t.PrivateReplyRequired() {
+			tools = append(tools, stationWechatForwardTool())
+		}
 	}
 	if t.scopeAllowed(t.trace, t.reads) {
 		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
@@ -376,6 +379,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if t.cross != nil && t.cross.Required {
 		return "", errors.New("跨会话查询结果仅供本轮私聊答复，其他工具请另起请求")
+	}
+	if name == stationWechatForwardToolName {
+		return t.forwardOriginalFile(ctx, raw)
 	}
 	if name == "wechat_video_read" {
 		return t.readVideo(ctx, raw)

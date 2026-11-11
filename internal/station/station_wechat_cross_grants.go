@@ -322,6 +322,10 @@ func (worker *stationWechatWorker) crossAuthority(account string) (stationWechat
 // succeeds. Repeating it before reads and delivery detects revoked authority,
 // replacement native data, edited requests, and changed reply destinations.
 func (s *stationWechat) verifyWechatCrossRequest(ctx context.Context, id string, in companion.Input, source string, owner stationservices.Owner) (stationWechatCrossAccess, error) {
+	return s.verifyWechatCrossScope(ctx, id, in, source, owner, false)
+}
+
+func (s *stationWechat) verifyWechatCrossScope(ctx context.Context, id string, in companion.Input, source string, owner stationservices.Owner, forward bool) (stationWechatCrossAccess, error) {
 	deny := func() (stationWechatCrossAccess, error) {
 		return stationWechatCrossAccess{}, apphost.ErrObservationForbidden
 	}
@@ -334,17 +338,18 @@ func (s *stationWechat) verifyWechatCrossRequest(ctx context.Context, id string,
 	}
 	grants, binding, policy, grantErr := worker.crossAuthority(in.Account)
 	sourceGrant, originGrant, privateGrant := policy.HistoryGrants[source], policy.Grants[in.Thread], time.Time{}
-	if binding.Binding != nil {
+	if binding.Binding != nil && !forward {
 		privateGrant = policy.Grants[binding.Binding.Sender]
 	}
+	sourceFile, targetFile := policy.AttachmentGrants[source], policy.MediaReplyGrants[in.Thread]
 	b := binding.Binding
-	if grantErr != nil || b == nil || owner.ID == "" || owner.FishID == "" || grants.Owner != owner.ID || grants.Fish != owner.FishID || b.Owner != owner.ID || b.Fish != owner.FishID || grants.OwnerRevision != binding.Revision || b.Sender != in.Sender || sourceGrant.IsZero() || originGrant.IsZero() || !sourceGrant.Equal(grants.Sources[source]) || !originGrant.Equal(grants.Origins[in.Thread]) || in.IsGroup && privateGrant.IsZero() {
+	if grantErr != nil || b == nil || owner.ID == "" || owner.FishID == "" || grants.Owner != owner.ID || grants.Fish != owner.FishID || b.Owner != owner.ID || b.Fish != owner.FishID || grants.OwnerRevision != binding.Revision || b.Sender != in.Sender || sourceGrant.IsZero() || originGrant.IsZero() || !sourceGrant.Equal(grants.Sources[source]) || !originGrant.Equal(grants.Origins[in.Thread]) || !forward && in.IsGroup && privateGrant.IsZero() || forward && (!in.IsGroup || sourceFile.IsZero() || targetFile.IsZero()) {
 		return deny()
 	}
 	preview, record, err := s.previewWechatOwner(ctx, id, binding, owner, in.TraceID)
 	when, timeErr := time.Parse(time.RFC3339Nano, in.MessageTime)
 	actual, actualErr := time.Parse(time.RFC3339Nano, record.CreatedAt)
-	if err != nil || timeErr != nil || actualErr != nil || !when.Equal(actual) || when.Before(grants.ActivatedAt) || when.Before(originGrant) || preview.Dataset != b.Dataset || record.SenderID != b.Sender || record.ThreadID != in.Thread || record.Body != *in.OriginalText || in.IsGroup && when.Before(privateGrant) || !in.IsGroup && in.Thread != b.Sender {
+	if err != nil || timeErr != nil || actualErr != nil || !when.Equal(actual) || when.Before(grants.ActivatedAt) || when.Before(originGrant) || preview.Dataset != b.Dataset || record.SenderID != b.Sender || record.ThreadID != in.Thread || record.Body != *in.OriginalText || !forward && in.IsGroup && when.Before(privateGrant) || !in.IsGroup && in.Thread != b.Sender || forward && (when.Before(sourceFile) || when.Before(targetFile)) {
 		return deny()
 	}
 	if ref := in.Source; ref != nil {
@@ -354,9 +359,18 @@ func (s *stationWechat) verifyWechatCrossRequest(ctx context.Context, id string,
 		}
 	}
 	fresh, freshBinding, current, readErr := worker.crossAuthority(in.Account)
-	unchanged := readErr == nil && fresh.Revision == grants.Revision && freshBinding.Revision == binding.Revision && sourceGrant.Equal(current.HistoryGrants[source]) && originGrant.Equal(current.Grants[in.Thread]) && privateGrant.Equal(current.Grants[b.Sender])
+	unchanged := readErr == nil && fresh.Revision == grants.Revision && freshBinding.Revision == binding.Revision && sourceGrant.Equal(current.HistoryGrants[source]) && originGrant.Equal(current.Grants[in.Thread])
+	if forward {
+		unchanged = unchanged && sourceFile.Equal(current.AttachmentGrants[source]) && targetFile.Equal(current.MediaReplyGrants[in.Thread])
+	} else {
+		unchanged = unchanged && privateGrant.Equal(current.Grants[b.Sender])
+	}
 	if !unchanged || ctx.Err() != nil {
 		return deny()
 	}
-	return stationWechatCrossAccess{Digest: localCheckpointKey("wechat-cross-request-v1", preview.Digest, grants.Revision, source, sourceGrant, originGrant, privateGrant), PrivateTarget: b.Sender, GrantRevision: grants.Revision}, nil
+	digest := localCheckpointKey("wechat-cross-request-v1", preview.Digest, grants.Revision, source, sourceGrant, originGrant, privateGrant)
+	if forward {
+		digest = localCheckpointKey("wechat-forward-v1", digest, sourceFile, targetFile)
+	}
+	return stationWechatCrossAccess{Digest: digest, PrivateTarget: b.Sender, GrantRevision: grants.Revision}, nil
 }

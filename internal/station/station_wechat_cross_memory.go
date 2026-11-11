@@ -84,6 +84,10 @@ func (t *stationAttachmentTools) crossAuthorization() string {
 }
 
 func (t *stationAttachmentTools) crossProof(ctx context.Context, old stationWechatCrossProof) (stationWechatCrossProof, error) {
+	return t.crossScopeProof(ctx, old, false)
+}
+
+func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old stationWechatCrossProof, forward bool) (stationWechatCrossProof, error) {
 	deny := func() (stationWechatCrossProof, error) {
 		return stationWechatCrossProof{}, apphost.ErrObservationForbidden
 	}
@@ -94,7 +98,7 @@ func (t *stationAttachmentTools) crossProof(ctx context.Context, old stationWech
 	if err != nil {
 		return deny()
 	}
-	access, err := t.crossHost.verifyWechatCrossRequest(ctx, t.crossConnection, t.trace, old.Thread, owner)
+	access, err := t.crossHost.verifyWechatCrossScope(ctx, t.crossConnection, t.trace, old.Thread, owner, forward)
 	if err != nil {
 		return deny()
 	}
@@ -118,7 +122,7 @@ func (t *stationAttachmentTools) crossProof(ctx context.Context, old stationWech
 	if err != nil || fresh != owner || t.blocked() {
 		return deny()
 	}
-	if t.cross != nil {
+	if !forward && t.cross != nil {
 		t.cross.Target = access.PrivateTarget
 	}
 	return next, nil

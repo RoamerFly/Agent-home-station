@@ -26,17 +26,23 @@ type stationWechatCrossDeliveryPart struct {
 	Attempted      bool                   `json:"attempted"`
 	BodyUnverified bool                   `json:"body_unverified,omitempty"`
 	Status         linuxnative.ToolStatus `json:"status"`
+	Upload         string                 `json:"upload_id,omitempty"`
 }
 type stationWechatCrossDelivery struct {
-	Version int                              `json:"version"`
-	Key     string                           `json:"key"`
-	Account string                           `json:"account_id"`
-	Origin  string                           `json:"origin_thread"`
-	Trace   string                           `json:"origin_message"`
-	Target  string                           `json:"target_thread"`
-	Created time.Time                        `json:"created_at"`
-	Proofs  []stationWechatCrossProof        `json:"proofs"`
-	Parts   []stationWechatCrossDeliveryPart `json:"parts"`
+	Version  int                              `json:"version"`
+	Key      string                           `json:"key"`
+	Account  string                           `json:"account_id"`
+	Origin   string                           `json:"origin_thread"`
+	Trace    string                           `json:"origin_message"`
+	Target   string                           `json:"target_thread"`
+	Created  time.Time                        `json:"created_at"`
+	Proofs   []stationWechatCrossProof        `json:"proofs"`
+	Parts    []stationWechatCrossDeliveryPart `json:"parts"`
+	Original *wechatapp.AttachmentSource      `json:"original_file,omitempty"`
+}
+
+func stationCrossReceiptKey(key string) bool {
+	return strings.HasPrefix(key, "cross-reply-") || strings.HasPrefix(key, "cross-forward-")
 }
 
 func openWechatCrossDelivery(worker *stationWechatWorker, create bool) (*os.Root, error) {
@@ -52,7 +58,7 @@ func openWechatCrossDelivery(worker *stationWechatWorker, create bool) (*os.Root
 }
 func readWechatCrossDelivery(root *os.Root, key, account string) (stationWechatCrossDelivery, error) {
 	var row stationWechatCrossDelivery
-	if !strings.HasPrefix(key, "cross-reply-") || !identity.ValidPathID(key) {
+	if !stationCrossReceiptKey(key) || !identity.ValidPathID(key) {
 		return row, apphost.ErrNotFound
 	}
 	raw, err := readLegacyImportFile(root, key+".json", 1<<20)
@@ -62,8 +68,12 @@ func readWechatCrossDelivery(root *os.Root, key, account string) (stationWechatC
 	if json.Unmarshal(raw, &row) != nil || row.Version != 1 || row.Key != key || row.Account != account || !identity.ValidPathID(row.Target) || !identity.ValidPathID(row.Origin) || row.Trace == "" || row.Created.IsZero() || len(row.Parts) == 0 || len(row.Proofs) == 0 {
 		return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 	}
+	forward := strings.HasPrefix(key, "cross-forward-")
+	if forward != (row.Original != nil) || forward && (len(row.Parts) != 1 || len(row.Proofs) != 1 || row.Original.Kind != "file" || row.Original.Account != account || row.Original.Thread != row.Proofs[0].Thread || row.Original.Thread == row.Target || row.Origin != row.Target) {
+		return stationWechatCrossDelivery{}, apphost.ErrUnavailable
+	}
 	for i, p := range row.Parts {
-		if p.Key != key+"-"+fmt.Sprint(i) || strings.TrimSpace(p.Text) == "" || len(p.Text) > 3000 {
+		if p.Key != key+"-"+fmt.Sprint(i) || !forward && (strings.TrimSpace(p.Text) == "" || len(p.Text) > 3000 || p.Upload != "") || forward && (p.Text != "" || p.Attempted && !identity.ValidPathID(p.Upload)) {
 			return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 		}
 		if p.Status.ID != "" {
@@ -71,6 +81,27 @@ func readWechatCrossDelivery(root *os.Root, key, account string) (stationWechatC
 		}
 	}
 	return row, nil
+}
+
+func (row stationWechatCrossDelivery) matchesStatus(part stationWechatCrossDeliveryPart, status linuxnative.ToolStatus) bool {
+	if status.AccountID != row.Account {
+		return false
+	}
+	if row.Original == nil {
+		return validCrossDeliveryStatus(status, row.Target)
+	}
+	return status.ID != "" && status.ThreadID == row.Target && status.SourceID == part.Upload && part.Upload != "" && (status.Kind == "file" || status.Kind == "send" || status.Kind == "")
+}
+
+func (row stationWechatCrossDelivery) matchesNative(ctx context.Context, native *linuxnative.Sender) bool {
+	if native == nil || native.Account() != row.Account {
+		return false
+	}
+	if row.Original == nil {
+		return true
+	}
+	dataset, err := native.Identity(ctx)
+	return err == nil && dataset == row.Original.Dataset
 }
 func saveWechatCrossDelivery(root *os.Root, row stationWechatCrossDelivery) error {
 	data, err := json.Marshal(row)
@@ -211,7 +242,7 @@ func (t *stationAttachmentTools) RoutePrivateReply(ctx context.Context, messages
 // Receipt lookup remains available after source revocation, without opening
 // memory, replaying text or admitting another native write.
 func (s *stationWechat) readCrossMemoryReceipt(ctx context.Context, id, key string) (apphost.Receipt, error) {
-	if !strings.HasPrefix(key, "cross-reply-") || !identity.ValidPathID(key) {
+	if !stationCrossReceiptKey(key) || !identity.ValidPathID(key) {
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
 	w, err := s.worker(id, false)
@@ -249,14 +280,14 @@ func (s *stationWechat) readCrossMemoryReceipt(ctx context.Context, id, key stri
 		return apphost.Receipt{}, apphost.ErrNotFound
 	}
 	changed := false
-	if nativeErr == nil {
+	if nativeErr == nil && row.matchesNative(ctx, native) {
 		for i := range row.Parts {
 			part := &row.Parts[i]
 			if !part.Attempted {
 				continue
 			}
 			status, err := native.LookupSend(ctx, part.Key)
-			if err == nil && status.AccountID == account && validCrossDeliveryStatus(status, row.Target) {
+			if err == nil && row.matchesStatus(*part, status) {
 				part.Status = status
 				changed = true
 			}
@@ -273,9 +304,13 @@ func (s *stationWechat) readCrossMemoryReceipt(ctx context.Context, id, key stri
 }
 
 func (s *stationWechat) crossMemoryReceipt(id string, row stationWechatCrossDelivery) apphost.Receipt {
-	out := apphost.Receipt{ConnectionRef: s.connectionRef(id, row.Account), ConversationID: row.Target, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: row.Key, Kind: "text", State: "accepted", Lookup: "host_private_route_checkpoint"}}
+	kind, lookup := "text", "host_private_route_checkpoint"
+	if row.Original != nil {
+		kind, lookup = "file", "host_original_forward_checkpoint"
+	}
+	out := apphost.Receipt{ConnectionRef: s.connectionRef(id, row.Account), ConversationID: row.Target, DeliveryReceipt: apphost.DeliveryReceipt{IdempotencyKey: row.Key, Kind: kind, State: "accepted", Lookup: lookup}}
 	for i, part := range row.Parts {
-		p := apphost.DeliveryReceipt{IdempotencyKey: part.Key, OperationID: part.Status.ID, Kind: "text", State: part.Status.State, PlatformState: part.Status.State, ServerID: part.Status.ServerID, Lookup: "host_private_route_checkpoint"}
+		p := apphost.DeliveryReceipt{IdempotencyKey: part.Key, OperationID: part.Status.ID, Kind: kind, State: part.Status.State, PlatformState: part.Status.State, ServerID: part.Status.ServerID, Lookup: lookup}
 		if p.State == "" {
 			p.State = "unknown"
 		}
@@ -285,6 +320,21 @@ func (s *stationWechat) crossMemoryReceipt(id string, row stationWechatCrossDeli
 		} else {
 			out.State = "pending"
 			out.UnconfirmedParts = append(out.UnconfirmedParts, apphost.ReceiptPart{Index: i, State: p.State})
+		}
+	}
+	if row.Original != nil && len(out.UnconfirmedParts) == 1 {
+		out.State = out.UnconfirmedParts[0].State
+		if !row.Parts[0].Attempted {
+			out.State = "prepared"
+		}
+		if out.State == "accepted" {
+			out.State = "unknown"
+		}
+	}
+	if row.Original != nil {
+		out.OperationID = row.Parts[0].Status.ID
+		if out.State == "accepted" {
+			out.ServerID = row.Parts[0].Status.ServerID
 		}
 	}
 	return out
@@ -323,7 +373,7 @@ func (s *stationWechat) listCrossMemoryReceipts(ctx context.Context, id, after s
 	keys := []string{}
 	for _, entry := range entries {
 		key := strings.TrimSuffix(entry.Name(), ".json")
-		if !entry.IsDir() && strings.HasPrefix(key, "cross-reply-") && strings.HasSuffix(entry.Name(), ".json") && identity.ValidPathID(key) {
+		if !entry.IsDir() && stationCrossReceiptKey(key) && strings.HasSuffix(entry.Name(), ".json") && identity.ValidPathID(key) {
 			keys = append(keys, key)
 		}
 	}
@@ -404,13 +454,13 @@ func (s *stationWechat) cancelCrossMemoryDelivery(w http.ResponseWriter, r *http
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if native, err := s.WorkerSender(ctx, id); err == nil && native.Account() == row.Account {
+	if native, err := s.WorkerSender(ctx, id); err == nil && row.matchesNative(ctx, native) {
 		for _, part := range row.Parts {
 			if !part.Attempted {
 				continue
 			}
 			status, err := native.LookupSend(ctx, part.Key)
-			if err == nil && validCrossDeliveryStatus(status, row.Target) && status.State != "accepted" && status.State != "failed" && status.State != "cancelled" && status.State != "rejected" {
+			if err == nil && row.matchesStatus(part, status) && status.State != "accepted" && status.State != "failed" && status.State != "cancelled" && status.State != "rejected" {
 				_, _ = native.CancelMediaJob(ctx, status.ID)
 			}
 		}

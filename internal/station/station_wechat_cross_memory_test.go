@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -31,10 +32,18 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	sent := []map[string]string{}
 	loseNext, hideLookups := false, false
 	submitState := "accepted"
+	const originalBytes = "synthetic original file bytes"
+	const originalName = "旅行计划.txt"
+	duplicateGroup, duplicateFile, badHash := false, false, false
+	downloads, uploads := 0, 0
+	var pauseUpload func()
 	newMessage := func(id, thread, sender, text string) linuxnative.Message {
 		return linuxnative.Message{ID: id, AccountID: account, ThreadID: thread, SenderID: sender, Body: text, Type: 1, Direction: "incoming", ServerID: "78901", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	}
 	messages["bind"] = newMessage("bind", origin, ownerID, "合成本人消息")
+	fileMessage := newMessage("original-file", source, "wxid-source-member", "<appmsg><type>6</type><title>旅行计划.txt</title></appmsg>")
+	fileMessage.Type = 49
+	messages[fileMessage.ID] = fileMessage
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -46,6 +55,60 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 			out = map[string]any{"items": []map[string]any{{"id": account, "authenticated": true, "connection": "online"}, {"id": "two", "authenticated": true, "connection": "online"}}}
 		case "/v1/accounts/one", "/v1/accounts/two":
 			out = map[string]any{"id": filepath.Base(r.URL.Path), "storageMode": "managed", "authenticated": true, "connection": "online"}
+		case "/v1/accounts/one/groups":
+			group := source
+			var next any
+			if duplicateGroup {
+				if r.URL.Query().Get("cursor") == "" {
+					next = "second-group-page"
+				} else {
+					group = "other-source@chatroom"
+				}
+			}
+			out = map[string]any{"items": []any{map[string]any{"id": group, "name": "远足"}}, "nextCursor": next}
+		case "/v1/accounts/one/threads/" + source + "/messages":
+			item := fileMessage
+			var next any
+			if duplicateFile {
+				if r.URL.Query().Get("cursor") == "" {
+					next = "second-file-page"
+				} else {
+					item.ID = "duplicate-original"
+				}
+			}
+			out = map[string]any{"items": []any{item}, "nextCursor": next}
+		case "/v1/accounts/one/messages/original-file/media-transfers":
+			downloads++
+			out = map[string]any{"id": "synthetic-download", "state": "completed", "assetId": "synthetic-file-asset", "accountId": account, "kind": "download"}
+		case "/v1/accounts/one/media/synthetic-file-asset":
+			digest := hexDigest([]byte(originalBytes))
+			if badHash {
+				digest = hexDigest([]byte("other bytes"))
+			}
+			out = map[string]any{"id": "synthetic-file-asset", "accountId": account, "messageId": "original-file", "kind": "file", "state": "available", "variant": "original", "actualVariant": "original", "byteLength": len(originalBytes), "contentType": "text/plain", "sha256": digest}
+		case "/v1/accounts/one/media/synthetic-file-asset/content":
+			_, _ = io.WriteString(w, originalBytes)
+			return
+		case "/v1/accounts/one/uploads":
+			uploads++
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			defer file.Close()
+			bytes, err := io.ReadAll(file)
+			if err != nil || string(bytes) != originalBytes || header.Filename != originalName {
+				t.Error("forward used different file bytes or title", header.Filename, err)
+			}
+			out = map[string]any{"id": "synthetic-forward-upload", "name": header.Filename, "byteLength": len(bytes), "sha256": hexDigest(bytes)}
+			if pause := pauseUpload; pause != nil {
+				pauseUpload = nil
+				mu.Unlock()
+				pause()
+				mu.Lock()
+			}
 		case "/v1/accounts/one/sends":
 			if r.Method != "POST" {
 				t.Error("unexpected send method")
@@ -58,12 +121,14 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 				return
 			}
 			key := r.Header.Get("Idempotency-Key")
-			if key == "" || body["threadId"] != ownerID || body["kind"] != "text" {
+			isText := body["threadId"] == ownerID && body["kind"] == "text"
+			isForward := body["threadId"] == origin && body["kind"] == "file" && body["sourceId"] == "synthetic-forward-upload"
+			if key == "" || !isText && !isForward {
 				t.Error("cross result sent outside private owner", body)
 			}
 			body["key"] = key
 			sent = append(sent, body)
-			out = map[string]any{"id": "synthetic-send-" + fmt.Sprint(len(sent)), "accountId": account, "threadId": ownerID, "kind": "send", "state": submitState, "serverMessageId": fmt.Sprint(8000 + len(sent))}
+			out = map[string]any{"id": "synthetic-send-" + fmt.Sprint(len(sent)), "accountId": account, "threadId": body["threadId"], "kind": "send", "state": submitState, "serverMessageId": fmt.Sprint(8000 + len(sent)), "sourceId": body["sourceId"]}
 			statuses[key] = out.(map[string]any)
 			if loseNext {
 				loseNext = false
@@ -179,9 +244,12 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 		}
 		original = entry
 	}
-	makeTools := func(messageID, thread, sender string) (*stationAttachmentTools, companion.Input) {
+	makeTools := func(messageID, thread, sender string, words ...string) (*stationAttachmentTools, companion.Input) {
 		t.Helper()
 		text := "查其他会话的旅行资料"
+		if len(words) > 0 {
+			text = words[0]
+		}
 		message := newMessage(messageID, thread, sender, text)
 		mu.Lock()
 		messages[messageID] = message
@@ -496,4 +564,174 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	if receipt, err := host.ReadReceipt(t.Context(), id, key); err != nil || receipt.State != "accepted" {
 		t.Fatal("revocation lost existing native receipt", receipt, err)
 	}
+
+	// The current group explicitly receives only the selected original. Its
+	// permission is independent of the owner's private reply destination.
+	policy["attachment_threads"] = []string{origin, source}
+	policy["media_reply_threads"] = []string{origin}
+	req("PUT", path+"/policy", policy, 200)
+	grant["revision"], grant["request_key"], grant["sources"], grant["origins"] = 2, "authorize-forward-source", []string{source}, []string{origin}
+	req("PUT", path+"/cross-memory-grants", grant, 200)
+	forward := func(tools *stationAttachmentTools, args string, want string) apphost.Receipt {
+		t.Helper()
+		raw, err := tools.Call(t.Context(), stationWechatForwardToolName, json.RawMessage(args))
+		if want == "denied" {
+			if err == nil {
+				t.Fatal("unsafe forward accepted", raw)
+			}
+			return apphost.Receipt{}
+		}
+		var result apphost.Receipt
+		if err != nil || json.Unmarshal([]byte(raw), &result) != nil || result.State != want {
+			t.Fatalf("forward want %s, got %s: %v", want, raw, err)
+		}
+		return result
+	}
+	words := "把群「远足」的「旅行计划.txt」转到这个群"
+	exact := "转发原件 " + source + " original-file 到这个群"
+	newForward := func(trace, sender, text string) *stationAttachmentTools {
+		tools, _ := makeTools(trace, origin, sender, text)
+		return tools
+	}
+	forward(newForward("wrong-speaker", "wxid-other", words), `{}`, "denied")
+	forward(newForward("wrong-intent", ownerID, "看看群远足的旅行计划.txt"), `{}`, "denied")
+	forward(newForward("wrong-target", ownerID, words), `{"target_thread_id":"other@chatroom"}`, "denied")
+	foreign, _ := makeTools("foreign-thread", origin, ownerID, exact)
+	foreign.trace.Account = "two"
+	forward(foreign, `{}`, "denied")
+	mu.Lock()
+	duplicateGroup = true
+	mu.Unlock()
+	forward(newForward("duplicate-group", ownerID, words), `{}`, "needs_clarification")
+	mu.Lock()
+	duplicateGroup = false
+	duplicateFile = true
+	mu.Unlock()
+	forward(newForward("duplicate-file", ownerID, words), `{}`, "needs_clarification")
+	mu.Lock()
+	duplicateFile = false
+	badHash = true
+	mu.Unlock()
+	forward(newForward("bad-original", ownerID, exact), `{}`, "denied")
+	mu.Lock()
+	badHash = false
+	if downloads != 1 || uploads != 0 {
+		t.Fatal("ambiguity or bad original reached upload", downloads, uploads)
+	}
+	beforeSends := len(sent)
+	loseNext = true
+	mu.Unlock()
+	first, firstInput := makeTools("lost-forward-reply", origin, ownerID, words)
+	listed, err := first.List(t.Context())
+	if err != nil || len(listed) != 2 || listed[1].Name != stationWechatForwardToolName {
+		t.Fatal("explicit command tool absent", listed, err)
+	}
+	unknownReceipt := forward(first, `{}`, "unknown")
+	mu.Lock()
+	hideLookups = true
+	mu.Unlock()
+	retry := first.ForkTools().(*stationAttachmentTools)
+	retry.SetTrace(firstInput)
+	forward(retry, `{}`, "unknown")
+	mu.Lock()
+	hideLookups = false
+	mu.Unlock()
+	accepted := forward(retry, `{}`, "accepted")
+	if accepted.IdempotencyKey != unknownReceipt.IdempotencyKey || accepted.ConversationID != origin || accepted.Kind != "file" || accepted.ServerID == "" {
+		t.Fatal(accepted)
+	}
+	mu.Lock()
+	if len(sent) != beforeSends+1 || uploads != 1 {
+		t.Fatal("result unknown caused duplicate transfer", len(sent), uploads)
+	}
+	mu.Unlock()
+	fileReceipt, err := host.ReadReceipt(t.Context(), id, accepted.IdempotencyKey)
+	if err != nil || fileReceipt.State != "accepted" || fileReceipt.Kind != "file" {
+		t.Fatal(fileReceipt, err)
+	}
+	queued := newForward("cancel-forward", ownerID, exact)
+	mu.Lock()
+	submitState = "queued"
+	mu.Unlock()
+	queuedReceipt := forward(queued, `{}`, "queued")
+	req("POST", path+"/receipts/"+queuedReceipt.IdempotencyKey+"/cancel", map[string]any{}, 202)
+	stopped, err := host.ReadReceipt(t.Context(), id, queuedReceipt.IdempotencyKey)
+	if err != nil || !stopped.CancelRequested || stopped.State != "cancelled" {
+		t.Fatal(stopped, err)
+	}
+	engineTools, engineInput := makeTools("explicit-forward-engine", origin, ownerID, words)
+	var modelCalls int
+	forwardModel := localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return `{"action":"tool","tool":"wechat_forward_file","arguments":{}}`, nil
+		}
+		for _, turn := range turns {
+			var packet struct{ Tool, Result string }
+			if json.Unmarshal([]byte(turn["content"]), &packet) == nil && packet.Tool == stationWechatForwardToolName {
+				var result apphost.Receipt
+				if json.Unmarshal([]byte(packet.Result), &result) == nil && result.State == "accepted" && result.ConversationID == origin && result.ServerID != "" {
+					return `{"action":"silent","reason":"already_delivered"}`, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("tool result missing verified forward receipt")
+	})
+	mu.Lock()
+	submitState = "accepted"
+	mu.Unlock()
+	engine, err := companion.New(config, memory, forwardModel, "合成微信转发回放")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Tools, engine.MaxToolCalls = engineTools, 6
+	if decision, err := engine.Respond(t.Context(), engineInput); err != nil || decision.Action != "silent" || modelCalls != 2 {
+		t.Fatal(decision, modelCalls, err)
+	}
+
+	// Revocation while the native upload response is in flight must stop the
+	// dispatch even if the upload itself finishes successfully.
+	inFlight := newForward("revoked-during-upload", ownerID, exact)
+	started, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	mu.Lock()
+	pauseUpload = func() { close(started); <-release }
+	mu.Unlock()
+	dispatchResult := make(chan error, 1)
+	go func() {
+		_, err := inFlight.Call(t.Context(), stationWechatForwardToolName, json.RawMessage(`{}`))
+		dispatchResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not start")
+	}
+	// Receipt reads must stay available while a transfer is in flight.
+	inFlightKey := "cross-forward-" + localCheckpointKey(account, origin, "revoked-during-upload")[:40]
+	receiptContext, cancelReceipt := context.WithTimeout(t.Context(), 2*time.Second)
+	pendingReceipt, err := host.ReadReceipt(receiptContext, id, inFlightKey)
+	cancelReceipt()
+	if err != nil || pendingReceipt.State != "prepared" {
+		t.Fatal("in-flight receipt unavailable", pendingReceipt, err)
+	}
+	blockedForward := newForward("revoked-forward-target", ownerID, exact)
+	policy["media_reply_threads"] = []string{}
+	req("PUT", path+"/policy", policy, 200)
+	close(release)
+	if err := <-dispatchResult; err == nil {
+		t.Fatal("revocation during upload allowed submit")
+	}
+	forward(blockedForward, `{}`, "denied")
+	mu.Lock()
+	if len(sent) != beforeSends+3 || uploads != 4 {
+		t.Fatal("revoked target wrote to native", len(sent), uploads)
+	}
+	mu.Unlock()
 }

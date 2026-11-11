@@ -32,7 +32,7 @@ type stationLegacyReadCursor struct {
 // Imported conversation evidence must be looked up under current authority
 // in the turn that uses it. It cannot be replayed from a generation checkpoint.
 func (*stationAttachmentTools) EphemeralToolResult(name string) bool {
-	return name == "wechat_read_legacy" || name == stationWechatCrossToolName
+	return name == "wechat_read_legacy" || name == stationWechatCrossToolName || name == stationWechatForwardToolName
 }
 
 // Bind generated drafts to the history grant whenever imported evidence can

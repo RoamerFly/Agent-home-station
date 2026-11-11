@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"net/http"
-	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -62,7 +61,7 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 400, "投递编号无效")
 		return
 	}
-	if strings.HasPrefix(key, "cross-reply-") {
+	if stationCrossReceiptKey(key) {
 		s.cancelCrossMemoryDelivery(w, r, id, key)
 		return
 	}
