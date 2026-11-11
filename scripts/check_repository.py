@@ -31,7 +31,7 @@ def package_findings(index):
     """Check the bytes that will be cloned, not Windows working-tree newlines."""
     failures = []
     for manifest, raw in index.items():
-        if not re.fullmatch(r"plugins/[^/]+/plugin\.json", manifest):
+        if not re.fullmatch(r"(?:plugins/[^/]+/plugin|connected-apps/[^/]+/app)\.json", manifest):
             continue
         root = manifest.rsplit("/", 1)[0] + "/"
         try:
@@ -44,7 +44,7 @@ def package_findings(index):
             continue
         for name, digest in files.items():
             path = PurePosixPath(name)
-            if path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name or str(path) != name or name == "plugin.json":
+            if path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name or str(path) != name or root + name == manifest:
                 failures.append({"path": manifest, "reason": "invalid_package_member"})
                 continue
             content = index.get(root + name)
