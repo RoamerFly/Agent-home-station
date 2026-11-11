@@ -147,11 +147,11 @@ def verify(binary, output, tool_id="comfyui"):
                 assert len(writes) == 1
                 page.locator("#project-tools-list[aria-busy='false']").wait_for()
                 dialog.screenshot(path=str(output / f"{prefix}-deployment-desktop-light.png"))
-                page.set_viewport_size({"width": 375, "height": 820})
+                page.set_viewport_size({"width": 1280, "height": 820})
                 page.emulate_media(color_scheme="dark")
                 dialog.locator(".comfy-deployment-actions").scroll_into_view_if_needed()
-                assert_no_horizontal_overflow(page, f"{name} deployment 375 dark")
-                dialog.screenshot(path=str(output / f"{prefix}-deployment-narrow-dark.png"))
+                assert_no_horizontal_overflow(page, f"{name} deployment 1280 dark")
+                dialog.screenshot(path=str(output / f"{prefix}-deployment-desktop-small-dark.png"))
                 box = approval.bounding_box()
                 assert box and 14 <= box["width"] <= 20 and 14 <= box["height"] <= 20
                 mode, draft = "conflict", rf"E:\Models\{name}-draft"

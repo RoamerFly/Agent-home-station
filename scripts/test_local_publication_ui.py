@@ -279,7 +279,7 @@ def verify(binary, output):
                 panel.get_by_role("button", name="上一页").click()
                 expect(panel.get_by_text("第 1 页", exact=True)).to_be_visible()
                 expect(row("accepted")).to_be_visible()
-                page.set_viewport_size({"width": 390, "height": 844})
+                page.set_viewport_size({"width": 1280, "height": 844})
                 page.emulate_media(color_scheme="dark")
                 assert_no_horizontal_overflow(page, "B 站发布工作台")
                 assert panel.evaluate("""panel => {
@@ -289,14 +289,14 @@ def verify(binary, output):
                         return !node.getClientRects().length || (rect.left >= left && rect.right <= right);
                     });
                 }"""), "controls clipped by application card"
-                panel.screenshot(path=str(output / "bilibili-publication-dark-390.png"))
+                panel.screenshot(path=str(output / "bilibili-publication-dark-1280.png"))
                 authorization.locator("summary").click()
                 assert_no_horizontal_overflow(page, "B 站授权登记")
-                authorization.screenshot(path=str(output / "bilibili-authorization-dark-390.png"))
+                authorization.screenshot(path=str(output / "bilibili-authorization-dark-1280.png"))
                 authorization.locator("summary").click()
                 oauth.locator("summary").click()
                 assert_no_horizontal_overflow(page, "B 站网页授权")
-                oauth.screenshot(path=str(output / "bilibili-oauth-dark-390.png"))
+                oauth.screenshot(path=str(output / "bilibili-oauth-dark-1280.png"))
                 assert not errors, errors
                 assert writes == [("draft", "submit"), ("upload", "resume"), ("upload", "cancel"),
                                   ("unknown", "status"), ("unknown", "cancel"), ("accepted", "status")], writes

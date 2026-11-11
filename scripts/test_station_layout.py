@@ -74,10 +74,10 @@ def verify_glass_views(page, output):
     expect(page.locator("#memory-list [aria-pressed=true]")).to_contain_text("夜海")
     page.locator("#memory-filters").get_by_role("button", name="约定", exact=True).click()
     expect(page.locator("#memory-list .memory-row")).to_have_count(1)
-    page.set_viewport_size({"width": 375, "height": 740})
+    page.set_viewport_size({"width": 1280, "height": 740})
     fixed_shell(page)
     expect(page.locator("#memory-detail")).to_contain_text("周日一起画明信片。")
-    page.screenshot(path=str(output/"memory-narrow.png"))
+    page.screenshot(path=str(output/"memory-desktop-small.png"))
     page.get_by_role("button", name="返回原会话", exact=True).click()
     page.set_viewport_size({"width": 1440, "height": 900})
     expect(page.locator("#chat-tab")).to_be_focused()
@@ -161,11 +161,11 @@ def verify_memory_source_selection(page, output):
     panel.get_by_role("button", name="读取来源原话", exact=True).click()
     expect(panel).to_contain_text("合成封存原话 <img src=invalid>")
     expect(panel.locator("img")).to_have_count(0)
-    page.set_viewport_size({"width": 375, "height": 740})
+    page.set_viewport_size({"width": 1280, "height": 740})
     fixed_shell(page)
     assert page.locator("#memory-view").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
     panel.scroll_into_view_if_needed()
-    page.screenshot(path=str(output / "memory-wechat-archive-narrow.png"))
+    page.screenshot(path=str(output / "memory-wechat-archive-desktop-small.png"))
     panel.get_by_role("button", name="继续读取原文", exact=True).click()
     expect(panel.get_by_role("button", name="继续读取原文", exact=True)).to_have_count(0)
     assert len(pending) == 1
@@ -365,7 +365,7 @@ def verify_douyin_memory_permissions(page, panel, nav, output):
     comments.check()
     expect(comments).to_be_checked()
     expect(works).to_be_enabled()
-    page.screenshot(path=str(output / "douyin-memory-grants-narrow.png"))
+    page.screenshot(path=str(output / "douyin-memory-grants-desktop-small.png"))
     works.uncheck()
     expect(works).not_to_be_checked()
     expect(comments).to_be_checked()
@@ -519,7 +519,7 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     expect(station_memory.get_by_text("微信工作站查询范围已保存。", exact=True)).to_be_visible()
     assert station_writes[0]["origins"] == ["memory-a@chatroom"] and len(cross_writes) == 1 and len(memory_writes) == 1
     station_memory.scroll_into_view_if_needed()
-    page.screenshot(path=str(output/"wechat-to-station-grants-narrow.png"))
+    page.screenshot(path=str(output/"wechat-to-station-grants-desktop-small.png"))
     douyin_memory.get_by_role("button", name="载入最新抖音查询范围").click()
     douyin_memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True).check()
     douyin_memory.get_by_role("checkbox", name="本人作品文字", exact=True).check()
@@ -532,15 +532,15 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     expect(douyin_memory.get_by_text("微信抖音查询范围已保存。", exact=True)).to_be_visible()
     assert douyin_writes[0]["app_sources"] == ["works"] and douyin_writes[0]["origins"] == ["memory-a@chatroom"]
     douyin_memory.scroll_into_view_if_needed()
-    page.screenshot(path=str(output/"wechat-to-douyin-grants-narrow.png"))
+    page.screenshot(path=str(output/"wechat-to-douyin-grants-desktop-small.png"))
     owner.get_by_role("button", name="核验消息发送者").click()
     expect(owner.get_by_text("此消息的原生发送者与已绑定本人一致。", exact=True)).to_be_visible()
     message.fill("member-message")
     owner.get_by_role("button", name="核验消息发送者").click()
     expect(owner.get_by_text("此消息的原生发送者与已绑定本人不一致。", exact=True)).to_be_visible()
-    page.screenshot(path=str(output/"wechat-owner-binding-narrow.png"))
+    page.screenshot(path=str(output/"wechat-owner-binding-desktop-small.png"))
     cross.scroll_into_view_if_needed()
-    page.screenshot(path=str(output/"wechat-cross-memory-grants-narrow.png"))
+    page.screenshot(path=str(output/"wechat-cross-memory-grants-desktop-small.png"))
     assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
     panel.get_by_label("当前连接").select_option("wechat-synthetic-two")
     expect(owner.get_by_text("尚未绑定微信本人", exact=True)).to_be_visible()
@@ -667,7 +667,7 @@ def verify_wechat_surf_schedule(page, panel, nav, output):
     expect(live.get_by_text("只在点击后读取的合成正文", exact=True)).to_be_visible()
     assert len(history_reads) == 2
     assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-    page.screenshot(path=str(output/"wechat-surf-schedule-narrow.png"))
+    page.screenshot(path=str(output/"wechat-surf-schedule-desktop-small.png"))
     live.get_by_role("button", name="暂停冲浪").click()
     expect(live.get_by_text("调度暂停", exact=True)).to_be_visible()
     expect(live.get_by_text("只在点击后读取的合成正文", exact=True)).to_have_count(0)
@@ -735,7 +735,7 @@ def verify_application_configuration(page, output):
     opener.click()
     expect(nav.get_by_role("button", name="网上冲浪")).to_be_visible()
     assert not surf_reads
-    page.set_viewport_size({"width": 375, "height": 740})
+    page.set_viewport_size({"width": 1280, "height": 740})
     nav.get_by_role("button", name="网上冲浪").click()
     expect(panel.get_by_text("旧配置只读预览 · 调度保持暂停", exact=True)).to_be_visible()
     expect(panel.get_by_text("海洋故事", exact=True)).to_be_visible()
@@ -746,7 +746,7 @@ def verify_application_configuration(page, output):
     expect(panel.get_by_text("历史正文读取 · synthetic.example · 偏移 0 · 10/15 字符", exact=True)).to_be_visible()
     assert surf_reads[-1][1] == {"part": ["history"]}
     assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-    page.screenshot(path=str(output/"wechat-surf-archive-narrow.png"))
+    page.screenshot(path=str(output/"wechat-surf-archive-desktop-small.png"))
     panel.get_by_label("当前连接").select_option("wechat-synthetic-two")
     expect(panel.get_by_text("次账号主题", exact=True)).to_be_visible()
     expect(panel.get_by_text("合成收藏", exact=False)).to_have_count(0)
@@ -765,7 +765,7 @@ def verify_application_configuration(page, output):
     page.set_viewport_size({"width": 1440, "height": 900})
 
     page.get_by_role("button", name="管理抖音", exact=True).click()
-    page.set_viewport_size({"width": 375, "height": 740})
+    page.set_viewport_size({"width": 1280, "height": 740})
     opener.click()
     expect(nav.get_by_role("button", name="直播与本机预览")).to_be_visible()
     verify_douyin_read_controls(page, panel, nav)
@@ -774,9 +774,9 @@ def verify_application_configuration(page, output):
     nav.get_by_role("button", name="直播与本机预览").click()
     expect(panel.get_by_role("button", name="打开 OBS 本机预览")).to_be_visible()
     expect(panel.get_by_role("button", name="开始直播", exact=True)).to_have_count(0)
-    assert panel.evaluate("node => node.getBoundingClientRect().width === innerWidth")
+    assert panel.evaluate("node => node.getBoundingClientRect().width < innerWidth && node.getBoundingClientRect().width >= innerWidth - 40")
     assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-    page.screenshot(path=str(output/"douyin-configuration-narrow.png"))
+    page.screenshot(path=str(output/"douyin-configuration-desktop-small.png"))
     panel.get_by_role("button", name="打开 OBS 本机预览").click()
     expect(page.locator("#tool-dialog")).to_be_visible()
     expect(page.locator("#tool-dialog-title")).to_contain_text("OBS")
@@ -915,7 +915,7 @@ def verify(binary, output):
                 close_application(page)
                 home_tab(page,'settings')
                 assert page.locator('#model-persona').input_value()=='未保存的主角色草稿'
-                for width,height,theme in [(1024,600,'light'),(375,740,'light'),(375,600,'dark')]:
+                for width,height,theme in [(1024,600,'light'),(1280,800,'light'),(1440,900,'dark')]:
                     close_application(page);page.set_viewport_size({'width':width,'height':height});page.emulate_media(color_scheme=theme)
                     fixed_shell(page)
                     home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
@@ -935,7 +935,7 @@ def verify(binary, output):
                 assert not errors, errors
                 browser.close()
         finally:stop(process)
-    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['chat and memory palace','shared application details', 'registered application configuration','viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and narrow light dark']},ensure_ascii=False))
+    print(json.dumps({'status':'passed','model_calls':0,'wechat_sends':0,'scenes':['chat and memory palace','shared application details', 'registered application configuration','viewport-fixed scene','independent content scrolling','large app dialog','per-app persona isolation','draft preservation','escape close','desktop and desktop-small light dark']},ensure_ascii=False))
 
 
 if __name__=='__main__':

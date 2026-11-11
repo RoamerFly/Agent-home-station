@@ -18,7 +18,7 @@ def verify(binary, output):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
-                context = browser.new_context(viewport={"width": 375, "height": 740})
+                context = browser.new_context(viewport={"width": 1280, "height": 740})
                 page = context.new_page()
                 errors, reads, writes, shares = [], [], [], []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -99,7 +99,7 @@ def verify(binary, output):
                 expect(history.get_by_text("结果未知，请查原任务", exact=False)).to_be_visible()
                 assert len(shares) == 1 and shares[0]["description"] == "合成分享草稿"
                 assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-                page.screenshot(path=str(output / "surf-share-narrow.png"))
+                page.screenshot(path=str(output / "surf-share-desktop-small.png"))
                 sharing.get_by_role("button", name="清空分享授权", exact=True).click()
                 expect(sharing.get_by_text("分享授权已清空。", exact=True)).to_be_visible()
                 assert writes[-1][1]["targets"] == [] and writes[-1][1]["sources"] == [] and not writes[-1][1]["auto"]

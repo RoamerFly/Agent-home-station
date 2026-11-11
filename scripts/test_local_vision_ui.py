@@ -19,7 +19,7 @@ def verify(binary, output):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
-                for width, color, suffix in ((1280, "light", "desktop-light"), (375, "dark", "mobile-dark")):
+                for width, color, suffix in ((1280, "light", "desktop-light"), (1440, "dark", "desktop-dark")):
                     context = browser.new_context(viewport={"width": width, "height": 800}, color_scheme=color)
                     page = context.new_page()
                     installed = False

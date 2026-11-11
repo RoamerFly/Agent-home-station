@@ -36,4 +36,4 @@
 
 原事件来源和工具证明从 SQLite 的精确可见事件修订读取，不要求原请求仍在近期聊天快照中；跨主人、冲突、屏蔽和旧版本仍会拒绝。这里只取证明元数据，不把旧聊天正文装入模型上下文。
 
-新增专项为 `TestMemoryLink*`、`TestLocalRequestSourceAndEvidenceSurviveRecentPruning` 和 `scripts/test_station_memory_link.py`。覆盖正常引擎先目录后查询、下一轮零继承、旧引用拒绝、关联链更正、来源替换、重试绑定、主人会话与 CSRF、宿主重建、关联成品、生成中撤权，以及 375 像素下关联/取消/重试。全部使用隔离合成数据；真实微信引用续办仍未在此入口冒充实现。
+新增专项为 `TestMemoryLink*`、`TestLocalRequestSourceAndEvidenceSurviveRecentPruning` 和 `scripts/test_station_memory_link.py`。覆盖正常引擎先目录后查询、下一轮零继承、旧引用拒绝、关联链更正、来源替换、重试绑定、主人会话与 CSRF、宿主重建、关联成品、生成中撤权，以及桌面窗口下关联/取消/重试。全部使用隔离合成数据；真实微信引用续办仍未在此入口冒充实现。

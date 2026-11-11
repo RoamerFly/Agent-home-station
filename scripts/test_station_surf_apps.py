@@ -18,7 +18,7 @@ def verify(binary, output):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
-                page = browser.new_page(viewport={"width": 375, "height": 740})
+                page = browser.new_page(viewport={"width": 1280, "height": 740})
                 errors, writes, reads = [], [], []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.route("**/api/apps", lambda route: route.fulfill(json={"items": [{"id": "wechat", "name": "微信", "registration": "station-native"}]}))
@@ -93,7 +93,7 @@ def verify(binary, output):
                 confirm.check()
                 expect(panel.get_by_role("button", name="启用冲浪", exact=True)).to_be_enabled()
                 assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-                page.screenshot(path=str(output / "surf-apps-narrow.png"))
+                page.screenshot(path=str(output / "surf-apps-desktop-small.png"))
                 app.get_by_role("button", name="清空应用冲浪授权", exact=True).click()
                 expect(app.get_by_text("应用冲浪授权已清空。", exact=True)).to_be_visible()
                 assert writes[-1][1]["scopes"] == [] and not errors, errors

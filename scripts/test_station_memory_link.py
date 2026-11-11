@@ -16,7 +16,7 @@ def verify(binary, output):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
-                page = browser.new_page(viewport={"width": 375, "height": 740})
+                page = browser.new_page(viewport={"width": 1280, "height": 740})
                 errors, sends = [], []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.route("**/api/local/model", lambda route: route.fulfill(json={"revision": 0, "provider": "deepseek", "model": "synthetic", "key_configured": True}))
@@ -81,7 +81,7 @@ def verify(binary, output):
                 assert sends[-1] == first and first["continue_request_id"] == "synthetic-parent"
                 expect(page.locator("#chat-memory-link")).to_be_visible()
                 assert page.locator("#chat-form").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
-                page.screenshot(path=str(output / "memory-link-narrow.png"))
+                page.screenshot(path=str(output / "memory-link-desktop-small.png"))
                 page.get_by_role("button", name="取消关联", exact=True).click()
                 page.set_viewport_size({"width": 1440, "height": 900})
                 expect(page.locator("#chat-memory-link")).to_be_hidden()

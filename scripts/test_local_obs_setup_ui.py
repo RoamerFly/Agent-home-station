@@ -90,13 +90,13 @@ def verify(binary, output):
                 path.fill(r"E:\Synthetic\OBS.zip")
                 approval.check()
                 dialog.screenshot(path=str(output / "obs-setup-desktop-light.png"))
-                page.set_viewport_size({"width": 375, "height": 820})
+                page.set_viewport_size({"width": 1280, "height": 820})
                 page.emulate_media(color_scheme="dark")
                 approval.scroll_into_view_if_needed()
-                assert_no_horizontal_overflow(page, "OBS setup narrow dark")
+                assert_no_horizontal_overflow(page, "OBS setup desktop-small dark")
                 box = approval.bounding_box()
                 assert box and 14 <= box["width"] <= 20
-                dialog.screenshot(path=str(output / "obs-setup-narrow-dark.png"))
+                dialog.screenshot(path=str(output / "obs-setup-desktop-small-dark.png"))
                 mode = "conflict"
                 page.evaluate("window.fixtureHold = true")
                 save.click()

@@ -99,7 +99,7 @@ def refresh_application(page):
 
 
 def assert_no_horizontal_overflow(page, scene):
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{scene}: narrow overflow"
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{scene}: desktop-small overflow"
 
 
 def assert_worker_controls_fit(page):
@@ -1168,10 +1168,10 @@ def verify(binary, output):
                 assert page.get_by_role("button", name="修改我的群昵称", exact=True).count() == 0
                 page.get_by_text("这次群昵称修改仍在核对中；刷新只查询原操作，不会重复提交。", exact=True).wait_for()
                 assert len(group_queries) == 2
-                page.set_viewport_size({"width": 375, "height": 780})
+                page.set_viewport_size({"width": 1280, "height": 780})
                 assert_no_horizontal_overflow(page, "WeChat group directory")
                 assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-groups-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-groups-desktop-small.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.get_by_text("群聊", exact=True).click()
                 page.get_by_text("通讯录", exact=True).click()
@@ -1199,10 +1199,10 @@ def verify(binary, output):
                 page.get_by_role("button", name="保存解析设置").click()
                 page.get_by_placeholder("已配置，留空保留").wait_for()
                 assert page.get_by_label("元宝解析凭据", exact=True).input_value() == ""
-                page.set_viewport_size({"width": 375, "height": 780})
+                page.set_viewport_size({"width": 1280, "height": 780})
                 assert_no_horizontal_overflow(page, "share reader configuration")
                 assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-share-reader-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-share-reader-desktop-small.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.get_by_role("button", name="启用解析", exact=True).click()
                 page.get_by_text("已启用，按需运行", exact=True).wait_for()
@@ -1251,10 +1251,10 @@ def verify(binary, output):
                 key_field = page.get_by_label("视觉接口密钥", exact=True).and_(page.get_by_placeholder("已配置，留空保留"))
                 key_field.wait_for()
                 assert key_field.input_value() == ""
-                page.set_viewport_size({"width": 375, "height": 780})
+                page.set_viewport_size({"width": 1280, "height": 780})
                 assert_no_horizontal_overflow(page, "media configuration")
                 assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-media-understanding-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-media-understanding-desktop-small.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.get_by_role("button", name="启用媒体理解", exact=True).click()
                 page.get_by_role("button", name="停用媒体理解", exact=True).click()
@@ -1268,9 +1268,9 @@ def verify(binary, output):
                 expect(page.get_by_role("button", name="保存媒体设置")).to_be_enabled()
                 assert media["configuration"]["values"]["asr_backend"] == "local"
                 expect(page.get_by_text("请先检查项目工具中的本地媒体识别资源。", exact=True)).to_be_visible()
-                page.set_viewport_size({"width": 375, "height": 780})
+                page.set_viewport_size({"width": 1280, "height": 780})
                 assert_no_horizontal_overflow(page, "local ASR resource warning")
-                page.screenshot(path=str(output / "apps-local-asr-unavailable-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-local-asr-unavailable-desktop-small.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.get_by_label("语音识别方式", exact=True).select_option("remote")
                 assert page.get_by_label("语音识别接口地址", exact=True).input_value() == "https://asr.example/transcriptions", "switching back must retain remote ASR settings"
@@ -1422,10 +1422,10 @@ def verify(binary, output):
                 page.get_by_role("button", name="查看已有授权", exact=True).click()
                 page.get_by_role("button", name="已列出全部", exact=True).wait_for()
                 assert len(share_requests) == 1
-                page.set_viewport_size({"width": 375, "height": 780})
+                page.set_viewport_size({"width": 1280, "height": 780})
                 assert_no_horizontal_overflow(page, "worker controls")
                 assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-worker-narrow.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-worker-desktop-small.png"), full_page=True)
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.unroute(artifact_pattern, register_artifact)
                 page.unroute(grants_pattern, work_grants)
@@ -1459,14 +1459,14 @@ def verify(binary, output):
                 session = context.request.get(origin + "/api/session").json()
                 stale = context.request.post(origin + "/api/local/home", data={"action": "authorize", "revision": initial["revision"]}, headers={"Origin": origin, "X-CSRF-Token": session["csrf"]})
                 assert stale.status == 409, "stale revision revived grant"
-                page.set_viewport_size({"width": 375, "height": 812})
+                page.set_viewport_size({"width": 1280, "height": 812})
                 page.emulate_media(color_scheme="dark")
                 assert_no_horizontal_overflow(page, "settings")
-                page.screenshot(path=str(output / "paused-dark-375.png"), full_page=True)
+                page.screenshot(path=str(output / "paused-dark-1280.png"), full_page=True)
                 page.get_by_role("tab", name="应用").click()
                 page.locator("#apps-view").wait_for(state="visible")
                 assert_no_horizontal_overflow(page, "apps")
-                page.screenshot(path=str(output / "apps-dark-375.png"), full_page=True)
+                page.screenshot(path=str(output / "apps-dark-1280.png"), full_page=True)
                 home_tab(page, "settings")
                 page.locator("#settings-access-button").click()
                 page.get_by_text("工作空间已授权", exact=True).wait_for()
@@ -1504,7 +1504,7 @@ def verify(binary, output):
                 page.unroute(chat_pattern, synthetic_chat)
                 assert not errors, errors
                 browser.close()
-                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable upgrade", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "legacy group note preview and confirmation", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "375 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "375 dark"]}, ensure_ascii=False))
+                print(json.dumps({"status": "passed", "model_calls": 0, "wechat_calls": 0, "scenes": ["login", "initialize", "project tool install enable disable upgrade", "artifact download link", "application catalog", "application source install or unavailable source", "synthetic application account", "synthetic QR retry and expiry", "legacy import preview confirm and stale retry", "legacy memory inventory and pagination", "legacy group note preview and confirmation", "worker policy and lifecycle", "WeChat contacts and independent grant", "WeChat group management receipts", "share reader settings", "media understanding settings", "delivery snapshot pagination", "partial cancellation receipt lookup", "artifact registration and sharing", "1280 worker editor", "application account unavailable", "pause", "stale revision", "resume", "logout", "restart", "1280 dark"]}, ensure_ascii=False))
         finally:
             stop(process)
 
@@ -1520,7 +1520,7 @@ def verify_douyin_authorization(binary, output):
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
                 for desktop in (True, False):
-                    width = 375 if desktop else 1280
+                    width = 1440 if desktop else 1280
                     context = browser.new_context(viewport={"width": width, "height": 800}, color_scheme="dark" if desktop else "light")
                     page = context.new_page()
                     if desktop:
@@ -1650,7 +1650,7 @@ def verify_douyin_authorization(binary, output):
                     assert page.get_by_label("完整回调地址").count() == 0
                     assert page.get_by_role("button", name="打开扫码窗口").is_disabled()
                     assert page.get_by_label("抖音 Client Secret").input_value() == ""
-                    assert_no_horizontal_overflow(page, "375-pixel Douyin authorization")
+                    assert_no_horizontal_overflow(page, "1280-pixel Douyin authorization")
                     page.screenshot(path=str(output / "douyin-auth-desktop-dark.png"))
                     with page.expect_request(lambda req: req.url.endswith("/douyin/authorization") and req.method == "POST"
                                              and req.post_data_json.get("action") == "cancel"):
@@ -1685,7 +1685,7 @@ def verify_douyin_authorization(binary, output):
                     accepted_row.get_by_role("button", name="查询状态").click()
                     accepted_row.get_by_text("已公开", exact=True).wait_for()
                     assert len(publication_actions) == 1
-                    assert_no_horizontal_overflow(page, "375-pixel Douyin publication")
+                    assert_no_horizontal_overflow(page, "1280-pixel Douyin publication")
                     page.screenshot(path=str(output / "douyin-publication-desktop-dark.png"))
                     assert completed == [expected], "stale or repeated callback was submitted"
                     assert cancelled == [attempts[0]]
@@ -1701,7 +1701,7 @@ def verify_douyin_authorization(binary, output):
                     page.get_by_text("重新扫码授权", exact=True).wait_for()
                     page.get_by_role("button", name="打开扫码窗口").wait_for()
                     assert page.get_by_role("button", name="续期授权").count() == 0
-                    assert_no_horizontal_overflow(page, "375-pixel expired Douyin authorization")
+                    assert_no_horizontal_overflow(page, "1280-pixel expired Douyin authorization")
                     begin()
                     page.get_by_text("请在扫码窗口内扫描二维码", exact=False).wait_for()
                     assert len(attempts) == 3

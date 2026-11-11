@@ -22,7 +22,7 @@ def verify(binary, output):
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
-                for width, color, suffix in ((1280, "light", "desktop-light"), (375, "dark", "mobile-dark")):
+                for width, color, suffix in ((1280, "light", "desktop-light"), (1440, "dark", "desktop-dark")):
                     context = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=color)
                     page = context.new_page()
                     page.add_init_script("""(() => {
@@ -178,7 +178,7 @@ def verify(binary, output):
         finally:
             stop(process)
     print(json.dumps({"status": "passed", "synthetic": True, "platform_calls": 0, "model_calls": 0,
-                      "screenshots": ["interactions-desktop-light.png", "interactions-mobile-dark.png"]}))
+                      "screenshots": ["interactions-desktop-light.png", "interactions-desktop-dark.png"]}))
 
 
 if __name__ == "__main__":

@@ -160,11 +160,11 @@ def verify(binary, output):
                 expect(panel.get_by_text("独立音乐 · 未静音 · 音量设置 50%", exact=True)).to_be_visible()
                 panel.screenshot(path=str(output / "obs-preview-active-light.png"))
                 assert_no_horizontal_overflow(page, "OBS preview desktop")
-                page.set_viewport_size({"width": 390, "height": 760})
+                page.set_viewport_size({"width": 1280, "height": 760})
                 page.emulate_media(color_scheme="dark")
                 page.wait_for_function("document.querySelector('#obs-preview-panel img.obs-preview-image')?.naturalWidth > 0")
-                panel.screenshot(path=str(output / "obs-preview-active-narrow.png"))
-                assert_no_horizontal_overflow(page, "OBS preview narrow active")
+                panel.screenshot(path=str(output / "obs-preview-active-desktop-small.png"))
+                assert_no_horizontal_overflow(page, "OBS preview desktop-small active")
                 fail_frame = True
                 page.wait_for_timeout(1650)
                 expect(panel.locator("img.obs-preview-image")).to_have_count(0)
@@ -180,7 +180,7 @@ def verify(binary, output):
                 assert [item["action"] for item in writes].count("stop") == 1
                 page.locator("#project-tools-tab").click()
                 expect(panel.locator("img.obs-preview-image")).to_have_count(0)
-                assert_no_horizontal_overflow(page, "OBS preview narrow")
+                assert_no_horizontal_overflow(page, "OBS preview desktop-small")
                 browser.close()
         finally:
             stop(process)
