@@ -24,6 +24,51 @@ const visibleLocalToolEvent = `e.suppressed=0
  AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id)
  AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)`
 
+// LocalToolEvidence returns only a chosen tool's journal metadata for an exact
+// visible local source. It does not load the original message or tool bodies
+// into model context, and cannot be used to select another conversation.
+func (s *Store) LocalToolEvidence(ctx context.Context, in Input, tool string) ([]LocalToolCheckpoint, error) {
+	scope, err := localConversationScope(in)
+	if err != nil || tool == "" || in.Source == nil || in.Source.EventID == "" || in.Source.InstanceID == "" || in.Source.Revision < 1 {
+		return nil, ErrLocalConversationIdentity
+	}
+	source, ok := s.SourceForInput(in)
+	if !ok || source.EventID != in.Source.EventID || source.Revision != in.Source.Revision || source.InstanceID != in.Source.InstanceID {
+		return nil, ErrLocalRequestUnavailable
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, errors.New("memory database closed")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT c.call_key,c.tool,c.grant_key,c.target,c.result FROM events e
+ LEFT JOIN local_tool_checkpoints c ON c.event_id=e.id AND c.revision=e.revision AND c.tool=? AND c.call_key!=''
+ WHERE e.id=? AND e.scope=? AND e.revision=? AND e.role='user' AND `+visibleLocalToolEvent+` ORDER BY c.rowid`, tool, source.EventID, scope, source.Revision)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []LocalToolCheckpoint
+	visible := false
+	for rows.Next() {
+		visible = true
+		var key, name, grant, target, result sql.NullString
+		if err := rows.Scan(&key, &name, &grant, &target, &result); err != nil {
+			return nil, err
+		}
+		if key.Valid {
+			results = append(results, LocalToolCheckpoint{Key: key.String, Tool: name.String, Grant: grant.String, Target: target.String, Result: result.String})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !visible {
+		return nil, ErrLocalRequestUnavailable
+	}
+	return results, nil
+}
+
 // OpenLocalToolRun attaches the journal to the exact visible source revision.
 // An empty-key row identifies a turn admitted under the checkpoint protocol.
 // An older unfinished turn without that row may have already acted.

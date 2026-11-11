@@ -78,14 +78,8 @@ func (h *localChatService) validatePublication(ctx context.Context, job pluginho
 			return errors.New("原作品引用的应用资料已撤权或变更")
 		}
 	}
-	for _, notice := range origin.Notices {
-		if notice.AppID != "douyin" || h.home.douyinWeb == nil {
-			return errors.New("原作品引用的互动通知来源不可用")
-		}
-		record, _, err := h.home.douyinWeb.noticeState(grant.FishID)
-		if err != nil || !record.NoticeAgent || record.NoticeAccount == "" || notice.GrantVersion != localNoticeGrantVersion(grant.FishID, grant.OwnerID, record) {
-			return errors.New("原作品引用的互动通知已撤权或变更")
-		}
+	if err := h.checkPublicationNotices(ctx, grant.FishID, grant.OwnerID, origin.Notices); err != nil {
+		return err
 	}
 	refs := append([]apphost.PublicationArtifact{}, draft.Artifacts...)
 	if draft.Project != nil {
@@ -96,7 +90,7 @@ func (h *localChatService) validatePublication(ctx context.Context, job pluginho
 		// source fence checks records only. Each transfer verifies its own
 		// bytes again, so an N-file upload does not rehash all N files per open.
 		if job.State == "submitting" {
-			if _, _, _, err := h.publicationArtifactAccess(ref); err != nil {
+			if _, _, _, err := h.publicationArtifactAccess(ctx, ref); err != nil {
 				return err
 			}
 			continue
@@ -115,7 +109,7 @@ func (h *localChatService) validatePublication(ctx context.Context, job pluginho
 	return ctx.Err()
 }
 
-func (h *localChatService) publicationArtifactAccess(ref apphost.PublicationArtifact) (localArtifact, *localWorkspaceAccess, localWorkspaceGrant, error) {
+func (h *localChatService) publicationArtifactAccess(ctx context.Context, ref apphost.PublicationArtifact) (localArtifact, *localWorkspaceAccess, localWorkspaceGrant, error) {
 	store := h.home.artifacts
 	artifact, err := store.readRecord(ref.ID)
 	if err != nil || localPublicationArtifact(artifact) != ref {
@@ -125,12 +119,15 @@ func (h *localChatService) publicationArtifactAccess(ref apphost.PublicationArti
 	if !ok {
 		return localArtifact{}, nil, localWorkspaceGrant{}, errors.New("成品不属于当前本机身份或来源已变化")
 	}
+	if err := h.checkArtifactNoticeSources(ctx, artifact); err != nil {
+		return localArtifact{}, nil, localWorkspaceGrant{}, err
+	}
 	grant, err := access.resolve()
 	return artifact, access, grant, err
 }
 
 func (h *localChatService) openPublicationArtifact(ctx context.Context, ref apphost.PublicationArtifact) (io.ReadCloser, error) {
-	artifact, access, grant, err := h.publicationArtifactAccess(ref)
+	artifact, access, grant, err := h.publicationArtifactAccess(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +139,7 @@ func (h *localChatService) openPublicationArtifact(ctx context.Context, ref apph
 	if err != nil {
 		return nil, err
 	}
-	if !store.artifactLineageValid(artifact) {
+	if !store.artifactLineageValid(artifact) || h.checkArtifactNoticeSources(ctx, artifact) != nil {
 		file.Close()
 		return nil, errors.New("成品来源在校验期间已变化")
 	}

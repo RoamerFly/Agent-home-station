@@ -89,6 +89,56 @@ func TestLocalLiveProgramSnapshotProbeAndRevocation(t *testing.T) {
 	assertLiveProgramClean(t, f)
 }
 
+func TestLocalLiveProgramRechecksNotificationSourceWithoutBroadcast(t *testing.T) {
+	p := &noticeDerivedPublisher{}
+	f, job := noticeDerivedDraft(t, false, p)
+	parent := noticeDraftArtifact(t, f, job)
+	tool := noticeToolSet(t, f, "notice-program-child", true)
+	grant, err := tool.access.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, ok := tool.artifactSource(grant)
+	if !ok {
+		t.Fatal("missing programme source")
+	}
+	path := filepath.Join(grant.Directory, "works", "notice-program.mp4")
+	data := syntheticDouyinAudioMedia(t, true)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := f.handler.home.artifacts.publishFile(t.Context(), localArtifactInput{Key: tool.traceID, homeFile: true, parent: &localArtifactLink{ID: parent.ID, SHA256: parent.SHA256}}, source, tool.access, grant, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	programs := f.handler.chat.livePrograms
+	ref := apphost.LiveReference{ProgramArtifactID: a.ID, ProgramSHA256: a.SHA256}
+	if err := programs.check(t.Context(), ref); err != nil {
+		t.Fatal(err)
+	}
+	media, err := programs.open(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSyntheticNoticeAgent(t, f, false)
+	if _, err := io.ReadAll(media.Source); !errors.Is(err, errLiveProgramSource) {
+		t.Fatalf("opened programme ignored revoked source: %v", err)
+	}
+	if err := media.Source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(programs.check(t.Context(), ref), errLiveProgramSource) {
+		t.Fatal("cached programme ignored revoked source")
+	}
+	if !bytes.Equal(localArtifactDownload(t, f, a.ID), data) {
+		t.Fatal("local video was removed")
+	}
+	assertLiveProgramClean(t, f)
+	if p.submits != 0 {
+		t.Fatal("preview check published")
+	}
+}
+
 func TestLocalLiveProgramRejectsFakeContainerAndChangedOriginal(t *testing.T) {
 	f := localChatFixture(t)
 	a := liveProgramArtifact(t, f, []byte("not an actual video"), "fake.mp4")

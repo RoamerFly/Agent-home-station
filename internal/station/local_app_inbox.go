@@ -28,6 +28,13 @@ type localInboxInput struct {
 	Continuation  string `json:"continuation"`
 }
 
+type localInboxCheckpoint struct {
+	Version      int                      `json:"version"`
+	State        string                   `json:"state"`
+	BodyRetained bool                     `json:"body_retained"`
+	Notices      []localPublicationNotice `json:"notices"`
+}
+
 type localInboxToolError struct {
 	status  int
 	message string
@@ -169,6 +176,10 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 		result["app_id"], result["mark_read_possible"], result["text_scope"] = "douyin", true, "rendered_list_may_include_previous_pages"
 		t.noticeReads = append(t.noticeReads, proof)
 		value, err := localProcessJSON(result)
-		return value, `{"state":"read","body_retained":false}`, err
+		if err != nil {
+			return "", "", err
+		}
+		metadata, err := localProcessJSON(localInboxCheckpoint{Version: 1, State: "read", Notices: []localPublicationNotice{{AppID: "douyin", GrantVersion: localNoticeGrantVersion(t.access.fishID, t.access.ownerID, proof.record)}}})
+		return value, metadata, err
 	})
 }

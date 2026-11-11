@@ -41,6 +41,13 @@ func liveProgramSpecified(ref apphost.LiveReference) bool {
 	return ref.ProgramArtifactID != "" || ref.ProgramSHA256 != "" || ref.ProgramLoop
 }
 
+func (p *localLivePrograms) checkBound(ctx context.Context, bound *localProjectArtifactInput) error {
+	if p == nil || p.home == nil || p.home.artifacts == nil || bound == nil || bound.check(ctx) != nil || p.home.artifacts.chat == nil || p.home.artifacts.chat.checkArtifactNoticeSources(ctx, bound.artifact) != nil {
+		return errLiveProgramSource
+	}
+	return nil
+}
+
 func (p *localLivePrograms) check(ctx context.Context, ref apphost.LiveReference) error {
 	if !liveProgramSpecified(ref) {
 		return ctx.Err()
@@ -61,7 +68,7 @@ func (p *localLivePrograms) checkLocked(ctx context.Context, ref apphost.LiveRef
 		return errLiveProgramSource
 	}
 	if p.input != nil && p.ref.ProgramArtifactID == ref.ProgramArtifactID && p.ref.ProgramSHA256 == ref.ProgramSHA256 {
-		if p.input.check(ctx) != nil {
+		if p.checkBound(ctx, p.input) != nil {
 			return errLiveProgramSource
 		}
 		return nil
@@ -75,6 +82,9 @@ func (p *localLivePrograms) checkLocked(ctx context.Context, ref apphost.LiveRef
 	bound, err := p.home.artifacts.bindProjectArtifact(ctx, ref.ProgramArtifactID, access, grant)
 	if err != nil || bound.artifact.SHA256 != ref.ProgramSHA256 {
 		return errLiveProgramSource
+	}
+	if err := p.checkBound(ctx, bound); err != nil {
+		return err
 	}
 	file, err := p.snapshot(ctx, bound)
 	if err != nil {
@@ -103,7 +113,7 @@ func (p *localLivePrograms) checkLocked(ctx context.Context, ref apphost.LiveRef
 	if decodeErr != nil || len(frames) != 1 || (removeErr != nil && !errors.Is(removeErr, os.ErrNotExist)) {
 		return errLiveProgramProbe
 	}
-	if bound.check(ctx) != nil {
+	if p.checkBound(ctx, bound) != nil {
 		return errLiveProgramSource
 	}
 	p.ref, p.input, p.meta = ref, bound, meta
@@ -127,7 +137,7 @@ func (p *localLivePrograms) open(ctx context.Context, ref apphost.LiveReference)
 		return nil, err
 	}
 	bound := p.input
-	file.verify = func() error { return bound.check(ctx) }
+	file.verify = func() error { return p.checkBound(ctx, bound) }
 	return &localLiveProgramMedia{Source: file, SHA256: ref.ProgramSHA256, Bytes: p.input.artifact.Bytes,
 		Width: p.meta.Width, Height: p.meta.Height}, nil
 }
