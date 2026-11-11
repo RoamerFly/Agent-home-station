@@ -107,6 +107,7 @@ func TestStationWechatOwnerBindingUsesNativeSenderAndAccount(t *testing.T) {
 		return out
 	}
 	req("GET", url("one"), nil, false, 401)
+	req("GET", "/api/apps/wechat/connections/"+wechatapp.ConnectionID("one")+"/cross-memory-grants", nil, false, 401)
 	f.login()
 	req("POST", "/api/local/home", map[string]string{"action": "initialize"}, true, 200)
 	initial := req("GET", url("one"), nil, false, 200)
@@ -173,6 +174,11 @@ func TestStationWechatOwnerBindingUsesNativeSenderAndAccount(t *testing.T) {
 	if strings.Contains(string(saved), "本人普通文字") || strings.Contains(string(saved), "synthetic-owner-binding-token") {
 		t.Fatal("binding retained message body or native credential")
 	}
+	exerciseStationWechatCrossGrants(t, f, func(message linuxnative.Message) {
+		mu.Lock()
+		messages[message.AccountID+"/"+message.ID] = message
+		mu.Unlock()
+	}, unavailable.Store)
 	if err := f.handler.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +189,9 @@ func TestStationWechatOwnerBindingUsesNativeSenderAndAccount(t *testing.T) {
 	}
 	check("owner", 1, true)
 	// Switching a daemon generation preserves the real account/data identity.
+	if savedCross := req("GET", "/api/apps/wechat/connections/"+wechatapp.ConnectionID("one")+"/cross-memory-grants", nil, false, 200); savedCross["revision"] != float64(3) || len(savedCross["sources"].(map[string]any)) != 0 {
+		t.Fatal("cross grants lost across restart", savedCross)
+	}
 	mu.Lock()
 	generation = "restarted-generation"
 	mu.Unlock()
