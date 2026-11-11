@@ -49,6 +49,7 @@ type stationWechat struct {
 	localASR               stationLocalASR
 	localVision            stationLocalVision
 	documents              stationDocumentTools
+	ownerReader            stationservices.OwnerReader
 	contactCursor          cipher.AEAD
 }
 
@@ -96,6 +97,7 @@ type stationWechatWorker struct {
 	deliveryMu      sync.Mutex
 	surfMu          sync.Mutex
 	ownerMu         sync.Mutex
+	crossDeliveryMu sync.Mutex
 	surfCancel      context.CancelFunc
 	rollbackAuditMu sync.Mutex
 	shareMu         sync.Mutex
@@ -730,6 +732,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	}
 	defer memory.Close()
 	attachment := &stationAttachmentTools{store: memory, native: native, dir: dir, grants: policy.AttachmentGrants, replies: policy.MediaReplyGrants, reads: policy.HistoryGrants, blocked: run.Blocked, documents: s.documents}
+	attachment.crossHost, attachment.crossConnection = s, station.connectionID
 	attachment.stationImageVision, attachment.stationVideoVision, attachment.localVision = policy.StationImageVision, policy.StationVideoVision, s.localVision
 	attachment.stationLocalAudio, attachment.localASR = policy.StationLocalAudio, s.localASR
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }

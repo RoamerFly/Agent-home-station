@@ -32,24 +32,25 @@ type stationLegacyReadCursor struct {
 // Imported conversation evidence must be looked up under current authority
 // in the turn that uses it. It cannot be replayed from a generation checkpoint.
 func (*stationAttachmentTools) EphemeralToolResult(name string) bool {
-	return name == "wechat_read_legacy"
+	return name == "wechat_read_legacy" || name == stationWechatCrossToolName
 }
 
 // Bind generated drafts to the history grant whenever imported evidence can
 // participate in this turn. The ordinary delivery guard checks the stamp on
 // retry, including after the worker stops or starts with a different policy.
 func (t *stationAttachmentTools) MemoryResultAuthorization() string {
+	cross := t.crossAuthorization()
 	if !t.legacyMemoryAvailable(context.Background()) {
-		return ""
+		return cross
 	}
-	return "legacy-" + localCheckpointKey(t.trace.Account, struct {
+	return "legacy-" + localCheckpointKey(cross, t.trace.Account, struct {
 		Thread string
 		Grant  time.Time
 	}{t.trace.Thread, t.reads[t.trace.Thread]})
 }
 
 func (t *stationAttachmentTools) MemoryResultAuthorized(stamp string) bool {
-	return stamp != "" && stamp == t.MemoryResultAuthorization()
+	return stamp != "" && stamp == t.MemoryResultAuthorization() && t.checkCrossResults(context.Background()) == nil
 }
 
 func (t *stationAttachmentTools) legacyMemoryAvailable(ctx context.Context) bool {

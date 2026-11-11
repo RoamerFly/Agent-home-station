@@ -237,6 +237,9 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
+	crossHost          *stationWechat
+	crossConnection    string
+	cross              *stationWechatCrossTurn
 	native             *linuxnative.Sender
 	store              *companion.Store
 	dir                string
@@ -267,11 +270,13 @@ func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy.prepared = nil
 	copy.readCursors = wechatapp.HistoryCursors{}
 	copy.legacyReadCursors = nil
+	copy.cross = nil
 	return &copy
 }
 
 func (t *stationAttachmentTools) SetTrace(in companion.Input) {
 	t.trace, t.prepared, t.readCursors, t.legacyReadCursors = in, nil, wechatapp.HistoryCursors{}, nil
+	t.cross = nil
 }
 
 func (t *stationAttachmentTools) allowed() bool {
@@ -290,10 +295,16 @@ func (t *stationAttachmentTools) replyAllowed(in companion.Input) bool {
 }
 
 func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if err := t.checkCrossResults(ctx); err != nil {
+		return nil, err
+	}
 	if ctx.Err() != nil {
 		return nil, nil
 	}
 	tools := []mcptools.Tool{}
+	if t.crossAuthorization() != "" {
+		tools = append(tools, stationWechatCrossTool())
+	}
 	if t.scopeAllowed(t.trace, t.reads) {
 		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
 		if t.legacyMemoryAvailable(ctx) {
@@ -357,6 +368,15 @@ func stationImageRef(ref *companion.SourceRef) bool {
 }
 
 func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if err := t.checkCrossResults(ctx); err != nil {
+		return "", err
+	}
+	if name == stationWechatCrossToolName {
+		return t.callCrossMemory(ctx, raw)
+	}
+	if t.cross != nil && t.cross.Required {
+		return "", errors.New("跨会话查询结果仅供本轮私聊答复，其他工具请另起请求")
+	}
 	if name == "wechat_video_read" {
 		return t.readVideo(ctx, raw)
 	}

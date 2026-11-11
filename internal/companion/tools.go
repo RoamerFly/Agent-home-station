@@ -960,7 +960,7 @@ func deliveryFeedbackTool(name string) bool {
 // separate idempotency and delivery rules.
 func isReadOnlyRecoveryTool(name string) bool {
 	switch name {
-	case "memory_search", "memory_read", "wechat_read", "wechat_read_legacy", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "agent_task_status", "agent_tasks":
+	case "memory_search", "memory_read", "wechat_read", "wechat_read_legacy", "wechat_cross_memory", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "agent_task_status", "agent_tasks":
 		return true
 	}
 	return false

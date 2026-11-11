@@ -296,6 +296,28 @@ type stationWechatCrossAccess struct {
 	GrantRevision int
 }
 
+// Runtime checks must not wait for worker.mu: shutdown drains the actor while
+// holding that lock. Policy files are atomically replaced and validated here.
+func (worker *stationWechatWorker) crossAuthority(account string) (stationWechatCrossGrants, stationWechatOwnerState, stationWechatPolicy, error) {
+	worker.ownerMu.Lock()
+	defer worker.ownerMu.Unlock()
+	grants, err := readStationWechatCrossGrants(worker, account)
+	if err != nil {
+		return grants, stationWechatOwnerState{}, stationWechatPolicy{}, err
+	}
+	binding, err := readStationWechatOwner(worker, account)
+	if err != nil {
+		return grants, binding, stationWechatPolicy{}, err
+	}
+	root, err := workspacefs.OpenPath(worker.dir)
+	if err != nil {
+		return grants, binding, stationWechatPolicy{}, err
+	}
+	defer root.Close()
+	policy, err := readStationWechatPolicy(root)
+	return grants, binding, policy, err
+}
+
 // No cross-conversation content may be opened until this host-owned check
 // succeeds. Repeating it before reads and delivery detects revoked authority,
 // replacement native data, edited requests, and changed reply destinations.
@@ -303,25 +325,20 @@ func (s *stationWechat) verifyWechatCrossRequest(ctx context.Context, id string,
 	deny := func() (stationWechatCrossAccess, error) {
 		return stationWechatCrossAccess{}, apphost.ErrObservationForbidden
 	}
-	if ctx.Err() != nil || in.Channel != "wechat" || wechatapp.ConnectionID(in.Account) != id || in.Thread == source || in.Preview || in.Surf || in.ReportOnly || in.HistoricalReview || in.BackgroundResult || in.ConversationDelivery || in.SourceOnlyContext || in.OriginTraceID != "" || in.TaskID != "" || in.ReplyContext != nil || in.OriginalText == nil || in.TraceID == "" || in.IsGroup != strings.HasSuffix(in.Thread, "@chatroom") {
+	if ctx.Err() != nil || in.Channel != "wechat" || in.Mode != "direct" || !in.Directed || wechatapp.ConnectionID(in.Account) != id || in.Thread == source || in.Preview || in.Surf || in.ReportOnly || in.HistoricalReview || in.BackgroundResult || in.ConversationDelivery || in.SourceOnlyContext || in.OriginTraceID != "" || in.TaskID != "" || in.ReplyContext != nil || in.OriginalText == nil || in.TraceID == "" || in.IsGroup != strings.HasSuffix(in.Thread, "@chatroom") {
 		return deny()
 	}
 	worker, err := s.worker(id, false)
 	if err != nil || worker == nil {
 		return deny()
 	}
-	worker.mu.Lock()
-	worker.ownerMu.Lock()
-	grants, grantErr := readStationWechatCrossGrants(worker, in.Account)
-	binding, bindingErr := readStationWechatOwner(worker, in.Account)
-	sourceGrant, originGrant, privateGrant := worker.policy.HistoryGrants[source], worker.policy.Grants[in.Thread], time.Time{}
+	grants, binding, policy, grantErr := worker.crossAuthority(in.Account)
+	sourceGrant, originGrant, privateGrant := policy.HistoryGrants[source], policy.Grants[in.Thread], time.Time{}
 	if binding.Binding != nil {
-		privateGrant = worker.policy.Grants[binding.Binding.Sender]
+		privateGrant = policy.Grants[binding.Binding.Sender]
 	}
-	worker.ownerMu.Unlock()
-	worker.mu.Unlock()
 	b := binding.Binding
-	if grantErr != nil || bindingErr != nil || b == nil || owner.ID == "" || owner.FishID == "" || grants.Owner != owner.ID || grants.Fish != owner.FishID || b.Owner != owner.ID || b.Fish != owner.FishID || grants.OwnerRevision != binding.Revision || b.Sender != in.Sender || sourceGrant.IsZero() || originGrant.IsZero() || !sourceGrant.Equal(grants.Sources[source]) || !originGrant.Equal(grants.Origins[in.Thread]) || in.IsGroup && privateGrant.IsZero() {
+	if grantErr != nil || b == nil || owner.ID == "" || owner.FishID == "" || grants.Owner != owner.ID || grants.Fish != owner.FishID || b.Owner != owner.ID || b.Fish != owner.FishID || grants.OwnerRevision != binding.Revision || b.Sender != in.Sender || sourceGrant.IsZero() || originGrant.IsZero() || !sourceGrant.Equal(grants.Sources[source]) || !originGrant.Equal(grants.Origins[in.Thread]) || in.IsGroup && privateGrant.IsZero() {
 		return deny()
 	}
 	preview, record, err := s.previewWechatOwner(ctx, id, binding, owner, in.TraceID)
@@ -330,16 +347,14 @@ func (s *stationWechat) verifyWechatCrossRequest(ctx context.Context, id string,
 	if err != nil || timeErr != nil || actualErr != nil || !when.Equal(actual) || when.Before(grants.ActivatedAt) || when.Before(originGrant) || preview.Dataset != b.Dataset || record.SenderID != b.Sender || record.ThreadID != in.Thread || record.Body != *in.OriginalText || in.IsGroup && when.Before(privateGrant) || !in.IsGroup && in.Thread != b.Sender {
 		return deny()
 	}
-	if ref := in.Source; ref != nil && (ref.MessageID != in.TraceID || ref.ServerID != record.ServerID || ref.Account != "" && ref.Account != in.Account || ref.Thread != "" && ref.Thread != in.Thread || ref.Sender != "" && ref.Sender != in.Sender || ref.OccurredAt != in.MessageTime) {
-		return deny()
+	if ref := in.Source; ref != nil {
+		sourceTime, timeErr := time.Parse(time.RFC3339Nano, ref.OccurredAt)
+		if ref.MessageID != in.TraceID || ref.ServerID != record.ServerID || ref.Account != "" && ref.Account != in.Account || ref.Thread != "" && ref.Thread != in.Thread || ref.Sender != "" && ref.Sender != in.Sender || timeErr != nil || !sourceTime.Equal(when) {
+			return deny()
+		}
 	}
-	worker.mu.Lock()
-	worker.ownerMu.Lock()
-	fresh, readErr := readStationWechatCrossGrants(worker, in.Account)
-	freshBinding, ownerErr := readStationWechatOwner(worker, in.Account)
-	unchanged := readErr == nil && ownerErr == nil && fresh.Revision == grants.Revision && freshBinding.Revision == binding.Revision && sourceGrant.Equal(worker.policy.HistoryGrants[source]) && originGrant.Equal(worker.policy.Grants[in.Thread]) && privateGrant.Equal(worker.policy.Grants[b.Sender])
-	worker.ownerMu.Unlock()
-	worker.mu.Unlock()
+	fresh, freshBinding, current, readErr := worker.crossAuthority(in.Account)
+	unchanged := readErr == nil && fresh.Revision == grants.Revision && freshBinding.Revision == binding.Revision && sourceGrant.Equal(current.HistoryGrants[source]) && originGrant.Equal(current.Grants[in.Thread]) && privateGrant.Equal(current.Grants[b.Sender])
 	if !unchanged || ctx.Err() != nil {
 		return deny()
 	}

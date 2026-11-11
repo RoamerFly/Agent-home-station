@@ -54,3 +54,16 @@ func (r *availablePrivateRoute) RoutePrivateReply(context.Context, []string) err
 	r.submitted++
 	return nil
 }
+
+func TestCrossConversationPrivateOriginAlsoUsesRequestScopedHostRoute(t *testing.T) {
+	route := &availablePrivateRoute{}
+	e := &Engine{Tools: route}
+	d, err := e.routeCrossConversationReply(t.Context(), Input{IsGroup: false}, Decision{Action: "reply", Messages: []string{"本轮外部证据回答"}})
+	if err != nil || d.Action != "silent" || len(d.Messages) != 0 || route.submitted != 1 {
+		t.Fatal("private origin bypassed host route", d, err)
+	}
+	progress, err := e.reviewProgressPrivacy(t.Context(), []map[string]string{{"role": "user", "content": `{"kind":"current_message","is_group":false}`}}, "wechat_cross_memory", "其他群的查询正文")
+	if err != nil || progress != "" {
+		t.Fatal("cross-source progress can enter private origin memory", progress, err)
+	}
+}

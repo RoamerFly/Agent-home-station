@@ -2805,7 +2805,7 @@
     const content = appElement("div"), status = appElement("p", "", "app-scope-note"), feedback = appElement("p", "", "app-scope-note");
     feedback.setAttribute("role", "status");
     panel.append(appElement("h4", "微信本人跨群查询"), appElement("p", "分别选择发起会话和查询来源。只有已绑定的本人可以发起，群内查询的结果私下回传给本人。", "app-scope-note"),
-      appElement("p", "跨群检索与私聊回传入口正在接通，当前可先保存授权范围。", "app-scope-note"), status, content, feedback);
+      appElement("p", "同账号跨群查询按需返回摘要和本轮引用。结果通过本人私聊回传，投递状态可在投递与回执中核对。", "app-scope-note"), status, content, feedback);
     const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/cross-memory-grants";
     const active = () => appConfiguration === view && view.section === "account" && view.connection === connection && panel.isConnected && !view.controller.signal.aborted;
     const drafts = apps.wechatCrossMemoryDrafts;

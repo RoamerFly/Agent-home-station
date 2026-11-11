@@ -686,6 +686,13 @@ func (t *generationTools) PrivateReplyRequired() bool {
 	return false
 }
 
+func (t *generationTools) PrivateReplyUnavailableNotice() string {
+	if p, ok := t.inner.(interface{ PrivateReplyUnavailableNotice() string }); ok {
+		return p.PrivateReplyUnavailableNotice()
+	}
+	return ""
+}
+
 func (t *generationTools) RoutePrivateReply(ctx context.Context, messages []string) error {
 	if p, ok := t.inner.(interface {
 		RoutePrivateReply(context.Context, []string) error

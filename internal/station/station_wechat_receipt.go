@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -11,11 +12,36 @@ import (
 	"wechat-bot/internal/identity"
 )
 
-func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (apphost.ReceiptPage, error) {
-	page := apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "current_worker_checkpoint"}
+func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (page apphost.ReceiptPage, resultErr error) {
+	page = apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "current_worker_checkpoint"}
 	if !artifactID(id, "wechat-") || after != "" && !identity.ValidPathID(after) || limit < 1 {
 		return page, apphost.ErrNotFound
 	}
+	if strings.HasPrefix(after, "cross-reply-") {
+		return s.listCrossMemoryReceipts(ctx, id, after, limit)
+	}
+	defer func() {
+		if resultErr != nil || page.NextAfter != "" {
+			return
+		}
+		room := limit - len(page.Items)
+		extra, err := s.listCrossMemoryReceipts(ctx, id, "", max(1, room))
+		if err != nil {
+			resultErr = err
+			return
+		}
+		if len(extra.Items) == 0 {
+			return
+		}
+		page.Coverage += "+" + extra.Coverage
+		page.Snapshot = localCheckpointKey(page.Snapshot, extra.Snapshot)
+		if room == 0 {
+			page.NextAfter = stationCrossReceiptStart
+			return
+		}
+		page.Items = append(page.Items, extra.Items...)
+		page.NextAfter = extra.NextAfter
+	}()
 	w, account, err := s.deliveryCheckpoint(id)
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, apphost.ErrNotFound) {
 		return page, nil
@@ -55,6 +81,9 @@ func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limi
 func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphost.Receipt, error) {
 	if !identity.ValidPathID(key) {
 		return apphost.Receipt{}, apphost.ErrNotFound
+	}
+	if strings.HasPrefix(key, "cross-reply-") {
+		return s.readCrossMemoryReceipt(ctx, id, key)
 	}
 	native, nativeErr := s.WorkerSender(ctx, id)
 	if nativeErr != nil && (!errors.Is(nativeErr, apphost.ErrUnavailable) || ctx.Err() != nil) {

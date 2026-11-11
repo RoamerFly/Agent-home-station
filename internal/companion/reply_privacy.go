@@ -15,7 +15,8 @@ type GroupReplyPrivacy interface {
 }
 
 // PrivateReplyRouter is a host-owned route for a trusted administrator who
-// asked from a group to read another authorized conversation.  It is separate
+// asked to read another authorized conversation. It also keeps private-origin
+// cross-source answers out of ordinary accepted conversation memory. It is separate
 // from diagnostic review: its final text has already passed the current
 // request's normal evidence checks and is not sent through another model.
 type PrivateReplyRouter interface {
@@ -43,7 +44,7 @@ func (e *Engine) reviewReplyPrivacy(ctx context.Context, in Input, d Decision) (
 // it needs its own explicit source, target and delivery receipt contract.
 func (e *Engine) routeCrossConversationReply(ctx context.Context, in Input, d Decision) (Decision, error) {
 	router, ok := e.Tools.(PrivateReplyRouter)
-	if !ok || !in.IsGroup || d.Action != "reply" || !router.PrivateReplyRequired() {
+	if !ok || d.Action != "reply" || !router.PrivateReplyRequired() {
 		return d, nil
 	}
 	hasText := len(d.Messages) > 0
@@ -57,6 +58,12 @@ func (e *Engine) routeCrossConversationReply(ctx context.Context, in Input, d De
 		d.ImageID = ""
 		d.MediaIDs = nil
 		d.Action, d.Reason = "silent", "cross_conversation_private_route_unavailable"
+		if notice, ok := e.Tools.(interface{ PrivateReplyUnavailableNotice() string }); ok && in.IsGroup {
+			if text := notice.PrivateReplyUnavailableNotice(); text != "" {
+				d.Action = "reply"
+				d.Messages = []string{text}
+			}
+		}
 		return d, nil
 	}
 	if !hasText {
@@ -147,7 +154,7 @@ func (e *Engine) reviewProgressPrivacy(ctx context.Context, turns []map[string]s
 		if json.Unmarshal([]byte(turns[i]["content"]), &target) != nil || target.Kind != "current_message" {
 			continue
 		}
-		if router, routed := e.Tools.(PrivateReplyRouter); target.Group && routed && router.PrivateReplyRequired() {
+		if router, routed := e.Tools.(PrivateReplyRouter); routed && router.PrivateReplyRequired() {
 			// The eventual result is owner-private; interim tool/progress text
 			// must not disclose another conversation back into the source group.
 			return "", nil

@@ -68,7 +68,7 @@ func exerciseStationWechatCrossGrants(t *testing.T, f *localHomeFixture, saveMes
 	text := "查一下获准来源中的合成旅行资料"
 	message := linuxnative.Message{ID: "cross-owner", AccountID: "one", ThreadID: origin, SenderID: private, Body: text, Direction: "incoming", Type: 1, ServerID: "98765", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	saveMessage(message)
-	in := companion.Input{Channel: "wechat", Account: "one", Thread: origin, Sender: private, TraceID: message.ID, Text: text, OriginalText: &text, MessageTime: message.CreatedAt, IsGroup: true, Mode: "direct"}
+	in := companion.Input{Channel: "wechat", Account: "one", Thread: origin, Sender: private, TraceID: message.ID, Text: text, OriginalText: &text, MessageTime: message.CreatedAt, IsGroup: true, Mode: "direct", Directed: true}
 	in.Source = &companion.SourceRef{Account: in.Account, Thread: in.Thread, Sender: in.Sender, MessageID: in.TraceID, ServerID: message.ServerID, OccurredAt: in.MessageTime}
 	host := f.handler.chat.wechat
 	proof, err := host.verifyWechatCrossRequest(t.Context(), id, in, source, owner)
@@ -84,6 +84,7 @@ func exerciseStationWechatCrossGrants(t *testing.T, f *localHomeFixture, saveMes
 	for _, change := range []func(*companion.Input){
 		func(i *companion.Input) { i.Sender = "wxid-member" }, func(i *companion.Input) { i.Account = "two" },
 		func(i *companion.Input) { i.Thread = "other@chatroom" }, func(i *companion.Input) { i.IsGroup = false },
+		func(i *companion.Input) { i.Directed = false }, func(i *companion.Input) { i.Mode = "social" },
 		func(i *companion.Input) { i.Preview = true }, func(i *companion.Input) { i.Surf = true }, func(i *companion.Input) { i.HistoricalReview = true },
 		func(i *companion.Input) { i.ReportOnly = true }, func(i *companion.Input) { i.ConversationDelivery = true }, func(i *companion.Input) { i.OriginTraceID = "other" },
 		func(i *companion.Input) { i.OriginalText = nil }, func(i *companion.Input) { v := "篡改原话"; i.OriginalText = &v },

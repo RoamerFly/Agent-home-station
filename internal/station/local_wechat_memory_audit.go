@@ -12,6 +12,8 @@ import (
 )
 
 type localWechatMemoryAudit struct {
+	Direction       string    `json:"direction,omitempty"`
+	OriginThread    string    `json:"origin_thread,omitempty"`
 	Account         string    `json:"account_id"`
 	Thread          string    `json:"thread_id"`
 	Fish            string    `json:"fish_id"`
@@ -30,6 +32,12 @@ func (t *localToolSet) auditWechatMemory(proof localWechatMemoryProof, search bo
 	if err != nil || worker == nil {
 		return errors.New("跨来源读取审计暂不可保存")
 	}
+	key := localCheckpointKey(t.access.fishID, t.access.ownerID, t.traceID, proof.Source)
+	expected := localWechatMemoryAudit{Direction: "station_to_wechat", Account: proof.Source.Account, Thread: proof.Source.Thread, Fish: t.access.fishID, Owner: t.access.ownerID, Request: key, Revision: proof.Revision}
+	return writeWechatMemoryAudit(worker, expected, search, count, result)
+}
+
+func writeWechatMemoryAudit(worker *stationWechatWorker, expected localWechatMemoryAudit, search bool, count int, result string) error {
 	worker.ownerMu.Lock()
 	defer worker.ownerMu.Unlock()
 	root, err := workspacefs.OpenPath(worker.dir)
@@ -42,18 +50,18 @@ func (t *localToolSet) auditWechatMemory(proof localWechatMemoryProof, search bo
 		return err
 	}
 	defer dir.Close()
-	key := localCheckpointKey(t.access.fishID, t.access.ownerID, t.traceID, proof.Source)
-	expected := localWechatMemoryAudit{Account: proof.Source.Account, Thread: proof.Source.Thread, Fish: t.access.fishID, Owner: t.access.ownerID, Request: key, Revision: proof.Revision}
+	key := expected.Request
 	raw, err := readLegacyImportFile(dir, key+".json", 16<<10)
 	audit := expected
 	if err == nil {
-		if json.Unmarshal(raw, &audit) != nil || audit.Account != expected.Account || audit.Thread != expected.Thread ||
+		if json.Unmarshal(raw, &audit) != nil || audit.Direction != "" && audit.Direction != expected.Direction || audit.OriginThread != "" && audit.OriginThread != expected.OriginThread || audit.Account != expected.Account || audit.Thread != expected.Thread ||
 			audit.Fish != expected.Fish || audit.Owner != expected.Owner || audit.Request != key || audit.Revision != expected.Revision {
 			return errors.New("跨来源审计版本已变化")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	audit.Direction, audit.OriginThread = expected.Direction, expected.OriginThread
 	if search {
 		audit.Searches++
 	} else {

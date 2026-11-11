@@ -15,6 +15,7 @@ import (
 )
 
 func (s *stationWechat) attachment(identity stationservices.OwnerReader) stationhost.Attachment {
+	s.ownerReader = identity
 	return stationhost.Attachment{
 		Mount: func(owner *websession.Store, mux *http.ServeMux) {
 			actions := s.managementActions(owner, identity)
