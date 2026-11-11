@@ -64,6 +64,7 @@
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       wechatRelocation: new Map(),
+      wechatSurfDrafts: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
@@ -2339,10 +2340,14 @@
     view.surfAbort = controller;
     const active = () => appConfiguration === view && view.section === "surf" &&
       view.connection === connection && !controller.signal.aborted;
-    const endpoint = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/legacy-import/surf";
+    const connectionPath = "/api/apps/wechat/connections/" + encodeURIComponent(connection);
+    const endpoint = connectionPath + "/legacy-import/surf";
     let after = "";
     const more = memoryButton("读取浏览档案", "button compact secondary", readHistory);
     more.hidden = true;
+    if (apps.registered?.some((record) => record.id === "wechat" && record.registration === "station-native")) {
+      panel.append(appSurfSchedule(view, connection, connectionPath, controller.signal, active));
+    }
     panel.append(notice, settings, history, more);
     void readSettings();
 
@@ -2422,6 +2427,160 @@
       }
     }
     return panel;
+  }
+  function appSurfSchedule(view, connection, path, signal, active) {
+    const box = appElement("section", "", "configuration-surf-live");
+    const status = appElement("p", "正在读取冲浪调度…", "app-scope-note");
+    status.setAttribute("role", "status");
+    const feedback = appElement("p", "");
+    feedback.setAttribute("role", "status");
+    const content = appElement("div");
+    box.append(appElement("h4", "本机冲浪调度"), status, content, feedback);
+    view.surfDrafts ||= apps.wechatSurfDrafts;
+    let schedule, reader, busy = false;
+    void refresh();
+    async function refresh() {
+      try {
+        const result = await Promise.all([request(path + "/surf", { signal }), request(path + "/surf-reader", { signal })]);
+        if (!active()) return;
+        [schedule, reader] = result;
+        render();
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) status.textContent = error.message;
+      }
+    }
+    async function write(action, draft, readerAction = false) {
+      if (busy || !active()) return;
+      busy = true;
+      feedback.textContent = "";
+      for (const node of content.querySelectorAll("button")) node.disabled = true;
+      try {
+        let input;
+        if (readerAction) {
+          input = { action, revision: reader.revision || 0, grant_network: action === "install" };
+        } else {
+          input = { action, revision: action === "save" ? draft.revision : schedule.revision };
+          if (action === "save") input.settings = draft.settings;
+          if (action === "resume") input.allow_public_reads = true;
+          const fingerprint = JSON.stringify(input);
+          draft.pending ||= {};
+          draft.pending[fingerprint] ||= newRequestID();
+          input.key = draft.pending[fingerprint];
+        }
+        await request(path + (readerAction ? "/surf-reader" : "/surf"), { method: "PUT", body: JSON.stringify(input), signal });
+        if (!active()) return;
+        if (!readerAction && action === "save") view.surfDrafts.delete(connection);
+        feedback.textContent = action === "save" ? "已保存，调度暂停。" : "设置已更新。";
+        await refresh();
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          if (error.status === 409) await refresh();
+        }
+      } finally {
+        busy = false;
+        if (active() && schedule && reader) render();
+      }
+    }
+    function render() {
+      status.textContent = schedule.enabled
+        ? (schedule.public_reader_ready ? "已启用，随微信工作器运行" : "已启用，等待公开网页工具") +
+          (schedule.next ? " · 下次可运行 " + new Date(schedule.next).toLocaleString("zh-CN") : "")
+        : "调度暂停";
+      if (schedule.last_run) {
+        const run = schedule.last_run;
+        const label = { started: "已开始，结果待核对", interrupted: "已中止", completed: "已完成" };
+        status.textContent += " · 最近一轮 " + (label[run.state] || run.state);
+        if (run.state === "completed") status.textContent += "，" + run.candidates + " 个候选，读到正文 " + run.read_candidates + " 项" + (run.bookmark ? "，收藏 " + run.bookmark : "");
+      }
+      let draft = view.surfDrafts.get(connection);
+      if (!draft || (!draft.dirty && draft.revision !== schedule.revision)) {
+        draft = { revision: schedule.revision, settings: structuredClone(schedule.settings), dirty: false };
+        view.surfDrafts.set(connection, draft);
+      }
+      const form = appElement("form", "", "configuration-surf-form");
+      const controls = appElement("div", "", "configuration-round-filters");
+      const confirmed = appElement("label", "");
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      confirmed.append(check, document.createTextNode("授权此连接读取所选公开网页来源"));
+      const toolAction = reader.installed ? reader.enabled ? "disable" : "enable" : "install";
+      const toolLabel = { install: "安装公开网页工具", enable: "启用公开网页工具", disable: "停用公开网页工具" };
+      const toolButton = memoryButton(toolLabel[toolAction], "button compact secondary", () => write(toolAction, draft, true));
+      const scheduleButton = memoryButton(schedule.enabled ? "暂停冲浪" : "启用冲浪", "button compact secondary", () => write(schedule.enabled ? "pause" : "resume", draft));
+      const save = appElement("button", "保存并暂停", "button compact primary");
+      save.type = "submit";
+      const updateButtons = () => {
+        toolButton.disabled = busy || (toolAction === "install" && !check.checked);
+        scheduleButton.disabled = busy || (!schedule.enabled && (!schedule.public_reader_ready || !check.checked || draft.dirty));
+        save.disabled = busy;
+      };
+      const changed = () => { draft.dirty = true; updateButtons(); };
+      check.addEventListener("change", updateButtons);
+      const field = (parent, label, type, value, onInput, min = null, max = null) => {
+        const wrapper = appElement("label", label);
+        const input = document.createElement(type === "textarea" ? "textarea" : "input");
+        if (type !== "textarea") input.type = type;
+        if (min !== null) input.min = min;
+        if (max !== null) input.max = max;
+        input.required = true;
+        input.value = value;
+        input.addEventListener("input", () => { onInput(input.value); changed(); });
+        wrapper.append(input);
+        parent.append(wrapper);
+      };
+      const values = draft.settings;
+      field(form, "兴趣主题（每行一项）", "textarea", values.topics.join("\n"), (value) => { values.topics = value.split("\n").map((row) => row.trim()).filter(Boolean); });
+      for (const [key, label, low, high] of [["interval_minutes", "最短间隔（分钟）", 15, 1440], ["interval_max_minutes", "最长间隔（分钟）", 15, 1440], ["daily_limit", "每日次数", 1, 24], ["tool_calls", "单轮工具次数", 3, 30]]) {
+        field(controls, label, "number", values[key], (value) => { values[key] = Number(value); }, low, high);
+      }
+      for (const [key, label, type] of [["timezone", "调度时区", "text"], ["quiet_start", "免打扰开始", "time"], ["quiet_end", "免打扰结束", "time"]]) {
+        field(controls, label, type, values[key], (value) => { values[key] = value; });
+      }
+      form.append(controls);
+      const sources = appElement("details", "", "identity-details");
+      sources.append(appElement("summary", "公开来源 · " + values.sources.filter((item) => item.enabled).length + " 个启用"));
+      const list = appElement("div", "", "configuration-surf-sources");
+      function showSources() {
+        sources.querySelector("summary").textContent = "公开来源 · " + values.sources.filter((item) => item.enabled).length + " 个启用";
+        list.replaceChildren();
+        for (const [index, source] of values.sources.entries()) {
+          const row = appElement("fieldset", "", "configuration-surf-source");
+          const toggle = appElement("label", "");
+          const on = document.createElement("input");
+          on.type = "checkbox"; on.checked = source.enabled;
+          on.addEventListener("change", () => {
+            source.enabled = on.checked; changed();
+            sources.querySelector("summary").textContent = "公开来源 · " + values.sources.filter((item) => item.enabled).length + " 个启用";
+          });
+          toggle.append(on, document.createTextNode("启用 " + (source.name || "来源 " + (index + 1))));
+          row.append(toggle);
+          if (source.type === "rss") {
+            field(row, "来源名称", "text", source.name, (value) => { source.name = value; });
+            field(row, "订阅网址", "url", source.url, (value) => { source.url = value; });
+            row.append(memoryButton("移除订阅", "button compact secondary", () => { values.sources.splice(index, 1); changed(); showSources(); }));
+          }
+          list.append(row);
+        }
+      }
+      showSources();
+      sources.append(list, memoryButton("添加公开订阅", "button compact secondary", () => {
+        if (values.sources.length >= 12) { feedback.textContent = "最多可保存 12 个来源。"; return; }
+        values.sources.push({ id: "rss-" + newRequestID(), name: "", type: "rss", url: "", kind: "text", enabled: true });
+        changed(); showSources();
+      }));
+      form.append(sources, save);
+      form.addEventListener("submit", (event) => { event.preventDefault(); void write("save", draft); });
+      const actions = appElement("div", "", "configuration-surf-actions");
+      actions.append(confirmed, toolButton, scheduleButton);
+      content.replaceChildren(form, actions);
+      if (draft.revision !== schedule.revision) {
+        content.append(appElement("p", "服务器配置已变化。可先查看最新版本，再重新填写。", "app-scope-note"),
+          memoryButton("载入服务器版本", "button compact secondary", () => { view.surfDrafts.delete(connection); render(); }));
+      }
+      updateButtons();
+    }
+    return box;
   }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");

@@ -254,6 +254,87 @@ def verify_douyin_notice(page, panel, nav):
     page.unroute(notice_path)
 
 
+def verify_wechat_surf_schedule(page, panel, nav, output):
+    schedule = {"account": "one", "revision": 0, "enabled": False, "public_reader_ready": False,
+                "settings": {"topics": ["海边故事"], "sources": [
+                    {"id": "synthetic", "name": "合成订阅", "type": "rss", "kind": "text", "enabled": True, "url": "https://synthetic.example/feed"}],
+                    "interval_minutes": 60, "interval_max_minutes": 150, "daily_limit": 4, "tool_calls": 12, "timezone": "Asia/Shanghai",
+                    "quiet_start": "00:00", "quiet_end": "08:00"}}
+    reader = {"installed": False, "enabled": False, "runtime_ready": True}
+    reads, writes = [], []
+    base = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-one/surf(?:-reader)?$")
+
+    def runtime(route):
+        request = route.request
+        path = urlparse(request.url).path
+        target = reader if path.endswith("/surf-reader") else schedule
+        if request.method == "GET":
+            reads.append(path)
+        else:
+            assert request.method == "PUT" and request.headers.get("x-csrf-token")
+            body = request.post_data_json
+            writes.append(body)
+            if target is reader:
+                if body["action"] == "install":
+                    assert body["grant_network"] is True
+                    reader.update(installed=True, revision=1)
+                else:
+                    assert body["action"] == "enable" and body["revision"] == reader["revision"]
+                    reader.update(enabled=True, revision=2)
+                    schedule["public_reader_ready"] = True
+            else:
+                assert body["key"] and body["revision"] == schedule["revision"]
+                if body["action"] == "save":
+                    assert body["settings"]["topics"] == ["隔离测试主题", "第二行"]
+                    schedule["settings"] = body["settings"]
+                if body["action"] == "resume":
+                    assert body["allow_public_reads"] is True
+                    schedule["enabled"] = True
+                if body["action"] == "pause":
+                    schedule["enabled"] = False
+                schedule["revision"] += 1
+        route.fulfill(json=target)
+
+    page.route(base, runtime)
+    page.locator("#app-configuration-open").click()
+    expect(nav.get_by_role("button", name="网上冲浪")).to_be_visible()
+    assert not reads and not writes
+    nav.get_by_role("button", name="网上冲浪").click()
+    live = panel.locator(".configuration-surf-live")
+    expect(live.get_by_text("调度暂停", exact=True)).to_be_visible()
+    assert len(reads) == 2 and not writes
+    textarea = live.get_by_label("兴趣主题（每行一项）")
+    textarea.fill("隔离测试主题\n第二行")
+    page.keyboard.press("Escape")
+    expect(panel).not_to_be_visible()
+    page.locator("#app-configuration-open").click()
+    nav.get_by_role("button", name="网上冲浪").click()
+    expect(textarea).to_have_value("隔离测试主题\n第二行")
+    nav.get_by_role("button", name="会话与记忆").click()
+    nav.get_by_role("button", name="网上冲浪").click()
+    expect(textarea).to_have_value("隔离测试主题\n第二行")
+    confirm = live.get_by_role("checkbox", name="授权此连接读取所选公开网页来源")
+    install = live.get_by_role("button", name="安装公开网页工具")
+    expect(install).to_be_disabled()
+    live.get_by_role("button", name="保存并暂停").click()
+    expect(live.get_by_text("已保存，调度暂停。", exact=True)).to_be_visible()
+    confirm.check()
+    install.click()
+    live.get_by_role("button", name="启用公开网页工具").click()
+    enable = live.get_by_role("button", name="启用冲浪", exact=True)
+    expect(enable).to_be_disabled()
+    confirm.check()
+    enable.click()
+    expect(live.get_by_text("已启用，随微信工作器运行", exact=True)).to_be_visible()
+    assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    page.screenshot(path=str(output/"wechat-surf-schedule-narrow.png"))
+    live.get_by_role("button", name="暂停冲浪").click()
+    expect(live.get_by_text("调度暂停", exact=True)).to_be_visible()
+    assert [body["action"] for body in writes] == ["save", "install", "enable", "resume", "pause"]
+    page.keyboard.press("Escape")
+    page.unroute(base)
+
+
 def verify_application_configuration(page, output):
     reads = []
     page.on("request", lambda request: reads.append((request.method, urlparse(request.url).path)))
@@ -280,8 +361,8 @@ def verify_application_configuration(page, output):
     expect(opener).to_be_focused()
 
     close_application(page)
-    page.route("**/api/apps", lambda route: route.fulfill(json={"items": [
-        {"id": "wechat", "name": "微信", "registration": "station-archive"}]}))
+    wechat = {"id": "wechat", "name": "微信", "registration": "station-archive"}
+    page.route("**/api/apps", lambda route: route.fulfill(json={"items": [wechat]}))
     page.route("**/api/apps/wechat/connections", lambda route: route.fulfill(json={"items": [
         {"id": "wechat-synthetic-one", "label": "合成账号一"},
         {"id": "wechat-synthetic-two", "label": "合成账号二"}]}))
@@ -329,6 +410,12 @@ def verify_application_configuration(page, output):
     expect(panel.get_by_text("合成收藏", exact=False)).to_have_count(0)
     page.keyboard.press("Escape")
     expect(opener).to_be_focused()
+    close_application(page)
+    wechat["registration"] = "station-native"
+    home_tab(page, "chat")
+    home_tab(page, "apps")
+    page.get_by_role("button", name="管理微信", exact=True).click()
+    verify_wechat_surf_schedule(page, panel, nav, output)
     close_application(page)
     page.unroute("**/api/apps")
     page.unroute("**/api/apps/wechat/connections")

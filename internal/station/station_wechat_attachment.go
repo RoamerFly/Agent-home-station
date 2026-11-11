@@ -40,6 +40,13 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 				Archive: s.archiveManagementHandlers(false),
 			}
 			routes.Mount(mux, owner.Protect)
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
+			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
+			surfReader := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+				s.stationMediaSettings(w, r, stationSurfPlugin)
+			})
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-reader", surfReader)
+			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf-reader", surfReader)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/conversations/{thread}/imported-memory", owner.Protect(s.readImportedConversation(owner)))
 		},

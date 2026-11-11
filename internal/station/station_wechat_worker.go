@@ -94,6 +94,8 @@ type stationWechatWorker struct {
 	roundMu         sync.Mutex
 	mu              sync.Mutex
 	deliveryMu      sync.Mutex
+	surfMu          sync.Mutex
+	surfCancel      context.CancelFunc
 	rollbackAuditMu sync.Mutex
 	shareMu         sync.Mutex
 	share           *stationShareHost
@@ -739,6 +741,12 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	}
 	var roundErrorLogged atomic.Bool
 	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
+		SurfTask: func(now time.Time) (*bot.SurfTask, error) {
+			return station.claimSurf(ctx, native.Account(), now, activationAllowed,
+				func(ctx context.Context, state stationSurfSchedule) (func(context.Context, string) (companion.ToolAccess, error), error) {
+					return s.prepareSurf(ctx, station, state, activationAllowed)
+				})
+		},
 		Record: func(entry bot.Record) {
 			if entry.ThreadID != "" && policy.Grants[entry.ThreadID].IsZero() {
 				return

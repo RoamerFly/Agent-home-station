@@ -28,6 +28,7 @@ type stationShareHost struct {
 	controller *pluginruntime.Controller
 	send       pluginruntime.RouteTransport
 	postModel  pluginruntime.RouteTransport
+	surfRead   func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
 	localASR   stationLocalASR
 	usageMu    sync.Mutex
 	usage      *billing.Store

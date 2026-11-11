@@ -180,6 +180,7 @@ func WaitWorkerLogin(ctx context.Context, native *linuxnative.Sender) error {
 // The adapter owns defaults and inbound policy. The host retains storage,
 // artifact authorization, and the fence used to serialize native submissions.
 type WorkerQueue struct {
+	SurfTask          func(time.Time) (*bot.SurfTask, error)
 	Record            func(bot.Record)
 	StateDir          string
 	Groups            GroupPolicy
@@ -243,6 +244,7 @@ func (r *WorkerRun) queueConfig(account string, queue WorkerQueue, checkActivati
 	groups := queue.Groups
 	threads, rules := groups.Participation(&character)
 	config := bot.Config{
+		SurfTask: queue.SurfTask,
 		StateDir: queue.StateDir, Record: queue.Record, AllowedThreads: threads, GroupRules: rules,
 		ScopedAnalyzer:    queue.MediaObserver,
 		DeliveryCancelled: queue.DeliveryCancelled, WithDeliverySubmit: queue.WithDeliverySubmit,

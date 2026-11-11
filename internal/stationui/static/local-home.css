@@ -775,6 +775,15 @@ body.is-home-ready {
 .configuration-surf-settings h4 { margin-bottom: 4px; }
 .configuration-surf-settings ul { padding-inline-start: 1.3rem; }
 .configuration-surf-record p { margin-block: 6px; }
+.configuration-surf-live { width: 100%; }
+.configuration-surf-form, .configuration-surf-sources, .configuration-surf-source { display: grid; gap: 9px; min-width: 0; }
+.configuration-surf-form label { display: grid; gap: 5px; }
+.configuration-surf-form textarea { min-height: 4rem; }
+.configuration-surf-source { margin: 4px 0; border: 1px solid var(--line); border-radius: 10px; }
+.configuration-surf-source label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 7px; }
+.configuration-surf-form button { justify-self: start; }
+.configuration-surf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-block: 10px; }
+.configuration-surf-actions label { width: 100%; }
 .douyin-read-panel { display: grid; gap: 8px; margin-top: 14px; }
 .douyin-read-panel h4, .douyin-read-panel .app-scope-note { margin: 0; }
 .douyin-read-result .publication-actions { flex-wrap: wrap; }

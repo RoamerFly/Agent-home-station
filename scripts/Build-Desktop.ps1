@@ -231,7 +231,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithOBSPreview){
+if((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithOBSPreview){
  $pluginSource=Join-Path $workspace 'plugins'
  $catalogArgs=@('--source',$pluginSource,'--output',(Join-Path $OutputDirectory 'plugins'))
  if(-not $LocalStation){
@@ -248,6 +248,7 @@ if((-not $LocalStation) -or $WithShareReader -or $WithMediaUnderstanding -or $Wi
  if($LocalStation -and $WithYuE){$catalogArgs+=@('--package','yue')}
  if($LocalStation -and $WithStationSpeech){$catalogArgs+=@('--package','station-speech')}
  if($LocalStation -and $WithOBSPreview){$catalogArgs+=@('--package','obs-preview')}
+ if($LocalStation -and $WithWeChatApp){$catalogArgs+=@('--package','web-search')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
@@ -377,7 +378,7 @@ if($WithRVCBackend){
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and ($WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithMediaUnderstanding) -and -not $Portable){
+if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithMediaUnderstanding) -and -not $Portable){
  $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}

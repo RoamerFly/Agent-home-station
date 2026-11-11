@@ -95,6 +95,10 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 			}
 			switch input.Action {
 			case "configure":
+				if plugin == stationSurfPlugin {
+					websession.Fail(w, 400, "冲浪只使用受管工具的公开读取能力")
+					return
+				}
 				if raw, exists := input.Config.Values["object_bridge_url"]; plugin == wechatapp.ShareReaderToolID && exists {
 					var addr string
 					if json.Unmarshal(raw, &addr) != nil {

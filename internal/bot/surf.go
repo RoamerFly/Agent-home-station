@@ -15,6 +15,10 @@ type SurfTask struct {
 	PreferredKind      string
 	ForceShare         bool
 	QuietDeadline      time.Time
+	// The private observer can use its host scheduler's own time zone and
+	// quiet hours instead of inheriting the conversation policy.
+	PrivateQuietHours *companion.Config `json:"-"`
+	PrivateToolCalls  int               `json:"-"`
 }
 
 func (w *Worker) tickSurf(ctx context.Context) bool {
@@ -85,6 +89,13 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 	// This empty, nonpersistent observer may produce a private text decision.
 	// Host sending permissions remain unchanged; Preview never enters delivery.
 	preview.Config.Permissions = companion.Permissions{ReplyText: true}
+	if quiet := task.PrivateQuietHours; quiet != nil {
+		preview.Config.Timezone = quiet.Timezone
+		preview.Config.QuietStart, preview.Config.QuietEnd = quiet.QuietStart, quiet.QuietEnd
+	}
+	if task.PrivateToolCalls > 0 {
+		preview.MaxToolCalls = task.PrivateToolCalls
+	}
 	if task.PrivateBrowseTools != nil {
 		preview.Tools, err = task.PrivateBrowseTools(ctx, trace)
 		if err != nil {
