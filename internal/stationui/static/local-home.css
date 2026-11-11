@@ -784,6 +784,8 @@ body.is-home-ready {
 .configuration-surf-form button { justify-self: start; }
 .configuration-surf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-block: 10px; }
 .configuration-surf-actions label { width: 100%; }
+.configuration-surf-live-history { display: grid; gap: 10px; justify-items: start; margin-top: 14px; }
+.configuration-surf-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .douyin-read-panel { display: grid; gap: 8px; margin-top: 14px; }
 .douyin-read-panel h4, .douyin-read-panel .app-scope-note { margin: 0; }
 .douyin-read-result .publication-actions { flex-wrap: wrap; }

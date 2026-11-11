@@ -262,6 +262,19 @@ def verify_wechat_surf_schedule(page, panel, nav, output):
                     "quiet_start": "00:00", "quiet_end": "08:00"}}
     reader = {"installed": False, "enabled": False, "runtime_ready": True}
     reads, writes = [], []
+    history_reads = []
+    history_path = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-one/surf-history(?:/[^?]+)?(?:\?|$)")
+    def retained_history(route):
+        request = urlparse(route.request.url)
+        assert route.request.method == "GET"
+        history_reads.append(request.path)
+        if request.path.endswith("/synthetic-job"):
+            route.fulfill(json={"text": "只在点击后读取的合成正文"})
+        else:
+            route.fulfill(json={"rows": [{"job": "synthetic-job", "title": "长期合成收藏", "at": "2026-01-02T00:00:00Z",
+                "state": "completed", "site": "synthetic.example", "verified_public_read": True, "readable": True,
+                "bookmarked": True, "offset": 0, "returned_characters": 10, "total_characters": 10}], "source_version": "synthetic-version"})
+    page.route(history_path, retained_history)
     base = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-one/surf(?:-reader)?$")
 
     def runtime(route):
@@ -326,13 +339,24 @@ def verify_wechat_surf_schedule(page, panel, nav, output):
     confirm.check()
     enable.click()
     expect(live.get_by_text("已启用，随微信工作器运行", exact=True)).to_be_visible()
+    assert not history_reads
+    live.get_by_role("button", name="读取本机浏览记录").click()
+    expect(live.get_by_text("长期合成收藏 · 已收藏", exact=False)).to_be_visible()
+    assert len(history_reads) == 1
+    expect(live.get_by_text("只在点击后读取的合成正文", exact=True)).to_have_count(0)
+    live.get_by_text("长期合成收藏 · 已收藏", exact=False).click()
+    live.get_by_role("button", name="查看已读正文").click()
+    expect(live.get_by_text("只在点击后读取的合成正文", exact=True)).to_be_visible()
+    assert len(history_reads) == 2
     assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
     page.screenshot(path=str(output/"wechat-surf-schedule-narrow.png"))
     live.get_by_role("button", name="暂停冲浪").click()
     expect(live.get_by_text("调度暂停", exact=True)).to_be_visible()
+    expect(live.get_by_text("只在点击后读取的合成正文", exact=True)).to_have_count(0)
     assert [body["action"] for body in writes] == ["save", "install", "enable", "resume", "pause"]
     page.keyboard.press("Escape")
     page.unroute(base)
+    page.unroute(history_path)
 
 
 def verify_application_configuration(page, output):

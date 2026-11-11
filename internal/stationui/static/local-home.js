@@ -2347,7 +2347,7 @@
     more.hidden = true;
     if (apps.registered?.some((record) => record.id === "wechat" && record.registration === "station-native")) {
       panel.append(appSurfSchedule(view, connection, connectionPath, controller.signal, active));
-    }
+    } else panel.append(appSurfHistory(connectionPath, controller.signal, active).node);
     panel.append(notice, settings, history, more);
     void readSettings();
 
@@ -2436,6 +2436,8 @@
     feedback.setAttribute("role", "status");
     const content = appElement("div");
     box.append(appElement("h4", "本机冲浪调度"), status, content, feedback);
+    const historyView = appSurfHistory(path, signal, active);
+    box.append(historyView.node);
     view.surfDrafts ||= apps.wechatSurfDrafts;
     let schedule, reader, busy = false;
     void refresh();
@@ -2469,6 +2471,7 @@
         }
         await request(path + (readerAction ? "/surf-reader" : "/surf"), { method: "PUT", body: JSON.stringify(input), signal });
         if (!active()) return;
+        historyView.clear();
         if (!readerAction && action === "save") view.surfDrafts.delete(connection);
         feedback.textContent = action === "save" ? "已保存，调度暂停。" : "设置已更新。";
         await refresh();
@@ -2581,6 +2584,69 @@
       updateButtons();
     }
     return box;
+  }
+  function appSurfHistory(path, signal, active) {
+    const node = appElement("section", "", "configuration-surf-live-history");
+    const records = appElement("div", "", "configuration-surf-history");
+    const feedback = appElement("p", "", "app-scope-note");
+    feedback.setAttribute("role", "status");
+    let next = "", version = "", generation = 0;
+    const load = memoryButton("读取本机浏览记录", "button compact secondary", () => read(false));
+    const more = memoryButton("读取更多本机记录", "button compact secondary", () => read(true));
+    more.hidden = true;
+    node.append(load, records, feedback, more);
+    function clear() {
+      generation++;
+      next = ""; version = ""; records.replaceChildren(); more.hidden = true; feedback.textContent = ""; load.disabled = false;
+    }
+    async function read(continuing) {
+      const serial = continuing ? generation : ++generation;
+      load.disabled = true; more.disabled = true;
+      if (!continuing) records.replaceChildren();
+      const query = new URLSearchParams();
+      if (continuing) query.set("after", next);
+      feedback.textContent = "正在读取记录…";
+      try {
+        const page = await request(path + "/surf-history?" + query, { signal });
+        if (!active() || serial !== generation) return;
+        next = page.next_after || ""; version = page.source_version || "";
+        for (const row of page.rows || []) {
+          const detail = appElement("details", "", "identity-details configuration-surf-record");
+          detail.append(appElement("summary", [row.title || "公开正文读取", row.bookmarked && "已收藏", new Date(row.at).toLocaleString("zh-CN")].filter(Boolean).join(" · ")));
+          detail.append(appElement("p", [row.site, row.verified_public_read ? "已读取 " + row.returned_characters + "/" + row.total_characters + " 字符 · 偏移 " + row.offset : row.state].filter(Boolean).join(" · "), "app-scope-note"));
+          const text = appElement("p", "", "configuration-surf-body");
+          const button = memoryButton("查看已读正文", "button compact secondary", async () => {
+            const selectedVersion = version;
+            button.disabled = true;
+            try {
+              const body = await request(path + "/surf-history/" + encodeURIComponent(row.job) + "?source_version=" + encodeURIComponent(selectedVersion), { signal });
+              if (active() && serial === generation && selectedVersion === version) {
+                text.textContent = body.text || "";
+                button.textContent = "重新查看已读正文";
+              }
+            } catch (error) {
+              if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
+                text.textContent = error.message;
+              }
+            } finally {
+              if (active() && serial === generation) button.disabled = false;
+            }
+          });
+          if (row.readable) detail.append(button, text);
+          else detail.append(appElement("p", row.verified_public_read ? "当前来源授权已变化，保留历史摘要。" : "正文结果待核对。", "app-scope-note"));
+          records.append(detail);
+        }
+        more.hidden = !next;
+        feedback.textContent = !records.childElementCount && !next ? "还没有本机浏览记录。" : "记录按写入顺序显示，正文按需读取。";
+      } catch (error) {
+        if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          next = ""; more.hidden = true; records.replaceChildren(); feedback.textContent = error.message;
+        }
+      } finally {
+        if (active() && serial === generation) { load.disabled = false; more.disabled = false; }
+      }
+    }
+    return { node, clear };
   }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");

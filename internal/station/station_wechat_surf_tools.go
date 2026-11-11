@@ -45,6 +45,7 @@ type stationSurfTools struct {
 	traceMatched   bool
 	known          map[string]mcptools.DiscoveryItem
 	read           map[string]bool
+	readJobs       map[string]pluginhost.Job
 }
 
 type stationSurfContextKey struct{}
@@ -70,7 +71,7 @@ func (s *stationWechat) prepareSurf(ctx context.Context, w *stationWechatWorker,
 		}
 		return &stationSurfTools{worker: w, host: host, account: state.Account, trace: trace,
 			revision: state.Revision, settings: state.Settings, installed: item, active: allowed,
-			known: map[string]mcptools.DiscoveryItem{}, read: map[string]bool{}}, nil
+			known: map[string]mcptools.DiscoveryItem{}, read: map[string]bool{}, readJobs: map[string]pluginhost.Job{}}, nil
 	}, nil
 }
 
@@ -157,9 +158,9 @@ func (t *stationSurfTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 type stationSurfQuery struct {
-	offset, limit                int
-	url, expectedHash, candidate string
-	source                       mcptools.DiscoverySource
+	offset, limit                       int
+	url, expectedHash, candidate, title string
+	source                              mcptools.DiscoverySource
 }
 
 func (t *stationSurfTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -210,6 +211,16 @@ func (t *stationSurfTools) Call(ctx context.Context, name string, raw json.RawMe
 			return "", errors.New("surf_candidate_not_in_this_run")
 		}
 		query.offset, query.limit, query.url, query.expectedHash, query.candidate = input.Offset, 4000, entry.URL, input.Hash, input.Candidate
+		query.title = entry.Title
+		for _, source := range t.settings.Sources {
+			if source.ID == entry.SourceID && source.Enabled {
+				query.source = source
+				break
+			}
+		}
+		if query.source.ID == "" {
+			return "", errors.New("surf_candidate_source_changed")
+		}
 		if input.Limit != nil {
 			query.limit = *input.Limit
 		}
@@ -230,6 +241,7 @@ func (t *stationSurfTools) invoke(ctx context.Context, capability string, query 
 		Account: t.account, Thread: "host:surf:" + t.account, Requester: "host:surf", Purpose: "private public web browsing",
 		RequestKey:    "surf-" + localCheckpointKey(t.trace, capability, string(raw), t.installed.Revision, conf.Revision),
 		Authorization: t.trace, SourceVersions: map[string]int{t.trace: t.revision},
+		EvidenceEpoch: localCheckpointKey(query.source),
 	}
 	reader := t.host.surfRead
 	if reader == nil {
@@ -261,6 +273,7 @@ func (t *stationSurfTools) invoke(ctx context.Context, capability string, query 
 		}
 	} else {
 		t.read[query.candidate] = true
+		t.readJobs[query.candidate] = call.Job
 	}
 	return string(result), nil
 }
@@ -279,6 +292,9 @@ func (t *stationSurfTools) ReviewSurf(ctx context.Context, decision companion.De
 	state.LastRun.State = "completed"
 	state.LastRun.Candidates, state.LastRun.ReadCandidates = len(t.known), len(t.read)
 	if decision.Action == "silent" && decision.SurfAction == "bookmark" && t.read[decision.SurfItemID] {
+		if err := t.worker.saveSurfBookmark(t.account, t.readJobs[decision.SurfItemID], decision.SurfItemID); err != nil {
+			return out, err
+		}
 		state.LastRun.Bookmark = t.known[decision.SurfItemID].Title
 		out.SurfAction, out.SurfItemID, out.Reason = "bookmark", decision.SurfItemID, "surf_bookmarked"
 	}
@@ -412,7 +428,12 @@ func (p *stationSurfCall) validateResult(raw json.RawMessage) (pluginruntime.Ver
 		view["url"], view["read_coverage"] = out.URL, out.Coverage
 	}
 	private, err := json.Marshal(view)
-	return pluginruntime.VerifiedResult{Result: json.RawMessage(`{"verified_public_read":true}`), Private: private}, err
+	public := json.RawMessage(`{"verified_public_read":true}`)
+	if p.capability == "web.read" {
+		public, err = json.Marshal(stationSurfReadSummary{Verified: true, Title: p.query.title, Site: legacySurfSite(out.URL),
+			Candidate: p.query.candidate, SourceID: p.query.source.ID, Offset: out.Offset, Returned: out.Returned, Total: out.TotalCharacters, Complete: out.Complete})
+	}
+	return pluginruntime.VerifiedResult{Result: public, Private: private}, err
 }
 
 func surfCoverage(offset, limit, returned, total int, next *int, complete bool) bool {

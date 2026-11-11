@@ -52,6 +52,8 @@ func attachStationWechatArchive(registry apphost.Registry, dataDir string, apps 
 	}
 	apps = append(apps, stationhost.Attachment{Mount: func(owner *websession.Store, mux *http.ServeMux) {
 		store.archiveManagementHandlers(true).Mount(mux, owner.Protect)
+		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-history", owner.Protect(store.surfHistoryRoute(owner, false)))
+		mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-history/{job}", owner.Protect(store.surfHistoryRoute(owner, true)))
 	}})
 	return registry, apps, nil
 }

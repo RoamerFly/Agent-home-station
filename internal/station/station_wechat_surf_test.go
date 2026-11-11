@@ -20,6 +20,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationruntime"
+	"wechat-bot/internal/websession"
 )
 
 func TestStationSurfScheduleClaimPauseAndRestart(t *testing.T) {
@@ -145,6 +146,11 @@ func TestStationSurfOwnerRoute(t *testing.T) {
 	req("GET", url("one"), nil, false, 401)
 	f.login()
 	req("GET", url("one"), nil, false, 200)
+	empty := req("GET", strings.TrimSuffix(url("one"), "/surf")+"/surf-history?limit=25", nil, false, 200)
+	if empty["limit"] != float64(25) || len(empty["rows"].([]any)) != 0 {
+		t.Fatal("empty history lost requested parameters", empty)
+	}
+	req("GET", strings.TrimSuffix(url("one"), "/surf")+"/surf-history?limit=0", nil, false, 400)
 	if _, err := os.Stat(filepath.Join(data, "apps", "wechat", "workers")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("opening settings created a worker: %v", err)
 	}
@@ -258,6 +264,16 @@ func TestStationSurfManagedReaderWindows(t *testing.T) {
 	if err != nil || !strings.Contains(body, "只在合成网页正文出现") || !reflect.DeepEqual(traffic, []string{feed, pageURL}) {
 		t.Fatalf("read: %s %+v %v", body, traffic, err)
 	}
+	var full struct {
+		Hash string `json:"sha256"`
+	}
+	if json.Unmarshal([]byte(body), &full) != nil || full.Hash == "" {
+		t.Fatal("full body lost its hash")
+	}
+	partial, _ := json.Marshal(map[string]any{"candidate_id": id, "offset": 5, "limit": 5, "expected_sha256": full.Hash})
+	if _, err := tools.Call(run, "web_fetch", partial); err != nil {
+		t.Fatal(err)
+	}
 	model := &stationSurfModel{t: t, candidate: id}
 	config := companion.Defaults()
 	config.Enabled = true
@@ -272,11 +288,123 @@ func TestStationSurfManagedReaderWindows(t *testing.T) {
 	if err != nil || loadErr != nil || model.calls != 4 || decision.SurfAction != "bookmark" || state.LastRun == nil || state.LastRun.Bookmark != "合成收藏" {
 		t.Fatalf("bookmark lost: %+v %+v %v %v", decision, state.LastRun, err, loadErr)
 	}
+	page, err := worker.surfHistory(run, web, account, "", 1)
+	if err != nil || len(page.Rows) != 1 || !page.Rows[0].Readable || !page.Rows[0].Bookmarked || page.Next == "" {
+		t.Fatalf("history missing verified bookmark: %+v %v", page, err)
+	}
+	wire, _ := json.Marshal(page)
+	if strings.Contains(string(wire), "只在合成网页正文出现") {
+		t.Fatal("history list returned private body")
+	}
+	saved, err := worker.readSurfHistoryBody(run, web, account, page.Rows[0].Job, page.SourceVersion)
+	if err != nil || !strings.Contains(string(saved), "只在合成网页正文出现") {
+		t.Fatalf("retained body unavailable: %s %v", saved, err)
+	}
+	if _, err := worker.readSurfHistoryBody(run, web, "synthetic-two", page.Rows[0].Job, page.SourceVersion); err == nil {
+		t.Fatal("another account read private browser evidence")
+	}
+	second, err := worker.surfHistory(run, web, account, page.Next, 1)
+	if err != nil || len(second.Rows) != 1 || second.Rows[0].Offset != 5 || second.Rows[0].Returned != 5 || second.Next != "" {
+		t.Fatalf("continuation lost exact read range: %+v %v", second, err)
+	}
 	if _, err := worker.updateSurf(account, stationSurfUpdate{Action: "pause", Revision: 2, Key: "pause"}, true, now); err != nil || run.Err() == nil {
 		t.Fatalf("pause did not revoke tool context: %v", err)
 	}
-	if _, err := tools.Call(run, "web_fetch", args); err == nil || len(traffic) != 2 {
+	if _, err := tools.Call(run, "web_fetch", args); err == nil || len(traffic) != 3 {
 		t.Fatal("revoked request reached the network")
+	}
+	if _, err := worker.readSurfHistoryBody(ctx, web, account, page.Rows[0].Job, page.SourceVersion); err == nil {
+		t.Fatal("old body reference survived revocation")
+	}
+	if _, err := worker.surfHistory(ctx, web, account, page.Next, 1); err == nil {
+		t.Fatal("old history cursor survived revocation")
+	}
+	if err := web.controller.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := web.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &stationWechatWorker{dir: worker.dir}
+	reopened, err := host.shareHost(restarted, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.controller.Close(); _ = reopened.store.Close() })
+	after, err := restarted.surfHistory(ctx, reopened, account, "", 10)
+	if err != nil || len(after.Rows) != 2 || !after.Rows[0].Bookmarked || !after.Rows[0].Readable {
+		t.Fatalf("restarted history lost bookmark or paused public evidence: %+v %v", after, err)
+	}
+	if _, err := restarted.readSurfHistoryBody(ctx, reopened, account, after.Rows[0].Job, after.SourceVersion); err != nil {
+		t.Fatalf("paused scheduler denied a currently authorized archived source: %v", err)
+	}
+	installed, err := reopened.store.Installed(ctx, stationSurfPlugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.store.SetEnabled(ctx, stationSurfPlugin, installed.Revision, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.readSurfHistoryBody(ctx, reopened, account, after.Rows[0].Job, after.SourceVersion); err == nil {
+		t.Fatal("revoked public reader exposed a body")
+	}
+	withdrawn, err := restarted.surfHistory(ctx, reopened, account, "", 10)
+	if err != nil || len(withdrawn.Rows) != 2 || withdrawn.Rows[0].Readable || !withdrawn.Rows[0].Bookmarked {
+		t.Fatalf("revoked history lost summaries or exposed private results: %+v %v", withdrawn, err)
+	}
+	if len(traffic) != 3 {
+		t.Fatal("retained history attempted a network read")
+	}
+	exerciseSurfHistoryOwnerHTTP(t, host, restarted, account, withdrawn.Rows[0].Job, withdrawn.SourceVersion)
+}
+
+type surfHistoryFixtureNative struct {
+	stationWechatNative
+	account string
+}
+
+func (f surfHistoryFixtureNative) Inspect(_ context.Context, id string) (apphost.ConnectionStatus, error) {
+	if id != wechatapp.ConnectionID(f.account) {
+		return apphost.ConnectionStatus{}, apphost.ErrNotFound
+	}
+	return apphost.ConnectionStatus{Connection: apphost.Connection{ID: id, AccountID: f.account}}, nil
+}
+
+func exerciseSurfHistoryOwnerHTTP(t *testing.T, host *stationWechat, worker *stationWechatWorker, account, job, version string) {
+	t.Helper()
+	owner, err := websession.New("synthetic-local-password", "", "synthetic-surf-history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.stationWechatNative = surfHistoryFixtureNative{account: account}
+	id := wechatapp.ConnectionID(account)
+	host.workers = map[string]*stationWechatWorker{id: worker}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/login", owner.Login)
+	path := "/api/apps/wechat/connections/{connection}/surf-history"
+	mux.HandleFunc("GET "+path, owner.Protect(host.surfHistoryRoute(owner, false)))
+	mux.HandleFunc("GET "+path+"/{job}", owner.Protect(host.surfHistoryRoute(owner, true)))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	jar, _ := cookiejar.New(nil)
+	f := &localHomeFixture{t: t, server: server, client: &http.Client{Jar: jar}}
+	url := "/api/apps/wechat/connections/" + id + "/surf-history"
+	if status, _ := f.request("GET", url, nil, false); status != 401 {
+		t.Fatal("history accepted anonymous read", status)
+	}
+	f.login()
+	status, page := f.request("GET", url+"?limit=1", nil, false)
+	if status != 200 || len(page["rows"].([]any)) != 1 || page["rows"].([]any)[0].(map[string]any)["readable"] != false {
+		t.Fatal("owner history lost revoked evidence state", status, page)
+	}
+	if status, _ := f.request("GET", url+"/"+job+"?source_version="+version, nil, false); status != 409 {
+		t.Fatal("owner body route bypassed revoked public reader", status)
+	}
+	if status, _ := f.request("GET", "/api/apps/wechat/connections/"+wechatapp.ConnectionID("another-account")+"/surf-history", nil, false); status != 404 {
+		t.Fatal("history connection scope bypassed", status)
+	}
+	if status, _ := f.request("GET", url+"?limit=0", nil, false); status != 400 {
+		t.Fatal("invalid limit accepted", status)
 	}
 }
 
