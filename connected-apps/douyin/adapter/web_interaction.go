@@ -13,6 +13,14 @@ func (p *WebApp) WithWebInteraction(bridge apphost.InteractionProvider) *WebApp 
 	return p
 }
 
+func (p *WebApp) ResolveInteractionResource(ctx context.Context, draft apphost.InteractionDraft) (string, error) {
+	provider, ok := p.interaction.(apphost.InteractionResourceProvider)
+	if !ok {
+		return "", apphost.ErrInteractionUnavailable
+	}
+	return provider.ResolveInteractionResource(ctx, draft)
+}
+
 func (p *WebApp) ResolveInteractionSubject(ctx context.Context, draft apphost.InteractionDraft) (string, error) {
 	provider, ok := p.interaction.(apphost.InteractionSubjectProvider)
 	if !ok {

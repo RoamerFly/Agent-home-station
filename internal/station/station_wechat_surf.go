@@ -54,13 +54,15 @@ type stationSurfSchedule struct {
 }
 
 type stationSurfRun struct {
-	Trace          string    `json:"trace"`
-	At             time.Time `json:"at"`
-	State          string    `json:"state"`
-	Candidates     int       `json:"candidates"`
-	ReadCandidates int       `json:"read_candidates"`
-	Bookmark       string    `json:"bookmark,omitempty"`
-	Share          string    `json:"share,omitempty"`
+	Trace            string    `json:"trace"`
+	At               time.Time `json:"at"`
+	State            string    `json:"state"`
+	Candidates       int       `json:"candidates"`
+	ReadCandidates   int       `json:"read_candidates"`
+	Bookmark         string    `json:"bookmark,omitempty"`
+	Share            string    `json:"share,omitempty"`
+	ApplicationReads int       `json:"application_reads,omitempty"`
+	InteractionTasks []string  `json:"interaction_tasks,omitempty"`
 }
 
 type stationSurfUpdate struct {
@@ -83,10 +85,19 @@ func (p stationSurfSettings) clock() companion.Config {
 	return companion.Config{Timezone: p.Timezone, QuietStart: p.QuietStart, QuietEnd: p.QuietEnd}
 }
 
+func (p stationSurfSettings) hasPublicSources() bool {
+	for _, source := range p.Sources {
+		if source.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func (p stationSurfSettings) valid() bool {
 	if p.IntervalMinutes < 15 || p.IntervalMaxMinutes < p.IntervalMinutes || p.IntervalMaxMinutes > 1440 ||
 		p.DailyLimit < 1 || p.DailyLimit > 24 || p.ToolCalls < 3 || p.ToolCalls > 30 || len(p.Topics) < 1 || len(p.Topics) > 20 ||
-		len(p.Sources) < 1 || len(p.Sources) > 12 || p.Timezone == "Local" || p.Timezone == "" || len(p.Timezone) > 100 {
+		len(p.Sources) > 12 || p.Timezone == "Local" || p.Timezone == "" || len(p.Timezone) > 100 {
 		return false
 	}
 	if _, err := time.LoadLocation(p.Timezone); err != nil {
@@ -103,15 +114,13 @@ func (p stationSurfSettings) valid() bool {
 		}
 	}
 	seen := map[string]bool{}
-	active := false
 	for _, source := range p.Sources {
 		if !identity.ValidPathID(source.ID) || seen[source.ID] || mcptools.ValidateDiscoverySource(source) != nil {
 			return false
 		}
 		seen[source.ID] = true
-		active = active || source.Enabled
 	}
-	return active
+	return true
 }
 
 func (p stationSurfSettings) next(now time.Time) (time.Time, error) {
@@ -255,11 +264,19 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := stationSurfDefaults(connection.AccountID)
-	ready := false
+	ready, appReady := false, false
 	if worker != nil {
 		ready = stationruntime.ToolRuntimeReady(s.shareOptions, s.workspaceRoot) && s.surfPluginReady(ctx, worker, connection.AccountID)
+		appReady = s.activeSurfAppsGrant(ctx, worker, connection.AccountID) != nil
 		if writing {
-			state, err = worker.updateSurf(connection.AccountID, in, ready, time.Now())
+			canRun := ready || appReady
+			if in.Action == "resume" {
+				worker.surfMu.Lock()
+				current, readErr := worker.surfSchedule(connection.AccountID)
+				worker.surfMu.Unlock()
+				canRun = readErr == nil && (ready && current.Settings.hasPublicSources() || appReady)
+			}
+			state, err = worker.updateSurf(connection.AccountID, in, canRun, time.Now())
 		} else {
 			worker.surfMu.Lock()
 			state, err = worker.surfSchedule(connection.AccountID)
@@ -272,15 +289,16 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, apphost.ErrLifecycleConflict):
 		websession.Fail(w, 409, "配置或操作编号已变化，请刷新后重试")
 	case errors.Is(err, apphost.ErrLifecycleNotReady):
-		websession.Fail(w, 409, "请先保存冲浪设置并启用此连接的公开网页工具")
+		websession.Fail(w, 409, "请先保存冲浪设置，再启用公开网页工具或授权应用冲浪入口")
 	case err != nil:
 		websession.Fail(w, 503, "微信冲浪设置暂不可读或保存")
 	default:
 		state.LastKey, state.LastRequest = "", ""
 		websession.Respond(w, 200, struct {
 			stationSurfSchedule
-			PublicReaderReady bool `json:"public_reader_ready"`
-		}{state, ready})
+			PublicReaderReady      bool `json:"public_reader_ready"`
+			ApplicationReaderReady bool `json:"application_reader_ready"`
+		}{state, ready && state.Settings.hasPublicSources(), appReady})
 	}
 }
 
@@ -337,11 +355,14 @@ func (w *stationWechatWorker) claimSurf(ctx context.Context, account string, now
 	}
 	quiet := state.Settings.clock()
 	mayShare := false
+	appBrowse := false
 	if root, err := workspacefs.OpenPath(w.dir); err == nil {
 		grant, err := readSurfShareGrants(root, account)
+		apps, appsErr := readSurfAppsGrant(root, account)
 		root.Close()
 		mayShare = err == nil && grant.Auto && len(grant.Targets) > 0
+		appBrowse = appsErr == nil && len(apps.Scopes) > 0
 	}
 	return &bot.SurfTask{Topic: topic, PreferredKind: "text", QuietDeadline: quiet.QuietDeadline(now),
-		PrivateBrowseTools: factory, PrivateQuietHours: &quiet, PrivateToolCalls: state.Settings.ToolCalls, PrivateMayShare: mayShare}, nil
+		PrivateBrowseTools: factory, PrivateQuietHours: &quiet, PrivateToolCalls: state.Settings.ToolCalls, PrivateMayShare: mayShare, PrivateAppBrowse: appBrowse}, nil
 }

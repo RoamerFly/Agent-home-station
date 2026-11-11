@@ -2583,7 +2583,8 @@
     box.append(appElement("h4", "本机冲浪调度"), status, content, feedback);
     const historyView = appSurfHistory(path, signal, active);
     const sharing = appSurfSharing(connection, path, signal, active);
-    box.append(sharing.node, historyView.node);
+    const appSurf = appSurfApplications(connection, path, signal, active, refresh);
+    box.append(sharing.node, appSurf.node, historyView.node);
     view.surfDrafts ||= apps.wechatSurfDrafts;
     let schedule, reader, busy = false;
     void refresh();
@@ -2593,6 +2594,7 @@
         if (!active()) return;
         [schedule, reader] = result;
         sharing.refresh();
+        appSurf.refresh();
         render();
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) status.textContent = error.message;
@@ -2634,7 +2636,7 @@
     }
     function render() {
       status.textContent = schedule.enabled
-        ? (schedule.public_reader_ready ? "已启用，随微信工作器运行" : "已启用，等待公开网页工具") +
+        ? (schedule.public_reader_ready || schedule.application_reader_ready ? "已启用，随微信工作器运行" : "已启用，等待获准的读取入口") +
           (schedule.next ? " · 下次可运行 " + new Date(schedule.next).toLocaleString("zh-CN") : "")
         : "调度暂停";
       if (schedule.last_run) {
@@ -2643,6 +2645,8 @@
         status.textContent += " · 最近一轮 " + (label[run.state] || run.state);
         if (run.state === "completed") status.textContent += "，" + run.candidates + " 个候选，读到正文 " + run.read_candidates + " 项" + (run.bookmark ? "，收藏 " + run.bookmark : "");
         if (run.share) status.textContent += " · 分享任务 " + run.share + "（结果请查投递与回执）";
+        if (run.application_reads) status.textContent += " · 应用读取 " + run.application_reads + " 项";
+        if (run.interaction_tasks?.length) status.textContent += " · 应用互动任务 " + run.interaction_tasks.length + " 项（结果请到对应应用核对）";
       }
       let draft = view.surfDrafts.get(connection);
       if (!draft || (!draft.dirty && draft.revision !== schedule.revision)) {
@@ -2654,7 +2658,7 @@
       const confirmed = appElement("label", "");
       const check = document.createElement("input");
       check.type = "checkbox";
-      confirmed.append(check, document.createTextNode("授权此连接读取所选公开网页来源"));
+      confirmed.append(check, document.createTextNode(schedule.application_reader_ready && !schedule.public_reader_ready ? "确认按应用冲浪授权启用调度" : "授权此连接读取所选公开网页来源"));
       const toolAction = reader.installed ? reader.enabled ? "disable" : "enable" : "install";
       const toolLabel = { install: "安装公开网页工具", enable: "启用公开网页工具", disable: "停用公开网页工具" };
       const toolButton = memoryButton(toolLabel[toolAction], "button compact secondary", () => write(toolAction, draft, true));
@@ -2663,7 +2667,7 @@
       save.type = "submit";
       const updateButtons = () => {
         toolButton.disabled = busy || (toolAction === "install" && !check.checked);
-        scheduleButton.disabled = busy || (!schedule.enabled && (!schedule.public_reader_ready || !check.checked || draft.dirty));
+        scheduleButton.disabled = busy || (!schedule.enabled && (!(schedule.public_reader_ready || schedule.application_reader_ready) || !check.checked || draft.dirty));
         save.disabled = busy;
       };
       const changed = () => { draft.dirty = true; updateButtons(); };
@@ -2804,6 +2808,84 @@
       if (draft.revision !== grant.revision) form.append(appElement("p", "授权已变化，草稿保留。请载入新版本后重新选择。", "app-scope-note"),
         memoryButton("载入最新分享授权", "button compact secondary", () => { apps.wechatSurfShareDrafts.delete(draftKey); render(); }));
       content.replaceChildren(form);
+    }
+    return { node, refresh };
+  }
+  function appSurfApplications(connection, path, signal, active, onSaved) {
+    const node = appElement("section", "", "configuration-surf-apps");
+    const status = appElement("p", "", "app-scope-note"); status.setAttribute("role", "status");
+    const form = appElement("form", "", "configuration-surf-form");
+    const feedback = appElement("p", "", "app-scope-note"); feedback.setAttribute("role", "status");
+    node.append(appElement("h4", "应用浏览与互动"), status,
+      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用的「详细配置 → 互动任务」核对。", "app-scope-note"), form, feedback);
+    const key = connection + ":apps";
+    let saved, busy = false, serial = 0;
+    async function refresh() {
+      const generation = ++serial;
+      try {
+        const result = await request(path + "/surf-app-grants", { signal });
+        if (!active() || generation !== serial) return;
+        saved = result; render();
+      } catch (error) {
+        if (active() && generation === serial && !appSessionExpired([{ status: "rejected", reason: error }])) status.textContent = error.message;
+      }
+    }
+    async function save(draft, clear = false) {
+      if (busy || !active()) return;
+      const input = { revision: saved.revision, scopes: clear ? [] : Object.values(draft.scopes).map((scope) => ({ id: scope.id, fields: [...scope.fields].sort(), actions: [...scope.actions].sort() })).sort((a, b) => a.id.localeCompare(b.id)) };
+      draft.pending ||= {}; const fingerprint = JSON.stringify(input); draft.pending[fingerprint] ||= newRequestID(); input.key = draft.pending[fingerprint];
+      busy = true; render();
+      try {
+        const result = await request(path + "/surf-app-grants", { method: "PUT", body: JSON.stringify(input), signal });
+        if (!active()) return;
+        apps.wechatSurfShareDrafts.delete(key); saved = result;
+        feedback.textContent = clear ? "应用冲浪授权已清空。" : "应用冲浪授权已保存。";
+        void onSaved();
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) { feedback.textContent = error.message; if (error.status === 409) await refresh(); }
+      } finally { busy = false; if (active() && saved) render(); }
+    }
+    function render() {
+      status.textContent = saved.current ? "独立冲浪可按所选范围使用应用" : saved.scopes.length ? "已存范围当前不可用，请核对应用及账号授权。" : "应用冲浪未授权";
+      let draft = apps.wechatSurfShareDrafts.get(key);
+      if (!draft || (!draft.dirty && draft.revision !== saved.revision)) {
+        draft = { revision: saved.revision, scopes: {}, dirty: false };
+        for (const scope of saved.scopes) draft.scopes[scope.id] = { id: scope.id, fields: new Set(scope.fields), actions: new Set(scope.actions) };
+        apps.wechatSurfShareDrafts.set(key, draft);
+      }
+      const choices = new Map(saved.available.map((scope) => [scope.id, scope]));
+      for (const scope of saved.scopes) if (!choices.has(scope.id)) choices.set(scope.id, scope);
+      const nodes = [];
+      const labels = { title: "标题", body: "正文", page_text: "网页文字", comments: "评论", audio: "音轨", visual: "视频画面", playback: "播放采样", images: "图片", account_works: "本人作品列表", own_video: "本人作品状态", player_entry: "播放器入口" };
+      function check(parent, text, value, change) {
+        const label = appElement("label", "", "configuration-owner-confirm"); const input = document.createElement("input"); input.type = "checkbox"; input.checked = value; input.disabled = busy;
+        input.addEventListener("change", () => { draft.dirty = true; change(input.checked); }); label.append(input, document.createTextNode(text)); parent.append(label);
+      }
+      for (const [id, scope] of choices) {
+        const section = appElement("details", "", "identity-details");
+        section.open = Boolean(draft.scopes[id]);
+        const appName = apps.registered?.find((app) => app.id === scope.target.app_id)?.name || { douyin: "抖音", bilibili: "哔哩哔哩" }[scope.target.app_id] || scope.target.app_id;
+        const entryName = scope.target.label || { home: "首页", "account-works": "本人作品列表" }[scope.target.content_id] || scope.target.content_id;
+        const accountName = scope.target.account_id?.startsWith("web-profile-") ? "当前网页登录账号" : scope.target.account_id;
+        section.append(appElement("summary", [appName, entryName, accountName].filter(Boolean).join(" · ")));
+        check(section, "启用此应用入口", Boolean(draft.scopes[id]), (on) => { if (on) draft.scopes[id] ||= { id, fields: new Set(scope.target.fields), actions: new Set() }; else delete draft.scopes[id]; render(); });
+        if (draft.scopes[id]) {
+          const selected = draft.scopes[id];
+          const fields = appElement("fieldset"); fields.append(appElement("legend", "读取范围"));
+          for (const field of new Set([...scope.fields, ...selected.fields])) check(fields, (labels[field] || field) + (scope.target.fields.includes(field) ? "（根入口）" : "（后续入口）"), selected.fields.has(field), (on) => on ? selected.fields.add(field) : selected.fields.delete(field));
+          section.append(fields);
+          const actions = appElement("fieldset"); actions.append(appElement("legend", "互动范围"));
+          for (const action of new Set([...scope.actions, ...selected.actions])) check(actions, { like: "点赞与取消点赞", reply_comment: "回复已读评论" }[action] || action, selected.actions.has(action), (on) => on ? selected.actions.add(action) : selected.actions.delete(action));
+          if (!scope.actions.length) actions.append(appElement("p", "当前应用未提供已授权的互动执行器。", "app-scope-note")); section.append(actions);
+        }
+        nodes.push(section);
+      }
+      if (!choices.size) nodes.push(appElement("p", "暂无获准的应用来源，请先在相应应用中连接并授权读取。", "app-scope-note"));
+      const submit = appElement("button", "保存应用冲浪授权", "button compact primary"); submit.type = "submit"; submit.disabled = busy || draft.revision !== saved.revision;
+      const clear = memoryButton("清空应用冲浪授权", "button compact secondary", () => save(draft, true)); clear.disabled = busy;
+      if (draft.revision !== saved.revision) nodes.push(appElement("p", "授权已变化，草稿保留。请载入新版本后重新选择。", "app-scope-note"), memoryButton("载入最新应用冲浪授权", "button compact secondary", () => { apps.wechatSurfShareDrafts.delete(key); render(); }));
+      form.replaceChildren(...nodes, submit, clear);
+      form.onsubmit = (event) => { event.preventDefault(); if (!submit.disabled) void save(draft); };
     }
     return { node, refresh };
   }

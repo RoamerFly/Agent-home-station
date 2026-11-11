@@ -80,6 +80,13 @@ type InteractionProvider interface {
 	QueryInteraction(context.Context, InteractionQuery) (InteractionReceipt, error)
 }
 
+// InteractionResourceProvider supplies a stable platform resource identity.
+// Browser content handles may include a changing read-snapshot identifier.
+// Autonomous deduplication must not confuse a refreshed handle with new work.
+type InteractionResourceProvider interface {
+	ResolveInteractionResource(context.Context, InteractionDraft) (string, error)
+}
+
 type interactionRecord struct {
 	Draft    InteractionDraft `json:"draft"`
 	Manifest string           `json:"manifest_sha256"`

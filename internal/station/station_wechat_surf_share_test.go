@@ -38,7 +38,7 @@ type surfShareFixture struct {
 	reconnect               func()
 }
 
-func newSurfShareFixture(t *testing.T) *surfShareFixture {
+func newSurfShareFixture(t *testing.T, extra ...apphost.Registration) *surfShareFixture {
 	t.Helper()
 	x := &surfShareFixture{t: t, dataset: "synthetic-surf-dataset", statuses: map[string]map[string]any{}}
 	base := t.TempDir()
@@ -120,7 +120,7 @@ func newSurfShareFixture(t *testing.T) *surfShareFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := apphost.New(entry)
+	registry, err := apphost.New(append([]apphost.Registration{entry}, extra...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

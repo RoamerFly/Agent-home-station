@@ -47,6 +47,15 @@ func (h *localChatService) interactionHost() (*apphost.Interactor, pluginhost.In
 		return nil, actor, err
 	}
 	return apphost.NewInteractor(h.applications, host.store, func(ctx context.Context, job pluginhost.Job, d apphost.InteractionDraft) error {
+		var origin struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(d.Origin, &origin) == nil && origin.Kind == "wechat_surf" {
+			if h.wechat == nil {
+				return apphost.ErrInteractionDenied
+			}
+			return h.wechat.validateSurfInteraction(ctx, job, d)
+		}
 		if h.validatePublication(ctx, job, apphost.PublicationDraft{Origin: d.Origin}) != nil {
 			return apphost.ErrInteractionDenied
 		}

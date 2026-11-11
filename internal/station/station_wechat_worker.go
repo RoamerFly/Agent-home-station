@@ -100,6 +100,7 @@ type stationWechatWorker struct {
 	surfMu           sync.Mutex
 	surfShareMu      sync.Mutex
 	surfShareGrantMu sync.Mutex
+	surfAppsMu       sync.Mutex
 	ownerMu          sync.Mutex
 	crossDeliveryMu  sync.Mutex
 	forwardMu        sync.Mutex

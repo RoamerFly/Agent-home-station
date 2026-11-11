@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -20,7 +19,6 @@ import (
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/strictjson"
-	"wechat-bot/internal/workspacefs"
 	catalog "wechat-bot/plugins"
 )
 
@@ -36,6 +34,11 @@ func surfInstallation(ctx context.Context, host *stationShareHost) (pluginhost.I
 type stationSurfTools struct {
 	station        *stationWechat
 	shareGrant     *stationSurfShareGrants
+	appGrant       *stationSurfAppsGrant
+	appKnown       map[string]map[string][]apphost.ObservationField
+	appReads       map[string]apphost.ObservationResult
+	appComments    map[string]map[string]bool
+	appTasks       map[string]bool
 	worker         *stationWechatWorker
 	host           *stationShareHost
 	account, trace string
@@ -53,18 +56,16 @@ type stationSurfTools struct {
 type stationSurfContextKey struct{}
 
 func (s *stationWechat) prepareSurf(ctx context.Context, w *stationWechatWorker, state stationSurfSchedule, allowed func() error) (func(context.Context, string) (companion.ToolAccess, error), error) {
-	root, err := workspacefs.OpenPath(filepath.Join(w.dir, "project-tools"))
-	if err != nil {
-		return nil, apphost.ErrLifecycleNotReady
-	}
-	root.Close()
 	host, err := s.shareHost(w, state.Account)
 	if err != nil {
 		return nil, err
 	}
 	item, err := surfInstallation(ctx, host)
-	if err != nil {
-		return nil, err
+	if !state.Settings.hasPublicSources() {
+		item = pluginhost.InstalledPackage{}
+	}
+	if (err != nil || item.Package.ID == "") && s.activeSurfAppsGrant(ctx, w, state.Account) == nil {
+		return nil, apphost.ErrLifecycleNotReady
 	}
 	// Capture installation identity at the beginning of the run.
 	return func(ctx context.Context, trace string) (companion.ToolAccess, error) {
@@ -74,6 +75,14 @@ func (s *stationWechat) prepareSurf(ctx context.Context, w *stationWechatWorker,
 		tools := &stationSurfTools{station: s, worker: w, host: host, account: state.Account, trace: trace,
 			revision: state.Revision, settings: state.Settings, installed: item, active: allowed,
 			known: map[string]mcptools.DiscoveryItem{}, read: map[string]bool{}, readJobs: map[string]pluginhost.Job{}}
+		tools.appKnown = map[string]map[string][]apphost.ObservationField{}
+		tools.appReads = map[string]apphost.ObservationResult{}
+		tools.appComments = map[string]map[string]bool{}
+		tools.appTasks = map[string]bool{}
+		tools.appGrant = s.activeSurfAppsGrant(ctx, w, state.Account)
+		if item.Package.ID == "" && tools.appGrant == nil {
+			return nil, apphost.ErrLifecycleNotReady
+		}
 		if grant, _, _, err := s.surfShareAuthority(ctx, w, state.Account); err == nil && grant.Auto {
 			tools.shareGrant = &grant
 		}
@@ -98,7 +107,7 @@ func (t *stationSurfTools) MemoryResultAuthorization() string {
 }
 
 func (t *stationSurfTools) MemoryResultAuthorized(stamp string) bool {
-	return stamp != "" && stamp == t.MemoryResultAuthorization()
+	return stamp != "" && stamp == t.MemoryResultAuthorization() && t.check(t.run) == nil
 }
 
 func (t *stationSurfTools) BindSurfBrowseContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
@@ -135,16 +144,18 @@ func (t *stationSurfTools) check(ctx context.Context) error {
 		return err
 	}
 	t.worker.surfMu.Lock()
-	defer t.worker.surfMu.Unlock()
 	state, err := t.worker.surfSchedule(t.account)
+	t.worker.surfMu.Unlock()
 	if err != nil || !state.Enabled || state.Revision != t.revision || state.LastRun == nil || state.LastRun.Trace != t.trace || state.Settings.clock().Quiet(time.Now()) {
 		return apphost.ErrLifecycleConflict
 	}
-	current, err := surfInstallation(ctx, t.host)
-	if err != nil || current.Revision != t.installed.Revision || current.Digest != t.installed.Digest {
-		return apphost.ErrLifecycleNotReady
+	if t.installed.Package.ID != "" {
+		current, err := surfInstallation(ctx, t.host)
+		if err != nil || current.Revision != t.installed.Revision || current.Digest != t.installed.Digest {
+			return apphost.ErrLifecycleNotReady
+		}
 	}
-	return ctx.Err()
+	return t.checkSurfApps(ctx)
 }
 
 func (t *stationSurfTools) List(ctx context.Context) ([]mcptools.Tool, error) {
@@ -166,10 +177,17 @@ func (t *stationSurfTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 		slices.Sort(targets)
 		shareNote = "。若选择分享，最终reply中以surf_target_thread选择目标：" + strings.Join(targets, "、") + "；仍需当前授权和已读候选。"
 	}
-	return []mcptools.Tool{
-		{Name: "web_discover", Description: "按已授权的来源编号发现公开候选。来源：" + strings.Join(sources, "、"), InputSchema: json.RawMessage(`{"type":"object","properties":{"source_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["source_id"],"additionalProperties":false}`)},
-		{Name: "web_fetch", Description: "用本轮实际发现的 candidate_id 读取公开正文。续读传 offset 和上页 sha256。" + shareNote, InputSchema: json.RawMessage(`{"type":"object","properties":{"candidate_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"expected_sha256":{"type":"string"}},"required":["candidate_id"],"additionalProperties":false}`)},
-	}, nil
+	all := []mcptools.Tool{}
+	if t.installed.Package.ID != "" {
+		all = append(all, []mcptools.Tool{
+			{Name: "web_discover", Description: "按已授权的来源编号发现公开候选。来源：" + strings.Join(sources, "、"), InputSchema: json.RawMessage(`{"type":"object","properties":{"source_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["source_id"],"additionalProperties":false}`)},
+			{Name: "web_fetch", Description: "用本轮实际发现的 candidate_id 读取公开正文。续读传 offset 和上页 sha256。" + shareNote, InputSchema: json.RawMessage(`{"type":"object","properties":{"candidate_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"expected_sha256":{"type":"string"}},"required":["candidate_id"],"additionalProperties":false}`)},
+		}...)
+	}
+	if t.appGrant != nil {
+		all = append(all, surfAppTool())
+	}
+	return all, nil
 }
 
 type stationSurfQuery struct {
@@ -181,6 +199,12 @@ type stationSurfQuery struct {
 func (t *stationSurfTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	if err := t.check(ctx); err != nil {
 		return "", err
+	}
+	if name == stationSurfAppTool {
+		return t.callSurfApp(ctx, raw)
+	}
+	if t.installed.Package.ID == "" {
+		return "", apphost.ErrLifecycleNotReady
 	}
 	var query stationSurfQuery
 	var args map[string]any

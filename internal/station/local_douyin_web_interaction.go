@@ -32,6 +32,19 @@ func (p *localDouyinWebInteraction) ref(a localDouyinWebAccess) apphost.Connecti
 	return apphost.ConnectionRef{AppID: douyinapp.ID, InstallationID: p.installation, ConnectionID: a.connection.ID, AccountID: a.connection.AccountID}
 }
 
+func (p *localDouyinWebInteraction) ResolveInteractionResource(ctx context.Context, draft apphost.InteractionDraft) (string, error) {
+	a, err := p.access(ctx)
+	if err != nil || p.ref(a) != draft.Target {
+		return "", apphost.ErrInteractionDenied
+	}
+	reader := &localDouyinWebObservation{home: p.home, installation: p.installation}
+	target, ok := resolveDouyinInteractionTarget(reader, a, draft)
+	if !ok || target.videoID == "" {
+		return "", apphost.ErrInteractionDenied
+	}
+	return "video:" + target.videoID, nil
+}
+
 func (p *localDouyinWebInteraction) ResolveInteractionSubject(ctx context.Context, d apphost.InteractionDraft) (string, error) {
 	a, err := p.access(ctx)
 	if err != nil || p.ref(a) != d.Target || d.Kind != "reply_comment" || !a.record.RepliesEnabled || !a.record.CommentsEnabled {
