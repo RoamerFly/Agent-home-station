@@ -37,7 +37,7 @@ def verify(binary, output):
                     page.route("**/api/local/apps/douyin/web-login", fulfill_json({"revision": 0, "state": "unconfigured", "active": False, "available": False}))
                     page.route(re.compile(r".*/api/local/publications\?app_id=douyin.*$"), fulfill_json({"tasks": {"items": [], "has_more": False}, "targets": []}))
                     calls = []
-                    payload = {"state": "inspected", "control_available": False,
+                    payload = {"state": "inspected", "control_available": False, "process_state": "not_observed",
                                "file": {"product_name": "合成客户端", "version": "1.2.3.4", "architecture": "x64",
                                         "signature": {"state": "trusted", "publisher": "Douyin Vision Co., Ltd."}},
                                "reason": "已读取程序版本及指纹；发布者、客户端登录和直播控制仍待核对"}
@@ -59,15 +59,26 @@ def verify(binary, output):
                     open_configuration(page, "抖音", "直播与本机预览")
                     form = page.get_by_role("form", name="直播伴侣程序检查")
                     path = page.get_by_role("textbox", name="直播伴侣主程序路径")
-                    button = form.get_by_role("button", name="检查程序", exact=True)
-                    expect(button).to_be_disabled()
+                    automatic = form.get_by_role("button", name="检查本机直播伴侣", exact=True)
+                    button = form.get_by_role("button", name="检查指定程序", exact=True)
+                    expect(path).not_to_be_visible()
                     assert not calls, "opening the detail must not inspect or start programs"
+                    automatic.click()
+                    expect(form).to_contain_text("当前未观察到主程序运行")
+                    assert calls == [{"discover": True}]
+                    inspected = payload
+                    payload = {"state": "manual_selection", "control_available": False, "reason": "可手动选择要核对的版本"}
+                    automatic.click()
+                    expect(form).to_contain_text("可手动选择要核对的版本")
+                    form.locator("summary").click()
+                    expect(button).to_be_disabled()
+                    payload = inspected
                     path.fill(r"E:\synthetic\直播伴侣.exe")
                     button.click()
                     expect(form).to_contain_text("合成客户端 · 1.2.3.4 · x64")
                     expect(form).to_contain_text("签名发布者 Douyin Vision Co., Ltd.")
                     expect(form).to_contain_text("仍待核对")
-                    assert calls == [{"executable": r"E:\synthetic\直播伴侣.exe"}]
+                    assert calls[-1] == {"executable": r"E:\synthetic\直播伴侣.exe"}
                     form.scroll_into_view_if_needed()
                     page.locator("#app-configuration").screenshot(path=str(output / f"live-client-trusted-{width}-{color}.png"))
                     # Editing a draft invalidates the old result; refreshing keeps the draft.

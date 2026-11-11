@@ -29,12 +29,13 @@ func (h *localHomeService) douyinLiveClientRoutes(owner *websession.Store, mux *
 		}
 		var in struct {
 			Executable string `json:"executable"`
+			Discover   bool   `json:"discover"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 		if !websession.Decode(w, r, &in) {
 			return
 		}
-		if len(in.Executable) > 4096 || strings.TrimSpace(in.Executable) == "" {
+		if len(in.Executable) > 4096 || in.Discover == (strings.TrimSpace(in.Executable) != "") {
 			websession.Fail(w, http.StatusBadRequest, "请选择已安装的直播伴侣主程序 EXE")
 			return
 		}
@@ -42,19 +43,28 @@ func (h *localHomeService) douyinLiveClientRoutes(owner *websession.Store, mux *
 		defer cancel()
 		stop := context.AfterFunc(service, cancel)
 		defer stop()
+		if in.Discover {
+			candidates, err := discoverDouyinLiveCompanion(ctx, douyinInstalledRoots(), nativeclient.Inspect)
+			if err != nil {
+				websession.Fail(w, http.StatusRequestTimeout, "本机检查未完成，可稍后重新检查")
+				return
+			}
+			if len(candidates) != 1 {
+				reason := "没有找到可验证的直播伴侣主程序。可在指定程序路径中手动核对。"
+				if len(candidates) > 1 {
+					reason = "找到多个已验证的版本。可在指定程序路径中选择要核对的主程序。"
+				}
+				websession.Respond(w, http.StatusOK, map[string]any{"state": "manual_selection", "control_available": false, "reason": reason})
+				return
+			}
+			candidate := candidates[0]
+			writeDouyinLiveInspection(w, ctx, candidate.path, candidate.file, nil)
+			return
+		}
 		info, err := nativeclient.Inspect(ctx, in.Executable)
 		switch {
 		case err == nil || errors.Is(err, nativeclient.ErrVersion):
-			state := "inspected"
-			if err != nil {
-				state = "metadata_missing"
-			}
-			identity, reason := douyinLiveClientIdentity(info)
-			if err != nil {
-				reason = "版本资料不完整。请选择已安装的直播伴侣主程序。"
-			}
-			websession.Respond(w, http.StatusOK, map[string]any{"state": state, "file": info, "client_identity": identity,
-				"control_available": false, "reason": reason})
+			writeDouyinLiveInspection(w, ctx, in.Executable, info, err)
 		case errors.Is(err, nativeclient.ErrInput):
 			websession.Fail(w, http.StatusBadRequest, "程序路径无效，请选择本机已安装的 EXE 文件")
 		case errors.Is(err, nativeclient.ErrInvalid):
@@ -65,6 +75,21 @@ func (h *localHomeService) douyinLiveClientRoutes(owner *websession.Store, mux *
 			websession.Fail(w, http.StatusServiceUnavailable, "无法读取程序，请检查文件是否存在、是否被占用及本机访问权限")
 		}
 	}))
+}
+
+func writeDouyinLiveInspection(w http.ResponseWriter, ctx context.Context, path string, info nativeclient.Info, err error) {
+	state := "inspected"
+	identity, reason := douyinLiveClientIdentity(info)
+	if err != nil {
+		state = "metadata_missing"
+		reason = "版本资料不完整。请选择已安装的直播伴侣主程序。"
+	}
+	process := "unavailable"
+	if err == nil && identity == "main" {
+		process = douyinLiveProcessState(ctx, path)
+	}
+	websession.Respond(w, http.StatusOK, map[string]any{"state": state, "file": info, "client_identity": identity,
+		"process_state": process, "observed_at": time.Now().UTC(), "control_available": false, "reason": reason})
 }
 
 func douyinLiveClientIdentity(info nativeclient.Info) (string, string) {

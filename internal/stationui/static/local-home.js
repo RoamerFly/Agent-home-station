@@ -71,7 +71,7 @@
       wechatCrossMemoryDrafts: new Map(),
       wechatArchiveDrafts: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
-      douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
+      douyinLiveClient: { path: "", manual: false, result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
       bilibiliWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), reconciliation: new Map(), error: "", notice: "", actionError: false },
@@ -3892,7 +3892,7 @@
     const form = appElement("form", "", "app-layer publication-layer douyin-live-client");
     form.setAttribute("aria-label", "直播伴侣程序检查");
     const detail = appElement("div", "", "publication-detail");
-    detail.append(appElement("strong", "直播伴侣"), appElement("p", "安装后选择主程序检查版本；不会打开程序或开始直播。"));
+    detail.append(appElement("strong", "直播伴侣"), appElement("p", "读取本机安装、版本和运行状态。"));
     const field = appElement("label", "已安装程序的 EXE 路径", "settings-field");
     const input = document.createElement("input");
     input.type = "text"; input.value = draft.path; input.maxLength = 4096; input.autocomplete = "off";
@@ -3904,31 +3904,40 @@
       const file = draft.result.file || {};
       const identity = [file.product_name, file.version, file.architecture].filter(value => typeof value === "string" && value).join(" · ");
       if (identity) result.append(appElement("p", identity));
+      const processLabels = { observed: "已观察到主程序运行", not_observed: "当前未观察到主程序运行", unavailable: "主程序运行状态暂无法核对" };
+      if (Object.hasOwn(processLabels, draft.result.process_state)) result.append(appElement("p", processLabels[draft.result.process_state]));
       const signature = file.signature;
       const signatureLabels = { unsigned: "未找到可验证的签名", untrusted: "Windows 拒绝信任签名", inconclusive: "签名暂无法核对" };
       if (signature?.state === "trusted" && typeof signature.publisher === "string" && signature.publisher)
         result.append(appElement("p", "签名发布者 " + signature.publisher));
       else if (signature && Object.hasOwn(signatureLabels, signature.state))
         result.append(appElement("p", signatureLabels[signature.state]));
-      result.append(appElement("p", draft.result.reason || "已检查文件，直播控制尚未验证。"));
+      result.append(appElement("p", draft.result.reason || "已检查程序版本。"));
     }
     const actions = appElement("div", "", "publication-actions");
-    const inspect = appElement("button", draft.busy ? "检查中…" : "检查程序", "button compact quiet");
-    inspect.type = "submit"; inspect.disabled = draft.busy || !draft.path.trim(); actions.append(inspect);
+    const discover = memoryButton(draft.busy ? "检查中…" : "检查本机直播伴侣", "button compact primary", () => void check(true));
+    discover.disabled = draft.busy; actions.append(discover);
+    const inspect = appElement("button", "检查指定程序", "button compact secondary");
+    inspect.type = "submit"; inspect.disabled = draft.busy || !draft.path.trim();
+    const manual = appElement("details", "", "identity-details"); manual.open = draft.manual;
+    manual.append(appElement("summary", "指定程序路径"), field, inspect);
+    manual.addEventListener("toggle", () => { if (manual.isConnected) draft.manual = manual.open; });
     input.addEventListener("input", () => {
       draft.path = input.value; draft.result = null; draft.error = ""; result.replaceChildren();
-      inspect.disabled = !draft.path.trim();
+      inspect.disabled = draft.busy || !draft.path.trim();
     });
-    form.addEventListener("submit", async event => {
-      event.preventDefault(); if (draft.busy || !draft.path.trim()) return;
+    async function check(automatic) {
+      if (draft.busy || !automatic && !draft.path.trim()) return;
+      draft.manual = manual.open;
       const generation = ++draft.generation;
       const controller = new AbortController(); draft.controller = controller; draft.busy = true; draft.error = ""; draft.result = null;
       renderApps();
       const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
       try {
-        const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify({ executable: draft.path }), signal: controller.signal });
+        const body = automatic ? { discover: true } : { executable: draft.path.trim() };
+        const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify(body), signal: controller.signal });
         if (!selected()) return;
-        if (!["inspected", "metadata_missing"].includes(value.state) || value.control_available !== false || !value.file || typeof value.reason !== "string") throw new Error("程序检查返回不完整，请重新检查。");
+        if (!["inspected", "metadata_missing", "manual_selection"].includes(value.state) || value.control_available !== false || value.state !== "manual_selection" && !value.file || typeof value.reason !== "string") throw new Error("程序检查返回不完整，请重新检查。");
         draft.result = value;
       } catch (error) {
         if (!selected()) return;
@@ -3937,8 +3946,9 @@
       } finally {
         if (generation === draft.generation) { draft.busy = false; draft.controller = null; if (selected()) renderApps(); }
       }
-    });
-    detail.append(field, result); form.append(detail, actions); return form;
+    }
+    form.addEventListener("submit", event => { event.preventDefault(); void check(false); });
+    detail.append(actions, result, manual); form.append(detail); return form;
   }
   function appPersonaRow(record) {
     const current = apps, id = record.id, label = record.name || id;
