@@ -222,6 +222,47 @@ func TestWechatMemoryOnlyArchiveOwnerSelectedSourceWithinWorkspace(t *testing.T)
 	}
 }
 
+func TestWechatMemoryOnlyArchiveAutomaticallySelectsSoleSourceAccount(t *testing.T) {
+	x, in := memoryOnlyArchiveFixture(t)
+	in.Account = ""
+	view := x.request("POST", x.path+"/memory-archive", in, 200)
+	if view["source_account"] != "old-alias" || len(view["conversations"].([]any)) != 2 || view["applied"] != false {
+		t.Fatal("single account autodiscovery", view)
+	}
+	in.Thread = "target@chatroom"
+	ready := x.request("POST", x.path+"/memory-archive", in, 200)
+	in.Digest = ready["digest"].(string)
+	in.SameAccount = true
+	x.request("POST", x.path+"/memory-archive", in, 400)
+	in.Account = ready["source_account"].(string)
+	x.request("POST", x.path+"/memory-archive", in, 200)
+}
+
+func TestWechatMemoryOnlyArchiveMultipleSourceAccountsRequireSelection(t *testing.T) {
+	x, in := memoryOnlyArchiveFixture(t)
+	store, err := companion.NewStore(filepath.Dir(in.Database))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := companion.Defaults()
+	cfg.Permissions.Remember = true
+	input := companion.Input{Channel: "wechat", Account: "second-old-alias", Thread: "private-foreign-thread", Sender: "synthetic-foreign", TraceID: "synthetic-foreign-message", Text: "合成其他账号内容", Source: &companion.SourceRef{Integrity: "observed", MessageType: 1}}
+	if err := store.Observe(input, cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	in.Account = ""
+	view := x.request("POST", x.path+"/memory-archive", in, 200)
+	if view["status"] != "choose_account" || len(view["source_accounts"].([]any)) != 2 || len(view["conversations"].([]any)) != 0 || view["digest"] != nil {
+		t.Fatal("ambiguous account auto-selected", view)
+	}
+	in.Account = "old-alias"
+	view = x.request("POST", x.path+"/memory-archive", in, 200)
+	if len(view["conversations"].([]any)) != 2 {
+		t.Fatal("selected scope widened", view)
+	}
+}
+
 func TestWechatMemoryOnlyArchiveReadBindingOwnerAndDataset(t *testing.T) {
 	x, in := memoryOnlyArchiveFixture(t)
 	in.Thread = "target@chatroom"

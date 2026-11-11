@@ -44,6 +44,7 @@ type stationMemoryArchiveView struct {
 	SourceSHA256  string                             `json:"source_sha256"`
 	Conversations []stationMemoryArchiveConversation `json:"conversations"`
 	Applied       bool                               `json:"applied"`
+	Accounts      []string                           `json:"source_accounts,omitempty"`
 }
 
 type memoryArchiveProblem string
@@ -60,8 +61,8 @@ func (s *stationWechat) memoryArchiveRoute(session *websession.Store) http.Handl
 		if !websession.Decode(w, r, &in) {
 			return
 		}
-		if !filepath.IsAbs(in.Database) || !identity.ValidPathID(in.Account) || in.Thread != "" && !identity.ValidPathID(in.Thread) ||
-			in.Digest != "" && (!in.SameAccount || in.Thread == "" || !legacyMemoryDigestValid(in.Digest)) {
+		if !filepath.IsAbs(in.Database) || in.Account != "" && !identity.ValidPathID(in.Account) || in.Thread != "" && !identity.ValidPathID(in.Thread) ||
+			in.Digest != "" && (!in.SameAccount || in.Account == "" || in.Thread == "" || !legacyMemoryDigestValid(in.Digest)) {
 			websession.Fail(w, 400, "请选择旧记忆库、来源账号和会话；确认时须核对同一微信账号及预览摘要")
 			return
 		}
@@ -179,7 +180,8 @@ func (a *stationMemoryArchiveSource) check(ctx context.Context) error {
 
 func (s *stationWechat) importMemoryArchive(ctx context.Context, id string, in stationMemoryArchiveInput, current func() bool) (stationMemoryArchiveView, error) {
 	var view stationMemoryArchiveView
-	if !current() || s.ownerReader == nil || !identity.ValidPathID(in.Account) || in.Thread != "" && !identity.ValidPathID(in.Thread) ||
+	if !current() || s.ownerReader == nil || in.Account != "" && !identity.ValidPathID(in.Account) || in.Thread != "" && !identity.ValidPathID(in.Thread) ||
+		in.Digest != "" && (!in.SameAccount || in.Account == "" || in.Thread == "" || !legacyMemoryDigestValid(in.Digest)) ||
 		!filepath.IsAbs(in.Database) || legacyImportOverlap(in.Database, s.dataDir) {
 		return view, apphost.ErrObservationForbidden
 	}
@@ -204,6 +206,27 @@ func (s *stationWechat) importMemoryArchive(ctx context.Context, id string, in s
 		return view, err
 	}
 	defer source.close()
+	accounts, err := companion.LegacyMemoryAccounts(ctx, source.file)
+	if err != nil || len(accounts) == 0 {
+		return view, memoryArchiveProblem("所选旧库没有可核对身份的微信资料，请重新选择旧记忆库。")
+	}
+	for _, account := range accounts {
+		if !identity.ValidPathID(account) {
+			return view, companion.ErrLegacyMemoryUnsupported
+		}
+	}
+	if in.Account == "" {
+		if len(accounts) > 1 {
+			if in.Digest != "" || in.Thread != "" {
+				return view, memoryArchiveProblem("旧库含有多个账号，请先选择来源账号再预览会话。")
+			}
+			if err := source.check(ctx); err != nil {
+				return view, err
+			}
+			return stationMemoryArchiveView{Status: "choose_account", TargetAccount: native.Account(), SourceSHA256: source.digest, Accounts: accounts, Conversations: []stationMemoryArchiveConversation{}}, nil
+		}
+		in.Account = accounts[0]
+	}
 	inventory, err := companion.LegacyMemoryInventory(ctx, source.file, in.Account)
 	if err != nil || inventory.MatchedScopes == 0 || inventory.UnmappedScopes != 0 {
 		return view, memoryArchiveProblem("无法在旧记忆库核对该本地账号编号，或存在身份不明确的会话。请使用旧资料中的账号编号。")

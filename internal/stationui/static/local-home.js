@@ -3326,53 +3326,70 @@
   function appMemoryArchiveImport(view, connection) {
     const panel = appElement("section", "", "configuration-rounds configuration-memory-import");
     const form = appElement("form", "", "configuration-surf-form");
-    const database = document.createElement("input"), account = document.createElement("input");
+    const database = document.createElement("input");
     const draft = apps.wechatArchiveDrafts.get(connection) || { database: "", account: "" };
     apps.wechatArchiveDrafts.set(connection, draft);
-    database.value = draft.database; account.value = draft.account;
-    database.required = account.required = true;
-    database.autocomplete = account.autocomplete = "off";
-    for (const [text, input] of [["旧记忆库完整路径", database], ["旧资料中的本地账号编号", account]]) {
-      const label = appElement("label", text); label.append(input); form.append(label);
-    }
-    const submit = appElement("button", "预览可接续会话", "button compact secondary"); submit.type = "submit";
+    database.value = draft.database; database.required = true; database.autocomplete = "off";
+    const sourceLabel = appElement("label", "旧记忆库完整路径"); sourceLabel.append(database); form.append(sourceLabel);
+    const submit = appElement("button", "查找旧会话", "button compact primary"); submit.type = "submit";
     const confirm = appElement("label", "", "configuration-owner-confirm");
     const same = document.createElement("input"); same.type = "checkbox";
     confirm.append(same, document.createTextNode("我确认旧资料与当前已登录连接属于同一个微信账号"));
     const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
-    const rows = appElement("div", "", "configuration-round-records");
-    form.append(submit, confirm);
+    const rows = appElement("div", "", "configuration-memory-records");
+    const sourceDetails = appElement("details", "", "identity-details");
+    sourceDetails.append(appElement("summary", "接续方式与来源核对"), appElement("p", "账号会自动识别。接续保留当前登录和发送队列，旧内容仍按会话授权读取。请先暂停连接。", "app-scope-note"));
+    confirm.hidden = true; form.append(submit);
     panel.append(appElement("h4", "从旧记忆库接续"),
-      appElement("p", "先预览会话和数量，再逐个接续已有历史读取授权的会话。请先暂停连接。当前登录、发送队列与普通聊天上下文不会被替换。", "app-scope-note"), form, feedback, rows);
+      appElement("p", "找到旧资料，选择会话，再确认接续。", "app-scope-note"), form, feedback, rows, confirm, sourceDetails);
     let generation = 0, busy = false;
     const active = () => appConfiguration === view && view.section === "conversations" && view.connection === connection && panel.isConnected;
     function disabled(value) {
       busy = value;
-      for (const input of [database, account, same, ...panel.querySelectorAll("button")]) input.disabled = value;
+      panel.setAttribute("aria-busy", String(value));
+      for (const input of panel.querySelectorAll("input, button")) input.disabled = value;
     }
     function reset() {
-      draft.database = database.value; draft.account = account.value;
-      generation++; same.checked = false; rows.replaceChildren(); feedback.textContent = "";
+      draft.database = database.value; draft.account = "";
+      generation++; same.checked = false; confirm.hidden = true; rows.replaceChildren(); feedback.textContent = "";
+      sourceDetails.querySelector(".configuration-archive-proof")?.remove();
     }
-    database.addEventListener("input", reset); account.addEventListener("input", reset);
+    database.addEventListener("input", reset);
+    panel.addEventListener("keydown", () => { panel.dataset.motion = "off"; });
+    panel.addEventListener("pointerdown", () => { panel.dataset.motion = "on"; });
     async function call(thread = "", digest = "") {
       if (!active() || busy) return;
       const serial = ++generation;
       disabled(true); feedback.textContent = digest ? "正在接续此会话…" : "正在只读核对来源…";
       try {
         const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/memory-archive", {
-          method: "POST", body: JSON.stringify({ source_database: database.value.trim(), source_account: account.value.trim(), thread_id: thread, digest, same_account: same.checked }), signal: view.controller.signal,
+          method: "POST", body: JSON.stringify({ source_database: database.value.trim(), source_account: draft.account, thread_id: thread, digest, same_account: same.checked }), signal: view.controller.signal,
         });
         if (!active() || serial !== generation) return;
         if (!Array.isArray(result.conversations) || typeof result.source_sha256 !== "string") throw new Error("旧记忆预览格式无效。");
-        rows.replaceChildren();
+        rows.replaceChildren(); confirm.hidden = true;
+        if (result.status === "choose_account") {
+          if (!Array.isArray(result.source_accounts) || result.source_accounts.length < 2) throw new Error("旧资料账号列表无效。");
+          same.checked = false;
+          for (const [index, id] of result.source_accounts.entries()) {
+            const option = memoryButton("旧资料账号 " + (index + 1), "configuration-archive-account", () => { draft.account = id; void call(); });
+            option.append(appElement("small", id)); rows.append(option);
+          }
+          feedback.textContent = "发现多个旧账号，请选择本次要接续的来源。";
+          return;
+        }
+        if (typeof result.source_account !== "string" || !result.source_account) throw new Error("旧资料账号未能核对。");
+        draft.account = result.source_account;
+        const proof = sourceDetails.querySelector(".configuration-archive-proof") || appElement("p", "", "app-scope-note configuration-archive-proof");
+        proof.textContent = "来源账号 " + result.source_account + " · 摘要 " + result.source_sha256.slice(0, 12); sourceDetails.append(proof);
         for (const row of result.conversations) {
-          const card = appElement("article", "", "memory-detail-section");
-          card.append(appElement("strong", row.thread_id), appElement("p", "可接续原话 " + row.event_count + " 条 · 提炼记忆 " + row.memory_count + " 条"));
+          const card = appElement("article", "", "memory-detail-section configuration-archive-card");
+          card.append(appElement("strong", row.thread_id), appElement("p", "原话 " + row.event_count + " 条 · 记忆 " + row.memory_count + " 条"));
           if (!row.history_granted) card.append(appElement("p", "请先在此页的会话设置中授予历史读取，再重新预览。", "app-scope-note"));
           else if (result.applied) card.append(appElement("p", "已接续，可在已接续档案中按需读取。", "app-scope-note"));
           else if (row.event_count) {
             const applying = Boolean(result.digest && thread === row.thread_id);
+            if (applying) { confirm.hidden = false; card.append(confirm); }
             card.append(memoryButton(applying ? "确认接续此会话" : "核对此会话", "button compact secondary", () => {
               if (applying && !same.checked) { feedback.textContent = "请先确认新旧连接属于同一微信账号。"; same.focus(); return; }
               void call(row.thread_id, applying ? result.digest : "");
@@ -3380,9 +3397,9 @@
           }
           rows.append(card);
         }
-        feedback.textContent = result.applied ? "会话档案已接续。" : "只读核对完成，来源摘要 " + result.source_sha256.slice(0, 12) + "。";
+        feedback.textContent = result.applied ? "会话档案已接续。" : thread ? "核对完成，请确认后接续。" : "已找到 " + result.conversations.length + " 个旧会话。";
       } catch (error) {
-        if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) { rows.replaceChildren(); feedback.textContent = error.message; }
+        if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) { rows.replaceChildren(); confirm.hidden = true; feedback.textContent = error.message; }
       } finally { disabled(false); }
     }
     form.addEventListener("submit", (event) => { event.preventDefault(); void call(); });

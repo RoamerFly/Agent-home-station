@@ -708,6 +708,22 @@ body.is-home-ready {
 .configuration-surf-source { margin: 4px 0; border: 1px solid var(--line); border-radius: 10px; }
 .configuration-surf-source label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 7px; }
 .configuration-surf-form button { justify-self: start; }
+.configuration-memory-import { display: grid; gap: 18px; max-width: 980px; margin-block: 18px 26px; }
+.configuration-memory-import > h4, .configuration-memory-import > p { margin: 0; }
+.configuration-memory-import .configuration-surf-form { gap: 16px; }
+.configuration-memory-records { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.configuration-archive-card { display: grid; align-content: start; gap: 15px; padding: 20px; overflow-wrap: anywhere; animation: archive-card-enter 180ms cubic-bezier(.215,.61,.355,1); }
+.configuration-archive-card > p { margin: 0; color: var(--muted); }
+.configuration-archive-card > button { justify-self: start; }
+.configuration-archive-account { display: grid; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--glass); color: inherit; text-align: start; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
+.configuration-archive-account:hover { background: rgba(124,192,220,.14); border-color: var(--accent); }
+.configuration-archive-account small { color: var(--muted); overflow-wrap: anywhere; }
+.configuration-memory-import[data-motion=off] .configuration-archive-card { animation: none; }
+@keyframes archive-card-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .configuration-archive-card { animation: none; }
+  .configuration-archive-account { transition: none; }
+}
 .configuration-surf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-block: 10px; }
 .configuration-surf-actions label { width: 100%; }
 .configuration-surf-live-history { display: grid; gap: 10px; justify-items: start; margin-top: 14px; }
