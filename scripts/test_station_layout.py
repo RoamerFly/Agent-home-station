@@ -179,7 +179,17 @@ def verify_douyin_notice(page, panel, nav):
     status_path = "**/api/local/apps/douyin/web-login"
     notice_path = "**/api/local/apps/douyin/web-notice"
     observed = []
-    login = {"revision": 7, "state": "saved", "active": False, "available": True, "notice_bound": False}
+    login = {"revision": 7, "state": "saved", "active": False, "available": True, "notice_bound": False, "notice_agent_enabled": False}
+
+    def status(route):
+        if route.request.method == "POST":
+            data = route.request.post_data_json
+            assert data["action"] == "set_notice_agent" and data["revision"] == login["revision"]
+            assert login["notice_bound"] is True
+            login["notice_agent_enabled"] = data["allow_notice_agent"]
+            login["revision"] += 1
+            observed.append("agent_enable" if data["allow_notice_agent"] else "agent_disable")
+        route.fulfill(json=login)
 
     def notice(route):
         data = route.request.post_data_json
@@ -189,8 +199,9 @@ def verify_douyin_notice(page, panel, nav):
         if action in ("bind", "revoke"):
             assert "allow_mark_read" not in data
             login["notice_bound"] = action == "bind"
+            login["notice_agent_enabled"] = False
             login["revision"] += 1
-            route.fulfill(json={"revision": login["revision"], "notice_bound": login["notice_bound"]})
+            route.fulfill(json={"revision": login["revision"], "notice_bound": login["notice_bound"], "notice_agent_enabled": False})
         elif action == "prepare":
             assert data["allow_mark_read"] is True
             assert data["pages"] == 2
@@ -204,7 +215,7 @@ def verify_douyin_notice(page, panel, nav):
                                 "pages_read": 1, "effective_pages": 2, "continuation": "" if resumed else "synthetic-next", "progress": "next_unavailable" if not resumed else "",
                                 "rendered_text": "合成用户评论了你的作品 <img src=invalid>"})
 
-    page.route(status_path, lambda route: route.fulfill(json=login))
+    page.route(status_path, status)
     page.route(notice_path, notice)
     nav.get_by_role("button", name="互动任务", exact=True).click()
     bind = panel.get_by_role("button", name="绑定当前抖音账号", exact=True)
@@ -215,18 +226,26 @@ def verify_douyin_notice(page, panel, nav):
     read = panel.get_by_role("button", name="读取并标记已读", exact=True)
     expect(read).to_be_visible()
     assert observed == ["bind"]
+    enable_agent = panel.get_by_role("button", name="允许 Agent 读取并标记已读", exact=True)
+    enable_agent.click()
+    disable_agent = panel.get_by_role("button", name="关闭 Agent 通知读取", exact=True)
+    expect(disable_agent).to_be_visible()
+    assert observed == ["bind", "agent_enable"]
     panel.get_by_label("通知读取批数", exact=True).select_option("2")
     read.click()
     expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_be_visible()
     expect(panel.get_by_text("合成用户评论了你的作品 <img src=invalid>", exact=True)).to_be_visible()
     expect(panel.get_by_text("本次读取 1/2 批，返回 1 条新通知。平台报告还有后续通知。后批未能继续加载，已返回本次成功读取的部分。")).to_be_visible()
-    assert observed == ["bind", "prepare", "read"]
+    assert observed == ["bind", "agent_enable", "prepare", "read"]
     resume = panel.get_by_role("button", name="继续读取并标记已读", exact=True)
     resume.click()
     expect(panel.get_by_text("通知 1233 · 平台类型 2", exact=True)).to_be_visible()
     expect(panel.get_by_text("本次读取 1/2 批，返回 1 条新通知。平台报告已读到末批。")).to_be_visible()
     expect(resume).not_to_be_visible()
-    assert observed == ["bind", "prepare", "read", "prepare", "read"]
+    assert observed == ["bind", "agent_enable", "prepare", "read", "prepare", "read"]
+    disable_agent.click()
+    expect(enable_agent).to_be_visible()
+    assert observed[-1] == "agent_disable"
     panel.get_by_role("button", name="撤销通知绑定", exact=True).click()
     expect(bind).to_be_visible()
     expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_have_count(0)

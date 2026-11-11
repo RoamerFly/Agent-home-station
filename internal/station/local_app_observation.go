@@ -132,6 +132,11 @@ func (t *localToolSet) checkAppObservationIdentity() error {
 }
 
 func (t *localToolSet) checkAppObservations(ctx context.Context) error {
+	for _, proof := range t.noticeReads {
+		if err := t.checkNoticeProof(ctx, proof); err != nil {
+			return err
+		}
+	}
 	for _, result := range t.appReads {
 		if err := t.observations.Check(ctx, result); err != nil {
 			return err

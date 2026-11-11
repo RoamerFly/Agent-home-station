@@ -46,28 +46,30 @@ type localDouyinWebView struct {
 	LikesEnabled    bool   `json:"likes_enabled"`
 	RepliesEnabled  bool   `json:"replies_enabled"`
 	NoticeBound     bool   `json:"notice_bound"`
+	NoticeAgent     bool   `json:"notice_agent_enabled"`
 	VisualReady     bool   `json:"visual_ready"`
 	VisualReason    string `json:"visual_reason,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled"`
 }
 
 type localDouyinWebInput struct {
-	Action         string  `json:"action"`
-	Revision       uint64  `json:"revision"`
-	AttemptID      string  `json:"attempt_id,omitempty"`
-	ApproveProfile bool    `json:"approve_profile"`
-	AllowRead      *bool   `json:"allow_read,omitempty"`
-	AllowWorks     *bool   `json:"allow_works,omitempty"`
-	AllowImages    *bool   `json:"allow_images,omitempty"`
-	ReadScope      *string `json:"read_scope,omitempty"`
-	AllowPlayback  *bool   `json:"allow_playback,omitempty"`
-	AllowAudio     *bool   `json:"allow_audio,omitempty"`
-	AllowVisual    *bool   `json:"allow_visual,omitempty"`
-	AllowComments  *bool   `json:"allow_comments,omitempty"`
-	AllowPublish   *bool   `json:"allow_publish,omitempty"`
-	AllowLikes     *bool   `json:"allow_likes,omitempty"`
-	AllowReplies   *bool   `json:"allow_replies,omitempty"`
-	noticeAccount  *string
+	Action           string  `json:"action"`
+	Revision         uint64  `json:"revision"`
+	AttemptID        string  `json:"attempt_id,omitempty"`
+	ApproveProfile   bool    `json:"approve_profile"`
+	AllowRead        *bool   `json:"allow_read,omitempty"`
+	AllowWorks       *bool   `json:"allow_works,omitempty"`
+	AllowImages      *bool   `json:"allow_images,omitempty"`
+	ReadScope        *string `json:"read_scope,omitempty"`
+	AllowPlayback    *bool   `json:"allow_playback,omitempty"`
+	AllowAudio       *bool   `json:"allow_audio,omitempty"`
+	AllowVisual      *bool   `json:"allow_visual,omitempty"`
+	AllowComments    *bool   `json:"allow_comments,omitempty"`
+	AllowPublish     *bool   `json:"allow_publish,omitempty"`
+	AllowLikes       *bool   `json:"allow_likes,omitempty"`
+	AllowReplies     *bool   `json:"allow_replies,omitempty"`
+	AllowNoticeAgent *bool   `json:"allow_notice_agent,omitempty"`
+	noticeAccount    *string
 }
 
 type localDouyinWebRecord struct {
@@ -93,6 +95,7 @@ type localDouyinWebRecord struct {
 	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
 	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
 	NoticeAccount   string `json:"notice_account,omitempty"`
+	NoticeAgent     bool   `json:"notice_agent_enabled,omitempty"`
 	PublishEnabled  bool   `json:"publish_enabled,omitempty"`
 }
 
@@ -219,6 +222,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.NoticeAccount != "" && (!validDouyinNoticeAccount(record.NoticeAccount) || record.Profile == "" || record.ConfirmedAt == "") {
 		return record, errors.New("互动通知授权的账号登记无效，原资料保留")
 	}
+	if record.NoticeAgent && record.NoticeAccount == "" {
+		return record, errors.New("互动通知工具授权缺少已核对账号，原资料保留")
+	}
 	if record.Detached && !record.Paused {
 		return record, errors.New("抖音接入状态无效，原资料保留")
 	}
@@ -294,6 +300,7 @@ func (h *localHomeService) douyinRegistrationDetached() (bool, error) {
 func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebView {
 	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, Detached: record.Detached, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
 	v.NoticeBound = record.NoticeAccount != ""
+	v.NoticeAgent = record.NoticeAgent
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -368,6 +375,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return in.AllowImages != nil && !*in.AllowImages
 	case "set_notice":
 		return in.noticeAccount != nil && *in.noticeAccount == ""
+	case "set_notice_agent":
+		return in.AllowNoticeAgent != nil && !*in.AllowNoticeAgent
 	case "set_publish":
 		return in.AllowPublish != nil && !*in.AllowPublish
 	case "set_interactions":
@@ -415,7 +424,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
-	noticeRevocation := in.Action == "set_notice" && localDouyinWebRevokesOnly(in)
+	noticeRevocation := (in.Action == "set_notice" || in.Action == "set_notice_agent") && localDouyinWebRevokesOnly(in)
 	if record.Detached && in.Action != "attach" && in.Action != "detach" && !noticeRevocation {
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
@@ -442,6 +451,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.Detached, record.Paused = detached, true
 		if detached {
 			record.NoticeAccount = ""
+			record.NoticeAgent = false
 		}
 		if save() != nil {
 			return fail(503, "抖音接入状态未保存，请重新读取后核对")
@@ -515,9 +525,22 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		if account != record.NoticeAccount {
 			record.NoticeAccount = account
+			record.NoticeAgent = false
 			if save() != nil {
 				return fail(503, "互动通知授权未保存，请重新读取后核对")
 			}
+		}
+	case "set_notice_agent":
+		if in.AllowNoticeAgent == nil {
+			return fail(400, "请明确是否允许 Agent 读取通知并可能标记已读")
+		}
+		view := m.view(record)
+		if *in.AllowNoticeAgent && (record.NoticeAccount == "" || view.State != "saved" || view.AttemptID != "" || !view.Available) {
+			return fail(409, "请先确认网页登录并绑定互动通知账号")
+		}
+		record.NoticeAgent = *in.AllowNoticeAgent
+		if save() != nil {
+			return fail(503, "互动通知工具授权未保存，请重新读取后核对")
 		}
 	case "begin_creator", "begin_creator_works":
 		view := m.view(record)
@@ -544,6 +567,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
 		record.NoticeAccount = ""
+		record.NoticeAgent = false
 		record.WorksEnabled = false
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
@@ -709,6 +733,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.ProfileEpoch++
 		record.ConfirmedAt = ""
 		record.NoticeAccount = ""
+		record.NoticeAgent = false
 		record.WorksEnabled = false
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
@@ -765,6 +790,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		// Another browser may still own the profile lock during that cleanup.
 		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled || record.NoticeAccount != "" {
 			record.NoticeAccount = ""
+			record.NoticeAgent = false
 			record.ReadEnabled = false
 			record.WorksEnabled = false
 			record.ImagesEnabled = false

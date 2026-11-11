@@ -263,6 +263,15 @@ func (t *localToolSet) dispatchCheckpointed(ctx context.Context, op companion.Lo
 
 func (t *localToolSet) checkpointView(op companion.LocalToolCheckpoint, grant localWorkspaceGrant) map[string]any {
 	view := map[string]any{"tool": op.Tool, "state": "needs_review", "recovered": true}
+	if op.Tool == localInboxToolName {
+		view["body_retained"], view["repeated"] = false, false
+		if op.Result != "" {
+			view["state"] = "read_not_repeated"
+		} else {
+			view["state"] = "unknown_not_repeated"
+		}
+		return view
+	}
 	if op.Tool == localProcessTool {
 		if t.process == nil {
 			return view

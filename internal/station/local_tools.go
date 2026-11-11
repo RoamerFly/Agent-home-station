@@ -31,6 +31,7 @@ type localToolSet struct {
 	wechat            *stationWechat
 	observations      *apphost.Observer
 	appReads          []apphost.ObservationResult
+	noticeReads       []localDouyinNoticeProof
 	publications      *localChatService
 	requestTime       time.Time
 	continuationGuard func(context.Context) error
@@ -76,7 +77,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	}
 	all := []mcptools.Tool{}
 	if t.publications != nil && t.run != nil {
-		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool())
+		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -126,6 +127,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localInteractionToolName {
 		return t.callInteraction(ctx, raw)
+	}
+	if name == localInboxToolName {
+		return t.callInbox(ctx, raw)
 	}
 	if name == localPublicationToolName {
 		return t.callPublication(ctx, raw)

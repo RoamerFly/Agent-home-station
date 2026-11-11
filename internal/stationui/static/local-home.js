@@ -2578,6 +2578,13 @@
       panel.append(pageLabel, appElement("p", "每批由抖音原生页面加载；续读会重新核对前批，也可能再次标记已读。列表变化时需从首批重读。", "app-scope-note"));
       actions.append(memoryButton("读取并标记已读", "button compact secondary", () => void run("read")), next);
     }
+    if (bound) {
+      const agentEnabled = login.notice_agent_enabled === true;
+      panel.append(appElement("p", agentEnabled
+        ? "已允许 Agent 按主人请求读取通知，可能标记已读；不会自动巡检。"
+        : "Agent 通知读取默认关闭。单独允许后，才可在聊天中请求读取并可能标记已读。", "app-scope-note"));
+      if (ready || agentEnabled) actions.append(memoryButton(agentEnabled ? "关闭 Agent 通知读取" : "允许 Agent 读取并标记已读", "button compact secondary", () => void run(agentEnabled ? "agent_disable" : "agent_enable")));
+    }
     if (bound) actions.append(memoryButton("撤销通知绑定", "button compact quiet", () => void run("revoke")));
     panel.append(actions, status, output);
     async function run(action, resume = false) {
@@ -2590,14 +2597,16 @@
       const buttons = [...actions.querySelectorAll("button")];
       for (const button of buttons) button.disabled = true;
       pages.disabled = true;
-      status.textContent = action === "read" ? "正在核对并读取互动通知…" : action === "bind" ? "正在核对抖音账号…" : "正在撤销通知绑定…";
+      status.textContent = action === "read" ? "正在核对并读取互动通知…" : action.startsWith("agent_") ? "正在保存通知工具授权…" : action === "bind" ? "正在核对抖音账号…" : "正在撤销通知绑定…";
       const post = (body) => request("/api/local/apps/douyin/web-notice", {
         method: "POST", body: JSON.stringify({ revision: login.revision, ...body }), signal: controller.signal,
       });
       let readRequested = false;
       try {
         if (action !== "read") {
-          const result = await post({ action });
+          const result = action.startsWith("agent_")
+            ? await request("/api/local/apps/douyin/web-login", { method: "POST", body: JSON.stringify({ action: "set_notice_agent", revision: login.revision, allow_notice_agent: action === "agent_enable" }), signal: controller.signal })
+            : await post({ action });
           if (!active()) return;
           if (typeof result.notice_bound !== "boolean" || !Number.isSafeInteger(result.revision)) throw new Error("通知绑定状态返回格式无效。");
           if (apps.douyinWebLogin.value === login) {
