@@ -39,6 +39,9 @@ func (p *localDouyinWebObservation) readComments(ctx context.Context, a localDou
 		return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 	}
 	cursor := localDouyinCommentsCursor{VideoID: target.videoID}
+	// Take the account binding before I/O. Resumed public-only targets have
+	// no creator proof after restart and cannot enter the owner archive.
+	creator, creatorVerified := p.creatorWorks.get(in.ContentID, a.version)
 	if in.Cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(in.Cursor)
 		if err != nil || len(raw) > 512 || strictLocalMemoryDecode(raw, &cursor) != nil || cursor.VideoID != target.videoID || !validLocalDouyinCommentID(cursor.After) || cursor.Position < 1 {
@@ -107,6 +110,21 @@ func (p *localDouyinWebObservation) readComments(ctx context.Context, a localDou
 	}
 	if len(result.Comments) > 0 {
 		if err := p.saveCreatorCommentTarget(a, in.ContentID, target.videoID); err != nil {
+			return apphost.ObservationPage{}, err
+		}
+	}
+	if a.record.Memory.Comments != "" && creatorVerified && creator.work.ID == target.videoID {
+		now := time.Now().UTC().Format(localDouyinMemoryTime)
+		rows := make([]localDouyinMemoryRecord, 0, len(page.Chunks))
+		for _, chunk := range page.Chunks {
+			body := chunk.Text
+			if chunk.PublishedAt != "" {
+				body += "\n平台时间 " + chunk.PublishedAt
+			}
+			rows = append(rows, localDouyinMemoryRecord{ID: target.videoID + "-" + chunk.SourceID, Work: target.videoID, Label: creator.work.Title,
+				Text: body, URL: chunk.SourceURL, Coverage: "已读的本人作品评论 · 第三方发言", At: now})
+		}
+		if err := m.captureMemory(ctx, a.record, douyinMemoryComments, creator.account, rows); err != nil {
 			return apphost.ObservationPage{}, err
 		}
 	}

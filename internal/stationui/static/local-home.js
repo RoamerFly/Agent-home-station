@@ -1519,6 +1519,8 @@
       (typeof value.visual_ready === "undefined" || typeof value.visual_ready === "boolean") &&
       (typeof value.visual_reason === "undefined" || typeof value.visual_reason === "string") &&
       (typeof value.publish_enabled === "undefined" || typeof value.publish_enabled === "boolean") &&
+      (typeof value.memory_scopes === "undefined" || (Array.isArray(value.memory_scopes) &&
+        value.memory_scopes.every((scope) => ["works", "comments", "notices"].includes(scope)))) &&
       (typeof value.reason === "undefined" || typeof value.reason === "string");
   }
   function douyinWebReadEnabled(value) { return value?.read_enabled === true; }
@@ -1626,6 +1628,10 @@
     }
     if (action === "set_works") body.allow_works = options.allowWorks === true;
     if (action === "set_images") body.allow_images = options.allowImages === true;
+    if (action === "set_memory") {
+      body.memory_scope = options.memoryScope;
+      body.allow_memory = options.allowMemory === true;
+    }
     if (action === "set_publish") body.allow_publish = options.allowPublish === true;
     if (action === "set_interactions") {
       if (typeof options.allowLikes === "boolean") body.allow_likes = options.allowLikes;
@@ -1647,6 +1653,7 @@
       }
       if (action === "set_works") feedback = updated.works_enabled ? "已允许读取本人作品。" : "已停止读取本人作品。";
       if (action === "set_images") feedback = updated.images_enabled ? "已允许分析本人公开图文图片。" : "已停止本人图文图片分析。";
+      if (action === "set_memory") feedback = options.allowMemory ? "已保存工作站按需检索授权。" : "已撤销工作站按需检索授权。";
       if (action === "set_read") {
         if (typeof options.allowComments === "boolean") feedback = options.allowComments ? "已允许读取视频评论。" : "已停止读取视频评论。";
         else if (typeof options.allowAudio === "boolean") feedback = options.allowAudio ? "已允许本机转写视频音轨。" : "已停止视频音轨转写。";
@@ -1699,6 +1706,29 @@
     const interactionActions = appElement("div", "", "publication-actions");
     const busy = Boolean(web.loading || web.applying);
     const available = value?.available !== false;
+    if (section === "account" && value?.state === "saved" && !value.detached) {
+      const memory = appElement("div", "", "douyin-memory-grants");
+      memory.append(appElement("strong", "工作站按需记忆"),
+        appElement("p", "授权后留存当前账号后续读到的资料。工作站仅在你提及抖音时按需检索。", "publication-authorization-note"));
+      const scopes = [
+        ["works", "本人作品文字", value.works_enabled],
+        ["comments", "本人作品评论", value.works_enabled && value.comments_enabled],
+        ["notices", "互动通知文字与元数据", value.notice_agent_enabled && value.notice_bound],
+      ];
+      for (const [scope, label, sourceAllowed] of scopes) {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = value.memory_scopes?.includes(scope) === true;
+        checkbox.disabled = busy || (!checkbox.checked && (value.paused || !sourceAllowed));
+        checkbox.addEventListener("change", () => {
+          void updateDouyinWebLogin(current, "set_memory", { memoryScope: scope, allowMemory: checkbox.checked });
+        });
+        const row = appElement("label", "", "switch-row");
+        row.append(checkbox, appElement("span", label));
+        memory.append(row);
+      }
+      detail.append(memory);
+    }
     if (!web.loaded && !web.loading) {
       const retry = appElement("button", "读取网页登录状态", "button compact quiet");
       retry.type = "button"; retry.addEventListener("click", () => { void loadDouyinWebLogin(current); }); actions.append(retry);

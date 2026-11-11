@@ -214,6 +214,10 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .publication-detail { min-width: 0; }
 .douyin-web-login { background: color-mix(in srgb, var(--accent-soft) 32%, var(--surface-solid)); }
 .douyin-web-login-actions { margin-top: 9px; }
+.douyin-memory-grants { display: grid; gap: 7px; margin-top: 12px; }
+.douyin-memory-grants .switch-row { color: var(--ink); background: var(--surface-solid); }
+.douyin-memory-grants .switch-row:has(input:disabled) { color: var(--muted); cursor: default; }
+.douyin-memory-grants input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-layer.douyin-live-client { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .douyin-live-client .settings-field { display: grid; gap: 5px; margin-top: 12px; }
 .douyin-live-client input { box-sizing: border-box; width: 100%; }

@@ -452,7 +452,10 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		if parseErr != nil {
 			return parseErr
 		}
-		if owner != "" && owner != page.Account || seen[page.PageKey] {
+		if owner != "" && owner != page.Account {
+			return errors.Join(ErrCreatorWorksChanged, ErrCreatorWorksAccountChanged)
+		}
+		if seen[page.PageKey] {
 			return ErrCreatorWorksChanged
 		}
 		owner, seen[page.PageKey] = page.Account, true

@@ -123,6 +123,9 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 		return apphost.ObservationPage{}, authErr
 	}
 	switch {
+	case errors.Is(err, stationbrowser.ErrCreatorWorksAccountChanged):
+		err := manager.captureMemory(ctx, access.record, douyinMemoryWorks, "", nil)
+		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationWebSnapshotChanged, err)
 	case errors.Is(err, stationbrowser.ErrCreatorWorksChanged):
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
 	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) && !errors.Is(err, context.DeadlineExceeded):
@@ -130,13 +133,30 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	case err != nil:
 		return apphost.ObservationPage{}, localDouyinWebReadError(err)
 	}
-	if result.Account == "" || result.PageKey == "" || cursor.Offset > len(result.Works) ||
-		cursor.Account != "" && cursor.Account != result.Account || cursor.PageKey != "" && cursor.PageKey != result.PageKey {
+	if result.Account == "" || result.PageKey == "" || cursor.Offset > len(result.Works) {
+		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+	}
+	if cursor.Account != "" && cursor.Account != result.Account {
+		err := manager.captureMemory(ctx, access.record, douyinMemoryWorks, "", nil)
+		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationWebSnapshotChanged, err)
+	}
+	if cursor.PageKey != "" && cursor.PageKey != result.PageKey {
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
 	}
 	end := cursor.Offset + min(cursor.Limit, len(result.Works)-cursor.Offset)
 	works := result.Works[cursor.Offset:end]
-	ids, err := p.creatorWorks.add(access.connection.AccountID, access.version, cursor.Request, result, works, time.Now().UTC())
+	now := time.Now().UTC()
+	if access.record.Memory.Works != "" || access.record.Memory.Comments != "" {
+		saved := make([]localDouyinMemoryRecord, 0, len(works))
+		for _, work := range works {
+			saved = append(saved, localDouyinMemoryRecord{ID: work.ID, Work: work.ID, Label: work.Title, Text: creatorWorkText(work),
+				URL: stationbrowser.DouyinCreatorManageURL, Coverage: "本人作品 · 创作者管理页文字快照", At: now.Format(localDouyinMemoryTime)})
+		}
+		if err := manager.captureMemory(ctx, access.record, douyinMemoryWorks, result.Account, saved); err != nil {
+			return apphost.ObservationPage{}, err
+		}
+	}
+	ids, err := p.creatorWorks.add(access.connection.AccountID, access.version, cursor.Request, result, works, now)
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
@@ -181,8 +201,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	return page, nil
 }
 
-func creatorWorkPage(snapshot localCreatorWorkSnapshot, limit int) apphost.ObservationPage {
-	row := snapshot.work
+func creatorWorkText(row stationbrowser.DouyinCreatorWork) string {
 	lines := []string{"作品编号 " + row.ID, "可见范围 " + row.Visibility}
 	if row.Title != "" {
 		lines = append(lines, "标题 "+row.Title)
@@ -196,11 +215,16 @@ func creatorWorkPage(snapshot localCreatorWorkSnapshot, limit int) apphost.Obser
 	if row.Reviewing {
 		lines = append(lines, "平台记录显示审核中")
 	}
+	return strings.Join(lines, "\n")
+}
+
+func creatorWorkPage(snapshot localCreatorWorkSnapshot, limit int) apphost.ObservationPage {
+	row := snapshot.work
 	coverage := "本人作品信息 · 创作者管理页快照 " + snapshot.captured.Format(time.RFC3339) + " · 不含图文或视频画面理解"
 	if limit == 0 {
 		limit = 2048
 	}
-	text := []rune(strings.Join(lines, "\n"))
+	text := []rune(creatorWorkText(row))
 	if len(text) > limit {
 		coverage += fmt.Sprintf(" · 显示 %d 字，共 %d 字，可增大 limit 重读", limit, len(text))
 		text = text[:limit]

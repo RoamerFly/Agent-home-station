@@ -17,27 +17,31 @@ import (
 )
 
 type localToolSet struct {
-	memory             companion.ToolAccess
-	files              *localWorkspaceFileTools
-	process            *localProcessTools
-	processError       error
-	projectTools       *localProjectTools
-	access             *localWorkspaceAccess
-	python             string
-	run                *companion.LocalToolRun
-	traceID            string
-	inspectOnly        bool
-	store              *companion.Store
-	wechat             *stationWechat
-	observations       *apphost.Observer
-	appReads           []apphost.ObservationResult
-	noticeReads        []localDouyinNoticeProof
-	wechatMemoryProofs []localWechatMemoryProof
-	wechatMemoryRefs   map[string]localWechatMemoryReference
-	wechatMemoryPages  map[string]localWechatMemoryPage
-	publications       *localChatService
-	requestTime        time.Time
-	continuationGuard  func(context.Context) error
+	memory                companion.ToolAccess
+	files                 *localWorkspaceFileTools
+	process               *localProcessTools
+	processError          error
+	projectTools          *localProjectTools
+	access                *localWorkspaceAccess
+	python                string
+	run                   *companion.LocalToolRun
+	traceID               string
+	inspectOnly           bool
+	store                 *companion.Store
+	wechat                *stationWechat
+	observations          *apphost.Observer
+	appReads              []apphost.ObservationResult
+	noticeReads           []localDouyinNoticeProof
+	wechatMemoryProofs    []localWechatMemoryProof
+	wechatMemoryRefs      map[string]localWechatMemoryReference
+	wechatMemoryPages     map[string]localWechatMemoryPage
+	douyinMemoryRequested bool
+	douyinMemoryProofs    map[localDouyinMemoryProof]struct{}
+	douyinMemoryRefs      map[string]localDouyinMemoryReference
+	douyinMemoryPages     map[string]localDouyinMemoryPage
+	publications          *localChatService
+	requestTime           time.Time
+	continuationGuard     func(context.Context) error
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -68,6 +72,9 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 		tools.publications = h
 		tools.projectTools = h.projectTools
 		tools.requestTime, _ = time.Parse(time.RFC3339Nano, in.MessageTime)
+		if in.OriginalText != nil {
+			tools.douyinMemoryRequested = strings.Contains(*in.OriginalText, "抖音") || strings.Contains(strings.ToLower(*in.OriginalText), "douyin")
+		}
 	}
 	return tools
 }
@@ -76,10 +83,17 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return nil, err
 	}
+	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+		return nil, err
+	}
 	if t.continuationGuard != nil {
 		if err := t.continuationGuard(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if len(t.douyinMemoryProofs) > 0 {
+		memoryTools, err := t.memory.List(ctx)
+		return append(memoryTools, localWechatMemorySchema()), err
 	}
 	all := []mcptools.Tool{}
 	if t.publications != nil && t.run != nil {
@@ -91,7 +105,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if t.wechat != nil && t.wechat.hasContactGrant() {
 		all = append(all, wechatapp.StationContactsTool())
 	}
-	if t.wechat != nil && t.run != nil && t.run.Tracked {
+	if (t.wechat != nil || t.douyinMemoryRequested && t.publications != nil) && t.run != nil && t.run.Tracked {
 		all = append(all, localWechatMemorySchema())
 	}
 	if t.wechat != nil && t.run != nil && t.run.Tracked && len(t.wechat.stationMuteTargets(t.requestTime)) > 0 {
@@ -126,16 +140,27 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return "", err
 	}
+	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+		return "", err
+	}
 	if t.continuationGuard != nil {
 		if err := t.continuationGuard(ctx); err != nil {
 			return "", err
+		}
+	}
+	if len(t.douyinMemoryProofs) > 0 && name != localWechatMemoryTool {
+		switch name {
+		case "memory_search", "memory_read":
+			return t.memory.Call(ctx, name, raw)
+		default:
+			return "", apphost.ErrObservationForbidden
 		}
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)
 	}
 	if name == localWechatMemoryTool {
-		return t.callWechatMemory(ctx, raw)
+		return t.callAppMemory(ctx, raw)
 	}
 	if name == localLiveToolName {
 		return t.callLive(ctx, raw)

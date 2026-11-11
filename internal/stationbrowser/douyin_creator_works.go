@@ -17,6 +17,7 @@ var creatorWorksNumericID = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 var (
 	ErrCreatorWorksUnavailable     = errors.New("创作者中心未返回可核对的本人作品")
 	ErrCreatorWorksChanged         = errors.New("创作者账号或前一页作品已变化，请从首页重查")
+	ErrCreatorWorksAccountChanged  = errors.New("创作者中心账号已变化，请重新核对登录")
 	ErrCreatorWorksNextUnavailable = errors.New("创作者中心报告还有作品，但当前页面未提供可核对的下一页入口")
 )
 

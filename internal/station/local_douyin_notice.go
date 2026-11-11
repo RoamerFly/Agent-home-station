@@ -232,6 +232,9 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 		}
 		page, err := m.readNotice(ctx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true, Pages: input.Pages, After: after}, authorize)
 		if err != nil {
+			if errors.Is(err, stationbrowser.ErrDouyinNoticeAccountChanged) && authorize() == nil {
+				err = errors.Join(err, m.captureMemory(ctx, record, douyinMemoryNotices, "", nil))
+			}
 			localDouyinNoticeFailure(w, err)
 			return
 		}
@@ -240,7 +243,12 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			return
 		}
 		if page.Account != record.NoticeAccount {
-			localDouyinNoticeFailure(w, stationbrowser.ErrDouyinNoticeAccountChanged)
+			err = m.captureMemory(ctx, record, douyinMemoryNotices, "", nil)
+			localDouyinNoticeFailure(w, errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err))
+			return
+		}
+		if err := m.captureNoticeMemory(ctx, record, page); err != nil {
+			websession.Fail(w, http.StatusServiceUnavailable, "通知已读取，可能已标记已读，本机记忆保存未完成")
 			return
 		}
 		next := m.finishNoticeCursor(scope, input.Continuation, after, page, nextToken)

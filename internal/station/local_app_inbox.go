@@ -163,13 +163,20 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 		}
 		page, err := m.readNotice(readCtx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true, Pages: in.Pages, After: after}, check)
 		if err != nil {
+			if errors.Is(err, stationbrowser.ErrDouyinNoticeAccountChanged) && check() == nil {
+				err = errors.Join(err, m.captureMemory(readCtx, record, douyinMemoryNotices, "", nil))
+			}
 			return "", "", err
 		}
 		if err := check(); err != nil {
 			return "", "", err
 		}
 		if page.Account != record.NoticeAccount {
-			return "", "", stationbrowser.ErrDouyinNoticeAccountChanged
+			err = m.captureMemory(readCtx, record, douyinMemoryNotices, "", nil)
+			return "", "", errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err)
+		}
+		if err := m.captureNoticeMemory(readCtx, record, page); err != nil {
+			return "", "", &localInboxToolError{status: 503, message: "通知已读取，可能已标记已读，本机记忆保存未完成"}
 		}
 		next := m.finishNoticeCursor(scope, in.Continuation, after, page, nextToken)
 		result := localDouyinNoticeResult(page, next, in.Pages)

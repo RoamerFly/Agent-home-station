@@ -254,6 +254,49 @@ def verify_douyin_notice(page, panel, nav):
     page.unroute(notice_path)
 
 
+def verify_douyin_memory_permissions(page, panel, nav, output):
+    status_path = "**/api/local/apps/douyin/web-login"
+    status = {"revision": 30, "state": "saved", "active": False, "available": True, "works_enabled": True,
+              "comments_enabled": True, "notice_bound": True, "notice_agent_enabled": False, "memory_scopes": []}
+    writes = []
+
+    def login(route):
+        if route.request.method == "POST":
+            data = route.request.post_data_json
+            assert data["action"] == "set_memory" and data["revision"] == status["revision"]
+            scope, enabled = data["memory_scope"], data["allow_memory"]
+            writes.append((scope, enabled))
+            if enabled:
+                status["memory_scopes"].append(scope)
+            else:
+                status["memory_scopes"].remove(scope)
+            status["revision"] += 1
+        route.fulfill(json=status)
+
+    page.route(status_path, login)
+    nav.get_by_role("button", name="账号与授权", exact=True).click()
+    works = panel.get_by_role("checkbox", name="本人作品文字", exact=True)
+    comments = panel.get_by_role("checkbox", name="本人作品评论", exact=True)
+    notices = panel.get_by_role("checkbox", name="互动通知文字与元数据", exact=True)
+    expect(works).to_be_enabled()
+    expect(works).not_to_be_checked()
+    expect(comments).not_to_be_checked()
+    expect(notices).to_be_disabled()
+    assert not writes
+    works.check()
+    expect(works).to_be_checked()
+    expect(works).to_be_enabled()
+    comments.check()
+    expect(comments).to_be_checked()
+    expect(works).to_be_enabled()
+    page.screenshot(path=str(output / "douyin-memory-grants-narrow.png"))
+    works.uncheck()
+    expect(works).not_to_be_checked()
+    expect(comments).to_be_checked()
+    assert writes == [("works", True), ("comments", True), ("works", False)]
+    page.unroute(status_path)
+
+
 def verify_wechat_owner_binding(page, panel, nav, output):
     reads, writes = [], []
     memory_writes = []
@@ -621,6 +664,7 @@ def verify_application_configuration(page, output):
     expect(nav.get_by_role("button", name="直播与本机预览")).to_be_visible()
     verify_douyin_read_controls(page, panel, nav)
     verify_douyin_notice(page, panel, nav)
+    verify_douyin_memory_permissions(page, panel, nav, output)
     nav.get_by_role("button", name="直播与本机预览").click()
     expect(panel.get_by_role("button", name="打开 OBS 本机预览")).to_be_visible()
     expect(panel.get_by_role("button", name="开始直播", exact=True)).to_have_count(0)

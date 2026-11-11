@@ -25,31 +25,32 @@ import (
 // claim that the platform has verified an account. Never expose its contents
 // to capability discovery, the editable fish home or model input.
 type localDouyinWebView struct {
-	Revision        uint64 `json:"revision"`
-	Paused          bool   `json:"paused"`
-	Detached        bool   `json:"detached"`
-	State           string `json:"state"`
-	Active          bool   `json:"active"`
-	AttemptID       string `json:"attempt_id,omitempty"`
-	ConfirmedAt     string `json:"confirmed_at,omitempty"`
-	Available       bool   `json:"available"`
-	Reason          string `json:"reason,omitempty"`
-	ReadEnabled     bool   `json:"read_enabled"`
-	WorksEnabled    bool   `json:"works_enabled"`
-	ImagesEnabled   bool   `json:"images_enabled"`
-	ImagesReady     bool   `json:"images_ready"`
-	ReadScope       string `json:"read_scope"`
-	PlaybackEnabled bool   `json:"playback_enabled"`
-	AudioEnabled    bool   `json:"audio_enabled"`
-	VisualEnabled   bool   `json:"visual_enabled"`
-	CommentsEnabled bool   `json:"comments_enabled"`
-	LikesEnabled    bool   `json:"likes_enabled"`
-	RepliesEnabled  bool   `json:"replies_enabled"`
-	NoticeBound     bool   `json:"notice_bound"`
-	NoticeAgent     bool   `json:"notice_agent_enabled"`
-	VisualReady     bool   `json:"visual_ready"`
-	VisualReason    string `json:"visual_reason,omitempty"`
-	PublishEnabled  bool   `json:"publish_enabled"`
+	Revision        uint64   `json:"revision"`
+	Paused          bool     `json:"paused"`
+	Detached        bool     `json:"detached"`
+	State           string   `json:"state"`
+	Active          bool     `json:"active"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	ConfirmedAt     string   `json:"confirmed_at,omitempty"`
+	Available       bool     `json:"available"`
+	Reason          string   `json:"reason,omitempty"`
+	ReadEnabled     bool     `json:"read_enabled"`
+	WorksEnabled    bool     `json:"works_enabled"`
+	ImagesEnabled   bool     `json:"images_enabled"`
+	ImagesReady     bool     `json:"images_ready"`
+	ReadScope       string   `json:"read_scope"`
+	PlaybackEnabled bool     `json:"playback_enabled"`
+	AudioEnabled    bool     `json:"audio_enabled"`
+	VisualEnabled   bool     `json:"visual_enabled"`
+	CommentsEnabled bool     `json:"comments_enabled"`
+	LikesEnabled    bool     `json:"likes_enabled"`
+	RepliesEnabled  bool     `json:"replies_enabled"`
+	NoticeBound     bool     `json:"notice_bound"`
+	NoticeAgent     bool     `json:"notice_agent_enabled"`
+	VisualReady     bool     `json:"visual_ready"`
+	VisualReason    string   `json:"visual_reason,omitempty"`
+	PublishEnabled  bool     `json:"publish_enabled"`
+	MemoryScopes    []string `json:"memory_scopes,omitempty"`
 }
 
 type localDouyinWebInput struct {
@@ -69,6 +70,8 @@ type localDouyinWebInput struct {
 	AllowLikes       *bool   `json:"allow_likes,omitempty"`
 	AllowReplies     *bool   `json:"allow_replies,omitempty"`
 	AllowNoticeAgent *bool   `json:"allow_notice_agent,omitempty"`
+	MemoryScope      string  `json:"memory_scope,omitempty"`
+	AllowMemory      *bool   `json:"allow_memory,omitempty"`
 	noticeAccount    *string
 }
 
@@ -82,21 +85,22 @@ type localDouyinWebRecord struct {
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
 	// account cannot inherit an earlier task's target reference.
-	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
-	ConfirmedAt     string `json:"confirmed_at,omitempty"`
-	ReadEnabled     bool   `json:"read_enabled,omitempty"`
-	WorksEnabled    bool   `json:"works_enabled,omitempty"`
-	ImagesEnabled   bool   `json:"images_enabled,omitempty"`
-	ReadScope       string `json:"read_scope,omitempty"`
-	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
-	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
-	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
-	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
-	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
-	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
-	NoticeAccount   string `json:"notice_account,omitempty"`
-	NoticeAgent     bool   `json:"notice_agent_enabled,omitempty"`
-	PublishEnabled  bool   `json:"publish_enabled,omitempty"`
+	ProfileEpoch    uint64                  `json:"profile_epoch,omitempty"`
+	ConfirmedAt     string                  `json:"confirmed_at,omitempty"`
+	ReadEnabled     bool                    `json:"read_enabled,omitempty"`
+	WorksEnabled    bool                    `json:"works_enabled,omitempty"`
+	ImagesEnabled   bool                    `json:"images_enabled,omitempty"`
+	ReadScope       string                  `json:"read_scope,omitempty"`
+	PlaybackEnabled bool                    `json:"playback_enabled,omitempty"`
+	AudioEnabled    bool                    `json:"audio_enabled,omitempty"`
+	VisualEnabled   bool                    `json:"visual_enabled,omitempty"`
+	CommentsEnabled bool                    `json:"comments_enabled,omitempty"`
+	LikesEnabled    bool                    `json:"likes_enabled,omitempty"`
+	RepliesEnabled  bool                    `json:"replies_enabled,omitempty"`
+	NoticeAccount   string                  `json:"notice_account,omitempty"`
+	NoticeAgent     bool                    `json:"notice_agent_enabled,omitempty"`
+	PublishEnabled  bool                    `json:"publish_enabled,omitempty"`
+	Memory          localDouyinMemoryGrants `json:"memory,omitzero"`
 }
 
 type localDouyinLoginWindow interface {
@@ -229,6 +233,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if record.NoticeAgent && record.NoticeAccount == "" {
 		return record, errors.New("互动通知工具授权缺少已核对账号，原资料保留")
 	}
+	if !record.Memory.valid() {
+		return record, errors.New("抖音记忆授权登记无效，原资料保留")
+	}
 	if record.Detached && !record.Paused {
 		return record, errors.New("抖音接入状态无效，原资料保留")
 	}
@@ -305,6 +312,11 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	v := localDouyinWebView{Revision: record.Revision, Paused: record.Paused, Detached: record.Detached, State: "unconfigured", Available: m.available(), ConfirmedAt: record.ConfirmedAt, ReadScope: localDouyinWebScope(record)}
 	v.NoticeBound = record.NoticeAccount != ""
 	v.NoticeAgent = record.NoticeAgent
+	for _, kind := range localDouyinMemoryKinds {
+		if record.Memory.token(kind) != "" {
+			v.MemoryScopes = append(v.MemoryScopes, kind)
+		}
+	}
 	if record.Profile != "" {
 		v.State = "unconfirmed"
 	}
@@ -381,6 +393,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return in.noticeAccount != nil && *in.noticeAccount == ""
 	case "set_notice_agent":
 		return in.AllowNoticeAgent != nil && !*in.AllowNoticeAgent
+	case "set_memory":
+		return in.AllowMemory != nil && !*in.AllowMemory
 	case "set_publish":
 		return in.AllowPublish != nil && !*in.AllowPublish
 	case "set_interactions":
@@ -428,14 +442,16 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
-	noticeRevocation := (in.Action == "set_notice" || in.Action == "set_notice_agent") && localDouyinWebRevokesOnly(in)
+	noticeRevocation := (in.Action == "set_notice" || in.Action == "set_notice_agent" || in.Action == "set_memory") && localDouyinWebRevokesOnly(in)
 	if record.Detached && in.Action != "attach" && in.Action != "detach" && !noticeRevocation {
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
 	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !noticeRevocation && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
 		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
 	}
+	original := record
 	save := func() error {
+		record.normalizeMemoryGrants(original)
 		record.Revision++
 		raw, err := json.Marshal(record)
 		if err != nil {
@@ -444,6 +460,39 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return hostfile.WritePrivate(filepath.Join(dir, "login.json"), raw)
 	}
 	switch in.Action {
+	case "set_memory":
+		if in.AllowMemory == nil || record.Memory.slot(in.MemoryScope) == nil {
+			return fail(400, "请指定抖音记忆来源与是否授权")
+		}
+		if *in.AllowMemory {
+			view := m.view(record)
+			if view.State != "saved" || view.AttemptID != "" || !record.memorySourceAllowed(in.MemoryScope) {
+				return fail(409, "请先完成当前抖音账号的来源读取授权")
+			}
+			current, err := m.home.identity.Read()
+			if err != nil || current.LocalOwner == nil || current.FishID != fish {
+				return fail(409, "本机主人已变更")
+			}
+			if record.Memory.Owner != current.LocalOwner.ID {
+				record.Memory = localDouyinMemoryGrants{Owner: current.LocalOwner.ID}
+			}
+			if record.Memory.token(in.MemoryScope) != "" {
+				return m.view(record), 200, nil
+			}
+			token, err := localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法生成记忆授权编号")
+			}
+			*record.Memory.slot(in.MemoryScope) = token
+		} else {
+			if record.Memory.token(in.MemoryScope) == "" {
+				return m.view(record), 200, nil
+			}
+			*record.Memory.slot(in.MemoryScope) = ""
+		}
+		if save() != nil {
+			return fail(503, "抖音记忆授权未保存")
+		}
 	case "detach", "attach":
 		detached := in.Action == "detach"
 		if detached == record.Detached {
