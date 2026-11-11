@@ -10,9 +10,67 @@ import (
 	"strings"
 	"testing"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/stationbrowser"
 )
+
+func TestLocalDouyinCreatorVideoDetailsAndVisualUseCurrentWork(t *testing.T) {
+	f, manager := newLocalDouyinWebFixture(t)
+	view := enableSyntheticDouyinWebRead(t, f)
+	view = setSyntheticDouyinWebScope(t, f, view, "home_and_videos")
+	original := syntheticDouyinAudioMedia(t, false)
+	const work = "7000000000000000011"
+	downloads, analyses := 0, 0
+	manager.readMedia = func(_ context.Context, _ string, id string, authorize func() error) (stationbrowser.DouyinWebMedia, error) {
+		if id != work {
+			t.Error("creator video changed before media read")
+		}
+		downloads++
+		return stationbrowser.DouyinWebMedia{Data: original, ContentType: "video/mp4"}, authorize()
+	}
+	manager.visual = stationLocalVision{
+		version: func(context.Context) (string, error) { return "synthetic-creator-vision", nil },
+		observe: func(_ context.Context, _, _ string, frames []deepseek.Image, _ int, check func() error) (string, error) {
+			analyses++
+			if len(frames) != 2 || frames[0].MIME != "image/jpeg" || len(frames[0].Data) == 0 {
+				t.Error("creator video did not reach frame analysis")
+			}
+			return "合成作品画面", check()
+		},
+	}
+	code, view := enableSyntheticDouyinWebVisual(t, f, view, true)
+	if code != 200 {
+		t.Fatal(code, view)
+	}
+	if code, out := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": true}, true); code != 200 {
+		t.Fatal(code, out)
+	}
+	visibility := "公开"
+	manager.readWorks = func(_ context.Context, _ string, _ stationbrowser.DouyinCreatorWorksRequest, check func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		return stationbrowser.DouyinCreatorWorksPage{Account: "synthetic-creator", PageKey: "same-page", CoverageKnown: true,
+			Works: []stationbrowser.DouyinCreatorWork{{ID: work, Title: "合成作品", Video: true, Visibility: visibility}}}, check()
+	}
+	const path = "/api/local/apps/observation"
+	in := map[string]any{"app_id": "douyin", "connection_id": douyinapp.WebReadConnectionID, "content_id": douyinapp.WebWorksContentID, "field": "account_works"}
+	code, list := f.request("POST", path, in, true)
+	if code != 200 {
+		t.Fatal(code, list)
+	}
+	in["content_id"], in["field"] = list["chunks"].([]any)[0].(map[string]any)["follow_up_content_id"], "page_text"
+	code, details := f.request("POST", path, in, true)
+	if code != 200 || details["chunks"].([]any)[0].(map[string]any)["follow_up_field"] != "visual" {
+		t.Fatal("creator detail did not expose granted visual follow-up", code, details)
+	}
+	in["field"], in["limit"] = "visual", 2
+	if code, out := f.request("POST", path, in, true); code != 200 || out["complete"] != false || out["visual_proof"] == nil || downloads != 1 || analyses != 1 {
+		t.Fatal("creator video visual did not use the original source", code, out, downloads, analyses)
+	}
+	visibility = "仅自己可见"
+	if code, out := f.request("POST", path, in, true); code != 409 || out["visual_proof"] != nil || downloads != 1 || analyses != 1 {
+		t.Fatal("changed visibility reached another frame batch", code, out, downloads, analyses)
+	}
+}
 
 func TestLocalDouyinWebVisualFollowsAuthorizedExactVideoAndReusesSource(t *testing.T) {
 	f, manager := newLocalDouyinWebFixture(t)

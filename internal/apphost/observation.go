@@ -60,9 +60,10 @@ type ObservationAccess struct {
 // ObservationGrant is provided by an application for every host read. Version
 // identifies the exact authorization that a durable checkpoint belongs to.
 type ObservationGrant struct {
-	Allowed bool   `json:"allowed"`
-	Version string `json:"version"`
-	Fresh   bool   // Read the current result instead of using a checkpoint.
+	Allowed          bool   `json:"allowed"`
+	Version          string `json:"version"`
+	Fresh            bool   // Read the current result instead of using a checkpoint.
+	RefreshCompleted bool   // Resume incomplete pages, but re-read completed observations.
 }
 
 type ObservationRequest struct {
@@ -393,7 +394,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 	if existed && (!checkpoint.matches(ref, in.ContentID, in.Field, grant.Version) || checkpoint.PlaybackLimit != playbackLimit) {
 		return ObservationResult{}, errors.New("应用观察进度与当前授权不一致")
 	}
-	if checkpoint.Complete && in.Field == ObservationImages {
+	if checkpoint.Complete && (in.Field == ObservationImages || grant.RefreshCompleted) {
 		checkpoint, existed = observationCheckpoint{}, false
 	}
 	if checkpoint.Complete {

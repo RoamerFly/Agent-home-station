@@ -79,6 +79,14 @@ func (t *localToolSet) douyinMemoryState(ctx context.Context) (localDouyinWebRec
 		return localDouyinWebRecord{}, nil
 	}
 	profile.Close()
+	// A detected creator account switch also fences older archive rows if
+	// the process stopped before it could update the separate memory database.
+	access := (&localDouyinWebObservation{home: m.home}).access(t.access.fishID, t.access.ownerID, record, localDouyinWebView{})
+	_, ownerFile := creatorOwnerLocation(access)
+	creator, ownerErr := readCreatorOwner(root, ownerFile)
+	if creator.Changed || ownerErr != nil && !errors.Is(ownerErr, os.ErrNotExist) {
+		record.Memory.Works, record.Memory.Comments = "", ""
+	}
 	return record, nil
 }
 

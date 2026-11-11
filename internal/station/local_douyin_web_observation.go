@@ -173,7 +173,9 @@ func (p *localDouyinWebObservation) Grant(ctx context.Context, in apphost.Observ
 		}
 		version += "/" + visionVersion
 	}
-	return apphost.ObservationGrant{Allowed: true, Version: version, Fresh: in.Field == apphost.ObservationPageText && strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix)}, nil
+	creator := strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix)
+	return apphost.ObservationGrant{Allowed: true, Version: version, Fresh: creator && in.Field == apphost.ObservationPageText,
+		RefreshCompleted: creator && in.Field != apphost.ObservationPageText}, nil
 }
 
 type localDouyinWebSnapshot struct {
@@ -242,11 +244,24 @@ func (p *localDouyinWebObservation) Read(ctx context.Context, in apphost.Observa
 			return apphost.ObservationPage{}, apphost.ErrObservationForbidden
 		}
 		page := creatorWorkPage(work, in.Limit)
+		fields := []apphost.ObservationField{}
+		for _, field := range p.mediaFollowUps(ctx, a.record) {
+			if p.webObservationAllowed(a, in.ContentID, field) {
+				fields = append(fields, field)
+			}
+		}
 		if a.record.ImagesEnabled && work.imageKey != "" && p.creatorImagesReady(ctx) {
+			fields = append(fields, apphost.ObservationImages)
+		}
+		if len(fields) > 0 {
 			page.Chunks[0].FollowUpContentID = in.ContentID
-			page.Chunks[0].FollowUpField = apphost.ObservationImages
+			page.Chunks[0].FollowUpField = fields[0]
+			page.Chunks[0].FollowUpFields = fields
 		}
 		return page, nil
+	}
+	if err := p.recheckCreatorVideo(ctx, a, target, authorize); err != nil {
+		return apphost.ObservationPage{}, err
 	}
 	if in.Field == apphost.ObservationPlayback {
 		return p.readPlayback(ctx, a, in, target, authorize)

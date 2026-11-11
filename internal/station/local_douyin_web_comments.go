@@ -108,8 +108,8 @@ func (p *localDouyinWebObservation) readComments(ctx context.Context, a localDou
 	if err := authorize(); err != nil {
 		return apphost.ObservationPage{}, err
 	}
-	if len(result.Comments) > 0 {
-		if err := p.saveCreatorCommentTarget(a, in.ContentID, target.videoID); err != nil {
+	if len(result.Comments) > 0 && creatorVerified {
+		if err := p.saveCreatorCommentTarget(a, in.ContentID, target); err != nil {
 			return apphost.ObservationPage{}, err
 		}
 	}

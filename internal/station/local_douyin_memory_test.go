@@ -205,7 +205,9 @@ func TestStationDouyinMemoryCapturesOnlyAuthorizedSources(t *testing.T) {
 	if items := search(tools, douyinMemoryNotices, "银河")["items"].([]any); len(items) != 1 || items[0].(map[string]any)["work_id"] != "" {
 		t.Fatal("rendered notification text falsely attributed to an item", items)
 	}
-	if workReads != 2 || commentReads != 2 || noticeReads != 1 {
+	// Two explicit list reads and one creator ownership recheck before the
+	// owned comment read. The memory tools themselves make no upstream calls.
+	if workReads != 3 || commentReads != 2 || noticeReads != 1 {
 		t.Fatal("retrieval read platform", workReads, commentReads, noticeReads)
 	}
 	t.Run("model starts without app body and next turn omits response", func(t *testing.T) {

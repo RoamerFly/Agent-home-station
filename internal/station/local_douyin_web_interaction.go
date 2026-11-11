@@ -177,6 +177,9 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 			return douyinReplyPacingReceipt(in.Reference, err)
 		}
 	}
+	if err := r.recheckCreatorVideo(ctx, a, target, func() error { return in.CheckActive(ctx) }); err != nil {
+		return apphost.InteractionReceipt{}, err
+	}
 	c.VideoID = target.videoID
 	if err := in.SaveCheckpoint(ctx, mustLocalDouyinJSON(c)); err != nil {
 		return apphost.InteractionReceipt{}, err

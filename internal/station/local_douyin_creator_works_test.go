@@ -3,6 +3,7 @@ package station
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -143,5 +144,87 @@ func TestLocalDouyinCreatorCommentReplyEvidenceSurvivesResolverRestart(t *testin
 	}
 	if grant, _ := restarted.GrantInteraction(t.Context(), draft); grant.Allowed {
 		t.Fatal("revoked creator evidence still authorized a reply")
+	}
+}
+
+func TestLocalDouyinCreatorAccountSwitchInvalidatesDurableTargets(t *testing.T) {
+	f, manager, _, view := syntheticInteractionFixture(t, true)
+	if code, out := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": true}, true); code != 200 {
+		t.Fatal(code, out)
+	}
+	const video = "7391234567890123456"
+	account, visibility := "synthetic-original-owner", "公开"
+	worksReads := 0
+	readWorks := func(_ context.Context, _ string, _ stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		worksReads++
+		return stationbrowser.DouyinCreatorWorksPage{Account: account, PageKey: "same-video-id", CoverageKnown: true,
+			Works: []stationbrowser.DouyinCreatorWork{{ID: video, Title: "合成作品", Visibility: visibility, Video: true}}}, authorize()
+	}
+	manager.readWorks = readWorks
+	manager.readComments = func(_ context.Context, _ string, request stationbrowser.DouyinCommentsRequest, authorize func() error) (stationbrowser.DouyinCommentPage, error) {
+		if request.VideoID != video {
+			t.Error("wrong source video")
+		}
+		return stationbrowser.DouyinCommentPage{Complete: true, Comments: []stationbrowser.DouyinComment{
+			{ID: "123", Author: "合成", AuthorID: "synthetic", Text: "合成评论"},
+		}}, authorize()
+	}
+	const path = "/api/local/apps/observation"
+	list := map[string]any{"app_id": "douyin", "connection_id": douyinapp.WebReadConnectionID, "content_id": douyinapp.WebWorksContentID, "field": "account_works", "refresh": true}
+	code, page := f.request("POST", path, list, true)
+	if code != 200 {
+		t.Fatal(code, page)
+	}
+	content := page["chunks"].([]any)[0].(map[string]any)["follow_up_content_id"].(string)
+	comments := map[string]any{"app_id": "douyin", "connection_id": douyinapp.WebReadConnectionID, "content_id": content, "field": "comments"}
+	if code, out := f.request("POST", path, comments, true); code != 200 {
+		t.Fatal(code, out)
+	}
+	f.server.Close()
+	if err := f.handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := apphost.New(douyinapp.New(filepath.Join(f.dir, "apps", "douyin")).Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithApps(f.dir, f.root, "synthetic-local-password", "", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = newLocalAppObservationFixtureWithHandler(t, handler, f.dir, f.root)
+	f.login()
+	f.handler.home.douyinWeb.available = func() bool { return true }
+	f.handler.home.douyinWeb.readWorks = readWorks
+	commentReads := 0
+	f.handler.home.douyinWeb.readComments = func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error) {
+		commentReads++
+		return stationbrowser.DouyinCommentPage{}, nil
+	}
+	entry, _ := f.handler.chat.applications.Lookup("douyin")
+	provider := &localDouyinWebInteraction{home: f.handler.home, installation: entry.InstallationID}
+	access, err := provider.access(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := apphost.InteractionDraft{Target: provider.ref(access), ContentID: content, Kind: "reply_comment", CommentID: "123"}
+	if _, err := provider.ResolveInteractionSubject(t.Context(), draft); err != nil {
+		t.Fatal("unchanged creator proof did not survive restart", err)
+	}
+	visibility = "仅自己可见"
+	if code, out := f.request("POST", path, comments, true); code != 409 || commentReads != 0 {
+		t.Fatal("private work reached the public comments reader", code, out, commentReads)
+	}
+	account, visibility = "synthetic-other-owner", "公开"
+	if code, out := f.request("POST", path, comments, true); code != 409 || out["chunks"] != nil || commentReads != 0 {
+		t.Fatal("switched account reached the comments reader after restart", code, out, commentReads)
+	}
+	if _, err := provider.ResolveInteractionSubject(t.Context(), draft); err == nil {
+		t.Fatal("old comment remained an authorized reply target")
+	}
+	account = "synthetic-original-owner"
+	priorReads := worksReads
+	if code, out := f.request("POST", path, list, true); code != 409 || out["chunks"] != nil || worksReads != priorReads {
+		t.Fatal("account change was silently reset", code, out)
 	}
 }

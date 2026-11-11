@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -91,6 +92,9 @@ func (i *localCreatorWorksIndex) get(id, grant string) (localCreatorWorkSnapshot
 }
 
 func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access localDouyinWebAccess, in apphost.ObservationRequest, authorize func() error) (apphost.ObservationPage, error) {
+	if owner, err := loadCreatorOwner(access); owner.Changed || err != nil && !errors.Is(err, os.ErrNotExist) {
+		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+	}
 	var cursor localCreatorWorksCursor
 	if in.Cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(in.Cursor)
@@ -124,8 +128,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	}
 	switch {
 	case errors.Is(err, stationbrowser.ErrCreatorWorksAccountChanged):
-		err := manager.captureMemory(ctx, access.record, douyinMemoryWorks, "", nil)
-		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationWebSnapshotChanged, err)
+		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, access, "")
 	case errors.Is(err, stationbrowser.ErrCreatorWorksChanged):
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
 	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) && !errors.Is(err, context.DeadlineExceeded):
@@ -137,8 +140,10 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
 	}
 	if cursor.Account != "" && cursor.Account != result.Account {
-		err := manager.captureMemory(ctx, access.record, douyinMemoryWorks, "", nil)
-		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationWebSnapshotChanged, err)
+		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, access, "")
+	}
+	if err := p.admitCreatorAccount(ctx, access, result.Account); err != nil {
+		return apphost.ObservationPage{}, err
 	}
 	if cursor.PageKey != "" && cursor.PageKey != result.PageKey {
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
@@ -231,4 +236,47 @@ func creatorWorkPage(snapshot localCreatorWorkSnapshot, limit int) apphost.Obser
 	}
 	return apphost.ObservationPage{Complete: true, Coverage: coverage,
 		Chunks: []apphost.ObservationChunk{{Text: string(text), SourceID: row.ID, SourceURL: stationbrowser.DouyinCreatorManageURL}}}
+}
+
+// Public video and comment endpoints do not attest creator ownership. Before
+// using a creator handle there, verify the exact work on its management page.
+func (p *localDouyinWebObservation) recheckCreatorVideo(ctx context.Context, a localDouyinWebAccess, target localDouyinWebTarget, authorize func() error) error {
+	if target.creatorAccount == "" {
+		return nil
+	}
+	m := p.home.douyinWeb
+	m.mu.Lock()
+	read, service := m.readWorks, m.ctx
+	m.mu.Unlock()
+	if read == nil {
+		return apphost.ErrObservationBrowserUnavailable
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(service, cancel)
+	defer stop()
+	if err := authorize(); err != nil {
+		return err
+	}
+	page, err := read(readCtx, a.profile, target.creatorPage, authorize)
+	if denied := authorize(); denied != nil {
+		return denied
+	}
+	if errors.Is(err, stationbrowser.ErrCreatorWorksAccountChanged) || err == nil && page.Account != "" && page.Account != target.creatorAccount {
+		return p.admitCreatorAccount(ctx, a, "")
+	}
+	if errors.Is(err, stationbrowser.ErrCreatorWorksChanged) || errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) || errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable) {
+		return apphost.ErrObservationWebSnapshotChanged
+	}
+	if err != nil {
+		return localDouyinWebReadError(err)
+	}
+	if page.Account == target.creatorAccount && page.PageKey != "" {
+		for _, work := range page.Works {
+			if work.ID == target.videoID && work.Video && work.Visibility == "公开" && !work.Reviewing {
+				return nil
+			}
+		}
+	}
+	return apphost.ErrObservationWebSnapshotChanged
 }

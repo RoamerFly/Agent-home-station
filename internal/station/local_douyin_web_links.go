@@ -15,17 +15,22 @@ import (
 	"wechat-bot/internal/workspacefs"
 )
 
-type localDouyinWebTarget struct{ url, videoID string }
+type localDouyinWebTarget struct {
+	url, videoID, creatorAccount string
+	creatorPage                  stationbrowser.DouyinCreatorWorksRequest
+}
 type localDouyinWebVideoRef struct {
 	Snapshot string `json:"snapshot"`
 	VideoID  string `json:"video"`
 }
 type localDouyinWebLinkProof struct {
-	Version   int      `json:"schema_version"`
-	Grant     string   `json:"grant"`
-	Snapshot  string   `json:"snapshot"`
-	SourceURL string   `json:"source_url"`
-	Videos    []string `json:"videos"`
+	Version        int                                       `json:"schema_version"`
+	Grant          string                                    `json:"grant"`
+	Snapshot       string                                    `json:"snapshot"`
+	SourceURL      string                                    `json:"source_url"`
+	Videos         []string                                  `json:"videos"`
+	CreatorAccount string                                    `json:"creator_account,omitempty"`
+	CreatorPage    *stationbrowser.DouyinCreatorWorksRequest `json:"creator_page,omitempty"`
 }
 
 func localDouyinWebFollowUpID(snapshot, video string) string {
@@ -48,6 +53,7 @@ func (p *localDouyinWebObservation) webObservationAllowed(a localDouyinWebAccess
 			return false
 		}
 		row, ok := p.creatorWorks.get(id, a.version)
+		ok = ok && creatorOwnerCurrent(a, row.account)
 		if field == apphost.ObservationPageText {
 			return ok
 		}
@@ -74,11 +80,11 @@ func (p *localDouyinWebObservation) webObservationAllowed(a localDouyinWebAccess
 func (p *localDouyinWebObservation) resolveTarget(a localDouyinWebAccess, id string) (localDouyinWebTarget, bool) {
 	if strings.HasPrefix(id, douyinapp.WebCreatorWorkPrefix) {
 		row, ok := p.creatorWorks.get(id, a.version)
-		if !ok {
+		if !ok || !creatorOwnerCurrent(a, row.account) {
 			return p.creatorCommentTarget(a, id)
 		}
 		url, _ := stationbrowser.DouyinVideoURL(row.work.ID)
-		return localDouyinWebTarget{url: url, videoID: row.work.ID}, true
+		return localDouyinWebTarget{url: url, videoID: row.work.ID, creatorAccount: row.account, creatorPage: row.request}, true
 	}
 	if id == douyinapp.WebReadContentID {
 		return localDouyinWebTarget{url: localDouyinWebHomeURL}, true
@@ -121,16 +127,17 @@ func (p *localDouyinWebObservation) resolveTarget(a localDouyinWebAccess, id str
 // A creator detail reference is in-memory. After a successful comment read
 // retain only the exact public video ID, bound to the current grant. This is
 // needed to resume an existing reply after the detail view expires or restarts.
-func (p *localDouyinWebObservation) saveCreatorCommentTarget(a localDouyinWebAccess, content, video string) error {
+func (p *localDouyinWebObservation) saveCreatorCommentTarget(a localDouyinWebAccess, content string, target localDouyinWebTarget) error {
 	token, creator := strings.CutPrefix(content, douyinapp.WebCreatorWorkPrefix)
 	if !creator {
 		return nil
 	}
-	if !validLocalDouyinWebID(token) || !validLocalDouyinCommentID(video) {
+	if !validLocalDouyinWebID(token) || !validLocalDouyinCommentID(target.videoID) || !creatorOwnerCurrent(a, target.creatorAccount) {
 		return apphost.ErrObservationForbidden
 	}
 	dir := p.snapshotDirectory(a)
-	proof := localDouyinWebLinkProof{Version: 1, Grant: a.version, Snapshot: token, SourceURL: stationbrowser.DouyinCreatorManageURL, Videos: []string{video}}
+	proof := localDouyinWebLinkProof{Version: 1, Grant: a.version, Snapshot: token, SourceURL: stationbrowser.DouyinCreatorManageURL,
+		Videos: []string{target.videoID}, CreatorAccount: target.creatorAccount, CreatorPage: &target.creatorPage}
 	raw, _ := json.Marshal(proof)
 	if err := hostfile.WritePrivate(filepath.Join(dir, token+".creator-comment.json"), raw); err != nil {
 		return apphost.ErrObservationWebStorageUnavailable
@@ -157,7 +164,8 @@ func (p *localDouyinWebObservation) creatorCommentTarget(a localDouyinWebAccess,
 	raw, err := io.ReadAll(io.LimitReader(file, 1025))
 	var proof localDouyinWebLinkProof
 	if err != nil || len(raw) > 1024 || strictLocalMemoryDecode(raw, &proof) != nil || proof.Version != 1 ||
-		proof.Grant != a.version || proof.Snapshot != token || proof.SourceURL != stationbrowser.DouyinCreatorManageURL || len(proof.Videos) != 1 {
+		proof.Grant != a.version || proof.Snapshot != token || proof.SourceURL != stationbrowser.DouyinCreatorManageURL || len(proof.Videos) != 1 ||
+		proof.CreatorPage == nil || proof.CreatorPage.Page < 0 || !creatorOwnerCurrent(a, proof.CreatorAccount) {
 		return localDouyinWebTarget{}, false
 	}
 	video := proof.Videos[0]
@@ -165,7 +173,7 @@ func (p *localDouyinWebObservation) creatorCommentTarget(a localDouyinWebAccess,
 	if err != nil {
 		return localDouyinWebTarget{}, false
 	}
-	return localDouyinWebTarget{url: url, videoID: video}, true
+	return localDouyinWebTarget{url: url, videoID: video, creatorAccount: proof.CreatorAccount, creatorPage: *proof.CreatorPage}, true
 }
 
 func saveLocalDouyinWebLinkProof(dir string, snapshot localDouyinWebSnapshot) error {

@@ -106,6 +106,11 @@ func (p *localDouyinWebObservation) readCreatorImages(ctx context.Context, a loc
 	if denied := authorize(); denied != nil {
 		return apphost.ObservationPage{}, denied
 	}
+	if errors.Is(err, stationbrowser.ErrCreatorWorksAccountChanged) || err == nil && page.Account != "" && page.Account != snapshot.account {
+		// A creator-account switch also invalidates prior details and the
+		// persisted public-comment link, not just this image batch.
+		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, a, "")
+	}
 	if errors.Is(err, stationbrowser.ErrCreatorWorksChanged) || errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) || errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable) {
 		return apphost.ObservationPage{}, apphost.ErrObservationImagesSourceChanged
 	}
