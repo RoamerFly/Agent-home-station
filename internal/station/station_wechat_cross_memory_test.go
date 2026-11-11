@@ -745,4 +745,12 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 		req("PUT", path+"/policy", policy, 200)
 		checkWechatDouyinMemoryDirection(t, f, path, origin, ownerID, makeTools, config)
 	})
+	t.Run("archive-source", func(t *testing.T) {
+		policy["reply_threads"] = []string{origin, source, ownerID}
+		req("PUT", path+"/policy", policy, 200)
+		current := req("GET", path+"/cross-memory-grants", nil, 200)
+		req("PUT", path+"/cross-memory-grants", map[string]any{"revision": current["revision"], "owner_revision": current["current_owner_revision"],
+			"request_key": "authorize-archive-queries", "sources": []string{source}, "origins": []string{origin, ownerID}}, 200)
+		checkWechatCrossArchive(t, f, path, origin, source, ownerID, makeTools, config)
+	})
 }

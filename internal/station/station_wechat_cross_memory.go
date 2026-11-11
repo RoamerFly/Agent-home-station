@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
@@ -23,6 +24,10 @@ type stationWechatCrossProof struct {
 	StationInstance, StationEpoch, StationScope         string
 	DouyinKind, DouyinScope, DouyinBinding, DouyinEpoch string
 	DouyinRevision                                      uint64
+	Archived                                            bool `json:"archived,omitempty"`
+	ArchiveFingerprint                                  string
+	ArchiveVisibility                                   string
+	ArchiveGrant                                        time.Time
 }
 type stationWechatCrossRef struct {
 	Proof   stationWechatCrossProof
@@ -58,10 +63,12 @@ type stationWechatCrossInput struct {
 	SourceLimit  *int   `json:"source_limit"`
 	SourceID     string `json:"source_id"`
 	WorkID       string `json:"work_id"`
+	Dataset      string `json:"dataset"`
+	SourceIndex  *int   `json:"source_index"`
 }
 
 func stationWechatCrossTool() mcptools.Tool {
-	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话、工作站与获准抖音来源。search指定query；查微信时填thread_id，查工作站时填source=station且省略thread_id。查抖音时填source=douyin及source_id，可用work_id过滤。抖音只检索本机已留存资料。默认5条摘要。read凭本轮reference按字节或来源分页。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station","douyin"]},"source_id":{"type":"string"},"work_id":{"type":"string"},"thread_id":{"type":"string"},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话、工作站与获准抖音来源。search指定query；查微信时填thread_id，封存档案从archive_sources选择并填dataset=archive，查工作站时填source=station且省略thread_id。查抖音时填source=douyin及source_id，可用work_id过滤。抖音只检索本机已留存资料。默认5条摘要。read凭本轮reference按字节或来源目录分页，封存档案可填source_index读取对应的原始消息。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station","douyin"]},"source_id":{"type":"string"},"work_id":{"type":"string"},"thread_id":{"type":"string"},"dataset":{"type":"string","enum":["archive"]},"source_index":{"type":"integer","minimum":0},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 // Only configuration metadata is considered for discovery. No source text or
@@ -150,7 +157,7 @@ func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old statio
 	if old.Douyin {
 		filename = stationWechatToDouyinGrantsFile
 	}
-	if old.Station && old.Douyin || t.crossFileAuthorization(filename) == "" || ctx.Err() != nil {
+	if old.Station && old.Douyin || old.Archived && (old.Station || old.Douyin || forward) || t.crossFileAuthorization(filename) == "" || ctx.Err() != nil {
 		return deny()
 	}
 	owner, err := t.crossHost.ownerReader()
@@ -173,7 +180,28 @@ func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old statio
 	if err != nil {
 		return deny()
 	}
-	next := stationWechatCrossProof{Thread: old.Thread, Digest: access.Digest, Instance: t.store.SourceInstanceID(), Epoch: epoch, Event: source.EventID, EventRevision: source.Revision, GrantRevision: access.GrantRevision, Station: old.Station, Douyin: old.Douyin}
+	next := stationWechatCrossProof{Thread: old.Thread, Digest: access.Digest, Instance: t.store.SourceInstanceID(), Epoch: epoch, Event: source.EventID, EventRevision: source.Revision, GrantRevision: access.GrantRevision, Station: old.Station, Douyin: old.Douyin, Archived: old.Archived}
+	if old.Archived {
+		worker, err := t.crossHost.worker(t.crossConnection, false)
+		if err != nil || worker == nil || !t.store.LegacyHistoryAllowed(t.trace.Account, old.Thread) {
+			return deny()
+		}
+		_, _, policy, err := worker.crossAuthority(t.trace.Account)
+		if err != nil {
+			return deny()
+		}
+		next.ArchiveGrant = policy.HistoryGrants[old.Thread]
+		archive, err := readStationLegacyMemory(worker.dir, t.trace.Account, old.Thread, next.ArchiveGrant)
+		if err != nil {
+			return deny()
+		}
+		next.ArchiveFingerprint = localCheckpointKey(archive)
+		records, _, err := t.crossArchiveRecords(ctx, next)
+		if err != nil {
+			return deny()
+		}
+		next.ArchiveVisibility = localCheckpointKey(records)
+	}
 	if old.Station {
 		store, scope, err := t.stationMemoryStore()
 		if err != nil {
@@ -257,10 +285,10 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 	if in.SourceID != "" || in.WorkID != "" {
 		return "", apphost.ErrObservationInvalid
 	}
-	noPages := in.Reference == "" && in.Offset == nil && in.Length == nil && in.SourceOffset == nil && in.SourceLimit == nil
+	noPages := in.Reference == "" && in.Offset == nil && in.Length == nil && in.SourceOffset == nil && in.SourceLimit == nil && in.SourceIndex == nil
 	switch in.Action {
 	case "sources":
-		if !noPages || in.Source != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
+		if !noPages || in.Source != "" || in.Dataset != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
 			return "", errors.New("来源目录不接受查询或分页参数")
 		}
 		w, err := t.crossHost.worker(t.crossConnection, false)
@@ -310,9 +338,16 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 			}
 			douyinSources = listing.Sources
 		}
-		return localMemoryJSON(map[string]any{"account_id": t.trace.Account, "sources": threads, "station_available": stationAvailable, "douyin_sources": douyinSources, "delivery": "owner_private_only"})
+		archived, err := t.crossArchiveSources(w, threads)
+		if err != nil {
+			return "", err
+		}
+		if err := t.checkCrossResults(ctx); err != nil {
+			return "", err
+		}
+		return localMemoryJSON(map[string]any{"account_id": t.trace.Account, "sources": threads, "archive_sources": archived, "station_available": stationAvailable, "douyin_sources": douyinSources, "delivery": "owner_private_only"})
 	case "read":
-		if in.Reference == "" || in.Source != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
+		if in.Reference == "" || in.Source != "" || in.Dataset != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
 			return "", errors.New("请凭本轮引用读取")
 		}
 		ref, ok := t.cross.Refs[in.Reference]
@@ -321,6 +356,12 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 		}
 		if _, err := t.crossProof(ctx, ref.Proof); err != nil {
 			return "", err
+		}
+		if ref.Proof.Archived {
+			return t.readCrossArchive(ctx, ref, in)
+		}
+		if in.SourceIndex != nil {
+			return "", apphost.ErrObservationInvalid
 		}
 		args, _ := json.Marshal(localMemoryReadInput{ID: ref.ID, Expected: &ref.Version, Offset: in.Offset, Length: in.Length, SourceOffset: in.SourceOffset, SourceLimit: in.SourceLimit})
 		reader, err := t.crossMemoryReader(ref.Proof)
@@ -336,7 +377,7 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 		}
 		return t.finishCrossMemory(ctx, ref.Proof, false, 1, result)
 	case "search":
-		if !noPages || in.Source != "" && in.Source != "wechat" && in.Source != "station" {
+		if !noPages || in.Source != "" && in.Source != "wechat" && in.Source != "station" || in.Dataset != "" && (in.Dataset != "archive" || in.Source == "station") {
 			return "", errors.New("搜索不接受读取参数")
 		}
 		limit := 5
@@ -346,11 +387,11 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 		if limit < 1 {
 			return "", errors.New("每页数量须为正数")
 		}
-		page := stationWechatCrossPage{Proof: stationWechatCrossProof{Thread: in.Thread, Station: in.Source == "station"}, Query: in.Query, Since: in.Since, Before: in.Before}
+		page := stationWechatCrossPage{Proof: stationWechatCrossProof{Thread: in.Thread, Station: in.Source == "station", Archived: in.Dataset == "archive"}, Query: in.Query, Since: in.Since, Before: in.Before}
 		if in.Cursor != "" {
 			var ok bool
 			page, ok = t.cross.Pages[in.Cursor]
-			if !ok || in.Source != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" {
+			if !ok || in.Source != "" || in.Dataset != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" {
 				return "", companion.ErrMemoryConflict
 			}
 		}
@@ -360,6 +401,9 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 		proof, err := t.crossProof(ctx, page.Proof)
 		if err != nil {
 			return "", err
+		}
+		if proof.Archived {
+			return t.searchCrossArchive(ctx, page, proof, limit)
 		}
 		reader, err := t.crossMemoryReader(proof)
 		if err != nil {
@@ -444,6 +488,9 @@ func (t *stationAttachmentTools) auditCrossMemory(proof stationWechatCrossProof,
 	}
 	direction, thread := "wechat_to_wechat", proof.Thread
 	keyKind := "wechat-cross"
+	if proof.Archived {
+		direction, keyKind = "wechat_to_wechat_archive", "wechat-cross-archive"
+	}
 	if proof.Station {
 		direction, thread = "wechat_to_station", proof.StationScope
 		keyKind = direction

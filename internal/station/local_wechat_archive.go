@@ -80,6 +80,11 @@ func (s *stationWechat) localWechatProof(ctx context.Context, store *companion.S
 			return localWechatMemoryProof{}, err
 		}
 		proof.Archive = localCheckpointKey(archive)
+		records, err := s.wechatArchiveRecords(ctx, store, proof)
+		if err != nil {
+			return localWechatMemoryProof{}, err
+		}
+		proof.ArchiveVisibility = localCheckpointKey(records)
 	}
 	if s.ownerReader == nil {
 		return localWechatMemoryProof{}, apphost.ErrObservationForbidden

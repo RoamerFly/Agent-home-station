@@ -84,7 +84,7 @@ func (t *stationAttachmentTools) isDouyinMemoryCall(in stationWechatCrossInput) 
 }
 
 func (t *stationAttachmentTools) callWechatDouyinMemory(ctx context.Context, in stationWechatCrossInput) (string, error) {
-	if in.Thread != "" || in.Source != "" && in.Source != "douyin" || in.SourceOffset != nil || in.SourceLimit != nil {
+	if in.Thread != "" || in.Dataset != "" || in.SourceIndex != nil || in.Source != "" && in.Source != "douyin" || in.SourceOffset != nil || in.SourceLimit != nil {
 		return "", apphost.ErrObservationInvalid
 	}
 	proof, err := t.crossProof(ctx, stationWechatCrossProof{Douyin: true})

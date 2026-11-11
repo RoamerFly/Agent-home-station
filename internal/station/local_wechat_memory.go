@@ -21,11 +21,12 @@ type localWechatMemorySource struct {
 	Dataset    string `json:"dataset,omitempty"`
 }
 type localWechatMemoryProof struct {
-	Source          localWechatMemorySource
-	Revision        int
-	Grant           time.Time
-	Instance, Epoch string
-	Archive         string
+	Source            localWechatMemorySource
+	Revision          int
+	Grant             time.Time
+	Instance, Epoch   string
+	Archive           string
+	ArchiveVisibility string
 }
 type localWechatMemoryReference struct {
 	Proof   localWechatMemoryProof

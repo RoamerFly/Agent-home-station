@@ -181,6 +181,9 @@ func exerciseStationWechatArchive(t *testing.T, f *localHomeFixture, worker *sta
 	if err := live.Observe(input, config, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if tools.checkAppObservations(t.Context()) == nil {
+		t.Fatal("newly observed correction left archived evidence valid for a final response")
+	}
 	get(palace+"/"+record+"?"+detail.Encode(), 409)
 	detail.Del("scope_version")
 	page = get(palace+"?"+detail.Encode(), 200)
