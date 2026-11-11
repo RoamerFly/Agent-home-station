@@ -240,6 +240,7 @@ func exerciseStationWechatMemory(t *testing.T, f *localHomeFixture, account stri
 	if _, err := call(fresh, search); err != nil {
 		t.Fatal(err)
 	}
+	exerciseStationWechatArchive(t, f, w, memory, account, threadA, threadB, newTools)
 	req("PUT", base+"/memory-grants", map[string]any{"revision": 1, "request_key": "revoke-memory", "station_reads": []string{}}, true, 200)
 	if fresh.checkAppObservations(t.Context()) == nil {
 		t.Fatal("revoked scope accepted for final response")

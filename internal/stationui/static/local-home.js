@@ -2062,7 +2062,47 @@
     return row;
   }
   function newMemoryView() {
-    return { kind: "", mode: "graph", cursor: "", next: "", selected: "", items: [], error: "", loading: false, generation: 0, detailGeneration: 0, recentGeneration: 0 };
+    return { kind: "", mode: "graph", cursor: "", next: "", selected: "", items: [], error: "", loading: false, generation: 0, detailGeneration: 0, recentGeneration: 0,
+      source: null, sources: [], sourceVersion: "", sourcesGeneration: 0 };
+  }
+  function memorySourceName(source) {
+    return source ? "微信 · " + source.account_id + " · " + source.thread_id + (source.dataset === "archive" ? " · 封存档案" : " · 实时记忆") : "本机会话";
+  }
+  function memorySourceQuery(current) {
+    return new URLSearchParams(current.source ? { app_id: "wechat", ...current.source } : {});
+  }
+  function refreshMemoryScope() {
+    memory.cursor = ""; memory.sourceVersion = ""; memory.selected = "";
+    void loadMemoryPage();
+  }
+  async function loadMemorySources() {
+    const current = memory, generation = ++current.sourcesGeneration;
+    const button = $("#memory-source-load");
+    button.disabled = true;
+    try {
+      const value = await request("/api/local/memory/palace/sources");
+      if (current !== memory || generation !== current.sourcesGeneration) return;
+      current.sources = value.sources;
+      const select = $("#memory-source");
+      select.replaceChildren(new Option("本机会话", ""), ...value.sources.map((source, index) => new Option(memorySourceName(source), String(index))));
+      const index = current.sources.findIndex((source) => JSON.stringify(source) === JSON.stringify(current.source));
+      if (current.source && index < 0) {
+        current.source = null; current.sourceVersion = ""; current.cursor = ""; current.selected = "";
+        void loadMemoryPage();
+      }
+      select.value = index < 0 ? "" : String(index);
+      $("#memory-source-label").hidden = false;
+      button.textContent = "刷新微信来源";
+      if (!value.sources.length) {
+        current.error = "当前没有获准微信来源，请在微信详细配置中授权工作站查询范围。";
+        renderMemoryPage();
+      }
+    } catch (error) {
+      if (current === memory && generation === current.sourcesGeneration) {
+        if (error.status === 401) { showLogin(); return; }
+        current.error = error.message; renderMemoryPage();
+      }
+    } finally { if (current === memory && generation === current.sourcesGeneration) button.disabled = false; }
   }
   function memoryKind(item) {
     return item.commitment ? "约定" : ({ fact: "人物与事实", episode: "经历", preference: "兴趣", lesson: "经验" }[item.kind] || "记忆");
@@ -2080,6 +2120,8 @@
       const { items } = await request("/api/local/memory/palace");
       if (current !== memory || generation !== current.recentGeneration) return;
       container.replaceChildren(...items.slice(0, 2).map((item) => memoryButton(item.title, "recent-memory-link", () => {
+        current.source = null; current.sourceVersion = "";
+        $("#memory-source").value = "";
         current.kind = ""; current.cursor = ""; current.selected = item.id;
         setActiveView("memory");
       })));
@@ -2108,7 +2150,8 @@
     graph.hidden = memory.mode !== "graph" || !memory.items.length;
     list.hidden = memory.mode !== "list" || !memory.items.length;
     $("#memory-canvas").setAttribute("aria-busy", String(memory.loading));
-    $("#memory-feedback").textContent = memory.loading ? "正在读取本机会话记忆…" : memory.error || (memory.items.length ? "" : "这个范围里还没有可展示的记忆。");
+    $("#memory-scope-label").textContent = memorySourceName(memory.source);
+    $("#memory-feedback").textContent = memory.loading ? "正在读取选中的记忆来源…" : memory.error || (memory.items.length ? "" : "这个范围里还没有可展示的记忆。");
     $("#memory-next").hidden = !memory.next || memory.loading;
     $("#memory-first").hidden = !memory.cursor || memory.loading;
     for (const button of $("#memory-filters").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.kind === memory.kind));
@@ -2123,7 +2166,7 @@
       for (const [name, value] of Object.entries({ x1: 50, y1: 52, x2: x, y2: y })) line.setAttribute(name, value);
       svg.append(line);
     }
-    graph.replaceChildren(svg, appElement("strong", "本机会话", "memory-anchor"), ...memory.items.map((item, index) => memoryChoice(item, true, index)));
+    graph.replaceChildren(svg, appElement("strong", memory.source ? (memory.source.dataset === "archive" ? "微信封存档案" : "微信会话") : "本机会话", "memory-anchor"), ...memory.items.map((item, index) => memoryChoice(item, true, index)));
     list.replaceChildren(...memory.items.map((item, index) => memoryChoice(item, false, index)));
     syncMemorySelection();
   }
@@ -2134,12 +2177,15 @@
     renderMemoryPage();
     $("#memory-detail").replaceChildren(appElement("h4", "记忆详情"), appElement("p", "选择一个节点查看原话和来源。"));
     try {
-      const query = new URLSearchParams({ kind: current.kind, cursor: current.cursor });
-      const { items, next_cursor } = await request("/api/local/memory/palace?" + query);
+      const query = memorySourceQuery(current);
+      query.set("kind", current.kind); query.set("cursor", current.cursor);
+      if (current.sourceVersion && current.cursor) query.set("scope_version", current.sourceVersion);
+      const { items, next_cursor, scope_version } = await request("/api/local/memory/palace?" + query);
       if (current !== memory || generation !== current.generation) return;
       current.items = items; current.next = next_cursor || "";
-      if (!items.some((item) => item.id === current.selected)) current.selected = items[0]?.id || "";
-      if (current.selected) void readMemoryDetail();
+      current.sourceVersion = scope_version || "";
+      if (!items.some((item) => item.id === current.selected)) current.selected = current.source ? "" : items[0]?.id || "";
+      if (current.selected && !current.source) void readMemoryDetail();
     } catch (error) {
       if (current !== memory || generation !== current.generation) return;
       if (error.status === 401) { showLogin(); return; }
@@ -2153,25 +2199,86 @@
     const panel = $("#memory-detail");
     panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", "正在核对来源…"));
     try {
-      const result = await request("/api/local/memory/palace/" + encodeURIComponent(current.selected));
+      const query = memorySourceQuery(current);
+      if (current.sourceVersion) query.set("scope_version", current.sourceVersion);
+      const result = await request("/api/local/memory/palace/" + encodeURIComponent(current.selected) + (current.source ? "?" + query : ""));
       if (current !== memory || generation !== current.detailGeneration) return;
       const item = result.memory;
       panel.replaceChildren(appElement("h4", item.title), appElement("span", memoryKind(item), "station-label"));
+      if (result.record_origin === "legacy_import_snapshot") {
+        panel.append(appElement("p", result.original ? "封存原始消息" : "封存提炼记忆 · 依据当时的来源记录", "app-scope-note"));
+      }
       if (item.status === "conflicted") panel.append(appElement("p", "这条记忆有冲突，待核对。", "memory-conflict"));
-      if (result.detail && result.detail !== item.title) panel.append(appElement("p", result.detail));
+      if (result.record_origin !== "legacy_import_snapshot" && result.detail && result.detail !== item.title) panel.append(appElement("p", result.detail));
       const section = (label, rows, empty) => {
         const block = appElement("section", "", "memory-detail-section");
         block.append(appElement("h5", label), ...(rows.length ? rows : [appElement("p", empty)]));
         panel.append(block);
       };
-      section("原话", result.sources.map((source) => appElement("blockquote", source.quote)), "暂无可读取的引用");
-      section("来源", result.sources.map((source) => appElement("p", ["本机会话", messageTime(source.at)].filter(Boolean).join(" · "))), "本机会话");
+      if (result.record_origin === "legacy_import_snapshot") {
+        const archive = appElement("div", "", "memory-detail-section");
+        archive.append(appElement("h5", "档案原文"), appElement("p", result.detail));
+        panel.append(archive);
+        const readPart = async (sourceIndex, offset, target) => {
+          const parameters = memorySourceQuery(current);
+          parameters.set("scope_version", current.sourceVersion);
+          parameters.set("offset", String(offset));
+          if (sourceIndex !== null) parameters.set("source_index", String(sourceIndex));
+          try {
+            const part = await request("/api/local/memory/palace/" + encodeURIComponent(current.selected) + "?" + parameters);
+            if (current !== memory || generation !== current.detailGeneration || !target.isConnected) return;
+            target.append(appElement(sourceIndex === null ? "p" : "blockquote", part.detail));
+            if (part.has_more) target.append(memoryButton("继续读取原文", "button compact quiet", (event) => {
+              event.currentTarget.remove(); void readPart(sourceIndex, part.next_offset, target);
+            }));
+          } catch (error) {
+            if (current === memory && generation === current.detailGeneration) {
+              panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message),
+                memoryButton("刷新来源记忆", "button compact secondary", refreshMemoryScope));
+            }
+          }
+        };
+        if (result.has_more) archive.append(memoryButton("继续读取原文", "button compact quiet", (event) => {
+          event.currentTarget.remove(); void readPart(null, result.next_offset, archive);
+        }));
+        const sourceDirectory = appElement("div", "", "memory-detail-section");
+        panel.append(sourceDirectory);
+        const appendSources = (value) => {
+          for (const source of value.sources) {
+            const block = appElement("section", "", "memory-detail-section");
+            block.append(appElement("p", [source.message_id, messageTime(source.at)].filter(Boolean).join(" · ")),
+              memoryButton("读取来源原话", "button compact secondary", (event) => {
+                event.currentTarget.remove(); void readPart(source.source_index, 0, block);
+              }));
+            sourceDirectory.append(block);
+          }
+          if (value.source_has_more) sourceDirectory.append(memoryButton("继续读取来源目录", "button compact quiet", async (event) => {
+            event.currentTarget.remove();
+            const parameters = memorySourceQuery(current);
+            parameters.set("scope_version", current.sourceVersion);
+            parameters.set("source_offset", String(value.next_source_offset));
+            parameters.set("length", "4");
+            try {
+              const next = await request("/api/local/memory/palace/" + encodeURIComponent(current.selected) + "?" + parameters);
+              if (current === memory && generation === current.detailGeneration && sourceDirectory.isConnected) appendSources(next);
+            } catch (error) {
+              if (current === memory && generation === current.detailGeneration) panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message),
+                memoryButton("刷新来源记忆", "button compact secondary", refreshMemoryScope));
+            }
+          }));
+        };
+        appendSources(result);
+      } else {
+        section("原话", result.sources.map((source) => appElement("blockquote", source.quote)), "暂无可读取的引用");
+        section("来源", result.sources.map((source) => appElement("p", [memorySourceName(current.source), messageTime(source.at)].filter(Boolean).join(" · "))), memorySourceName(current.source));
+      }
       section("更正记录", result.revisions.map((revision) => appElement("p", "版本 " + revision.version + " · " + revision.title)), "当前版本 " + result.version + "，暂无可读的旧版本");
-      panel.append(memoryButton("返回原会话", "button compact secondary", () => { setActiveView("chat"); $("#chat-tab").focus(); }));
+      if (!current.source) panel.append(memoryButton("返回原会话", "button compact secondary", () => { setActiveView("chat"); $("#chat-tab").focus(); }));
     } catch (error) {
       if (current !== memory || generation !== current.detailGeneration) return;
       if (error.status === 401) { showLogin(); return; }
-      panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message), memoryButton("重新读取", "button compact secondary", () => void readMemoryDetail()));
+      panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message),
+        memoryButton(current.source ? "刷新来源记忆" : "重新读取", "button compact secondary", current.source ? refreshMemoryScope : () => void readMemoryDetail()));
     }
   }
 
@@ -5544,6 +5651,10 @@
     clearOBSPreview();
     apps = newAppView();
     memory = newMemoryView(); renderMemoryPage();
+    $("#memory-source").replaceChildren(new Option("本机会话", ""));
+    $("#memory-source-label").hidden = true;
+    $("#memory-source-load").textContent = "选择微信来源";
+    $("#memory-source-load").disabled = false;
     $("#memory-detail").replaceChildren(); $("#recent-memory-items").replaceChildren();
     $("#apps-search").value = ""; $("#apps-filter").value = "";
     projectTools = newProjectToolsView();
@@ -5812,6 +5923,12 @@
   settingsAccessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   logoutButton.addEventListener("click", logout); settingsLogoutButton.addEventListener("click", logout); $("#local-logout-button").addEventListener("click", logout);
   $("#open-memory-button").addEventListener("click", () => { setActiveView("memory"); $("#memory-tab").focus(); });
+  $("#memory-source-load").addEventListener("click", () => void loadMemorySources());
+  $("#memory-source").addEventListener("change", (event) => {
+    memory.source = event.target.value === "" ? null : memory.sources[Number(event.target.value)];
+    memory.sourceVersion = ""; memory.cursor = ""; memory.selected = "";
+    void loadMemoryPage();
+  });
   $("#memory-filters").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-kind]");
     if (!button || memory.kind === button.dataset.kind) return;

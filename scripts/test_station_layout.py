@@ -102,6 +102,82 @@ def verify_glass_views(page, output):
     expect(page.get_by_role("button", name="管理抖音", exact=True)).to_be_focused()
 
 
+def verify_memory_source_selection(page, output):
+    source = {"connection_id": "wechat-synthetic", "account_id": "synthetic-owner",
+              "thread_id": "synthetic-memory@chatroom", "dataset": "archive"}
+    requested = []
+    pending = []
+    pattern = re.compile(r"/api/local/memory/palace(?:[/?]|$)")
+
+    def palace(route):
+        url = urlparse(route.request.url)
+        query = parse_qs(url.query)
+        if url.path.endswith("/sources"):
+            requested.append("sources")
+            route.fulfill(json={"app_id": "wechat", "sources": [source]})
+            return
+        if query.get("app_id") == ["wechat"]:
+            for field, value in source.items():
+                assert query[field] == [value]
+            if url.path.endswith("/archive-memory"):
+                assert query["scope_version"] == ["synthetic-version"]
+                if "source_index" in query:
+                    requested.append("original")
+                    if "offset" in query and query["offset"] != ["0"]:
+                        pending.append(route)
+                        return
+                    route.fulfill(json={"detail": "合成封存原话 <img src=invalid>", "next_offset": 40, "has_more": True})
+                    return
+                requested.append("detail")
+                route.fulfill(json={"memory": {"id": "archive-memory", "title": "合成微信档案", "kind": "fact", "status": "archived"},
+                                    "detail": "合成封存提炼记忆", "version": 1, "record_origin": "legacy_import_snapshot", "has_more": False,
+                                    "sources": [{"source_index": 0, "message_id": "synthetic-original", "at": "2026-01-01T00:00:00Z"}], "revisions": []})
+                return
+            requested.append("list")
+            route.fulfill(json={"items": [{"id": "archive-memory", "title": "合成微信档案", "kind": "fact", "status": "archived"}],
+                                "scope_version": "synthetic-version", "next_cursor": ""})
+        else:
+            route.fulfill(json={"items": [], "next_cursor": ""})
+
+    page.route(pattern, palace)
+    home_tab(page, "memory")
+    page.locator("#memory-modes").get_by_role("button", name="关系图", exact=True).click()
+    expect(page.locator("#memory-source-label")).not_to_be_visible()
+    assert not requested
+    page.locator("#memory-source-load").click()
+    select = page.get_by_label("记忆来源", exact=True)
+    expect(select).to_be_visible()
+    assert requested == ["sources"]
+    select.select_option("0")
+    node = page.locator("#memory-graph").get_by_role("button", name="合成微信档案 人物与事实", exact=True)
+    expect(node).to_be_visible()
+    expect(page.locator("#memory-detail")).not_to_contain_text("合成封存提炼记忆")
+    assert requested == ["sources", "list"]
+    node.click()
+    panel = page.locator("#memory-detail")
+    expect(panel).to_contain_text("合成封存提炼记忆")
+    expect(panel).not_to_contain_text("合成封存原话")
+    assert requested == ["sources", "list", "detail"]
+    panel.get_by_role("button", name="读取来源原话", exact=True).click()
+    expect(panel).to_contain_text("合成封存原话 <img src=invalid>")
+    expect(panel.locator("img")).to_have_count(0)
+    page.set_viewport_size({"width": 375, "height": 740})
+    fixed_shell(page)
+    assert page.locator("#memory-view").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    panel.scroll_into_view_if_needed()
+    page.screenshot(path=str(output / "memory-wechat-archive-narrow.png"))
+    panel.get_by_role("button", name="继续读取原文", exact=True).click()
+    expect(panel.get_by_role("button", name="继续读取原文", exact=True)).to_have_count(0)
+    assert len(pending) == 1
+    select.select_option("")
+    expect(panel).not_to_contain_text("合成封存原话")
+    pending.pop().fulfill(json={"detail": "迟到的微信原话", "has_more": False})
+    expect(panel).not_to_contain_text("迟到的微信原话")
+    expect(page.locator("#memory-scope-label")).to_have_text("本机会话")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.unroute(pattern)
+
+
 def verify_douyin_read_controls(page, panel, nav):
     observed = []
     pattern = re.compile(r"/api/local/apps/observation(?:\?|$)")
@@ -778,6 +854,7 @@ def verify(binary, output):
                 page.locator('#chat-view').wait_for(state='visible')
                 initial=fixed_shell(page)
                 verify_glass_views(page,output)
+                verify_memory_source_selection(page,output)
                 verify_application_configuration(page,output)
                 verify_summary_configuration_boundary(page,output)
                 main=context.request.get(origin+'/api/local/model').json()['persona']

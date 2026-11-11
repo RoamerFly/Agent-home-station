@@ -127,7 +127,15 @@ func (t *stationAttachmentTools) readLegacyMemory(ctx context.Context, raw json.
 }
 
 func (t *stationAttachmentTools) legacyEventAllowed(ctx context.Context, event companion.LegacyMemoryEvent) (bool, error) {
-	if !t.historyAllowed(ctx) || event.InstanceID == "" || event.EventID == "" || event.MessageID == "" || event.Sender == "" || event.OccurredAt == "" || event.Revision < 1 || !utf8.ValidString(event.Text) {
+	if !t.historyAllowed(ctx) {
+		return false, nil
+	}
+	allowed, err := legacyEventRecallAllowed(ctx, t.store, t.trace.Account, t.trace.Thread, event)
+	return allowed && t.historyAllowed(ctx), err
+}
+
+func legacyEventRecallAllowed(ctx context.Context, store *companion.Store, account, thread string, event companion.LegacyMemoryEvent) (bool, error) {
+	if event.InstanceID == "" || event.EventID == "" || event.MessageID == "" || event.Sender == "" || event.OccurredAt == "" || event.Revision < 1 || !utf8.ValidString(event.Text) {
 		return false, nil
 	}
 	if _, err := time.Parse(time.RFC3339Nano, event.OccurredAt); err != nil {
@@ -137,10 +145,9 @@ func (t *stationAttachmentTools) legacyEventAllowed(ctx context.Context, event c
 		return false, nil
 	}
 	text := event.Text
-	in := companion.Input{Channel: "wechat", Account: t.trace.Account, Thread: t.trace.Thread, Sender: event.Sender, TraceID: event.MessageID, MessageTime: event.OccurredAt, OriginalText: &text,
-		Source: &companion.SourceRef{InstanceID: event.InstanceID, EventID: event.EventID, MessageID: event.MessageID, ServerID: event.ServerID, Account: t.trace.Account, Thread: t.trace.Thread, Sender: event.Sender, OccurredAt: event.OccurredAt, Revision: event.Revision, BodyHash: event.Hash, Integrity: "verified_import"}}
-	allowed, err := t.store.NativeRecallAllowed(ctx, in)
-	return allowed && t.historyAllowed(ctx), err
+	in := companion.Input{Channel: "wechat", Account: account, Thread: thread, Sender: event.Sender, TraceID: event.MessageID, MessageTime: event.OccurredAt, OriginalText: &text,
+		Source: &companion.SourceRef{InstanceID: event.InstanceID, EventID: event.EventID, MessageID: event.MessageID, ServerID: event.ServerID, Account: account, Thread: thread, Sender: event.Sender, OccurredAt: event.OccurredAt, Revision: event.Revision, BodyHash: event.Hash, Integrity: "verified_import"}}
+	return store.NativeRecallAllowed(ctx, in)
 }
 
 func legacyEventHashMatches(text, hash string) bool {

@@ -118,7 +118,11 @@
             <section id="memory-view" class="memory-view" role="tabpanel" aria-labelledby="memory-tab" hidden>
               <header class="chat-heading-row"><h3>记忆宫殿</h3></header>
               <div class="memory-toolbar">
-                <span class="station-label">本机会话</span>
+                <span id="memory-scope-label" class="station-label">本机会话</span>
+                <button id="memory-source-load" type="button" class="button compact quiet">选择微信来源</button>
+                <label id="memory-source-label" class="memory-source" hidden>记忆来源
+                  <select id="memory-source" aria-label="记忆来源"><option value="">本机会话</option></select>
+                </label>
                 <div id="memory-filters" class="memory-filters" role="group" aria-label="记忆类别">
                   <button type="button" data-kind="" aria-pressed="true">全部</button>
                   <button type="button" data-kind="fact" aria-pressed="false">人物与事实</button>
