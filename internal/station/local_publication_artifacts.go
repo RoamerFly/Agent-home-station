@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
@@ -17,6 +18,33 @@ type localPublicationOrigin struct {
 	Request      string                        `json:"request_id"`
 	Source       *companion.SourceRef          `json:"source"`
 	Observations []localPublicationObservation `json:"observations,omitempty"`
+	Notices      []localPublicationNotice      `json:"notices,omitempty"`
+}
+
+type localPublicationNotice struct {
+	AppID        string `json:"app_id"`
+	GrantVersion string `json:"grant_version"`
+}
+
+func localNoticeGrantVersion(fish, owner string, record localDouyinWebRecord) string {
+	return localCheckpointKey("douyin-notice-grant-v1", fish, owner, record)
+}
+
+func (t *localToolSet) publicationOrigin(source *companion.SourceRef) localPublicationOrigin {
+	origin := localPublicationOrigin{Request: t.traceID, Source: source}
+	for _, read := range t.appReads {
+		ref := localPublicationObservation{ConnectionRef: read.ConnectionRef, ContentID: read.ContentID, Field: read.Field, GrantVersion: read.GrantVersion}
+		if !slices.Contains(origin.Observations, ref) {
+			origin.Observations = append(origin.Observations, ref)
+		}
+	}
+	for _, proof := range t.noticeReads {
+		ref := localPublicationNotice{AppID: "douyin", GrantVersion: localNoticeGrantVersion(t.access.fishID, t.access.ownerID, proof.record)}
+		if !slices.Contains(origin.Notices, ref) {
+			origin.Notices = append(origin.Notices, ref)
+		}
+	}
+	return origin
 }
 
 type localPublicationObservation struct {
@@ -48,6 +76,15 @@ func (h *localChatService) validatePublication(ctx context.Context, job pluginho
 			ConnectionRef: observation.ConnectionRef, ContentID: observation.ContentID, Field: observation.Field, GrantVersion: observation.GrantVersion,
 		}) != nil {
 			return errors.New("原作品引用的应用资料已撤权或变更")
+		}
+	}
+	for _, notice := range origin.Notices {
+		if notice.AppID != "douyin" || h.home.douyinWeb == nil {
+			return errors.New("原作品引用的互动通知来源不可用")
+		}
+		record, _, err := h.home.douyinWeb.noticeState(grant.FishID)
+		if err != nil || !record.NoticeAgent || record.NoticeAccount == "" || notice.GrantVersion != localNoticeGrantVersion(grant.FishID, grant.OwnerID, record) {
+			return errors.New("原作品引用的互动通知已撤权或变更")
 		}
 	}
 	refs := append([]apphost.PublicationArtifact{}, draft.Artifacts...)

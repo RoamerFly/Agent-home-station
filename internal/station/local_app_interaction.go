@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -158,13 +157,7 @@ func (t *localToolSet) callInteraction(ctx context.Context, raw json.RawMessage)
 		if !ok || source == nil {
 			return "", apphost.ErrInteractionDenied
 		}
-		origin := localPublicationOrigin{Request: t.traceID, Source: source}
-		for _, read := range t.appReads {
-			ref := localPublicationObservation{ConnectionRef: read.ConnectionRef, ContentID: read.ContentID, Field: read.Field, GrantVersion: read.GrantVersion}
-			if !slices.Contains(origin.Observations, ref) {
-				origin.Observations = append(origin.Observations, ref)
-			}
-		}
+		origin := t.publicationOrigin(source)
 		draft.Origin, _ = json.Marshal(origin)
 		actor.Authorization = localCheckpointKey(grant)
 		actor.SourceVersions = map[string]int{source.EventID: source.Revision}

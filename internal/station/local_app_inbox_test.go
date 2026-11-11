@@ -16,9 +16,9 @@ import (
 	"wechat-bot/internal/stationbrowser"
 )
 
-func syntheticNoticeFixture(t *testing.T, enabled bool) (*localHomeFixture, *localDouyinWebLogin, map[string]any) {
+func syntheticNoticeFixture(t *testing.T, enabled bool, extra ...apphost.Registration) (*localHomeFixture, *localDouyinWebLogin, map[string]any) {
 	t.Helper()
-	f, m := newLocalDouyinWebFixture(t)
+	f, m := newLocalDouyinWebFixture(t, extra...)
 	m.openCreatorWorks = m.openCreator
 	initializeDouyinWeb(t, f)
 	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)

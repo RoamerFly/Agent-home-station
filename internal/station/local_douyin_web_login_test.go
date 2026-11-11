@@ -29,11 +29,11 @@ func (w *syntheticDouyinLoginWindow) Close(context.Context) error {
 	return w.closeErr
 }
 
-func newLocalDouyinWebFixture(t *testing.T) (*localHomeFixture, *localDouyinWebLogin) {
+func newLocalDouyinWebFixture(t *testing.T, extra ...apphost.Registration) (*localHomeFixture, *localDouyinWebLogin) {
 	t.Helper()
 	base := t.TempDir()
 	data, home := filepath.Join(base, "host"), filepath.Join(base, "workspace")
-	registry, err := apphost.New(douyinapp.New(filepath.Join(data, "apps", "douyin")).Registration())
+	registry, err := apphost.New(append([]apphost.Registration{douyinapp.New(filepath.Join(data, "apps", "douyin")).Registration()}, extra...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

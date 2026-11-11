@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 
@@ -99,13 +98,7 @@ func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage)
 		if !ok || source == nil {
 			return "", errors.New("当前请求来源不可用")
 		}
-		origin := localPublicationOrigin{Request: t.traceID, Source: source}
-		for _, read := range t.appReads {
-			ref := localPublicationObservation{ConnectionRef: read.ConnectionRef, ContentID: read.ContentID, Field: read.Field, GrantVersion: read.GrantVersion}
-			if !slices.Contains(origin.Observations, ref) {
-				origin.Observations = append(origin.Observations, ref)
-			}
-		}
+		origin := t.publicationOrigin(source)
 		encodedOrigin, _ := json.Marshal(origin)
 		draft := apphost.PublicationDraft{Title: in.Title, Body: in.Body, Options: in.Options, Origin: encodedOrigin}
 		if in.AppID != "" || in.ConnectionID != "" {
