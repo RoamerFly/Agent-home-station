@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"sort"
@@ -22,15 +23,16 @@ type LegacyMemorySelection struct {
 // LegacyMemoryEvent retains only the original-message fields needed to create
 // a new, independently verifiable event in the destination store.
 type LegacyMemoryEvent struct {
-	InstanceID string `json:"instance_id"`
-	EventID    string `json:"event_id"`
-	MessageID  string `json:"message_id"`
-	ServerID   string `json:"server_id,omitempty"`
-	Sender     string `json:"sender"`
-	OccurredAt string `json:"occurred_at"`
-	Revision   int    `json:"revision"`
-	Text       string `json:"text"`
-	Hash       string `json:"hash"`
+	InstanceID               string `json:"instance_id"`
+	EventID                  string `json:"event_id"`
+	MessageID                string `json:"message_id"`
+	ServerID                 string `json:"server_id,omitempty"`
+	Sender                   string `json:"sender"`
+	OccurredAt               string `json:"occurred_at"`
+	Revision                 int    `json:"revision"`
+	Text                     string `json:"text"`
+	Hash                     string `json:"hash"`
+	OfflineProfileGeneration string `json:"offline_profile_generation,omitempty"`
 }
 
 // LegacyMemoryFactSource records the exact source version used by a fact.
@@ -161,7 +163,7 @@ func legacySelectionEvents(ctx context.Context, db *sql.DB, scopeID, account, th
 		}
 		events = append(events, LegacyMemoryEvent{
 			InstanceID: turn.Source.InstanceID, EventID: id, MessageID: trace, ServerID: turn.Source.ServerID, Sender: sender,
-			OccurredAt: at, Revision: revision, Text: text, Hash: hash,
+			OccurredAt: at, Revision: revision, Text: text, Hash: hash, OfflineProfileGeneration: turn.Source.OfflineProfileGeneration,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -175,6 +177,11 @@ func legacySelectionEventMatches(turn Turn, id, trace, role, sender, at, text, h
 	occurredAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil || memoryTime(occurredAt) != at || r == nil || strings.TrimSpace(r.InstanceID) == "" || strings.TrimSpace(r.MessageID) == "" {
 		return false
+	}
+	if r.OfflineProfileGeneration != "" {
+		if _, err := hex.DecodeString(r.OfflineProfileGeneration); err != nil || len(r.OfflineProfileGeneration) != 64 || r.Integrity != "verified_import" || r.ServerID == "" {
+			return false
+		}
 	}
 	return turn.EventID == id && turn.TraceID == trace && turn.Role == role && turn.Sender == sender &&
 		r.EventID == id && r.MessageID == trace && r.Account == account && r.Thread == thread && r.Sender == sender &&

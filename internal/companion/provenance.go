@@ -3,21 +3,22 @@ package companion
 // SourceRef identifies an observed message independently of an execution trace.
 // Names are presentation metadata; account, thread and sender IDs are identity.
 type SourceRef struct {
-	InstanceID  string `json:"instance_id,omitempty"`
-	EventID     string `json:"event_id,omitempty"`
-	MessageID   string `json:"message_id,omitempty"`
-	ServerID    string `json:"server_id,omitempty"`
-	Account     string `json:"account,omitempty"`
-	Thread      string `json:"thread,omitempty"`
-	Sender      string `json:"sender,omitempty"`
-	SenderName  string `json:"sender_name,omitempty"`
-	MessageType int    `json:"message_type,omitempty"`
-	OccurredAt  string `json:"occurred_at,omitempty"`
-	ReceivedAt  string `json:"received_at,omitempty"`
-	Sequence    int64  `json:"sequence,omitempty"`
-	Revision    int    `json:"revision,omitempty"`
-	BodyHash    string `json:"body_hash,omitempty"`
-	Integrity   string `json:"integrity,omitempty"`
+	InstanceID               string `json:"instance_id,omitempty"`
+	EventID                  string `json:"event_id,omitempty"`
+	MessageID                string `json:"message_id,omitempty"`
+	ServerID                 string `json:"server_id,omitempty"`
+	Account                  string `json:"account,omitempty"`
+	Thread                   string `json:"thread,omitempty"`
+	Sender                   string `json:"sender,omitempty"`
+	SenderName               string `json:"sender_name,omitempty"`
+	MessageType              int    `json:"message_type,omitempty"`
+	OccurredAt               string `json:"occurred_at,omitempty"`
+	ReceivedAt               string `json:"received_at,omitempty"`
+	Sequence                 int64  `json:"sequence,omitempty"`
+	Revision                 int    `json:"revision,omitempty"`
+	BodyHash                 string `json:"body_hash,omitempty"`
+	Integrity                string `json:"integrity,omitempty"`
+	OfflineProfileGeneration string `json:"offline_profile_generation,omitempty"`
 }
 
 // IncomingMediaRef distinguishes the uploader from people or objects depicted.
