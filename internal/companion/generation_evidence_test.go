@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -290,10 +292,15 @@ func TestGenerationEvidenceInvalidatesPendingNativeBatch(t *testing.T) {
 
 type preparedSourceEvidence struct {
 	policyContextTools
-	revoked bool
+	revoked         bool
+	revokeOnPrepare bool
 }
 
-func (p *preparedSourceEvidence) ContextPrepared(ContextReport) { p.revoked = true }
+func (p *preparedSourceEvidence) ContextPrepared(ContextReport) {
+	if p.revokeOnPrepare {
+		p.revoked = true
+	}
+}
 
 func (p *preparedSourceEvidence) ValidateGenerationSources(context.Context) error {
 	if p.revoked {
@@ -318,7 +325,7 @@ func TestGenerationSourceRechecksAtModelDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			probe := &preparedSourceEvidence{}
+			probe := &preparedSourceEvidence{revokeOnPrepare: true}
 			engine.Tools = probe
 			_, err = engine.Respond(t.Context(), Input{Mode: "direct", Text: "使用已取得的合成资料", Preview: true, TraceID: "source-dispatch"})
 			var changed *GenerationEvidenceChangedError
@@ -326,6 +333,31 @@ func TestGenerationSourceRechecksAtModelDispatch(t *testing.T) {
 				t.Fatal("revoked source crossed the dispatch boundary", err, probe.revoked)
 			}
 		})
+	}
+}
+
+func TestGenerationModelContextCarriesTransportGuard(t *testing.T) {
+	// The guard runs inside the actual client, after Engine has dispatched to
+	// the adapter but before any connection to the synthetic loopback address.
+	client, err := deepseek.NewWithAPIKey(deepseek.Config{BaseURL: "https://127.0.0.1:1"}, "synthetic-model-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	probe := &preparedSourceEvidence{}
+	model := runnerModelFunc(func(ctx context.Context, system string, turns []map[string]string) (string, error) {
+		probe.revoked = true
+		return client.Chat(ctx, system, turns)
+	})
+	engine, err := NewPreview(enabledConfig(), model, "synthetic transport boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Tools = probe
+	_, err = engine.Respond(t.Context(), Input{Mode: "direct", Text: "使用已取得的合成资料", Preview: true, TraceID: "transport-guard"})
+	var changed *GenerationEvidenceChangedError
+	if !errors.As(err, &changed) || !probe.revoked {
+		t.Fatal("transport did not receive host authorization", err)
 	}
 }
 

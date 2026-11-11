@@ -221,7 +221,7 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 	if err := e.ValidateGenerationEvidence(ctx, evidence); err != nil {
 		return PendingReview{}, err
 	}
-	answer, err := e.model.Chat(ctx, system, []map[string]string{{"role": "user", "content": string(encoded)}})
+	answer, err := e.model.Chat(e.modelRequestContext(ctx, evidence), system, []map[string]string{{"role": "user", "content": string(encoded)}})
 	if err != nil {
 		return PendingReview{}, err
 	}

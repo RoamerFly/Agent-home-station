@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"wechat-bot/internal/deepseek"
 )
 
 // GenerationEvidence binds a model result to the evidence and permissions that
@@ -83,6 +85,12 @@ func GenerationEvidenceFromContext(ctx context.Context) (GenerationEvidence, boo
 
 func withGenerationEvidence(ctx context.Context, evidence GenerationEvidence) context.Context {
 	return context.WithValue(ctx, generationEvidenceKey{}, evidence)
+}
+
+func (e *Engine) modelRequestContext(ctx context.Context, evidence GenerationEvidence) context.Context {
+	return deepseek.WithRequestGuard(withGenerationEvidence(ctx, evidence), func(attempt context.Context) error {
+		return e.ValidateGenerationEvidence(attempt, evidence)
+	})
 }
 
 func (e *Engine) currentGenerationEvidence(ctx context.Context) (GenerationEvidence, error) {

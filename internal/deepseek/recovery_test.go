@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -45,6 +46,38 @@ func TestModelTransientFailureRecoversSameInputAndReportsAttempts(t *testing.T) 
 				t.Fatal(events)
 			}
 		})
+	}
+}
+
+func TestRequestGuardStopsRetransmissionAfterRevocation(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	guardErr := errors.New("synthetic source revoked")
+	revoked := false
+	guardCalls, providerAttempts := 0, 0
+	client := &Client{endpoint: server.URL, http: server.Client(), onUsage: func(Usage) { providerAttempts++ }}
+	ctx := WithRequestObserver(t.Context(), func(event string, _ Diagnostics) {
+		if event == "model_retry" {
+			revoked = true
+		}
+	})
+	ctx = WithRequestGuard(ctx, func(context.Context) error {
+		guardCalls++
+		if revoked {
+			return guardErr
+		}
+		return nil
+	})
+	answer, err := client.request(ctx, []byte(`{"messages":["synthetic authorized context"]}`))
+	if !errors.Is(err, guardErr) || answer != "" || requests.Load() != 1 || guardCalls != 2 || providerAttempts != 1 {
+		t.Fatal(err, requests.Load(), guardCalls, providerAttempts)
+	}
+	if _, ok := ErrorDiagnostics(err); ok {
+		t.Fatal("host rejection was reported as a provider attempt")
 	}
 }
 

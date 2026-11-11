@@ -90,12 +90,20 @@ func UserMessage(err error) string {
 type requestObserverKey struct{}
 type requestAttemptKey struct{}
 type groundingFormatAttemptKey struct{}
+type requestGuardKey struct{}
 
 // WithRequestObserver scopes retry/recovery events to one conversation. The
 // callback is not stored on the shared client, so simultaneous previews cannot
 // inherit another conversation's tracing metadata.
 func WithRequestObserver(ctx context.Context, observer func(string, Diagnostics)) context.Context {
 	return context.WithValue(ctx, requestObserverKey{}, observer)
+}
+
+// WithRequestGuard checks host authorization before each HTTP completion
+// attempt, including retries and format repair. A guard failure is returned
+// to the host without opening a connection or recording a provider attempt.
+func WithRequestGuard(ctx context.Context, check func(context.Context) error) context.Context {
+	return context.WithValue(ctx, requestGuardKey{}, check)
 }
 
 func observeRequest(ctx context.Context, event string, d Diagnostics) {
@@ -177,7 +185,13 @@ func retryAfter(raw string, now time.Time) time.Duration {
 func (c *Client) request(ctx context.Context, body []byte) (string, error) {
 	start := time.Now()
 	const attempts = 2
+	check, _ := ctx.Value(requestGuardKey{}).(func(context.Context) error)
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if check != nil {
+			if err := check(ctx); err != nil {
+				return "", err
+			}
+		}
 		answer, failure := c.requestOnce(context.WithValue(ctx, requestAttemptKey{}, attempt), body)
 		if failure == nil {
 			if attempt > 1 {

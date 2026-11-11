@@ -267,7 +267,10 @@ func (e *Engine) Complete(ctx context.Context, prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	answer, err := e.model.Chat(withGenerationEvidence(ctx, evidence), e.system, []map[string]string{{"role": "user", "content": prompt}})
+	if err := e.validateGenerationSources(ctx); err != nil {
+		return "", err
+	}
+	answer, err := e.model.Chat(e.modelRequestContext(ctx, evidence), e.system, []map[string]string{{"role": "user", "content": prompt}})
 	if err != nil {
 		return "", err
 	}

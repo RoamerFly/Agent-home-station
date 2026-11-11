@@ -76,18 +76,19 @@ func (e *Engine) groundingChatValidated(ctx context.Context, system string, mess
 	if err := e.validateGenerationSources(ctx); err != nil {
 		return "", err
 	}
+	requestCtx := e.modelRequestContext(ctx, evidence)
 	var answer string
 	if model, ok := e.model.(validatedGroundingLanguageModel); ok && validate != nil {
-		answer, err = model.ChatGroundingValidated(ctx, system, messages, options, validate)
+		answer, err = model.ChatGroundingValidated(requestCtx, system, messages, options, validate)
 	} else if model, ok := e.model.(groundingLanguageModel); ok {
-		answer, err = model.ChatGrounding(ctx, system, messages, options)
+		answer, err = model.ChatGrounding(requestCtx, system, messages, options)
 	} else {
 		// Synthetic/unit adapters implement Chat only. This path is explicit in the
 		// request metadata and log; actual clients implement the dedicated method.
 		if e.ToolLog != nil {
 			e.ToolLog("grounding_unconfigured_chat_adapter")
 		}
-		answer, err = e.model.Chat(ctx, system, messages)
+		answer, err = e.model.Chat(requestCtx, system, messages)
 	}
 	if err != nil {
 		return "", err

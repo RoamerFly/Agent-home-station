@@ -29,7 +29,7 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		if err := r.validateGenerationSources(ctx); err != nil {
 			return Decision{}, err
 		}
-		answer, err := r.model.Chat(ctx, system, compactActionTurns(system, turns))
+		answer, err := r.model.Chat(r.modelRequestContext(ctx, evidence), system, compactActionTurns(system, turns))
 		if err != nil {
 			return Decision{}, err
 		}

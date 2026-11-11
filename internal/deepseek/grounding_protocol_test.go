@@ -116,3 +116,29 @@ func TestGroundingProtocolRepairDoesNotRetryChangedHostEvidence(t *testing.T) {
 		t.Fatalf("changed host state retried: %v calls=%d", err, calls.Load())
 	}
 }
+
+func TestRequestGuardStopsGroundingSyntaxRepair(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`{"choices":[{"message":{"content":"not JSON"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	client := groundingTestClient(t, server, false, nil)
+	revoked := false
+	guardErr := errors.New("synthetic source revoked before format repair")
+	ctx := WithRequestObserver(t.Context(), func(event string, _ Diagnostics) {
+		if event == "model_grounding_format_repair" {
+			revoked = true
+		}
+	})
+	ctx = WithRequestGuard(ctx, func(context.Context) error {
+		if revoked {
+			return guardErr
+		}
+		return nil
+	})
+	if _, err := client.ChatGrounding(ctx, "JSON", []map[string]string{{"role": "user", "content": "synthetic"}}, GroundingOptions{}); !errors.Is(err, guardErr) || calls.Load() != 1 {
+		t.Fatal(err, calls.Load())
+	}
+}

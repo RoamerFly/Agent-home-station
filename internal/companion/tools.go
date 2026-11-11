@@ -383,7 +383,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				return Decision{}, err
 			}
 			e.capturePreparedContext(system+budget, modelTurns, activeTools)
-			answer, err = native.ChatFunctions(ctx, system+budget, modelTurns, activeTools)
+			answer, err = native.ChatFunctions(e.modelRequestContext(ctx, callEvidence), system+budget, modelTurns, activeTools)
 		} else {
 			if err := e.Store.recordContextMetrics(ctx, system, modelTurns, nil); err != nil && e.ToolLog != nil {
 				e.ToolLog("context_metrics_write_failed")
@@ -396,7 +396,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				return Decision{}, err
 			}
 			e.capturePreparedContext(system, modelTurns, nil)
-			answer, err = e.model.Chat(ctx, system, modelTurns)
+			answer, err = e.model.Chat(e.modelRequestContext(ctx, callEvidence), system, modelTurns)
 		}
 		if err != nil {
 			return Decision{}, err
