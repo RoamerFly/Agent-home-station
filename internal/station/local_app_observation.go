@@ -132,6 +132,9 @@ func (t *localToolSet) checkAppObservationIdentity() error {
 }
 
 func (t *localToolSet) checkAppObservations(ctx context.Context) error {
+	if err := t.checkMemoryLink(ctx); err != nil {
+		return err
+	}
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return err
 	}

@@ -32,14 +32,14 @@ func (s *Store) LocalToolEvidence(ctx context.Context, in Input, tool string) ([
 	if err != nil || tool == "" || in.Source == nil || in.Source.EventID == "" || in.Source.InstanceID == "" || in.Source.Revision < 1 {
 		return nil, ErrLocalConversationIdentity
 	}
-	source, ok := s.SourceForInput(in)
-	if !ok || source.EventID != in.Source.EventID || source.Revision != in.Source.Revision || source.InstanceID != in.Source.InstanceID {
-		return nil, ErrLocalRequestUnavailable
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil {
 		return nil, errors.New("memory database closed")
+	}
+	source := in.Source
+	if err := s.localRequestSourceLocked(ctx, scope, source.MessageID, *source); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.call_key,c.tool,c.grant_key,c.target,c.result FROM events e
  LEFT JOIN local_tool_checkpoints c ON c.event_id=e.id AND c.revision=e.revision AND c.tool=? AND c.call_key!=''

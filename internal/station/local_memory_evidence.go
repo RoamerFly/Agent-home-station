@@ -98,14 +98,18 @@ func (t *localToolSet) restoreMemoryEvidence(ctx context.Context) error {
 	if t.run == nil {
 		return nil
 	}
+	in, err := t.memoryEvidenceInput(ctx)
+	if err != nil {
+		return err
+	}
+	proofs, err := t.publications.requestMemoryEvidence(ctx, t.store, in)
+	if err != nil {
+		return err
+	}
 	for _, op := range t.run.Operations {
-		if op.Tool != localWechatMemoryTool {
-			continue
-		}
-		proof, err := decodeMemoryEvidence(op, t.access.fishID, t.access.ownerID)
-		if err != nil {
-			return err
-		}
+		t.memoryLinked = t.memoryLinked || op.Tool == localMemoryLinkTool
+	}
+	for _, proof := range proofs {
 		if proof.Wechat != nil {
 			found := false
 			for _, prior := range t.wechatMemoryProofs {
@@ -129,7 +133,7 @@ func (t *localToolSet) restoreMemoryEvidence(ctx context.Context) error {
 	return t.checkDouyinMemoryResults(ctx)
 }
 
-func (h *localChatService) requestMemoryEvidence(ctx context.Context, store *companion.Store, in companion.Input) ([]localMemoryEvidence, error) {
+func (h *localChatService) ownMemoryEvidence(ctx context.Context, store *companion.Store, in companion.Input) ([]localMemoryEvidence, error) {
 	operations, err := store.LocalToolEvidence(ctx, in, localWechatMemoryTool)
 	if err != nil {
 		return nil, err
@@ -158,7 +162,8 @@ func (h *localChatService) checkRequestMemoryEvidence(ctx context.Context, store
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if _, ok := store.SourceForInput(in); !ok {
+			source, err := store.LocalRequestSource(ctx, in, in.Source.MessageID)
+			if err != nil || *source != *in.Source {
 				return errors.New("原请求来源已变化")
 			}
 			return nil

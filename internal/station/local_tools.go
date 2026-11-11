@@ -40,6 +40,7 @@ type localToolSet struct {
 	douyinMemoryProofs    map[localDouyinMemoryProof]struct{}
 	douyinMemoryRefs      map[string]localDouyinMemoryReference
 	douyinMemoryPages     map[string]localDouyinMemoryPage
+	memoryLinked          bool
 	publications          *localChatService
 	requestTime           time.Time
 	continuationGuard     func(context.Context) error
@@ -81,6 +82,9 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if err := t.checkMemoryLink(ctx); err != nil {
+		return nil, err
+	}
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return nil, err
 	}
@@ -138,6 +142,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if err := t.checkMemoryLink(ctx); err != nil {
+		return "", err
+	}
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return "", err
 	}

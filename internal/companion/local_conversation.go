@@ -39,6 +39,34 @@ type LocalConversationRequest struct {
 	Messages   []string `json:"messages"`
 	Completed  bool     `json:"completed"`
 }
+
+// LocalRequestSource resolves an exact visible owner request from the durable
+// event journal, including after it has left the recent-context snapshot.
+// Neither the message body nor an assistant reply is returned.
+func (s *Store) LocalRequestSource(ctx context.Context, in Input, request string) (*SourceRef, error) {
+	scope, err := localConversationScope(in)
+	if err != nil || request == "" {
+		return nil, ErrLocalConversationIdentity
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, errors.New("memory database closed")
+	}
+	var raw []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT e.payload FROM events e WHERE e.scope=? AND e.trace=? AND e.sender=? AND e.role='user' AND `+visibleLocalToolEvent, scope, request, in.Sender).Scan(&raw); err != nil {
+		return nil, ErrLocalRequestUnavailable
+	}
+	var turn Turn
+	if json.Unmarshal(raw, &turn) != nil || turn.Source == nil {
+		return nil, ErrLocalRequestUnavailable
+	}
+	if err := s.localRequestSourceLocked(ctx, scope, request, *turn.Source); err != nil {
+		return nil, err
+	}
+	return cloneSource(turn.Source), nil
+}
+
 type localConversationCursor struct {
 	Scope   string `json:"scope"`
 	Before  int64  `json:"before"`

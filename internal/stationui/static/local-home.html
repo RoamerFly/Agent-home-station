@@ -93,6 +93,10 @@
                   </div>
                   <button id="load-older-button" class="text-action load-older" type="button" hidden>查看更早的聊天</button>
                   <form id="chat-form" class="composer">
+                    <div id="chat-memory-link" class="chat-memory-link" hidden role="status">
+                      <span id="chat-memory-link-label"></span>
+                      <button id="chat-memory-link-cancel" class="text-action" type="button">取消关联</button>
+                    </div>
                     <label class="sr-only" for="chat-input">对大肥鱼说</label>
                     <textarea id="chat-input" rows="2" placeholder="和大肥鱼说点什么…" autocomplete="off"></textarea>
                     <div class="composer-bar">

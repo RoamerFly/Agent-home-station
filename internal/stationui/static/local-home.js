@@ -59,7 +59,7 @@
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
-    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), poll: 0 };
+    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), link: null, poll: 0 };
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
@@ -5998,6 +5998,11 @@
       const meta = document.createElement("div"); meta.className = "bubble-meta"; meta.textContent = assistant ? "大肥鱼" : "你";
       const time = messageTime(item.time || item.created_at);
       if (time) { const timeNode = document.createElement("time"); timeNode.textContent = time; meta.append(timeNode); }
+      if (assistant && state.chat.memoryLinks.has(item.request_id)) {
+        const link = document.createElement("button"); link.type = "button"; link.className = "text-action chat-link-action"; link.textContent = "关联继续";
+        link.setAttribute("aria-label", `关联继续${time ? " · " + time : "此回复"}`);
+        link.addEventListener("click", () => { state.chat.link = { id: item.request_id, time }; renderChat(); $("#chat-input").focus(); }); meta.append(link);
+      }
       const text = itemText(item), body = document.createElement("p"); body.className = "bubble-text"; body.textContent = text; bubble.append(meta, body);
       if (assistant) appendArtifactDownloads(bubble, text);
       if (!assistant && (state.chat.failed.has(item.request_id) || item.request_id === recoveryID)) {
@@ -6016,6 +6021,8 @@
     }
     $("#load-older-button").hidden = !state.chat.hasMore || state.chat.loading;
     $("#chat-progress").textContent = state.chat.busy || state.chat.pending.size ? "正在等待回复…" : state.chat.backgroundPending ? "后台任务完成后会继续回复" : "";
+    $("#chat-memory-link").hidden = !state.chat.link;
+    $("#chat-memory-link-label").textContent = state.chat.link ? `已关联${state.chat.link.time ? " · " + state.chat.link.time : "此回复"}，发送时核对资料授权` : "";
     chatStream.setAttribute("aria-busy", String(state.chat.loading || state.chat.busy || state.chat.pending.size > 0));
     chatStream.scrollTop = previousScroll;
   }
@@ -6034,6 +6041,8 @@
       const data = await request(`/api/local/chat?${query.toString()}`);
       if (current !== state.chat) return;
       mergeItems(Array.isArray(data.items) ? data.items : [], replace); state.chat.nextCursor = data.next_cursor || ""; state.chat.hasMore = Boolean(data.has_more);
+      if (replace) current.memoryLinks.clear();
+      for (const id of data.memory_link_requests || []) current.memoryLinks.add(id);
       state.chat.busy = Boolean(data.busy);
       current.backgroundPending = data.background_pending === true;
       const settled = new Set(state.chat.items.filter((item) => item.role === "assistant" && item.request_id).map((item) => item.request_id));
@@ -6060,13 +6069,16 @@
     const current = state.chat;
     const text = String(raw || ""); if (!text.trim() || state.chat.pending.has(requestID)) return;
     if (!chatConfigured()) { setActiveView("settings"); showMessage("先保存可用的聊天模型，再发送消息。", "warn"); return; }
+    const continuation = current.submittedLinks.get(requestID) || (arguments.length === 1 ? current.link?.id || "" : "");
+    if (continuation) current.submittedLinks.set(requestID, continuation);
+    if (arguments.length === 1) current.link = null;
     state.chat.pending.set(requestID, { text }); state.chat.failed.delete(requestID); $("#chat-input").value = ""; renderChat();
     // Only an explicit send/retry brings its result into view. Background
     // refreshes and reading older pages preserve the user's scroll position.
     chatStream.scrollTop = chatStream.scrollHeight;
     schedulePoll();
     try {
-      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text }) });
+      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text, ...(continuation ? { continue_request_id: continuation } : {}) }) });
       if (current !== state.chat) return;
       if (result.status === "completed") state.chat.pending.delete(requestID);
       if (result.status === "no_reply") {
@@ -6228,6 +6240,7 @@
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
+  $("#chat-memory-link-cancel").addEventListener("click", () => { state.chat.link = null; renderChat(); $("#chat-input").focus(); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { window.clearTimeout(state.chat.poll); state.chat.poll = 0; window.clearTimeout(liveSafety.timer); }

@@ -294,7 +294,22 @@ func (h *localChatService) history(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 503, "后台任务状态不可读，请稍后刷新")
 		return
 	}
-	websession.Respond(w, 200, map[string]any{"items": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load(), "background_pending": pending})
+	// Candidate metadata only: listing history never opens an application
+	// memory database. Actual authority is rechecked on explicit submission.
+	links, seen := []string{}, map[string]bool{}
+	for _, item := range page.Items {
+		if item.Role != "assistant" || item.RequestID == "" || seen[item.RequestID] {
+			continue
+		}
+		seen[item.RequestID] = true
+		origin := in
+		origin.TraceID = item.RequestID
+		origin.Source, _ = store.LocalRequestSource(r.Context(), origin, item.RequestID)
+		if proofs, err := h.requestMemoryEvidence(r.Context(), store, origin); err == nil && len(proofs) > 0 {
+			links = append(links, item.RequestID)
+		}
+	}
+	websession.Respond(w, 200, map[string]any{"items": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load(), "background_pending": pending, "memory_link_requests": links})
 }
 
 func localConversationConfig(persona string) companion.Config {
@@ -315,13 +330,14 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		RequestID string `json:"request_id"`
-		Text      string `json:"text"`
+		RequestID         string `json:"request_id"`
+		Text              string `json:"text"`
+		ContinueRequestID string `json:"continue_request_id"`
 	}
 	if !websession.Decode(w, r, &request) {
 		return
 	}
-	if !identity.ValidPathID(request.RequestID) || strings.TrimSpace(request.Text) == "" || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) {
+	if !identity.ValidPathID(request.RequestID) || request.ContinueRequestID != "" && (!identity.ValidPathID(request.ContinueRequestID) || request.ContinueRequestID == request.RequestID) || strings.TrimSpace(request.Text) == "" || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) {
 		websession.Fail(w, 400, "请提供稳定请求编号及 1–65536 字节的有效正文；长资料可分批继续")
 		return
 	}
@@ -357,9 +373,16 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	}
 	if prior != nil && prior.Completed {
 		in.TraceID, in.MessageTime = request.RequestID, prior.OccurredAt
-		source, ok := store.SourceForInput(in)
+		source, sourceErr := store.LocalRequestSource(r.Context(), in, request.RequestID)
 		in.Source = source
-		if !ok || h.checkRequestMemoryEvidence(r.Context(), store, in) != nil {
+		if request.ContinueRequestID != "" {
+			link, err := h.readMemoryLink(r.Context(), store, in)
+			if err != nil || link == nil || link.Request != request.ContinueRequestID {
+				websession.Fail(w, 409, "同一请求编号不能更换关联，请新建请求")
+				return
+			}
+		}
+		if sourceErr != nil || h.checkRequestMemoryEvidence(r.Context(), store, in) != nil {
 			websession.Fail(w, 409, "原请求的跨来源资料或授权已变化，请使用新请求重新查询")
 			return
 		}
@@ -382,6 +405,11 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	run, err := store.OpenLocalToolRun(r.Context(), in, prior == nil)
 	if err != nil {
 		websession.Fail(w, 503, "工具检查点无法核验，未执行本轮工具")
+		return
+	}
+	in.Source, _ = store.SourceForInput(in)
+	if err := h.bindMemoryLink(r.Context(), store, in, run, request.ContinueRequestID, prior == nil); err != nil {
+		websession.Fail(w, 409, "关联请求或资料授权已变化，请重新选择或主动查询")
 		return
 	}
 	response, err := h.generateLocalTurn(r.Context(), store, in, run, "")
