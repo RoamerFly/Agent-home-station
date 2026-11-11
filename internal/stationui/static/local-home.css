@@ -770,6 +770,11 @@ body.is-home-ready {
 .configuration-round-steps { display: grid; gap: 7px; padding-inline-start: 1.4rem; overflow-wrap: anywhere; }
 .configuration-round-records article { overflow-wrap: anywhere; }
 .configuration-round-records article p { margin: 0; white-space: pre-wrap; }
+.configuration-surf { display: grid; gap: 12px; justify-items: start; overflow-wrap: anywhere; }
+.configuration-surf-settings, .configuration-surf-history { width: 100%; }
+.configuration-surf-settings h4 { margin-bottom: 4px; }
+.configuration-surf-settings ul { padding-inline-start: 1.3rem; }
+.configuration-surf-record p { margin-block: 6px; }
 .douyin-read-panel { display: grid; gap: 8px; margin-top: 14px; }
 .douyin-read-panel h4, .douyin-read-panel .app-scope-note { margin: 0; }
 .douyin-read-result .publication-actions { flex-wrap: wrap; }

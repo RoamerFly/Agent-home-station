@@ -34,7 +34,7 @@ func applicationConfigurationRoutes(owner *websession.Store, mux *http.ServeMux,
 			if registered && entry.Registration == "station-native" {
 				sections = append(sections, appConfigurationSection{"rounds", "执行回合"})
 			}
-			sections = append(sections, appConfigurationSection{"conversations", "会话与记忆"}, appConfigurationSection{"delivery", "投递与回执"})
+			sections = append(sections, appConfigurationSection{"conversations", "会话与记忆"}, appConfigurationSection{"surf", "网上冲浪"}, appConfigurationSection{"delivery", "投递与回执"})
 		case "douyin":
 			sections = append(sections, appConfigurationSection{"browse", "内容浏览"}, appConfigurationSection{"publications", "作品发布"}, appConfigurationSection{"interactions", "互动任务"}, appConfigurationSection{"live", "直播与本机预览"})
 		case "bilibili":

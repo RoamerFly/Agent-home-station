@@ -64,6 +64,7 @@ type legacySnapshotPlan struct {
 	manifest  legacySnapshotManifest
 	projected map[string][]byte
 	source    map[string]string
+	verifying bool
 }
 
 // CaptureLegacyWechatSnapshot never starts either host. Capture holds the old
@@ -128,7 +129,7 @@ func CaptureLegacyWechatSnapshot(ctx context.Context, req LegacyWechatSnapshotRe
 	if _, err := source.Lstat(legacyCutoverClaimFile); !errors.Is(err, os.ErrNotExist) {
 		return out, errors.New("旧微信数据目录已交接或无法核对交接凭证")
 	}
-	plan, err := planLegacyWechatSnapshot(ctx, source, req.LegacyDataDir, req.PrimaryAccount, true)
+	plan, err := planLegacyWechatSnapshot(ctx, source, req.LegacyDataDir, req.PrimaryAccount, true, false)
 	if err != nil {
 		return out, err
 	}
@@ -184,8 +185,9 @@ func newLegacySnapshotPlan(primary string) legacySnapshotPlan {
 	return legacySnapshotPlan{manifest: legacySnapshotManifest{Version: 1, Primary: primary}, projected: map[string][]byte{}, source: map[string]string{}}
 }
 
-func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, primary string, checkSQLite bool) (legacySnapshotPlan, error) {
+func planLegacyWechatSnapshot(ctx context.Context, source *os.Root, oldRoot, primary string, checkSQLite, verifying bool) (legacySnapshotPlan, error) {
 	plan := newLegacySnapshotPlan(primary)
+	plan.verifying = verifying
 	stop, err := readLegacyImportFile(source, legacyStopMarkerFile, 16<<10)
 	var marker legacyStopMarker
 	if err != nil || json.Unmarshal(stop, &marker) != nil || marker.Version != 2 || marker.State != "stopped" || !marker.validMode() || marker.AccountID != primary ||
@@ -292,6 +294,9 @@ func (p *legacySnapshotPlan) snapshotAccount(ctx context.Context, root *os.Root,
 	p.addSmall(checkpoint.Queue.Path, checkpoint.Queue.Data, nil)
 	p.addSmall(checkpoint.Cursor.Path, checkpoint.Cursor.Data, nil)
 	adminDir := filepath.Dir(config)
+	if err := p.snapshotSurf(root, adminDir, account); err != nil {
+		return err
+	}
 	rawManagement, projectedManagement, managementCount, coldHashes, err := readLegacyManagementSnapshot(ctx, root, adminDir, account)
 	if err != nil {
 		return err
@@ -424,7 +429,7 @@ func writeLegacyWechatSnapshot(ctx context.Context, source, parent *os.Root, des
 	}
 	// Check source bytes again under the lease. This also catches a missing
 	// sidecar or optional file changing during the copy.
-	latest, err := planLegacyWechatSnapshot(ctx, source, req.LegacyDataDir, req.PrimaryAccount, false)
+	latest, err := planLegacyWechatSnapshot(ctx, source, req.LegacyDataDir, req.PrimaryAccount, false, false)
 	if err != nil || localCheckpointKey(latest.source) != localCheckpointKey(plan.source) {
 		return errors.New("制作过程中旧数据发生变化，未发布快照")
 	}
@@ -497,7 +502,7 @@ func verifyLegacyWechatSnapshot(ctx context.Context, parent *os.Root, name, targ
 		saved.Version != 1 || !identity.ValidPathID(saved.Primary) || legacyImportOverlap(marker.DataRoot, target) {
 		return out, errors.New("快照清单或停机记录无效")
 	}
-	plan, err := planLegacyWechatSnapshot(ctx, root, marker.DataRoot, saved.Primary, true)
+	plan, err := planLegacyWechatSnapshot(ctx, root, marker.DataRoot, saved.Primary, true, true)
 	if err != nil {
 		return out, err
 	}

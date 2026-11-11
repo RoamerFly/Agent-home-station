@@ -37,7 +37,7 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 				ImportGroupPreference: s.legacyGroupSettingHandler(false), ImportGroupRule: s.legacyGroupSettingHandler(true),
 				Activation: s.legacyActivationHandler, Rollback: s.legacyRollbackHandler,
 				RollbackAudit: s.legacyRollbackAuditHandler, RelocationReadiness: s.legacyRelocationReadinessHandler,
-				Archive: s.archiveManagementHandlers(),
+				Archive: s.archiveManagementHandlers(false),
 			}
 			routes.Mount(mux, owner.Protect)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))

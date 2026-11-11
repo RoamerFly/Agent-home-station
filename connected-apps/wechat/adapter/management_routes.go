@@ -23,6 +23,7 @@ type ManagementHandlers struct {
 // live native client. Its routes cannot start a connection or write to WeChat.
 type ArchiveManagementHandlers struct {
 	ListLegacyReceipts, ReadLegacyReceipt, ReadRelocationReceipt http.HandlerFunc
+	ReadLegacySurf                                               http.HandlerFunc
 }
 
 func (h ManagementHandlers) Mount(mux *http.ServeMux, protect func(http.HandlerFunc) http.HandlerFunc) {
@@ -61,6 +62,7 @@ func (h ArchiveManagementHandlers) Mount(mux *http.ServeMux, protect func(http.H
 	mount(legacyImportPath+"/receipts", h.ListLegacyReceipts, http.MethodGet)
 	mount(legacyImportPath+"/receipts/{key}", h.ReadLegacyReceipt, http.MethodGet)
 	mount(legacyImportPath+"/relocation/receipts/{key}", h.ReadRelocationReceipt, http.MethodGet)
+	mount(legacyImportPath+"/surf", h.ReadLegacySurf, http.MethodGet)
 }
 
 func managementMount(mux *http.ServeMux, protect func(http.HandlerFunc) http.HandlerFunc) func(string, http.HandlerFunc, ...string) {

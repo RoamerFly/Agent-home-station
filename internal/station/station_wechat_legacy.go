@@ -178,13 +178,17 @@ func legacyImportOverlap(first, second string) bool {
 }
 
 func (s *stationWechat) openLegacyImport() (*os.Root, legacyImportSource, error) {
+	return s.openLegacyImportSource(legacyImportSourceFile)
+}
+
+func (s *stationWechat) openLegacyImportSource(filename string) (*os.Root, legacyImportSource, error) {
 	var source legacyImportSource
 	application, err := workspacefs.OpenPath(filepath.Dir(s.root))
 	if err != nil {
 		return nil, source, errLegacyImportNotConfigured
 	}
 	defer application.Close()
-	raw, err := readLegacyImportFile(application, legacyImportSourceFile, 16<<10)
+	raw, err := readLegacyImportFile(application, filename, 16<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, source, errLegacyImportNotConfigured
 	}

@@ -23,6 +23,7 @@ func TestManagementRoutesKeepArchiveReadOnly(t *testing.T) {
 	active, archive, unprotected := http.NewServeMux(), http.NewServeMux(), http.NewServeMux()
 	evidence := ArchiveManagementHandlers{
 		ListLegacyReceipts: called, ReadLegacyReceipt: called, ReadRelocationReceipt: called,
+		ReadLegacySurf: called,
 	}
 	handlers := ManagementHandlers{
 		Contacts: called, SubmitRecall: called, CancelDelivery: called, ResumeDelivery: called,
@@ -39,6 +40,7 @@ func TestManagementRoutesKeepArchiveReadOnly(t *testing.T) {
 		{http.MethodGet, "/legacy-import/receipts", http.StatusNoContent},
 		{http.MethodGet, "/legacy-import/receipts/original", http.StatusNoContent},
 		{http.MethodGet, "/legacy-import/relocation/receipts/original", http.StatusNoContent},
+		{http.MethodGet, "/legacy-import/surf", http.StatusNoContent},
 		{http.MethodGet, "/contacts", http.StatusNotFound},
 		{http.MethodPost, "/receipts/original/recall", http.StatusNotFound},
 		{http.MethodPost, "/receipts/original/cancel", http.StatusNotFound},

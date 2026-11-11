@@ -272,9 +272,68 @@ def verify_application_configuration(page, output):
     page.screenshot(path=str(output/"wechat-configuration.png"))
     nav.get_by_role("button", name="会话与记忆").click()
     expect(panel.get_by_text("当前连接没有可展示的配置或资料。")).to_be_visible()
+    nav.get_by_role("button", name="网上冲浪").click()
+    expect(panel.get_by_text("连接微信或接续旧账号快照后可查看冲浪档案。")).to_be_visible()
+    assert not any(path.endswith("/legacy-import/surf") for _, path in reads[start:])
     page.keyboard.press("Escape")
     expect(panel).not_to_be_visible()
     expect(opener).to_be_focused()
+
+    close_application(page)
+    page.route("**/api/apps", lambda route: route.fulfill(json={"items": [
+        {"id": "wechat", "name": "微信", "registration": "station-archive"}]}))
+    page.route("**/api/apps/wechat/connections", lambda route: route.fulfill(json={"items": [
+        {"id": "wechat-synthetic-one", "label": "合成账号一"},
+        {"id": "wechat-synthetic-two", "label": "合成账号二"}]}))
+    surf_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/legacy-import/surf(?:\?|$)")
+    surf_reads = []
+
+    def surf_read(route):
+        request = urlparse(route.request.url)
+        assert route.request.method == "GET"
+        surf_reads.append((request.path, parse_qs(request.query)))
+        if request.query:
+            route.fulfill(json={"status": "available", "sessions": [{
+                "at": "2026-01-02T00:00:00Z", "thread": "", "visited_count": 1, "failure_count": 0,
+                "state": "not_shared", "candidates": [{"title": "合成收藏", "site": "synthetic.example", "bookmarked": True}],
+                "observations": [{"state": "body_read", "site": "synthetic.example", "returned_characters": 10, "total_characters": 15}],
+            }]})
+        else:
+            topic = "次账号主题" if "/wechat-synthetic-two/" in request.path else "海洋故事"
+            route.fulfill(json={"schedule": "paused", "history_available": topic == "海洋故事",
+                "settings": {"enabled": True, "interval_minutes": 45, "interval_max_minutes": 90,
+                             "max_sessions_per_day": 3, "topics": [topic], "target_count": 1, "interaction_count": 0}})
+
+    page.route(surf_pattern, surf_read)
+    home_tab(page, "chat")
+    home_tab(page, "apps")
+    expect(page.get_by_role("button", name="管理微信", exact=True)).to_be_visible()
+    page.get_by_role("button", name="管理微信", exact=True).click()
+    opener.click()
+    expect(nav.get_by_role("button", name="网上冲浪")).to_be_visible()
+    assert not surf_reads
+    page.set_viewport_size({"width": 375, "height": 740})
+    nav.get_by_role("button", name="网上冲浪").click()
+    expect(panel.get_by_text("旧配置只读预览 · 调度保持暂停", exact=True)).to_be_visible()
+    expect(panel.get_by_text("海洋故事", exact=True)).to_be_visible()
+    assert len(surf_reads) == 1 and not surf_reads[0][1]
+    panel.get_by_role("button", name="读取浏览档案", exact=True).click()
+    panel.get_by_text("本机独立浏览").click()
+    expect(panel.get_by_text("合成收藏 · synthetic.example · 已收藏", exact=True)).to_be_visible()
+    expect(panel.get_by_text("历史正文读取 · synthetic.example · 偏移 0 · 10/15 字符", exact=True)).to_be_visible()
+    assert surf_reads[-1][1] == {"part": ["history"]}
+    assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    page.screenshot(path=str(output/"wechat-surf-archive-narrow.png"))
+    panel.get_by_label("当前连接").select_option("wechat-synthetic-two")
+    expect(panel.get_by_text("次账号主题", exact=True)).to_be_visible()
+    expect(panel.get_by_text("合成收藏", exact=False)).to_have_count(0)
+    page.keyboard.press("Escape")
+    expect(opener).to_be_focused()
+    close_application(page)
+    page.unroute("**/api/apps")
+    page.unroute("**/api/apps/wechat/connections")
+    page.unroute(surf_pattern)
+    page.set_viewport_size({"width": 1440, "height": 900})
 
     page.get_by_role("button", name="管理抖音", exact=True).click()
     page.set_viewport_size({"width": 375, "height": 740})

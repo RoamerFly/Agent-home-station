@@ -2310,7 +2310,8 @@
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
-    view.roundPanel = null; view.archivePanel = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
+    view.surfAbort?.abort();
+    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -2326,6 +2327,101 @@
     if (view.record.id === "bilibili" && section === "publications") void loadBilibiliWork(apps, apps.bilibiliWork.cursors);
     renderAppConfiguration();
     $("#app-configuration-body").scrollTop = 0;
+  }
+  function appConfigurationSurf(view, connection) {
+    const panel = appElement("section", "", "configuration-surf");
+    const notice = appElement("p", "正在核对封存的冲浪配置…", "app-scope-note");
+    notice.setAttribute("role", "status");
+    const settings = appElement("div", "", "configuration-surf-settings");
+    const history = appElement("div", "", "configuration-surf-history");
+    const controller = new AbortController();
+    view.surfAbort?.abort();
+    view.surfAbort = controller;
+    const active = () => appConfiguration === view && view.section === "surf" &&
+      view.connection === connection && !controller.signal.aborted;
+    const endpoint = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/legacy-import/surf";
+    let after = "";
+    const more = memoryButton("读取浏览档案", "button compact secondary", readHistory);
+    more.hidden = true;
+    panel.append(notice, settings, history, more);
+    void readSettings();
+
+    function failed(error) {
+      return !active() || appSessionExpired([{ status: "rejected", reason: error }]);
+    }
+    async function readSettings() {
+      try {
+        const result = await request(endpoint, { signal: controller.signal });
+        if (!active()) return;
+        notice.textContent = "旧配置只读预览 · 调度保持暂停";
+        const saved = result.settings;
+        if (saved) {
+          settings.append(
+            appElement("p", "旧调度" + (saved.enabled ? "已开启" : "已关闭") +
+              " · 间隔 " + saved.interval_minutes + "–" + saved.interval_max_minutes + " 分钟 · 每日最多 " + saved.max_sessions_per_day + " 次"),
+            appElement("p", "旧分享目标 " + saved.target_count + " 个 · 旧互动授权 " + saved.interaction_count + " 项" + (saved.force_share ? " · 旧配置曾要求分享" : "")),
+            appElement("h4", "兴趣主题"),
+            appElement("p", saved.topics.join(" · "), "app-scope-note"),
+          );
+          if (saved.discovery?.sources?.length) {
+            const list = appElement("ul");
+            for (const source of saved.discovery.sources) {
+              list.append(appElement("li", [source.name, source.site, source.enabled ? "旧配置启用" : "旧配置停用"].filter(Boolean).join(" · ")));
+            }
+            settings.append(appElement("h4", "内容来源"), list);
+            const discovery = saved.discovery;
+            settings.append(appElement("p", "冷却 " + discovery.cooldown_days + " 天 · 单次最多 " + discovery.max_sources + " 个来源 · 深度 " + discovery.max_depth, "app-scope-note"));
+            const labels = { recommendations: "推荐", community: "社区", subscriptions: "订阅", related: "相关内容", search: "搜索" };
+            const weights = Object.entries(discovery.weights || {}).map(([name, value]) => labels[name] + " " + value);
+            if (weights.length) settings.append(appElement("p", weights.join(" · "), "app-scope-note"));
+          }
+        } else {
+          settings.append(appElement("p", result.settings_status === "unreadable" ? "封存的旧配置无法解析。" : "快照中没有旧调度配置。", "app-scope-note"));
+        }
+        more.hidden = !result.history_available;
+        if (more.hidden) history.append(appElement("p", "快照中没有浏览档案。", "app-scope-note"));
+      } catch (error) {
+        if (!failed(error)) notice.textContent = error.status === 404 ? "此连接尚无已接续的旧冲浪档案。" : error.message;
+      }
+    }
+    async function readHistory() {
+      more.disabled = true;
+      const paging = Boolean(after);
+      if (!paging) history.replaceChildren();
+      try {
+        const query = new URLSearchParams({ part: "history" });
+        if (paging) query.set("after", after);
+        const result = await request(endpoint + "?" + query, { signal: controller.signal });
+        if (!active()) return;
+        if (!result.sessions.length) history.append(appElement("p", result.status === "unreadable" ? "封存的浏览档案无法解析。" : "没有当前可读取的浏览记录。", "app-scope-note"));
+        for (const row of result.sessions) {
+          const record = appElement("details", "", "identity-details configuration-surf-record");
+          record.append(appElement("summary", [new Date(row.at).toLocaleString("zh-CN"), row.thread || "本机独立浏览", row.interest].filter(Boolean).join(" · ")));
+          const sessionStates = { browsing: "浏览中", not_shared: "未分享", shared: "历史标记已分享", failed: "失败", bookmarked: "已收藏" };
+          record.append(appElement("p", [sessionStates[row.state] || row.state, "已访问 " + row.visited_count, "失败 " + row.failure_count].filter(Boolean).join(" · ")));
+          for (const candidate of row.candidates || []) {
+            record.append(appElement("p", [candidate.title, candidate.site, candidate.bookmarked && "已收藏", candidate.selected && "历史选中"].filter(Boolean).join(" · ")));
+          }
+          const readStates = { body_read: "历史正文读取", read_failed: "读取失败", read_unverified: "读取未核验", legacy_unproven: "旧版缺少证明", media_prepared: "媒体已准备" };
+          for (const evidence of row.observations || []) {
+            const coverage = evidence.total_characters ? "偏移 " + (evidence.offset || 0) + " · " + (evidence.returned_characters || 0) + "/" + evidence.total_characters + " 字符" : "";
+            record.append(appElement("p", [readStates[evidence.state] || evidence.state, evidence.site, coverage].filter(Boolean).join(" · "), "app-scope-note"));
+          }
+          history.append(record);
+        }
+        after = result.next_after || "";
+        more.hidden = !after;
+        more.textContent = "读取更多浏览档案";
+      } catch (error) {
+        if (failed(error)) return;
+        after = "";
+        history.replaceChildren(appElement("p", error.message, "app-scope-note"));
+        more.textContent = "重新读取浏览档案";
+      } finally {
+        if (active()) more.disabled = false;
+      }
+    }
+    return panel;
   }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
@@ -2677,13 +2773,13 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "rounds", "delivery"].includes(section)) {
+    if (connections.length && ["account", "conversations", "rounds", "surf", "delivery"].includes(section)) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
       for (const [index, item] of connections.entries()) select.add(new Option(item.label || "连接 " + (index + 1), item.id));
       select.value = view.connection;
-      select.addEventListener("change", () => { stopAppConfigurationReads(); view.roundPanel = null; view.archivePanel = null; view.connection = select.value; renderAppConfiguration(); });
+      select.addEventListener("change", () => { stopAppConfigurationReads(); view.surfAbort?.abort(); view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.connection = select.value; renderAppConfiguration(); });
       label.append(select); controls.push(label);
     }
     switch (section) {
@@ -2711,6 +2807,16 @@
         if (selected) {
           if (view.roundPanel?.connection !== selected.id) view.roundPanel = { connection: selected.id, node: appConfigurationRounds(view, selected.id) };
           controls.push(view.roundPanel.node);
+        }
+        break;
+      case "surf":
+        if (selected) {
+          if (view.surfPanel?.connection !== selected.id) view.surfPanel = { connection: selected.id, node: appConfigurationSurf(view, selected.id) };
+          controls.push(view.surfPanel.node);
+        } else {
+          view.surfAbort?.abort();
+          view.surfPanel = null;
+          controls.push(appElement("p", "连接微信或接续旧账号快照后可查看冲浪档案。", "app-scope-note"));
         }
         break;
       case "delivery":
@@ -5233,6 +5339,7 @@
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
+    appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();

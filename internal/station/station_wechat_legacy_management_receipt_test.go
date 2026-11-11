@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
@@ -117,6 +119,11 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 		t.Fatal("secondary account read the primary ledger", other)
 	}
 	req("POST", secondary, map[string]any{"digest": other["digest"]}, 200)
+	beforeSurf := nativeCalls.Load()
+	supplement := exerciseLegacySurfSupplement(t, f, legacy, snapshot, fixture, primary, secondary)
+	if nativeCalls.Load() != beforeSurf {
+		t.Fatal("surf archive contacted the native service")
+	}
 	activation := req("GET", primary+"/activation", nil, 200)
 	if activation["management_pending_receipts"] != float64(1) {
 		t.Fatal("activation omitted unresolved management receipts", activation)
@@ -145,6 +152,14 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 	}
 	req("GET", primary+"/receipts/management-only", nil, 404)
 	req("GET", secondary+"/receipts/management-only"+origin, nil, 404)
+	history := req("GET", primary+"/surf?part=history", nil, 200)
+	if len(history["sessions"].([]any)) != 2 {
+		t.Fatal("offline surf archive exposed a conversation row", history)
+	}
+	if err := os.Rename(supplement, filepath.Join(base, "detached-surf")); err != nil {
+		t.Fatal(err)
+	}
+	req("GET", primary+"/surf", nil, 422)
 	req("GET", primary+"/receipts?origin=invalid", nil, 400)
 	if nativeCalls.Load() != before {
 		t.Fatal("offline archive read contacted the native service")
@@ -157,6 +172,7 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 	beforeOffline := nativeCalls.Load()
 	f = newLocalHomeFixture(t, host, home)
 	req("GET", primary+"/receipts"+origin, nil, 401)
+	req("GET", primary+"/surf", nil, 401)
 	f.login()
 	apps := req("GET", "/api/apps", nil, 200)["items"].([]any)
 	if len(apps) != 1 || apps[0].(map[string]any)["registration"] != "station-archive" {
@@ -176,4 +192,116 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 	if nativeCalls.Load() != beforeOffline || f.handler.chat.wechat != nil {
 		t.Fatalf("offline receipt retrieval contacted or started an application worker: calls before=%d after=%d", beforeOffline, nativeCalls.Load())
 	}
+}
+
+func exerciseLegacySurfSupplement(t *testing.T, f *localHomeFixture, legacy, original string, fixture legacyWechatSnapshotFixture, primary, secondary string) string {
+	t.Helper()
+	req := func(method, path string, expected int) map[string]any {
+		t.Helper()
+		code, data := f.request(method, path, nil, false)
+		if code != expected {
+			t.Fatalf("%s %s = %d want %d: %#v", method, path, code, expected, data)
+		}
+		return data
+	}
+	if result := req("GET", primary+"/surf", 200); result["settings_status"] != "missing" {
+		t.Fatal("old snapshot should still work", result)
+	}
+	settings := []byte(`{"settings":{"enabled":true,"force_share":true,"interval_minutes":45,"max_sessions_per_day":3,"topics":["海洋故事"],"threads":["synthetic-target@chatroom"],"interaction_grants":[{"platform_account":"synthetic-unmigrated-account"}],"discovery":{"sources":[{"name":"测试来源","url":"https://synthetic.example/feed?token=synthetic-url-secret","enabled":true,"kind":"text","type":"rss"}],"weights":{"search":15},"cooldown_days":7,"max_sources":2,"max_depth":1}}}`)
+	history := []byte(`{"version":1,"items":[{"item":{"id":"known","title":"合成收藏","url":"https://synthetic.example/story?private=synthetic-url-secret"},"bookmarked":true,"shared":{"synthetic-target@chatroom":"2026-01-01T12:00:00Z"}}],"sessions":[
+		{"account":"one","thread":"host:surf:one","at":"2026-01-03T12:00:00Z","state":"bookmarked","selected":"known","interest":"合成兴趣","candidates":[{"id":"known","title":"合成收藏","url":"https://synthetic.example/story?private=synthetic-url-secret","summary":"synthetic-unmigrated-body"}],"observations":[{"url":"https://synthetic.example/story","state":"body_read","job_id":"synthetic-unmigrated-job","offset":1,"returned_characters":10,"total_characters":15}]},
+		{"account":"one","thread":"allowed@chatroom","at":"2026-01-02T12:00:00Z","state":"shared","interest":"synthetic-hidden-thread-interest"},
+		{"account":"one","thread":"host:surf:one","at":"2026-01-01T12:00:00Z","state":"browsing","candidates":[{"id":"known","url":"https://synthetic.example/story?private=synthetic-url-secret"}]},
+		{"account":"two","thread":"host:surf:two","at":"2026-01-04T12:00:00Z","interest":"synthetic-other-account"},
+		{"thread":"allowed@chatroom","at":"2026-01-04T12:00:00Z","state":"synthetic-unbound-row"}]}`)
+	mustWriteSnapshotFixture(t, filepath.Join(legacy, "admin", legacySurfSettingsFile), settings)
+	mustWriteSnapshotFixture(t, filepath.Join(legacy, "admin", legacySurfHistoryFile), history)
+	secondaryDir := filepath.Join("admin", "accounts", wechatapp.AccountDirectory(fixture.secondary))
+	mustWriteSnapshotFixture(t, filepath.Join(legacy, secondaryDir, legacySurfSettingsFile), []byte(`{"settings":{"interval_minutes":30,"max_sessions_per_day":2,"topics":["次账号话题"]}}`))
+	snapshot := filepath.Join(filepath.Dir(original), "surf-supplement")
+	capture := LegacyWechatSnapshotRequest{LegacyDataDir: legacy, SnapshotDir: snapshot, PrimaryAccount: fixture.primary}
+	preview, err := CaptureLegacyWechatSnapshot(t.Context(), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture.ApplyDigest = preview.ApplyDigest
+	if _, err := CaptureLegacyWechatSnapshot(t.Context(), capture); err != nil {
+		t.Fatal(err)
+	}
+	assertPrivate := func(raw []byte) {
+		t.Helper()
+		for _, token := range []string{"synthetic-url-secret", "synthetic-unmigrated-", "synthetic-other-account", "synthetic-unbound-row", "synthetic-hidden-thread-interest"} {
+			if strings.Contains(string(raw), token) {
+				t.Fatalf("surf projection retained %s", token)
+			}
+		}
+	}
+	primaryHistory := filepath.Join(snapshot, "admin", legacySurfHistoryFile)
+	valid := mustReadSnapshotFixture(t, primaryHistory)
+	assertPrivate(valid)
+	assertPrivate(mustReadSnapshotFixture(t, filepath.Join(snapshot, "admin", legacySurfSettingsFile)))
+	source, err := json.Marshal(legacyImportSource{Root: snapshot, LegacyHostRoot: legacy, Primary: fixture.primary, Stopped: true, ManifestDigest: preview.ManifestDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteSnapshotFixture(t, filepath.Join(f.dir, "apps", "wechat", legacySurfSourceFile), source)
+	got := req("GET", primary+"/surf", 200)
+	configuration := got["settings"].(map[string]any)
+	if got["schedule"] != "paused" || got["history_available"] != true || configuration["enabled"] != true || configuration["interval_max_minutes"] != float64(90) {
+		t.Fatal("old settings were activated or lost", got)
+	}
+	discovery := configuration["discovery"].(map[string]any)
+	if discovery["sources"].([]any)[0].(map[string]any)["site"] != "synthetic.example" {
+		t.Fatal("configured source missing", discovery)
+	}
+	other := req("GET", secondary+"/surf", 200)
+	if other["history_available"] != false || other["settings"].(map[string]any)["topics"].([]any)[0] != "次账号话题" {
+		t.Fatal("secondary account scope mismatch", other)
+	}
+	req("GET", secondary+"/surf?part=history", 404)
+	req("GET", primary+"/surf?limit=1", 400)
+	response, err := f.client.Post(f.server.URL+primary+"/surf", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("unexpected surf write status: %d", response.StatusCode)
+	}
+	page := req("GET", primary+"/surf?part=history&limit=1", 200)
+	first := page["sessions"].([]any)[0].(map[string]any)
+	if first["thread"] != "" || first["candidates"].([]any)[0].(map[string]any)["bookmarked"] != true ||
+		first["observations"].([]any)[0].(map[string]any)["returned_characters"] != float64(10) {
+		t.Fatal("history lost scoped bookmark or evidence", page)
+	}
+	after := "&after=" + url.QueryEscape(page["next_after"].(string))
+	next := req("GET", primary+"/surf?part=history"+after, 200)
+	if len(next["sessions"].([]any)) != 1 || next["sessions"].([]any)[0].(map[string]any)["thread"] != "" ||
+		next["sessions"].([]any)[0].(map[string]any)["candidates"].([]any)[0].(map[string]any)["bookmarked"] != nil {
+		t.Fatal("conversation without history grant was returned", next)
+	}
+	worker, err := f.handler.chat.wechat.worker(wechatapp.ConnectionID(fixture.primary), false)
+	if err != nil || worker == nil {
+		t.Fatalf("synthetic worker unavailable: %v", err)
+	}
+	worker.mu.Lock()
+	worker.policy.HistoryGrants = map[string]time.Time{"allowed@chatroom": time.Now()}
+	worker.mu.Unlock()
+	req("GET", primary+"/surf?part=history"+after, 409)
+	granted := req("GET", primary+"/surf?part=history&limit=2", 200)
+	if granted["sessions"].([]any)[1].(map[string]any)["thread"] != "allowed@chatroom" {
+		t.Fatal("current history authorization not applied", granted)
+	}
+	worker.mu.Lock()
+	worker.policy.HistoryGrants = nil
+	worker.mu.Unlock()
+	req("GET", primary+"/surf?part=history&after="+url.QueryEscape(granted["next_after"].(string)), 409)
+	mustWriteSnapshotFixture(t, primaryHistory, append(append([]byte{}, valid...), '\n'))
+	req("GET", primary+"/surf?part=history", 422)
+	req("GET", primary+"/surf", 200)
+	mustWriteSnapshotFixture(t, primaryHistory, valid)
+	if string(mustReadSnapshotFixture(t, filepath.Join(legacy, "admin", legacySurfHistoryFile))) != string(history) {
+		t.Fatal("old surf history was modified")
+	}
+	return snapshot
 }

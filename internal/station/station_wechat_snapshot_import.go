@@ -145,7 +145,7 @@ func (guard *legacySnapshotGuard) verify(ctx context.Context, root *os.Root) err
 	// Hash all manifest inputs again, but skip SQLite quick_check.  Snapshot
 	// creation and the explicit snapshot --verify command retain quick_check;
 	// importing must not turn routine source consumption into a costly DB scan.
-	plan, err := planLegacyWechatSnapshot(ctx, root, marker.DataRoot, guard.manifest.Primary, false)
+	plan, err := planLegacyWechatSnapshot(ctx, root, marker.DataRoot, guard.manifest.Primary, false, true)
 	if err != nil {
 		return errLegacySnapshotIntegrity
 	}
