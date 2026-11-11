@@ -225,7 +225,7 @@ func (e localYuEInvocation) checkSource(ctx context.Context, args localYuEJobInp
 			return errors.New("YuE 原参考成品的来源或内容已变化")
 		}
 	}
-	return nil
+	return t.checkProjectRequestMemory(ctx, args.Trace, args.Origin)
 }
 
 func (e localYuEInvocation) submitYuE(ctx context.Context, job pluginhost.Job, args localYuEJobInput, deploy localYuEDeployment, reference []byte) pluginhost.Job {

@@ -110,6 +110,11 @@ func (e localYuEInvocation) jobAction(ctx context.Context, raw json.RawMessage) 
 	}
 	var view map[string]any
 	err = e.tool.projectTools.yue.Use(ctx, g.FishID, args.Binding, false, func(client localComfyAudioClient) error {
+		if !job.CancelRequested {
+			if err := e.checkSource(ctx, args); err != nil {
+				return err
+			}
+		}
 		remote, err := client.AudioStatus(ctx, ref)
 		if err != nil {
 			return err

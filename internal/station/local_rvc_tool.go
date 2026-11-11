@@ -407,7 +407,7 @@ func (e localRVCInvocation) checkSource(ctx context.Context, args localRVCInput,
 	if bound.artifact.SHA256 != args.Artifact.SHA256 || bound.check(ctx) != nil {
 		return errors.New("RVC 原成品已变更或遗忘")
 	}
-	return nil
+	return t.checkProjectRequestMemory(ctx, args.Trace, args.Origin)
 }
 
 func (r localRVCRemoteJob) matches(args localRVCInput) bool {

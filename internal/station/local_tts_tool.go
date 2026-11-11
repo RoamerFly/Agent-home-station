@@ -205,7 +205,11 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 		return job, err
 	}
 	defer release()
-	result, err := s.tts.Synthesize(jobCtx, grant.FishID, binding, request)
+	sourceErr := t.checkProjectRequestMemory(jobCtx, t.traceID, source)
+	var result localTTSResult
+	if sourceErr == nil {
+		result, err = s.tts.Synthesize(jobCtx, grant.FishID, binding, request)
+	}
 	s.update.Lock()
 	defer s.update.Unlock()
 	save, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -218,7 +222,8 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 	} else {
 		return job, currentErr
 	}
-	if job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
+	if sourceErr != nil || job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil ||
+		t.checkProjectRequestMemory(jobCtx, t.traceID, source) != nil {
 		return host.store.FinishJob(save, job.ID, job.Revision, "cancelled", nil)
 	}
 	if err != nil {
@@ -249,7 +254,8 @@ func (t *localToolSet) runLocalTTS(ctx context.Context, s *localProjectTools, ho
 	} else {
 		return job, currentErr
 	}
-	if job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil {
+	if job.CancelRequested || jobCtx.Err() != nil || !t.access.current(grant) || t.run.CheckSource(jobCtx) != nil ||
+		t.checkProjectRequestMemory(jobCtx, t.traceID, source) != nil {
 		return host.store.FinishJob(save, job.ID, job.Revision, "cancelled", nil)
 	}
 	if err != nil {
@@ -449,7 +455,7 @@ func (t *localToolSet) localTTSJobSourceValid(ctx context.Context, grant localWo
 	}
 	if args.Origin != nil && args.Trace != "" && job.Context.SourceVersions[args.Origin.EventID] == args.Origin.Revision &&
 		t.access.home.artifacts.sourceValid(localArtifact{Fish: grant.FishID, Owner: grant.OwnerID, Request: args.Trace, Source: args.Origin}) {
-		return nil
+		return t.checkProjectRequestMemory(ctx, args.Trace, args.Origin)
 	}
 	// Jobs made before 0.1.1 did not persist Origin and Trace.  A completed
 	// job is still readable only if its committed artifact supplies a matching

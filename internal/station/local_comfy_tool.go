@@ -205,7 +205,7 @@ func (e localComfyInvocation) checkSource(ctx context.Context, args localComfyJo
 		!t.access.home.artifacts.sourceValid(localArtifact{Fish: g.FishID, Owner: g.OwnerID, Request: args.Trace, Source: args.Origin}) {
 		return errors.New("ComfyUI 原请求或本机授权已变化")
 	}
-	return nil
+	return t.checkProjectRequestMemory(ctx, args.Trace, args.Origin)
 }
 
 func (e localComfyInvocation) checkWorkflow(args localComfyJobInput) error {
@@ -241,6 +241,12 @@ func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, ar
 			return err
 		}
 		job = claimed
+		if err := e.checkSource(ctx, args); err != nil {
+			save, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancel()
+			job = e.failComfyJob(save, job, "source_authorization_changed_before_submit")
+			return err
+		}
 		err = client.Submit(ctx, prepared)
 		save, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()

@@ -3,6 +3,7 @@ package station
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -184,6 +185,43 @@ func writeLocalComfyChatWorkflow(t *testing.T, root string) {
 	t.Helper()
 	graph := []byte(`{"1":{"class_type":"EmptyImage","inputs":{"width":32,"height":24,"batch_size":2,"color":16711680}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0],"filename_prefix":"owner-prefix"}}}`)
 	writeLocalComfyRegistry(t, root, graph, `[{"id":"width","label":"Width","kind":"integer","minimum":16,"maximum":512,"node":"1","input":"width"}]`)
+}
+
+func TestLocalComfyRechecksOriginalApplicationMemoryBeforeResult(t *testing.T) {
+	f, _, _, source := memoryEvidenceFixture(t)
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	original, in := memoryEvidenceTools(t, f, "comfy-private-origin")
+	memoryEvidenceSearch(t, original, source)
+	backend := &syntheticLocalComfy{root: root, fish: in.Account}
+	setUpLocalComfyChat(t, f, backend)
+	// Call the host implementation directly to exercise its boundary even if
+	// the current model tool policy withholds generation after a Douyin read.
+	raw, err := original.callLocalComfy(t.Context(), localComfyStartTool, json.RawMessage(`{"workflow_id":"smoke","inputs":{"width":48}}`))
+	var submitted struct {
+		ID string `json:"job_id"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &submitted) != nil || submitted.ID == "" || backend.submits != 1 {
+		t.Fatal("synthetic original was not submitted", raw, err)
+	}
+	status, _ := json.Marshal(map[string]string{"job_id": submitted.ID, "action": "status"})
+	later, _ := memoryEvidenceTools(t, f, "comfy-later-status")
+	if value, err := later.Call(t.Context(), localComfyJobTool, status); err != nil || !strings.Contains(value, "running") {
+		t.Fatal("authorized original result status unavailable", value, err)
+	}
+	_, view := f.request("GET", localDouyinWebRoute, nil, false)
+	if code, out := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_memory", "memory_scope": douyinMemoryWorks, "allow_memory": false, "revision": view["revision"]}, true); code != 200 {
+		t.Fatal(code, out)
+	}
+	backend.state = comfyui.Completed
+	if value, err := later.Call(t.Context(), localComfyJobTool, status); err == nil || value != "" || backend.fetches != 0 {
+		t.Fatal("revoked original remained readable", value, err, backend.fetches)
+	}
+	backend.state = comfyui.Running
+	cancel, _ := json.Marshal(map[string]string{"job_id": submitted.ID, "action": "cancel"})
+	if value, err := later.Call(t.Context(), localComfyJobTool, cancel); err != nil || !strings.Contains(value, "cancelled") || backend.cancels != 1 || backend.submits != 1 {
+		t.Fatal("cancel was unavailable or replayed the original", value, err, backend.cancels, backend.submits)
+	}
 }
 
 func TestLocalComfyChatJobsAndArtifacts(t *testing.T) {

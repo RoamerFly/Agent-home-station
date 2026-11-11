@@ -368,6 +368,9 @@ func (p *localProjectPolicy) Check(ctx context.Context, job pluginhost.Job, cap 
 		!p.tool.access.current(p.grant) || p.tool.run.CheckSource(ctx) != nil {
 		return errors.New("项目工具任务来源或本机授权已变化")
 	}
+	if err := p.tool.checkAppObservations(ctx); err != nil {
+		return err
+	}
 	if p.input != nil {
 		if err := p.input.check(ctx); err != nil {
 			return err

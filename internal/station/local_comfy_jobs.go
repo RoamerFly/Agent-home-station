@@ -71,6 +71,11 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	}
 	var view map[string]any
 	err = e.tool.projectTools.comfy.Use(ctx, g.FishID, args.Binding, false, func(client localComfyClient) error {
+		if !job.CancelRequested {
+			if err := e.checkSource(ctx, args); err != nil {
+				return err
+			}
+		}
 		state, err := client.Status(ctx, ref)
 		if err != nil {
 			return err

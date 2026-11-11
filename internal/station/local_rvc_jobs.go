@@ -54,6 +54,9 @@ func (e localRVCInvocation) jobAction(ctx context.Context, raw json.RawMessage) 
 		return "", err
 	}
 	if job.Recovery() == "terminal" {
+		if in.Action == "cancel" {
+			return localProcessJSON(rvcJobView(job))
+		}
 		return localProcessJSON(e.finishedView(ctx, job))
 	}
 	if in.Action == "cancel" && !job.CancelRequested {
@@ -122,7 +125,7 @@ func (e localRVCInvocation) readJob(ctx context.Context, id string, cancelOnly b
 		}
 		return job, args, nil, errors.New("原 RVC 任务不可用或授权已变化")
 	}
-	if job.State != "completed" && (cancelOnly || job.CancelRequested) {
+	if cancelOnly || job.State != "completed" && job.CancelRequested {
 		return job, args, nil, nil
 	}
 	artifact, err := t.access.home.artifacts.bindProjectArtifact(ctx, args.Artifact.ID, t.access, g)

@@ -188,6 +188,20 @@ func (h *localChatService) checkRequestMemoryEvidence(ctx context.Context, store
 	return t.checkDouyinMemoryResults(ctx)
 }
 
+// Reuse the original request's durable proofs when a later turn checks a
+// generation job. The polling turn's permissions cannot replace them.
+func (t *localToolSet) checkProjectRequestMemory(ctx context.Context, trace string, source *companion.SourceRef) error {
+	if err := t.checkAppObservations(ctx); err != nil {
+		return err
+	}
+	if t.publications == nil || t.store == nil || source == nil || trace == "" {
+		return errors.New("项目工具原请求的应用资料无法核对")
+	}
+	in := companion.Input{Channel: companion.LocalChannel, Account: t.access.fishID, Thread: t.access.ownerID,
+		Sender: t.access.ownerID, TraceID: trace, Source: source, MessageTime: source.OccurredAt}
+	return t.publications.checkRequestMemoryEvidence(ctx, t.store, in)
+}
+
 // Walk exact source revisions through immutable parent links. A child created
 // by another request does not shed the authority of its input artifact.
 func (h *localChatService) artifactMemoryEvidence(ctx context.Context, a localArtifact) (bool, error) {
