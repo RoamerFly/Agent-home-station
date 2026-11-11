@@ -4,9 +4,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import stat
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 
 SCRIPT = Path(__file__).with_name("stage_plugin_catalog.py")
@@ -270,14 +272,34 @@ class StagePluginCatalogTests(unittest.TestCase):
             source = root / "plugins"
             source.mkdir()
             write_package(source)
-            real_is_junction = Path.is_junction
+            real_lstat = Path.lstat
 
-            def synthetic_junction(path):
-                return path.name == "runtime" or real_is_junction(path)
+            def synthetic_junction(path, *args, **kwargs):
+                if path.name == "runtime":
+                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_reparse_tag=0xA0000003)
+                return real_lstat(path, *args, **kwargs)
 
-            with mock.patch.object(Path, "is_junction", synthetic_junction):
+            with mock.patch.object(Path, "lstat", synthetic_junction):
                 with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_links_forbidden"):
                     stage_plugin_catalog.stage(source, root / "out")
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction test")
+    def test_rejects_real_windows_junction_member(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "plugins"
+            source.mkdir()
+            package = write_package(source)
+            junction = package / "linked-runtime"
+            target = package / "runtime"
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+                capture_output=True, check=False,
+            )
+            if result.returncode:
+                self.skipTest("junction creation unavailable")
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_links_forbidden"):
+                stage_plugin_catalog.stage(source, root / "out")
 
     def test_application_descriptor_uses_same_integrity_and_update_contract(self):
         with tempfile.TemporaryDirectory() as temp:

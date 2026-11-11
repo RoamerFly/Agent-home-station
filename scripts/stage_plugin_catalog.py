@@ -11,11 +11,13 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import sys
 import tempfile
 
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 # These are host-side declarative metadata tests/source, deliberately adjacent
 # to package directories. They are not plugin package members and must never be
 # copied into a portable runtime catalog.
@@ -29,7 +31,10 @@ class StageError(ValueError):
 def _reparse(path):
     """Treat Windows junctions like links; a catalog must be a real tree."""
     try:
-        return path.is_symlink() or path.is_junction()
+        info = path.lstat()
+        return stat.S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) == IO_REPARSE_TAG_MOUNT_POINT
+    except FileNotFoundError:
+        return False
     except OSError:
         # A failed reparse-point query is not safe evidence for traversal.
         return True
