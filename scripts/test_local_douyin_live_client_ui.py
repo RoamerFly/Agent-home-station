@@ -8,7 +8,7 @@ import tempfile
 
 from playwright.sync_api import expect, sync_playwright
 
-from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, open_application, start, stop
+from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, open_configuration, start, stop
 
 
 def verify(binary, output):
@@ -56,7 +56,7 @@ def verify(binary, output):
                         page.locator("#initialize-button").click()
                         page.locator("#initialize-button").wait_for(state="hidden")
                     home_tab(page, "apps")
-                    open_application(page, "抖音")
+                    open_configuration(page, "抖音", "直播与本机预览")
                     form = page.get_by_role("form", name="直播伴侣程序检查")
                     path = page.get_by_role("textbox", name="直播伴侣主程序路径")
                     button = form.get_by_role("button", name="检查程序", exact=True)
@@ -69,11 +69,11 @@ def verify(binary, output):
                     expect(form).to_contain_text("仍待核对")
                     assert calls == [{"executable": r"E:\synthetic\直播伴侣.exe"}]
                     form.scroll_into_view_if_needed()
-                    page.locator("#app-dialog").screenshot(path=str(output / f"live-client-trusted-{width}-{color}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"live-client-trusted-{width}-{color}.png"))
                     # Editing a draft invalidates the old result; refreshing keeps the draft.
                     path.fill(r"E:\synthetic\other.exe")
                     expect(form).not_to_contain_text("1.2.3.4")
-                    page.locator("#app-dialog-refresh").click()
+                    page.locator("#app-configuration-refresh").click()
                     expect(path).to_have_value(r"E:\synthetic\other.exe")
                     payload = {"state": "metadata_missing", "file": {"architecture": "x64"}, "control_available": False,
                                "reason": "版本资料不完整，请确认选中了直播伴侣主程序"}
@@ -89,16 +89,16 @@ def verify(binary, output):
                     form.scroll_into_view_if_needed()
                     assert_no_horizontal_overflow(page, f"client inspect {width}")
                     assert form.evaluate("e => e.scrollWidth <= e.clientWidth + 1"), "client form overflows"
-                    page.locator("#app-dialog").screenshot(path=str(output / f"live-client-{width}-{color}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"live-client-{width}-{color}.png"))
                     # A closed dialog discards a late authentication error and cancels its fetch.
                     page.evaluate("window.delayClientInspection = true")
                     status, payload = 401, {"error": "synthetic late authentication"}
                     button.click()
                     expect(form.get_by_role("button", name="检查中…", exact=True)).to_be_disabled()
                     expect(path).to_be_disabled()
-                    page.locator("#app-dialog-close").click()
+                    page.locator("#app-configuration-close").click()
                     page.wait_for_timeout(750)
-                    open_application(page, "抖音")
+                    open_configuration(page, "抖音", "直播与本机预览")
                     expect(page.locator("#home-view")).to_be_visible()
                     expect(path).to_have_value(r"E:\synthetic\other.exe")
                     expect(form).not_to_contain_text("synthetic late authentication")

@@ -8,7 +8,7 @@ import tempfile
 
 from playwright.sync_api import sync_playwright
 
-from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, open_application, start, stop
+from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, close_application, open_configuration, start, stop
 
 
 def verify(binary, output):
@@ -161,15 +161,15 @@ def verify(binary, output):
                         page.locator("#initialize-button").wait_for(state="hidden")
                     home_tab(page, "apps")
                     page.locator("#apps-list[aria-busy='false']").wait_for()
-                    open_application(page, "抖音")
+                    open_configuration(page, "抖音")
                     page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
                     assert page.get_by_text("API 接入（可选）", exact=True).count() == 0
                     assert page.get_by_label("抖音 Client Key", exact=True).count() == 0
-                    page.get_by_role("button", name="资料与版本", exact=True).click()
-                    page.get_by_text("接入版本", exact=True).wait_for()
+                    page.locator("#app-configuration-nav").get_by_role("button", name="资料与版本", exact=True).click()
+                    page.locator("#app-configuration-body").get_by_text("接入版本", exact=True).wait_for()
                     assert page.get_by_text("源码", exact=False).count() == 0
                     page.screenshot(path=str(output / f"douyin-integration-version-{suffix}.png"), full_page=True)
-                    page.get_by_role("button", name="账号与权限", exact=True).click()
+                    page.locator("#app-configuration-nav").get_by_role("button", name="账号与授权", exact=True).click()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
                     assert page.get_by_label("允许静音观察视频播放", exact=True).count() == 0
@@ -183,8 +183,8 @@ def verify(binary, output):
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).wait_for()
                     # The next ordinary polling response may only move to an unconfirmed state.
                     view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-1", "read_enabled": False, "read_scope": "home"}
-                    page.locator("#app-dialog-close").click()
-                    open_application(page, "抖音")
+                    page.locator("#app-configuration-close").click()
+                    open_configuration(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
                     assert page.get_by_role("button", name="允许读取首页文字", exact=True).count() == 0
                     assert page.get_by_label("读取范围", exact=True).count() == 0
@@ -193,6 +193,7 @@ def verify(binary, output):
                     page.get_by_text("网页登录资料已保存", exact=True).wait_for()
                     page.get_by_text("最近主人确认：", exact=False).wait_for()
                     assert page.get_by_text("登录状态以网页为准，保存后可用于本软件已支持的抖音功能。", exact=True).count() == 1
+                    open_configuration(page, "抖音", "作品发布")
                     page.get_by_text("普通账号发布许可未开启。", exact=True).wait_for()
                     assert page.get_by_role("button", name="登录创作者中心", exact=True).is_disabled()
                     page.get_by_role("checkbox", name="允许普通账号发布", exact=True).check()
@@ -200,6 +201,7 @@ def verify(binary, output):
                     page.get_by_text("已保存普通账号发布许可。", exact=True).wait_for()
                     assert view["publish_enabled"] is True and view["read_enabled"] is False, "发布许可不能悄悄开启网页文字读取"
                     assert page.get_by_role("button", name="登录创作者中心", exact=True).is_enabled()
+                    open_configuration(page, "抖音", "内容浏览")
                     page.get_by_role("button", name="允许读取首页文字", exact=True).click()
                     page.get_by_role("button", name="停止网页读取", exact=True).wait_for()
                     page.get_by_text("已允许读取实际网页文字。", exact=False).wait_for()
@@ -218,8 +220,8 @@ def verify(binary, output):
                     view.pop("visual_enabled", None)
                     view["visual_ready"] = False
                     view["visual_reason"] = "本机视觉工具尚未就绪，请先启用并配置媒体理解。"
-                    page.locator("#app-dialog-close").click()
-                    open_application(page, "抖音")
+                    page.locator("#app-configuration-close").click()
+                    open_configuration(page, "抖音", "内容浏览")
                     playback = page.get_by_label("允许静音观察视频播放", exact=True)
                     playback.wait_for()
                     assert not playback.is_checked(), "扩大文字范围不得自动开启播放许可；旧状态缺省关闭"
@@ -232,25 +234,27 @@ def verify(binary, output):
                     comments = page.get_by_label("允许读取视频评论", exact=True)
                     assert not comments.is_checked(), "扩大网页读取范围不能自动打开评论读取"
                     assert not comments.is_disabled(), "网页可用时主人可单独开启评论读取"
+                    open_configuration(page, "抖音", "互动任务")
                     likes = page.get_by_label("允许点赞", exact=True)
                     replies = page.get_by_label("允许回复评论", exact=True)
                     assert not likes.is_checked(), "扩大网页读取范围不能自动打开点赞"
                     assert not replies.is_checked() and replies.is_disabled(), "回复评论必须先取得评论读取许可"
+                    open_configuration(page, "抖音", "内容浏览")
                     assert visual.is_disabled(), "视觉工具未就绪时不能误启用画面分析"
                     page.get_by_text("本机视觉工具尚未就绪，请先启用并配置媒体理解。", exact=False).wait_for()
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-visual-unavailable-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-visual-unavailable-{suffix}.png"))
                     visual_ready = True
                     view["visual_ready"] = True
                     view.pop("visual_reason", None)
-                    page.locator("#app-dialog-close").click()
-                    open_application(page, "抖音")
+                    page.locator("#app-configuration-close").click()
+                    open_configuration(page, "抖音", "内容浏览")
                     visual = page.get_by_label("允许本机分析视频画面", exact=True)
                     assert not visual.is_disabled(), "视觉工具就绪后应允许主人单独开启画面分析"
                     visual.check()
                     page.get_by_text("已允许使用本机视觉分析视频画面。", exact=True).wait_for()
                     assert visual.is_checked() and not playback.is_checked() and not audio.is_checked(), "画面分析许可不能开启播放或音轨转写"
                     page.get_by_text("交给媒体理解中配置的视觉服务处理", exact=False).wait_for()
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-visual-enabled-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-visual-enabled-{suffix}.png"))
                     visual.uncheck()
                     page.get_by_text("已停止视频画面分析。", exact=True).wait_for()
                     assert not visual.is_checked(), "主人撤销画面分析后必须立即反映"
@@ -263,7 +267,7 @@ def verify(binary, output):
                     assert page.get_by_text("本机语音识别工具未就绪，请先启用并配置识别模型。", exact=True).count() == 1, "同一故障只在控件旁展示一次"
                     assert revision == previous_revision and not audio.is_checked(), "识别工具未就绪时不能保存许可"
                     assert not playback.is_checked()
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-audio-unavailable-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-audio-unavailable-{suffix}.png"))
                     asr_ready = True
                     audio.check()
                     page.get_by_text("已允许本机转写视频音轨。", exact=True).wait_for()
@@ -282,6 +286,7 @@ def verify(binary, output):
                     page.evaluate("window.fixtureDelayWebLogin = false")
                     page.get_by_text("已允许读取视频评论。", exact=True).wait_for()
                     assert comments.is_checked() and audio.is_checked() and playback.is_checked(), "评论读取不得覆盖现有媒体许可"
+                    open_configuration(page, "抖音", "互动任务")
                     likes = page.get_by_label("允许点赞", exact=True)
                     replies = page.get_by_label("允许回复评论", exact=True)
                     assert not replies.is_disabled(), "评论读取保存后应允许主人单独开启回复评论"
@@ -298,7 +303,8 @@ def verify(binary, output):
                     assert view["likes_enabled"] is True and view["replies_enabled"] is True, "回复许可必须独立保存"
                     replies.scroll_into_view_if_needed()
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin interaction permissions")
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-interactions-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-interactions-{suffix}.png"))
+                    open_configuration(page, "抖音", "内容浏览")
                     audio.uncheck()
                     page.get_by_text("已停止视频音轨转写。", exact=True).wait_for()
                     assert playback.is_checked(), "撤销转写不能撤销播放观察"
@@ -358,9 +364,9 @@ def verify(binary, output):
                     playback.check()
                     page.get_by_text("已允许静音观察视频播放。", exact=True).wait_for()
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin playback permission")
-                    assert page.locator("#app-dialog").evaluate("node => node.scrollTop") == 0, "应用弹窗外层不能随内部操作滚动并裁切标题"
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-playback-{suffix}.png"))
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-audio-{suffix}.png"))
+                    assert page.locator("#app-configuration").evaluate("node => node.scrollTop") == 0, "应用弹窗外层不能随内部操作滚动并裁切标题"
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-playback-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-audio-{suffix}.png"))
                     before_gets = get_count
                     scope_conflict = True
                     scope.select_option("home")
@@ -370,8 +376,9 @@ def verify(binary, output):
                     assert page.get_by_label("读取范围", exact=True).input_value() == "home_and_videos", "失败后必须保留服务端读取范围"
                     assert playback.is_checked()
                     assert audio.is_checked()
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-read-{suffix}.png"))
                     # Re-entering Creator Center starts a fresh login and revokes its old publish grant.
+                    open_configuration(page, "抖音", "作品发布")
                     page.get_by_role("button", name="登录创作者中心", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     assert view["read_enabled"] is False, "重新登录必须撤销上一账号的首页文字读取许可"
@@ -386,8 +393,8 @@ def verify(binary, output):
                     assert audio.count() == 0
                     assert visual.count() == 0
                     view = {"revision": revision, "state": "unconfirmed", "active": False, "available": True, "attempt_id": "attempt-2", "read_enabled": False, "read_scope": "home"}
-                    page.locator("#app-dialog-close").click()
-                    open_application(page, "抖音")
+                    page.locator("#app-configuration-close").click()
+                    open_configuration(page, "抖音")
                     page.get_by_text("等待主人确认", exact=True).wait_for()
                     # Removing old profile data stays available even after the browser window is gone.
                     page.get_by_role("button", name="移除网页登录资料", exact=True).click()
@@ -400,25 +407,25 @@ def verify(binary, output):
                     assert len(requests) == 33, f"unexpected web-login request count: {len(requests)}"
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")
-                    page.locator("#app-dialog").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-{suffix}.png"))
 
                     # A delayed 401 from a closed detail must not log the owner out or repaint stale state.
-                    page.locator("#app-dialog-close").click()
+                    page.locator("#app-configuration-close").click()
                     late_401 = True
                     page.evaluate("window.fixtureDelayWebLogin = true")
-                    page.get_by_role("button", name="管理抖音", exact=True).click()
-                    page.locator("#app-dialog").wait_for(state="visible")
-                    page.locator("#app-dialog-close").click()
+                    page.locator("#app-configuration-open").click()
+                    page.locator("#app-configuration").wait_for(state="visible")
+                    page.locator("#app-configuration-close").click()
                     page.evaluate("window.fixtureDelayWebLogin = false")
-                    page.get_by_role("button", name="管理抖音", exact=True).click()
-                    page.locator("#app-dialog").wait_for(state="visible")
+                    page.locator("#app-configuration-open").click()
+                    page.locator("#app-configuration").wait_for(state="visible")
                     page.wait_for_timeout(1100)
                     assert page.locator("#home-view").is_visible(), "late closed-detail 401 must not end the current session"
                     # Logging out also must not let a pending UI poll repopulate the old detail.
-                    page.locator("#app-dialog-close").click()
+                    close_application(page)
                     page.locator("#local-logout-button").click()
                     page.locator("#login-view").wait_for(state="visible")
-                    assert not page.locator("#app-dialog").evaluate("node => node.open")
+                    assert not page.locator("#app-configuration").evaluate("node => node.open")
                     context.close()
                 browser.close()
         finally:

@@ -59,6 +59,8 @@ def open_project_tool(page, name):
 
 
 def close_application(page):
+    if page.locator("#app-configuration").evaluate("node => node.open"):
+        page.locator("#app-configuration-close").click()
     if page.locator("#tool-dialog").evaluate("node => node.open"):
         page.locator("#tool-dialog-close").click()
     if page.locator("#app-dialog").evaluate("node => node.open"):
@@ -79,11 +81,21 @@ def open_application(page, name="微信", section="账号与权限"):
     page.locator("#app-dialog-tabs").get_by_role("button", name=section, exact=True).click()
 
 
+def open_configuration(page, name="微信", section="账号与授权"):
+    dialog = page.locator("#app-configuration")
+    if dialog.evaluate("node => node.open") and not page.locator("#app-configuration-title").inner_text().startswith(name + " ·"):
+        close_application(page)
+    if not dialog.evaluate("node => node.open"):
+        open_application(page, name, "概览")
+        page.locator("#app-configuration-open").click()
+    dialog.locator("#app-configuration-nav").get_by_role("button", name=section, exact=True).click()
+
+
 def refresh_application(page):
-    node = "#app-dialog-refresh" if page.locator("#app-dialog").evaluate("node => node.open") else "#apps-refresh"
+    node = "#app-configuration-refresh" if page.locator("#app-configuration").evaluate("node => node.open") else "#apps-refresh"
     page.locator(node).click()
     page.locator("#apps-list[aria-busy='false']").wait_for(state="attached")
-    open_application(page)
+    open_configuration(page)
 
 
 def assert_no_horizontal_overflow(page, scene):
@@ -452,7 +464,7 @@ def verify(binary, output):
                 source_available = wechat[0]["source_available"]
                 if source_available:
                     assert "有可用版本" in source_state, source_state
-                    open_application(page, section="资料与版本")
+                    open_configuration(page, section="资料与版本")
                     page.get_by_role("button", name="安装接入版本").click()
                     page.get_by_text("已安装", exact=True).wait_for()
                     page.locator("#apps-feedback").get_by_text(re.compile("接入版本已.*家目录")).wait_for()
@@ -465,7 +477,7 @@ def verify(binary, output):
                 page.get_by_role("button", name="管理微信", exact=True).get_by_text("未运行", exact=True).wait_for()
                 if source_available:
                     page.locator("#apps-list").get_by_text("接入版本已安装", exact=True).wait_for()
-                open_application(page)
+                open_configuration(page)
                 page.get_by_text("微信服务未运行", exact=True).wait_for()
                 assert page.get_by_role("button", name="添加账号").count() == 0
                 close_application(page)
@@ -1400,7 +1412,7 @@ def verify(binary, output):
                 page.get_by_label("成品文件", exact=True).fill("作品/合成文档.pdf")
                 page.get_by_role("button", name="登记作品", exact=True).click()
                 page.locator("#artifact-result").filter(has_text=artifact_id).wait_for()
-                open_application(page)
+                open_configuration(page)
                 page.get_by_text("授权作品交付", exact=True).click()
                 page.get_by_label("作品编号", exact=True).fill(artifact_id)
                 page.get_by_label("接收会话", exact=True).fill("synthetic-room@chatroom")

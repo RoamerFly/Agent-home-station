@@ -6,7 +6,7 @@ import tempfile
 
 from playwright.sync_api import expect, sync_playwright
 
-from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, open_application, start, stop
+from test_local_home_ui import assert_no_horizontal_overflow, fulfill_json, home_tab, open_configuration, start, stop
 
 
 def verify(binary, output):
@@ -54,13 +54,13 @@ def verify(binary, output):
                     session = {"id": "synthetic-live", "state": "live", "local_stopped": False, "remote_ended": False}
                     expect(panel).to_contain_text("直播进行中", timeout=8000)
                     home_tab(page, "apps")
-                    open_application(page)
-                    panel = page.locator("#app-dialog").get_by_role("region", name="直播控制")
+                    open_configuration(page)
+                    panel = page.locator("#app-configuration").get_by_role("region", name="直播控制")
                     button = panel.get_by_role("button", name="停止直播", exact=True)
                     expect(button).to_be_enabled()
                     assert_no_horizontal_overflow(page, f"emergency stop {width}")
                     assert panel.evaluate("el => el.scrollWidth <= el.clientWidth + 1")
-                    page.locator("#app-dialog").screenshot(path=str(output / f"live-stop-{width}-{theme}.png"))
+                    page.locator("#app-configuration").screenshot(path=str(output / f"live-stop-{width}-{theme}.png"))
                     button.click()
                     expect(panel).to_contain_text("本机暂时无法确认停止")
                     button.click()

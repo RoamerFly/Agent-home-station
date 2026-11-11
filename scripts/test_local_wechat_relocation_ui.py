@@ -6,7 +6,7 @@ import tempfile
 
 from playwright.sync_api import expect, sync_playwright
 
-from test_local_home_ui import app_connection_payload, assert_no_horizontal_overflow, fulfill_json, home_tab, open_application, start, stop
+from test_local_home_ui import app_connection_payload, assert_no_horizontal_overflow, fulfill_json, home_tab, open_configuration, start, stop
 
 
 def verify(binary, output):
@@ -77,8 +77,8 @@ def verify(binary, output):
                         page.locator("#initialize-button").wait_for(state="hidden")
                     home_tab(page, "apps")
                     page.locator("#apps-list[aria-busy='false']").wait_for()
-                    open_application(page)
-                    dialog = page.locator("#app-dialog")
+                    open_configuration(page)
+                    dialog = page.locator("#app-configuration")
                     panel = dialog.get_by_role("region", name="微信搬迁核对")
                     expect(panel).to_have_count(1)
                     assert not calls

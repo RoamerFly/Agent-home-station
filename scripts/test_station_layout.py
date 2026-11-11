@@ -630,6 +630,36 @@ def verify_application_configuration(page, output):
     page.unroute("**/api/local/apps/synthetic-configuration/configuration")
 
 
+def open_configuration(page, app, section="概览"):
+    open_application(page, app, "概览")
+    page.locator("#app-configuration-open").click()
+    page.locator("#app-configuration-nav").get_by_role("button", name=section, exact=True).click()
+
+
+def verify_summary_configuration_boundary(page, output):
+    home_tab(page, "apps")
+    for app in ("微信", "抖音"):
+        close_application(page)
+        open_application(page, app, "概览")
+        body = page.locator("#app-dialog-body")
+        for name in ("概览", "账号与权限", "应用能力", "资料与版本"):
+            page.locator("#app-dialog-tabs").get_by_role("button", name=name, exact=True).click()
+            expect(body.locator("form,input,textarea,select")).to_have_count(0)
+            assert body.locator("button").count() == 1
+        page.locator("#app-dialog-tabs").get_by_role("button", name="账号与权限", exact=True).click()
+        shortcut = body.get_by_role("button", name="管理账号与授权", exact=True)
+        shortcut.click()
+        expect(page.locator("#app-configuration")).to_be_visible()
+        expect(page.locator("#app-configuration-nav [aria-pressed=true]")).to_have_text("账号与授权")
+        expect(body.locator("form,input,textarea,select")).to_have_count(0)
+        page.keyboard.press("Escape")
+        expect(page.locator("#app-configuration")).not_to_be_visible()
+        expect(shortcut).to_be_focused()
+        expect(page.locator("#app-dialog-tabs [aria-pressed=true]")).to_have_text("账号与权限")
+        page.screenshot(path=str(output / ("wechat-summary.png" if app == "微信" else "douyin-summary.png")))
+    close_application(page)
+
+
 def verify(binary, output):
     output.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='synthetic-layout-',dir=output) as temporary:
@@ -651,12 +681,13 @@ def verify(binary, output):
                 initial=fixed_shell(page)
                 verify_glass_views(page,output)
                 verify_application_configuration(page,output)
+                verify_summary_configuration_boundary(page,output)
                 main=context.request.get(origin+'/api/local/model').json()['persona']
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
                 assert page.get_by_role('button',name='安装接入版本',exact=True).count()==0
                 page.screenshot(path=str(output/'applications-desktop.png'))
                 for app,text in [('微信','合成微信偏好：喜欢音乐和简洁表达。'),('抖音','合成抖音偏好：喜欢旅行和摄影。')]:
-                    open_application(page,app,'概览')
+                    open_configuration(page,app)
                     form=page.get_by_role('form',name=app+'子角色',exact=True)
                     form.get_by_role('button',name='编辑',exact=True).click()
                     field=form.get_by_role('textbox',name=app+'子角色设定',exact=True)
@@ -689,23 +720,24 @@ def verify(binary, output):
                 fixed_shell(page,initial)
                 page.screenshot(path=str(output/'settings-desktop-scrolled.png'))
                 home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
-                open_application(page,'微信','概览')
+                open_configuration(page,'微信')
                 form=page.get_by_role('form',name='微信子角色',exact=True)
                 form.get_by_role('button',name='编辑',exact=True).click()
                 field=form.get_by_role('textbox',name='微信子角色设定',exact=True)
                 field.fill('暂未保存的应用草稿')
-                page.locator('#app-dialog-tabs').get_by_role('button',name='资料与版本',exact=True).click()
-                page.locator('#app-dialog-tabs').get_by_role('button',name='概览',exact=True).click()
+                page.locator('#app-configuration-nav').get_by_role('button',name='资料与版本',exact=True).click()
+                page.locator('#app-configuration-nav').get_by_role('button',name='概览',exact=True).click()
                 assert field.input_value()=='暂未保存的应用草稿'
                 # Force a long form body to verify the dialog scrolls and the fixed header stays usable.
                 field.evaluate('node => node.style.minHeight="1000px"')
-                header_top=page.locator('#app-dialog .app-dialog-header').bounding_box()['y']
-                page.locator('#app-dialog-body').evaluate('node => node.scrollTop=node.scrollHeight')
-                assert page.locator('#app-dialog-body').evaluate('node => node.scrollTop')>0
-                assert page.locator('#app-dialog .app-dialog-header').bounding_box()['y']==header_top
+                header_top=page.locator('#app-configuration .app-dialog-header').bounding_box()['y']
+                page.locator('#app-configuration-body').evaluate('node => node.scrollTop=node.scrollHeight')
+                assert page.locator('#app-configuration-body').evaluate('node => node.scrollTop')>0
+                assert page.locator('#app-configuration .app-dialog-header').bounding_box()['y']==header_top
                 fixed_shell(page,initial)
                 page.keyboard.press('Escape')
-                expect(page.locator('#app-dialog')).not_to_be_visible()
+                expect(page.locator('#app-configuration')).not_to_be_visible()
+                close_application(page)
                 home_tab(page,'settings')
                 assert page.locator('#model-persona').input_value()=='未保存的主角色草稿'
                 for width,height,theme in [(1024,600,'light'),(375,740,'light'),(375,600,'dark')]:
@@ -713,16 +745,16 @@ def verify(binary, output):
                     fixed_shell(page)
                     home_tab(page,'apps');page.locator('#apps-list[aria-busy="false"]').wait_for()
                     page.screenshot(path=str(output/f'applications-{width}-{height}-{theme}.png'))
-                    open_application(page,'抖音','概览')
+                    open_configuration(page,'抖音')
                     form=page.get_by_role('form',name='抖音子角色',exact=True)
                     form.get_by_role('button',name='编辑',exact=True).click()
                     field=form.get_by_role('textbox',name='抖音子角色设定',exact=True)
                     expect(field).to_have_value('合成抖音偏好：喜欢旅行和摄影。')
                     page.screenshot(path=str(output/f'dialog-{width}-{height}-{theme}.png'))
-                    dialog=page.locator('#app-dialog').bounding_box()
+                    dialog=page.locator('#app-configuration').bounding_box()
                     assert dialog['x']>=0 and dialog['x']+dialog['width']<=width+1
                     assert dialog['y']>=0 and dialog['y']+dialog['height']<=height+1
-                    assert not page.locator('#app-dialog-body').evaluate('node => node.scrollWidth>node.clientWidth+1')
+                    assert not page.locator('#app-configuration-body').evaluate('node => node.scrollWidth>node.clientWidth+1')
                     form.get_by_role('button',name='取消',exact=True).click()
                     close_application(page)
                 assert not errors, errors

@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import expect, sync_playwright
 
 from test_local_home_ui import (
-    assert_no_horizontal_overflow, fulfill_json, home_tab, open_application, start, stop,
+    assert_no_horizontal_overflow, fulfill_json, home_tab, open_configuration, start, stop,
 )
 
 
@@ -99,6 +99,9 @@ def verify(binary, output):
                             fulfill_json({"items": [{"id": "douyin", "name": "抖音"}]})(route)
                         elif path == "/api/apps/douyin/connections":
                             fulfill_json({"items": []})(route)
+                        elif path == "/api/local/apps/douyin/configuration":
+                            assert request.method == "GET"
+                            route.continue_()
                         elif path == "/api/local/apps/douyin/web-login":
                             assert request.method == "GET"
                             fulfill_json({"revision": 1, "state": "saved", "active": False, "available": True,
@@ -119,10 +122,10 @@ def verify(binary, output):
                         page.locator("#initialize-button").wait_for(state="hidden")
                     home_tab(page, "apps")
                     page.locator("#apps-list[aria-busy='false']").wait_for()
-                    open_application(page, "抖音")
-                    page.get_by_role("button", name="发布记录", exact=True).wait_for()
+                    open_configuration(page, "抖音", "作品发布")
+                    page.get_by_text("暂无抖音发布任务。", exact=True).wait_for()
                     assert publication_reads and not reads and not posts, "interactions must load only on selection"
-                    page.get_by_role("button", name="互动记录", exact=True).click()
+                    page.locator("#app-configuration-nav").get_by_role("button", name="互动任务", exact=True).click()
                     listing = page.get_by_role("list", name="抖音互动记录", exact=True)
                     expect(listing.locator("li")).to_have_count(6)
 
@@ -161,13 +164,14 @@ def verify(binary, output):
                     page.evaluate("window.fixtureHold = true")
                     page.locator('[data-page="next"]').click()
                     page.wait_for_function("typeof window.fixtureRelease === 'function'")
-                    page.locator("#app-dialog-close").click()
-                    closed_dom = page.locator("#app-dialog").inner_html()
+                    page.locator("#app-configuration-close").click()
+                    expect(page.locator("#app-configuration-body")).to_be_empty()
+                    closed_dom = page.locator("#app-configuration").inner_html()
                     page.evaluate("window.fixtureRelease()")
                     page.wait_for_timeout(150)
                     expect(page.locator("#home-view")).to_be_visible()
-                    expect(page.locator("#app-dialog")).not_to_be_visible()
-                    assert page.locator("#app-dialog").inner_html() == closed_dom, "late 401 repainted closed detail"
+                    expect(page.locator("#app-configuration")).not_to_be_visible()
+                    assert page.locator("#app-configuration").inner_html() == closed_dom, "late 401 repainted closed detail"
                     assert not errors and not external, (errors, external)
                     context.close()
                 browser.close()

@@ -2279,7 +2279,7 @@
   let appConfiguration = null;
   function appAccountVisible(id) {
     if (activeView !== "apps" || !$("#app-dialog").open || apps.openID !== id) return false;
-    if (!$("#app-configuration").open) return apps.detailTab === "account";
+    if (!$("#app-configuration").open) return false;
     const section = appConfiguration?.section;
     return section === "account" || (id === "wechat" && section === "conversations");
   }
@@ -2303,6 +2303,10 @@
       }
       view.sections = result.sections;
       view.error = "";
+      if (view.initialSection) {
+        const section = view.initialSection; view.initialSection = "";
+        if (view.sections.some((item) => item.id === section)) { selectAppConfiguration(view, section); return; }
+      }
     } catch (error) {
       if (appConfiguration !== view || sequence !== view.sequence || view.controller.signal.aborted) return;
       if (appSessionExpired([{ status: "rejected", reason: error }])) return;
@@ -3232,7 +3236,7 @@
     }
     switch (section) {
       case "overview":
-        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
+        controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
@@ -3330,13 +3334,13 @@
     body.scrollTop = scroll;
     if (focusConnection) $("#app-configuration-connection")?.focus({ preventScroll: true });
   }
-  function openAppConfiguration() {
+  function openAppConfiguration(initialSection = "overview") {
     const id = apps.openID;
     const record = apps.catalog?.find((row) => row.id === id) || apps.registered?.find((row) => row.id === id);
     const dialog = $("#app-configuration");
     if (!record || dialog.open) return;
     stopAppConfigurationReads();
-    const view = { record, section: "overview", sections: [], connection: "", roundFilters: new Map(), roundPanel: null, archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
+    const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", roundFilters: new Map(), roundPanel: null, archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
     appConfiguration = view;
     $("#app-dialog-body").replaceChildren();
     $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 详细配置"));
@@ -3347,6 +3351,22 @@
     void readAppConfiguration(view);
   }
 
+  function appCapabilityRows(evidence, detailed = false) {
+    const list = appElement("div", "", "app-capabilities");
+    for (const [name, status, explanation] of evidence.capabilities) {
+      const row = appElement("section", "", "app-capability");
+      row.append(appElement("h4", name), appElement("span", status, "station-label"));
+      if (detailed) row.append(appElement("p", explanation));
+      list.append(row);
+    }
+    if (!list.childElementCount) list.append(appElement("p", "当前应用暂无可单独展示的能力。"));
+    return list;
+  }
+  function appConfigurationShortcut(label, section) {
+    const button = memoryButton(label, "button compact primary", () => openAppConfiguration(section));
+    button.dataset.configurationSection = section; button.setAttribute("aria-controls", "app-configuration");
+    return button;
+  }
   function renderAppDialog(record, listing) {
     if ($("#app-configuration").open) { renderAppConfiguration(); return; }
     const body = $("#app-dialog-body"), scroll = body.scrollTop;
@@ -3368,10 +3388,6 @@
           stopDouyinLiveInspection(apps);
         }
         renderAppDialog(record, listing); body.scrollTop = 0;
-        if (record.id === "douyin" && id === "account") {
-          void loadDouyinWebLogin(apps);
-          if (apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
-        }
       });
       return button;
     }));
@@ -3379,26 +3395,18 @@
     let controls;
     switch (apps.detailTab) {
       case "overview":
-        controls = [appEvidenceRows(evidence), appPersonaRow(record)];
+        controls = [appEvidenceRows(evidence), appConfigurationShortcut("配置应用角色", "overview")];
         break;
       case "source":
-        controls = [appSourceRow(record, listing)];
-        if (record.id === "wechat") controls.push(appElement("p", "旧会话资料和回执按账号保管，可在「账号与权限」中核对。", "app-scope-note"));
+        controls = [appElement("p", listing ? "接入版本 " + (listing.installed_version || listing.version || "待核对") : "接入版本待核对", "app-scope-note"),
+          appConfigurationShortcut("管理资料与版本", "source")];
         break;
       case "capabilities": {
-        const list = appElement("div", "", "app-capabilities");
-        for (const [name, status, explanation] of evidence.capabilities) {
-          const row = appElement("section", "", "app-capability");
-          row.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", explanation));
-          list.append(row);
-        }
-        if (!list.childElementCount) list.append(appElement("p", "当前应用暂无可单独展示的能力。"));
-        controls = [list, appElement("p", "各应用按授权范围工作。", "app-scope-note")];
+        controls = [appCapabilityRows(evidence), appConfigurationShortcut("查看能力与详细配置", "overview")];
         break;
       }
       default:
-        controls = record.id === "douyin" ? [douyinWebLoginRow(apps, listing), douyinIsDetached(apps) ? null : douyinLiveClientRow(apps), douyinPublicationRow(apps)] :
-          record.id === "bilibili" ? [bilibiliPublicRow(record), bilibiliPublicationRow(apps)] : [appConnectionRow(record)];
+        controls = [appEvidenceRows(evidence), appConfigurationShortcut("管理账号与授权", "account")];
     }
     body.replaceChildren(...controls.filter(Boolean)); body.scrollTop = scroll;
     $("#app-dialog-refresh").disabled = apps.loading;
@@ -5792,6 +5800,7 @@
   });
   $("#app-configuration").addEventListener("close", () => {
     if ($("#app-configuration").open) return;
+    const closed = appConfiguration;
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
@@ -5802,8 +5811,9 @@
     renderLiveSafety();
     if (activeView === "apps" && $("#app-dialog").open) {
       renderApps();
-      $("#app-configuration-open").focus({ preventScroll: true });
-      if (apps.openID === "douyin" && apps.detailTab === "account") void loadDouyinWebLogin(apps);
+      $("#app-dialog-body").scrollTop = closed?.returnScroll || 0;
+      const shortcut = closed?.returnSection && $("#app-dialog-body").querySelector('[data-configuration-section="' + CSS.escape(closed.returnSection) + '"]');
+      (shortcut || (closed?.returnFocus?.isConnected && closed.returnFocus) || $("#app-configuration-open")).focus({ preventScroll: true });
     }
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
