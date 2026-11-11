@@ -254,6 +254,102 @@ def verify_douyin_notice(page, panel, nav):
     page.unroute(notice_path)
 
 
+def verify_wechat_owner_binding(page, panel, nav, output):
+    reads, writes = [], []
+    memory_writes = []
+    memory_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/memory-grants$")
+    grants = {"wechat-synthetic-one": {"revision": 0, "station_reads": {}, "available_history_threads": ["memory-a@chatroom", "memory-b@chatroom"]},
+              "wechat-synthetic-two": {"revision": 0, "station_reads": {}, "available_history_threads": []}}
+    def memory_grants(route):
+        state = grants[urlparse(route.request.url).path.split("/")[-2]]
+        if route.request.method == "PUT":
+            body = route.request.post_data_json
+            assert body["revision"] == state["revision"] and body["request_key"]
+            assert route.request.headers.get("x-csrf-token")
+            memory_writes.append(body)
+            state["station_reads"] = {thread: "2026-01-01T00:00:00Z" for thread in body["station_reads"]}
+            state["revision"] += 1
+        else:
+            assert route.request.method == "GET"
+        route.fulfill(json=state)
+    page.route(memory_pattern, memory_grants)
+    saved = {"wechat-synthetic-one": {"account_id": "one", "revision": 0},
+             "wechat-synthetic-two": {"account_id": "two", "revision": 0}}
+    pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/owner-binding$")
+    def binding(route):
+        request = route.request
+        connection = urlparse(request.url).path.split("/")[-2]
+        state = saved[connection]
+        if request.method == "GET":
+            reads.append(connection)
+            route.fulfill(json=state)
+            return
+        assert request.method == "POST" and request.headers.get("x-csrf-token")
+        body = request.post_data_json
+        writes.append(body)
+        assert body["revision"] == state["revision"]
+        if body["action"] == "preview":
+            route.fulfill(json={"account_id": state["account_id"], "sender_id": "wxid-synthetic-owner",
+                "thread_id": "synthetic-group@chatroom", "message_id": body["message_id"], "digest": "synthetic-digest", "revision": state["revision"]})
+            return
+        if body["action"] == "bind":
+            assert body["same_identity"] is True and body["digest"] == "synthetic-digest" and body["request_key"]
+            state["binding"] = {"sender_id": "wxid-synthetic-owner"}
+            state["revision"] += 1
+        elif body["action"] == "check":
+            route.fulfill(json={"is_bound_owner": body["message_id"] == "owner-message", "revision": state["revision"]})
+            return
+        elif body["action"] == "revoke":
+            state.pop("binding", None)
+            state["revision"] += 1
+        else:
+            raise AssertionError(body)
+        route.fulfill(json=state)
+    page.route(pattern, binding)
+    assert not reads and not writes
+    nav.get_by_role("button", name="账号与授权", exact=True).click()
+    owner = panel.locator(".configuration-owner-binding")
+    owner = owner.filter(has=page.get_by_role("heading", name="微信本人身份", exact=True))
+    expect(owner.get_by_text("尚未绑定微信本人", exact=True)).to_be_visible()
+    memory = panel.locator(".configuration-owner-binding").filter(has=page.get_by_role("heading", name="工作站按需查微信", exact=True))
+    expect(memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True)).not_to_be_checked()
+    assert not memory_writes
+    memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True).check()
+    memory.get_by_role("button", name="保存工作站查询范围").click()
+    expect(memory.get_by_text("工作站查询范围已保存。", exact=True)).to_be_visible()
+    assert memory_writes[0]["station_reads"] == ["memory-a@chatroom"]
+    message = owner.get_by_label("本人发来的普通文字消息编号")
+    message.fill("owner-message")
+    page.keyboard.press("Escape")
+    page.locator("#app-configuration-open").click()
+    nav.get_by_role("button", name="账号与授权", exact=True).click()
+    expect(message).to_have_value("owner-message")
+    owner.get_by_role("button", name="预览本人身份").click()
+    expect(owner.get_by_text("原生发送者 wxid-synthetic-owner · 会话 synthetic-group@chatroom", exact=True)).to_be_visible()
+    bind = owner.get_by_role("button", name="绑定本人", exact=True)
+    expect(bind).to_be_disabled()
+    owner.get_by_role("checkbox", name="确认核对到的发送者就是我本人").check()
+    bind.click()
+    expect(owner.get_by_text("微信本人绑定已保存。", exact=True)).to_be_visible()
+    owner.get_by_role("button", name="核验消息发送者").click()
+    expect(owner.get_by_text("此消息的原生发送者与已绑定本人一致。", exact=True)).to_be_visible()
+    message.fill("member-message")
+    owner.get_by_role("button", name="核验消息发送者").click()
+    expect(owner.get_by_text("此消息的原生发送者与已绑定本人不一致。", exact=True)).to_be_visible()
+    page.screenshot(path=str(output/"wechat-owner-binding-narrow.png"))
+    assert panel.locator("#app-configuration-body").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    panel.get_by_label("当前连接").select_option("wechat-synthetic-two")
+    expect(owner.get_by_text("尚未绑定微信本人", exact=True)).to_be_visible()
+    expect(owner.get_by_text("已保存本人发送者 wxid-synthetic-owner", exact=False)).to_have_count(0)
+    expect(memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True)).to_have_count(0)
+    panel.get_by_label("当前连接").select_option("wechat-synthetic-one")
+    owner.get_by_role("button", name="解除本人绑定").click()
+    expect(owner.get_by_text("微信本人绑定已解除。", exact=True)).to_be_visible()
+    assert [row["action"] for row in writes] == ["preview", "bind", "check", "check", "revoke"]
+    page.unroute(pattern)
+    page.unroute(memory_pattern)
+
+
 def verify_wechat_surf_schedule(page, panel, nav, output):
     schedule = {"account": "one", "revision": 0, "enabled": False, "public_reader_ready": False,
                 "settings": {"topics": ["海边故事"], "sources": [
@@ -312,6 +408,7 @@ def verify_wechat_surf_schedule(page, panel, nav, output):
     page.locator("#app-configuration-open").click()
     expect(nav.get_by_role("button", name="网上冲浪")).to_be_visible()
     assert not reads and not writes
+    verify_wechat_owner_binding(page, panel, nav, output)
     nav.get_by_role("button", name="网上冲浪").click()
     live = panel.locator(".configuration-surf-live")
     expect(live.get_by_text("调度暂停", exact=True)).to_be_visible()

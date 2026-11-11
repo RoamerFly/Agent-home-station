@@ -158,6 +158,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	if err = tools.checkAppObservations(ctx); err != nil {
 		return fail(409, "应用读取授权已变化，本次回复未写入聊天")
 	}
+	in.RequestScopedReply = len(tools.wechatMemoryProofs) > 0
 	if continuationID != "" {
 		if err = h.checkLocalTaskContinuation(ctx, store, in, continuationID); err != nil {
 			return fail(409, "后台任务状态或授权已变化，本次结果未写入聊天")

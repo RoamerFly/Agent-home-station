@@ -95,6 +95,7 @@ type stationWechatWorker struct {
 	mu              sync.Mutex
 	deliveryMu      sync.Mutex
 	surfMu          sync.Mutex
+	ownerMu         sync.Mutex
 	surfCancel      context.CancelFunc
 	rollbackAuditMu sync.Mutex
 	shareMu         sync.Mutex

@@ -786,6 +786,11 @@ body.is-home-ready {
 .configuration-surf-actions label { width: 100%; }
 .configuration-surf-live-history { display: grid; gap: 10px; justify-items: start; margin-top: 14px; }
 .configuration-surf-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.configuration-owner-binding { display: grid; gap: 9px; margin-top: 16px; overflow-wrap: anywhere; }
+.configuration-owner-binding h4, .configuration-owner-binding p { margin: 0; }
+.configuration-owner-form, .configuration-owner-form > label:first-child { display: grid; gap: 9px; min-width: 0; }
+.configuration-owner-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.configuration-owner-confirm { display: flex; align-items: center; gap: 8px; }
 .douyin-read-panel { display: grid; gap: 8px; margin-top: 14px; }
 .douyin-read-panel h4, .douyin-read-panel .app-scope-note { margin: 0; }
 .douyin-read-result .publication-actions { flex-wrap: wrap; }

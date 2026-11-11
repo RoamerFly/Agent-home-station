@@ -16,6 +16,7 @@ import (
 )
 
 type Turn struct {
+	RequestScoped     bool               `json:"request_scoped,omitempty"`
 	UserTextState     string             `json:"user_text_state,omitempty"`
 	Source            *SourceRef         `json:"source,omitempty"`
 	QuotedSource      *SourceRef         `json:"quoted_source,omitempty"`
@@ -318,7 +319,7 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 	scope := prune(copyScope(s.data.Scopes[ScopeID(input.Channel, input.Account, input.Thread)]), c, now)
 	keptSources := scope.Messages[:0]
 	for _, turn := range scope.Messages {
-		if turn.Source == nil || turn.Source.Integrity != "conflicted" {
+		if !turn.RequestScoped && (turn.Source == nil || turn.Source.Integrity != "conflicted") {
 			keptSources = append(keptSources, turn)
 		}
 	}

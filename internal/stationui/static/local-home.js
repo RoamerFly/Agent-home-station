@@ -65,6 +65,8 @@
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       wechatRelocation: new Map(),
       wechatSurfDrafts: new Map(),
+      wechatOwnerDrafts: new Map(),
+      wechatMemoryDrafts: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
@@ -2312,7 +2314,7 @@
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
     view.surfAbort?.abort();
-    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
+    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -2647,6 +2649,154 @@
       }
     }
     return { node, clear };
+  }
+  function appWechatOwnerBinding(view, connection) {
+    const panel = appElement("section", "", "configuration-owner-binding");
+    const status = appElement("p", "正在读取微信本人绑定…", "app-scope-note");
+    const feedback = appElement("p", "", "app-scope-note");
+    status.setAttribute("role", "status"); feedback.setAttribute("role", "status");
+    const form = appElement("form", "", "configuration-owner-form");
+    const field = appElement("label", "本人发来的普通文字消息编号");
+    const message = document.createElement("input"); message.type = "text"; message.maxLength = 8192;
+    const draft = apps.wechatOwnerDrafts.get(connection) || { message: "", preview: null, key: "", confirmed: false };
+    apps.wechatOwnerDrafts.set(connection, draft);
+    message.value = draft.message;
+    field.append(message); form.append(field);
+    const evidence = appElement("p", "", "app-scope-note");
+    const confirm = appElement("label", "", "configuration-owner-confirm");
+    const checked = document.createElement("input"); checked.type = "checkbox"; checked.checked = draft.confirmed;
+    confirm.append(checked, document.createTextNode("确认核对到的发送者就是我本人"));
+    const preview = memoryButton("预览本人身份", "button compact secondary", () => write("preview"));
+    const bind = memoryButton("绑定本人", "button compact primary", () => write("bind"));
+    const check = memoryButton("核验消息发送者", "button compact secondary", () => write("check"));
+    const revoke = memoryButton("解除本人绑定", "button compact secondary", () => write("revoke"));
+    const controls = appElement("div", "", "configuration-owner-actions");
+    controls.append(preview, bind, check, revoke);
+    form.append(evidence, confirm, controls);
+    form.addEventListener("submit", (event) => { event.preventDefault(); if (!preview.disabled) void write("preview"); });
+    panel.append(appElement("h4", "微信本人身份"), status,
+      appElement("p", "用当前账号收到的一条本人文字消息核对原生发送者。跨会话读取与投递需分别授权。", "app-scope-note"), form, feedback);
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/owner-binding";
+    const active = () => appConfiguration === view && view.section === "account" && view.connection === connection && panel.isConnected && !view.controller.signal.aborted;
+    let value = null, busy = true;
+    function render() {
+      const binding = value?.binding;
+      status.textContent = binding ? "已保存本人发送者 " + binding.sender_id + " · 版本 " + value.revision : "尚未绑定微信本人";
+      evidence.textContent = draft.preview ? "原生发送者 " + draft.preview.sender_id + " · 会话 " + draft.preview.thread_id : "";
+      confirm.hidden = !draft.preview;
+      checked.checked = draft.confirmed;
+      preview.disabled = busy || !value || !message.value.trim();
+      bind.disabled = busy || !value || !draft.preview || !checked.checked;
+      check.disabled = busy || !value?.binding || !message.value.trim();
+      revoke.disabled = busy || !value?.binding;
+      message.disabled = busy;
+    }
+    function changed() { draft.message = message.value; draft.preview = null; draft.key = ""; draft.confirmed = false; render(); }
+    message.addEventListener("input", changed);
+    checked.addEventListener("change", () => { draft.confirmed = checked.checked; render(); });
+    async function read() {
+      try {
+        const result = await request(path, { signal: view.controller.signal });
+        if (!active()) return;
+        value = result;
+        if (draft.preview?.revision !== value.revision) { draft.preview = null; draft.confirmed = false; draft.key = ""; }
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+      } finally {
+        if (active()) { busy = false; render(); }
+      }
+    }
+    async function write(action) {
+      if (busy || !active() || !value) return;
+      const input = { action, revision: value.revision };
+      if (action !== "revoke") input.message_id = message.value.trim();
+      if (action === "bind") {
+        input.digest = draft.preview.digest; input.same_identity = true;
+        draft.key ||= newRequestID(); input.request_key = draft.key;
+      } else if (action === "revoke") input.request_key = newRequestID();
+      busy = true; feedback.textContent = ""; render();
+      try {
+        const result = await request(path, { method: "POST", body: JSON.stringify(input), signal: view.controller.signal });
+        if (!active()) return;
+        if (action === "preview") {
+          draft.preview = result; draft.confirmed = false; draft.key = "";
+        } else if (action === "check") feedback.textContent = result.is_bound_owner ? "此消息的原生发送者与已绑定本人一致。" : "此消息的原生发送者与已绑定本人不一致。";
+        else {
+          value = result; draft.preview = null; draft.confirmed = false; draft.key = "";
+          feedback.textContent = action === "bind" ? "微信本人绑定已保存。" : "微信本人绑定已解除。";
+        }
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          if (error.status === 409) { draft.preview = null; draft.confirmed = false; draft.key = ""; await read(); }
+        }
+      } finally {
+        if (active()) { busy = false; render(); }
+      }
+    }
+    render(); void read();
+    return panel;
+  }
+  function appWechatMemoryGrants(view, connection) {
+    const panel = appElement("section", "", "configuration-owner-binding");
+    const content = appElement("div");
+    const feedback = appElement("p", "", "app-scope-note");
+    feedback.setAttribute("role", "status");
+    panel.append(appElement("h4", "工作站按需查微信"), appElement("p", "选择可供工作站查询的会话。先返回相关摘要，再按引用读取。", "app-scope-note"), content, feedback);
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/memory-grants";
+    const active = () => appConfiguration === view && view.section === "account" && view.connection === connection && panel.isConnected && !view.controller.signal.aborted;
+    let value = null, busy = true;
+    const drafts = apps.wechatMemoryDrafts;
+    let draft = drafts.get(connection);
+    async function read() {
+      try {
+        const result = await request(path, { signal: view.controller.signal });
+        if (!active()) return;
+        value = result;
+        if (!draft) { draft = { revision: result.revision, threads: new Set(Object.keys(result.station_reads || {})), key: newRequestID() }; drafts.set(connection, draft); }
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+      } finally {
+        if (active()) { busy = false; render(); }
+      }
+    }
+    function render() {
+      if (!value || !draft) return;
+      const form = appElement("form", "", "configuration-owner-form");
+      const available = value.available_history_threads || [];
+      for (const thread of new Set([...available, ...draft.threads])) {
+        const label = appElement("label", "", "configuration-owner-confirm");
+        const check = document.createElement("input"); check.type = "checkbox"; check.checked = draft.threads.has(thread); check.disabled = busy;
+        check.addEventListener("change", () => { if (check.checked) draft.threads.add(thread); else draft.threads.delete(thread); draft.key = newRequestID(); });
+        label.append(check, document.createTextNode(thread + (available.includes(thread) ? "" : " · 当前历史授权已撤销")));
+        form.append(label);
+      }
+      if (!available.length) form.append(appElement("p", "请先在会话与记忆中授权需要读取的会话历史。", "app-scope-note"));
+      const save = appElement("button", "保存工作站查询范围", "button compact primary"); save.type = "submit"; save.disabled = busy;
+      form.append(save);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!active() || busy) return;
+        busy = true; render();
+        try {
+          const result = await request(path, { method: "PUT", body: JSON.stringify({ revision: draft.revision, request_key: draft.key, station_reads: [...draft.threads] }), signal: view.controller.signal });
+          if (!active()) return;
+          draft = { revision: result.revision, threads: new Set(Object.keys(result.station_reads || {})), key: newRequestID() };
+          value = { ...value, ...result };
+          drafts.set(connection, draft);
+          feedback.textContent = "工作站查询范围已保存。";
+        } catch (error) {
+          if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+            feedback.textContent = error.message;
+            if (error.status === 409) await read();
+          }
+        } finally { if (active()) { busy = false; render(); } }
+      });
+      content.replaceChildren(form);
+      if (draft.revision !== value.revision) content.append(memoryButton("载入最新查询范围", "button compact secondary", () => { drafts.delete(connection); draft = null; busy = true; void read(); }));
+    }
+    void read();
+    return panel;
   }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
@@ -3014,6 +3164,12 @@
         break;
       case "account":
         controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : appConnectionRow(record, view.connection));
+        if (record.id === "wechat" && selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
+          if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
+          controls.push(view.ownerPanel.node);
+          if (view.memoryGrantPanel?.connection !== selected.id) view.memoryGrantPanel = { connection: selected.id, node: appWechatMemoryGrants(view, selected.id) };
+          controls.push(view.memoryGrantPanel.node);
+        }
         break;
       case "conversations": {
         const status = selected && apps.accountStatuses.get(selected.id);

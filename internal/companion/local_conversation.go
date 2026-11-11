@@ -336,7 +336,7 @@ func (s *Store) acceptLocalConversationGroup(ctx context.Context, in Input, pref
 		}
 		for i, text := range canonical {
 			key := prefix + strconv.Itoa(i)
-			scope.Messages = append(scope.Messages, Turn{ReplyContext: cloneReplyContext(in.ReplyContext), DeliveryID: key, RequestTraceID: in.TraceID, TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
+			scope.Messages = append(scope.Messages, Turn{RequestScoped: in.RequestScopedReply, ReplyContext: cloneReplyContext(in.ReplyContext), DeliveryID: key, RequestTraceID: in.TraceID, TraceID: key, Role: "assistant", Text: boundedText(text, 2048), FullText: text, SenderName: c.Name, SenderNameSource: "character", Time: now})
 		}
 		scope.LastInteraction = now
 		recordAutonomyAccepted(&scope, in, c, now)

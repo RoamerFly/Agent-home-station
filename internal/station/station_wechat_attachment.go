@@ -40,6 +40,12 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 				Archive: s.archiveManagementHandlers(false),
 			}
 			routes.Mount(mux, owner.Protect)
+			binding := owner.Protect(s.wechatOwnerRoute(owner, identity))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/owner-binding", binding)
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/owner-binding", binding)
+			memoryGrants := owner.Protect(s.memoryGrantsRoute(owner, identity))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/memory-grants", memoryGrants)
+			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/memory-grants", memoryGrants)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
 			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-history", owner.Protect(s.surfHistoryRoute(owner, false)))

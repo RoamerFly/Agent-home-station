@@ -17,24 +17,27 @@ import (
 )
 
 type localToolSet struct {
-	memory            companion.ToolAccess
-	files             *localWorkspaceFileTools
-	process           *localProcessTools
-	processError      error
-	projectTools      *localProjectTools
-	access            *localWorkspaceAccess
-	python            string
-	run               *companion.LocalToolRun
-	traceID           string
-	inspectOnly       bool
-	store             *companion.Store
-	wechat            *stationWechat
-	observations      *apphost.Observer
-	appReads          []apphost.ObservationResult
-	noticeReads       []localDouyinNoticeProof
-	publications      *localChatService
-	requestTime       time.Time
-	continuationGuard func(context.Context) error
+	memory             companion.ToolAccess
+	files              *localWorkspaceFileTools
+	process            *localProcessTools
+	processError       error
+	projectTools       *localProjectTools
+	access             *localWorkspaceAccess
+	python             string
+	run                *companion.LocalToolRun
+	traceID            string
+	inspectOnly        bool
+	store              *companion.Store
+	wechat             *stationWechat
+	observations       *apphost.Observer
+	appReads           []apphost.ObservationResult
+	noticeReads        []localDouyinNoticeProof
+	wechatMemoryProofs []localWechatMemoryProof
+	wechatMemoryRefs   map[string]localWechatMemoryReference
+	wechatMemoryPages  map[string]localWechatMemoryPage
+	publications       *localChatService
+	requestTime        time.Time
+	continuationGuard  func(context.Context) error
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -70,6 +73,9 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if err := t.checkWechatMemoryResults(ctx); err != nil {
+		return nil, err
+	}
 	if t.continuationGuard != nil {
 		if err := t.continuationGuard(ctx); err != nil {
 			return nil, err
@@ -84,6 +90,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	}
 	if t.wechat != nil && t.wechat.hasContactGrant() {
 		all = append(all, wechatapp.StationContactsTool())
+	}
+	if t.wechat != nil && t.run != nil && t.run.Tracked {
+		all = append(all, localWechatMemorySchema())
 	}
 	if t.wechat != nil && t.run != nil && t.run.Tracked && len(t.wechat.stationMuteTargets(t.requestTime)) > 0 {
 		all = append(all, wechatapp.StationGroupMuteTool())
@@ -114,6 +123,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if err := t.checkWechatMemoryResults(ctx); err != nil {
+		return "", err
+	}
 	if t.continuationGuard != nil {
 		if err := t.continuationGuard(ctx); err != nil {
 			return "", err
@@ -121,6 +133,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)
+	}
+	if name == localWechatMemoryTool {
+		return t.callWechatMemory(ctx, raw)
 	}
 	if name == localLiveToolName {
 		return t.callLive(ctx, raw)

@@ -13,6 +13,8 @@ import (
 )
 
 type Input struct {
+	// Set by the host when a reply consumed external request-scoped evidence.
+	RequestScopedReply bool `json:"-"`
 	// GroupShareSummary is set only by the authorized host for one share turn.
 	GroupShareSummary bool `json:"group_share_summary,omitempty"`
 	// Set only by authorized host delivery preparation, never model decisions.
