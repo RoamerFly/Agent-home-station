@@ -61,9 +61,12 @@ func validDouyinInteraction(in DouyinInteractionRequest) bool {
 	if in.Kind == DouyinInteractionLike {
 		return in.CommentID == "" && in.Text == "" && in.ExpectedCommentSHA256 == ""
 	}
-	if !douyinCommentID.MatchString(in.CommentID) || strings.TrimSpace(in.Text) == "" {
+	if !douyinCommentID.MatchString(in.CommentID) {
 		return false
 	}
-	// Submitted requests are query-only; recovery must not require new authority.
-	return in.Submitted || douyinInteractionHash.MatchString(in.ExpectedCommentSHA256)
+	if in.Submitted {
+		return in.Text == "" && in.ExpectedCommentSHA256 == "" && in.BeforeSubmit == nil &&
+			(in.RemoteID == "" || douyinCommentID.MatchString(in.RemoteID))
+	}
+	return in.RemoteID == "" && strings.TrimSpace(in.Text) != "" && douyinInteractionHash.MatchString(in.ExpectedCommentSHA256)
 }

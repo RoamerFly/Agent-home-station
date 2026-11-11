@@ -212,6 +212,9 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 	result.Code = localInteractionBrowserCode(result.Code, err)
 	// Preserve late verified identity independently of a cancelled HTTP request.
 	if result.RemoteID != "" {
+		if !validLocalDouyinInteractionID(in.Draft.Kind, target.videoID, result.RemoteID) {
+			return apphost.InteractionReceipt{}, apphost.ErrInteractionReceipt
+		}
 		c.RemoteID = result.RemoteID
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
@@ -256,6 +259,16 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 	if err != nil || p.ref(a) != in.Reference.Target {
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionDenied
 	}
+	if in.Draft.Kind == "reply_comment" && c.RemoteID == "" {
+		receipt := apphost.InteractionReceipt{Reference: in.Reference, State: "unknown", Code: "receipt_not_found"}
+		if until, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil && !until.IsZero() {
+			receipt.NextAttemptAt = until.Format(time.RFC3339Nano)
+		}
+		return receipt, nil
+	}
+	if c.RemoteID != "" && !validLocalDouyinInteractionID(in.Draft.Kind, c.VideoID, c.RemoteID) {
+		return apphost.InteractionReceipt{}, apphost.ErrInteractionReceipt
+	}
 	authorize := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -274,7 +287,7 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 	if err := authorize(); err != nil {
 		return apphost.InteractionReceipt{}, err
 	}
-	request := stationbrowser.DouyinInteractionRequest{VideoID: c.VideoID, Kind: in.Draft.Kind, CommentID: in.Draft.CommentID, Text: in.Draft.Text, Desired: in.Draft.Desired, Submitted: true, RemoteID: c.RemoteID}
+	request := stationbrowser.DouyinInteractionRequest{VideoID: c.VideoID, Kind: in.Draft.Kind, CommentID: in.Draft.CommentID, Desired: in.Draft.Desired, Submitted: true, RemoteID: c.RemoteID}
 	result, err := p.run(ctx, a, request, authorize)
 	result.Code = localInteractionBrowserCode(result.Code, err)
 	if err != nil && result.State != "applied" {
@@ -286,7 +299,12 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 		}
 		return receipt, nil
 	}
-	return localDouyinInteractionReceipt(in.Reference, in.Draft.Kind, c.VideoID, result)
+	if err := authorize(); err != nil {
+		return apphost.InteractionReceipt{}, err
+	}
+	ref := in.Reference
+	ref.RemoteID = c.RemoteID
+	return localDouyinInteractionReceipt(ref, in.Draft.Kind, c.VideoID, result)
 }
 
 func douyinReplyPacingReceipt(ref apphost.InteractionReference, err error) (apphost.InteractionReceipt, error) {
@@ -335,8 +353,12 @@ func (p *localDouyinWebInteraction) run(ctx context.Context, a localDouyinWebAcc
 	return run(callCtx, a.profile, in, authorize)
 }
 
+func validLocalDouyinInteractionID(kind, video, id string) bool {
+	return kind == "like" && id == "like:"+video || kind == "reply_comment" && validLocalDouyinCommentID(id)
+}
+
 func localDouyinInteractionReceipt(ref apphost.InteractionReference, kind, video string, r stationbrowser.DouyinInteractionResult) (apphost.InteractionReceipt, error) {
-	if r.State == "applied" && (r.RemoteID == "" || (kind == "like" && r.RemoteID != "like:"+video) || (kind == "reply_comment" && !validLocalDouyinCommentID(r.RemoteID))) {
+	if r.State == "applied" && r.RemoteID == "" || r.RemoteID != "" && !validLocalDouyinInteractionID(kind, video, r.RemoteID) {
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionReceipt
 	}
 	if r.RemoteID != "" {

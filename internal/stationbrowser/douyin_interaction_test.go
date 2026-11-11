@@ -12,6 +12,10 @@ func TestDouyinInteractionRequestRejectsUnsafeNewReply(t *testing.T) {
 		t.Fatal("reply with exact parent hash was rejected")
 	}
 	base.Submitted, base.ExpectedCommentSHA256 = true, ""
+	if validDouyinInteraction(base) {
+		t.Fatal("submitted lookup retained reply text")
+	}
+	base.Text = ""
 	if !validDouyinInteraction(base) {
 		t.Fatal("old submitted reply should remain queryable")
 	}

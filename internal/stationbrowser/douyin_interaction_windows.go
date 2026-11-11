@@ -42,6 +42,10 @@ func runDouyinInteraction(ctx context.Context, profile, target string, req Douyi
 	if err := authorize(); err != nil {
 		return result, err
 	}
+	if req.Submitted && req.Kind == DouyinInteractionReplyComment && req.RemoteID == "" {
+		result.Code = "receipt_not_found"
+		return result, ErrDouyinInteractionUnknown
+	}
 	lock, err := DouyinLoginProfileLockPath(profile)
 	if err != nil {
 		return result, ErrDouyinInteractionUnavailable

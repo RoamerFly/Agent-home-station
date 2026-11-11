@@ -72,13 +72,14 @@ func TestDouyinReplyPacingKeepsSubmittedJobQueryOnly(t *testing.T) {
 	}
 	var checkpoint json.RawMessage
 	clicks, queries := 0, 0
+	returnID := "106"
 	manager.interact = func(ctx context.Context, _ string, in stationbrowser.DouyinInteractionRequest, authorize func() error) (stationbrowser.DouyinInteractionResult, error) {
 		if in.Submitted {
-			if in.BeforeSubmit != nil {
-				t.Fatal("receipt lookup retained a submit action")
+			if in.BeforeSubmit != nil || in.Text != "" || in.ExpectedCommentSHA256 != "" || in.RemoteID != "106" || in.CommentID != "105" {
+				t.Fatal("receipt lookup lost its exact target or retained private text")
 			}
 			queries++
-			return stationbrowser.DouyinInteractionResult{Code: "receipt_not_found"}, stationbrowser.ErrDouyinInteractionUnknown
+			return stationbrowser.DouyinInteractionResult{State: "applied", RemoteID: returnID}, nil
 		}
 		if err := in.BeforeSubmit(ctx); err != nil {
 			return stationbrowser.DouyinInteractionResult{}, err
@@ -105,7 +106,20 @@ func TestDouyinReplyPacingKeepsSubmittedJobQueryOnly(t *testing.T) {
 	}
 	request.Checkpoint = checkpoint
 	recovered, err := provider.PerformInteraction(t.Context(), request)
-	if err != nil || recovered.Code != "receipt_not_found" || clicks != 1 || queries != 1 {
+	if err != nil || recovered.Code != "receipt_not_found" || recovered.NextAttemptAt != first.NextAttemptAt || clicks != 1 || queries != 0 {
 		t.Fatalf("resume: %+v %v clicks=%d queries=%d", recovered, err, clicks, queries)
+	}
+	var recorded localDouyinInteractionCheckpoint
+	if err := json.Unmarshal(checkpoint, &recorded); err != nil || !recorded.Submitted {
+		t.Fatal("submit was not recorded", err)
+	}
+	recorded.RemoteID = "106"
+	request.Checkpoint = mustLocalDouyinJSON(recorded)
+	if receipt, err := provider.PerformInteraction(t.Context(), request); err != nil || receipt.State != "applied" || receipt.Reference.RemoteID != "106" || clicks != 1 || queries != 1 {
+		t.Fatal("recorded ID did not reconcile", receipt, err, clicks, queries)
+	}
+	returnID = "107"
+	if _, err := provider.PerformInteraction(t.Context(), request); !errors.Is(err, apphost.ErrInteractionReceipt) || clicks != 1 || queries != 2 {
+		t.Fatal("browser replaced recorded reply ID", err, clicks, queries)
 	}
 }

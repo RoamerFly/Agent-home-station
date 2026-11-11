@@ -18,10 +18,11 @@
     return matches.length === 1 ? matches[0] : null;
   };
   const ownReply = () => {
-    const baseline = globalThis.__ahsReplyBaseline || new Set();
+    const baseline = globalThis.__ahsReplyBaseline;
+    if (!input.remoteID && !(baseline instanceof Set)) return null;
     const nodes = [...document.querySelectorAll('[data-e2e="comment-reply-item"][data-reply-id], [data-reply-id][data-parent-comment-id]')].filter(visible).filter(e =>
       (!input.remoteID ? !baseline.has(e.getAttribute('data-reply-id')) : e.getAttribute('data-reply-id') === input.remoteID) && e.getAttribute('data-parent-comment-id') === input.commentID &&
-      e.getAttribute('data-author-self') === 'true' && (e.querySelector('[data-e2e="comment-content"]')?.textContent || e.textContent || '').trim() === input.text.trim());
+      e.getAttribute('data-author-self') === 'true' && (input.remoteID || (e.querySelector('[data-e2e="comment-content"]')?.textContent || e.textContent || '').trim() === input.text.trim()));
     return nodes.length === 1 ? nodes[0] : null;
   };
   if (input.kind === 'like') {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -65,9 +66,45 @@ func TestLocalDouyinInteractionReplyBoundToParentAndCancellation(t *testing.T) {
 	}
 	// A new process with no recorded receipt must not infer delivery from an
 	// older same-text reply, even though the self reply is visible in the DOM.
-	got, err = runDouyinInteraction(ctx, profile, s.URL+"/video/123", DouyinInteractionRequest{VideoID: "123", Kind: DouyinInteractionReplyComment, CommentID: "456", Text: "同文回复", Submitted: true}, func() error { return nil }, true)
+	got, err = runDouyinInteraction(ctx, profile, s.URL+"/video/123", DouyinInteractionRequest{VideoID: "123", Kind: DouyinInteractionReplyComment, CommentID: "456", Submitted: true}, func() error { return nil }, true)
 	if !errors.Is(err, ErrDouyinInteractionUnknown) || got.State != DouyinInteractionUnknown {
 		t.Fatalf("receipt-less recovery=%+v %v", got, err)
+	}
+}
+
+func TestLocalDouyinSubmittedReplyUsesOnlyRecordedIdentity(t *testing.T) {
+	if !Available() {
+		t.Skip("Microsoft Edge unavailable")
+	}
+	var visits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/video/123" {
+			visits.Add(1)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<article data-e2e="comment-item" data-comment-id="456"><p data-e2e="comment-content">parent A</p></article>
+		  <div data-reply-id="789" data-parent-comment-id="456" data-author-self="true">earlier same-caption reply</div>
+		  <div data-reply-id="790" data-parent-comment-id="457" data-author-self="true">other parent</div>
+		  <div data-reply-id="791" data-parent-comment-id="456" data-author-self="false">other author</div>`)
+	}))
+	defer server.Close()
+	profile := t.TempDir() + "\\profile"
+	req := DouyinInteractionRequest{VideoID: "123", Kind: DouyinInteractionReplyComment, CommentID: "456", Submitted: true}
+	run := func() (DouyinInteractionResult, error) {
+		return runDouyinInteraction(t.Context(), profile, server.URL+"/video/123", req, func() error { return nil }, true)
+	}
+	if got, err := run(); !errors.Is(err, ErrDouyinInteractionUnknown) || got.RemoteID != "" || visits.Load() != 0 {
+		t.Fatal("missing ID triggered a browser query", got, err, visits.Load())
+	}
+	req.RemoteID = "789"
+	if got, err := run(); err != nil || got.RemoteID != "789" || got.State != DouyinInteractionApplied {
+		t.Fatal("exact recorded reply unavailable", got, err)
+	}
+	for _, id := range []string{"790", "791"} {
+		req.RemoteID = id
+		if got, err := run(); !errors.Is(err, ErrDouyinInteractionUnknown) || got.State != DouyinInteractionUnknown {
+			t.Fatal("accepted different parent or author", id, got, err)
+		}
 	}
 }
 
