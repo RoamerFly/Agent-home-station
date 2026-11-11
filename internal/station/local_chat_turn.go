@@ -85,6 +85,11 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	defer cancel()
 	stop := context.AfterFunc(h.ctx, cancel)
 	defer stop()
+	tools := h.tools(store, in)
+	tools.run = run
+	if err := tools.restoreMemoryEvidence(ctx); err != nil {
+		return fail(409, "原请求的跨来源资料或授权已变化，未调用模型")
+	}
 	settings, err := h.models.View()
 	if err != nil {
 		return fail(409, "本机模型配置不可读，原文件保留")
@@ -106,8 +111,6 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	if err != nil {
 		return fail(503, "本地聊天引擎未能准备，原始记录保留")
 	}
-	tools := h.tools(store, in)
-	tools.run = run
 	tools.inspectOnly = !run.Tracked || continuationID == "" && len(run.Operations) > 0
 	if continuationID != "" {
 		// A verified new process result admits the next stage of the same

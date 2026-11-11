@@ -71,6 +71,18 @@ func (h *localChatService) validatePublication(ctx context.Context, job pluginho
 		!h.home.artifacts.sourceValid(localArtifact{Fish: grant.FishID, Owner: grant.OwnerID, Request: origin.Request, Source: origin.Source}) {
 		return errors.New("原作品请求的来源已变化")
 	}
+	store, in, err := h.conversation()
+	if err != nil || in.Account != grant.FishID || in.Sender != grant.OwnerID {
+		return errors.New("原作品请求的主人身份已变化")
+	}
+	in.TraceID, in.Source, in.MessageTime = origin.Request, origin.Source, origin.Source.OccurredAt
+	proofs, err := h.requestMemoryEvidence(ctx, store, in)
+	if err != nil {
+		return err
+	}
+	if len(proofs) > 0 {
+		return errors.New("跨来源查询结果仅供主人私下读取，不能用于应用公开发布")
+	}
 	for _, observation := range origin.Observations {
 		if h.observations == nil || h.observations.Check(ctx, apphost.ObservationResult{
 			ConnectionRef: observation.ConnectionRef, ContentID: observation.ContentID, Field: observation.Field, GrantVersion: observation.GrantVersion,
@@ -121,6 +133,13 @@ func (h *localChatService) publicationArtifactAccess(ctx context.Context, ref ap
 	}
 	if err := h.checkArtifactNoticeSources(ctx, artifact); err != nil {
 		return localArtifact{}, nil, localWorkspaceGrant{}, err
+	}
+	private, err := h.artifactMemoryEvidence(ctx, artifact)
+	if err != nil {
+		return localArtifact{}, nil, localWorkspaceGrant{}, err
+	}
+	if private {
+		return localArtifact{}, nil, localWorkspaceGrant{}, errors.New("跨来源成品仅供主人私下读取，不能用于应用公开发布")
 	}
 	grant, err := access.resolve()
 	return artifact, access, grant, err

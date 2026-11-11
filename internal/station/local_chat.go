@@ -356,6 +356,13 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if prior != nil && prior.Completed {
+		in.TraceID, in.MessageTime = request.RequestID, prior.OccurredAt
+		source, ok := store.SourceForInput(in)
+		in.Source = source
+		if !ok || h.checkRequestMemoryEvidence(r.Context(), store, in) != nil {
+			websession.Fail(w, 409, "原请求的跨来源资料或授权已变化，请使用新请求重新查询")
+			return
+		}
 		websession.Respond(w, 200, map[string]any{"request_id": request.RequestID, "messages": prior.Messages, "status": "completed", "reused": true})
 		return
 	}

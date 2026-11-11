@@ -29,6 +29,9 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 	if err != nil || grant.Revision != job.HomeRevision {
 		return errors.New("原任务工作空间授权已变化")
 	}
+	if err := h.checkRequestMemoryEvidence(ctx, store, in); err != nil {
+		return errors.New("原任务的跨来源资料或授权已变化")
+	}
 	if job.JobID != "" {
 		run, err := store.OpenLocalToolRun(ctx, in, false)
 		if err != nil {
@@ -334,6 +337,10 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 	}
 	tools := h.tools(store, in)
 	tools.run = run
+	if err := tools.restoreMemoryEvidence(ctx); err != nil {
+		update("cancelled", "memory_source_changed", time.Now().UTC())
+		return
+	}
 	grant, err := tools.access.resolve()
 	if err != nil || grant.Revision != job.HomeRevision {
 		update("cancelled", "authorization_changed", time.Now().UTC())

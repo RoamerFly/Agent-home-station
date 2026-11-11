@@ -161,7 +161,19 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 		return t.callFollowup(ctx, raw)
 	}
 	if name == localWechatMemoryTool {
-		return t.callAppMemory(ctx, raw)
+		result, err := t.callAppMemory(ctx, raw)
+		if err != nil {
+			return "", err
+		}
+		// Persist versions before releasing private results to the model. A
+		// restarted task must not rely on the transient tool object's proofs.
+		if err := t.persistMemoryEvidence(ctx); err != nil {
+			return "", err
+		}
+		if err := t.checkAppObservations(ctx); err != nil {
+			return "", err
+		}
+		return result, nil
 	}
 	if name == localLiveToolName {
 		return t.callLive(ctx, raw)

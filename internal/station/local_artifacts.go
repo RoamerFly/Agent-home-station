@@ -171,6 +171,9 @@ func (s *localArtifactStore) read(id string) (localArtifact, error) {
 	if _, ok := s.accessWithParentCheck(a, verifyParents); !ok {
 		return localArtifact{}, errors.New("artifact_source_or_home_changed")
 	}
+	if err := s.chat.memoryEvidenceTimeout(a); err != nil {
+		return localArtifact{}, err
+	}
 	return a, nil
 }
 
@@ -197,6 +200,9 @@ func (s *localArtifactStore) readRecord(id string) (localArtifact, error) {
 }
 
 func (s *localArtifactStore) open(ctx context.Context, a localArtifact, allowed func() bool) (*os.File, error) {
+	if err := s.chat.checkArtifactMemoryEvidence(ctx, a); err != nil {
+		return nil, err
+	}
 	root, err := workspacefs.OpenPath(filepath.Join(s.home.dataDir, "artifacts", a.ID))
 	if err != nil {
 		return nil, err
@@ -211,6 +217,10 @@ func (s *localArtifactStore) open(ctx context.Context, a localArtifact, allowed 
 	if err != nil || n != a.Bytes || hex.EncodeToString(hash.Sum(nil)) != a.SHA256 || !allowed() {
 		file.Close()
 		return nil, errors.New("artifact_integrity_or_authorization_changed")
+	}
+	if err := s.chat.checkArtifactMemoryEvidence(ctx, a); err != nil {
+		file.Close()
+		return nil, err
 	}
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
@@ -260,6 +270,9 @@ func localArtifactIdentity(in localArtifactInput, source *companion.SourceRef, g
 func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactInput, source *companion.SourceRef, access *localWorkspaceAccess, grant localWorkspaceGrant, path string, validate func(*os.File, int64) error) (localArtifact, error) {
 	a, err := localArtifactIdentity(in, source, grant, path)
 	if err != nil {
+		return localArtifact{}, err
+	}
+	if err := s.chat.checkArtifactMemoryEvidence(ctx, a); err != nil {
 		return localArtifact{}, err
 	}
 	check := func() bool {
@@ -346,6 +359,9 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	}
 	a.SHA256 = digest
 	a.ID = a.id()
+	if err := s.chat.checkArtifactMemoryEvidence(ctx, a); err != nil {
+		return localArtifact{}, err
+	}
 	if err := writeLegacyStagedFile(root, filepath.Join(stage, "record.json"), a); err != nil {
 		return localArtifact{}, err
 	}
@@ -362,6 +378,9 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 	}
 	if !check() {
 		return localArtifact{}, errors.New("成品来源已变更")
+	}
+	if err := s.chat.checkArtifactMemoryEvidence(ctx, a); err != nil {
+		return localArtifact{}, err
 	}
 	return a, nil
 }
