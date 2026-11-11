@@ -1,5 +1,7 @@
 # WSL 管理数据迁入 Windows
 
+已有 Windows Station 资料的新版启动预演另见 [工作站旧资料升级预演](windows-station-upgrade-validation.md)。不要将同一 Station 的版本升级当作 WSL 账号重映射迁移。
+
 这是同一个微信登录在两个部署之间的管理数据迁移，不是导入官方 Windows 微信聊天。先验证 Windows 登录、授权收发和本机执行能力，再切换。音乐、CUDA、Linux 虚拟环境及符号链接需要单独适配，复制文件不代表已可执行。
 
 ## 备份和准备
