@@ -65,6 +65,10 @@ func (s *stationWechat) cancelDelivery(w http.ResponseWriter, r *http.Request) {
 		s.cancelCrossMemoryDelivery(w, r, id, key)
 		return
 	}
+	if stationSurfReceiptKey(key) {
+		s.cancelSurfShare(w, r, id, key)
+		return
+	}
 	worker, account, err := s.deliveryCheckpoint(id)
 	if err != nil || worker == nil {
 		websession.Fail(w, 404, "投递记录不存在")

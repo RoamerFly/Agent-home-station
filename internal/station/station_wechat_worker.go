@@ -93,23 +93,25 @@ func (policy stationWechatPolicy) groupPolicy() wechatapp.GroupPolicy {
 const stationWechatPolicyLimit = 128 << 10
 
 type stationWechatWorker struct {
-	connectionID    string
-	roundMu         sync.Mutex
-	mu              sync.Mutex
-	deliveryMu      sync.Mutex
-	surfMu          sync.Mutex
-	ownerMu         sync.Mutex
-	crossDeliveryMu sync.Mutex
-	forwardMu       sync.Mutex
-	surfCancel      context.CancelFunc
-	rollbackAuditMu sync.Mutex
-	shareMu         sync.Mutex
-	share           *stationShareHost
-	dir             string
-	runtimeDir      string
-	policy          stationWechatPolicy
-	actions         *wechatapp.ActionLedger
-	run             *wechatapp.WorkerRun
+	connectionID     string
+	roundMu          sync.Mutex
+	mu               sync.Mutex
+	deliveryMu       sync.Mutex
+	surfMu           sync.Mutex
+	surfShareMu      sync.Mutex
+	surfShareGrantMu sync.Mutex
+	ownerMu          sync.Mutex
+	crossDeliveryMu  sync.Mutex
+	forwardMu        sync.Mutex
+	surfCancel       context.CancelFunc
+	rollbackAuditMu  sync.Mutex
+	shareMu          sync.Mutex
+	share            *stationShareHost
+	dir              string
+	runtimeDir       string
+	policy           stationWechatPolicy
+	actions          *wechatapp.ActionLedger
+	run              *wechatapp.WorkerRun
 	// cutoverBlocked records a failed automatic preflight for older imported
 	// archives that predate LegacyArchiveDigest. It is intentionally transient:
 	// the archive evidence remains the authority and an explicit successful

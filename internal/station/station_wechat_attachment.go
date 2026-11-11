@@ -58,6 +58,9 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/cross-memory-grants", crossMemoryGrants)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
 			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf", owner.Protect(s.surfRoute))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-share-grants", owner.Protect(s.surfShareGrantsRoute))
+			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf-share-grants", owner.Protect(s.surfShareGrantsRoute))
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/surf-shares", owner.Protect(s.surfShareRoute))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-history", owner.Protect(s.surfHistoryRoute(owner, false)))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-history/{job}", owner.Protect(s.surfHistoryRoute(owner, true)))
 			surfReader := owner.Protect(func(w http.ResponseWriter, r *http.Request) {

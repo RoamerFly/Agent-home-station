@@ -19,6 +19,7 @@ type SurfTask struct {
 	// quiet hours instead of inheriting the conversation policy.
 	PrivateQuietHours *companion.Config `json:"-"`
 	PrivateToolCalls  int               `json:"-"`
+	PrivateMayShare   bool              `json:"-"`
 }
 
 func (w *Worker) tickSurf(ctx context.Context) bool {
@@ -127,12 +128,26 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 		w.activity(Record{Event: "surf_review", Category: "error", MessageID: trace, Origin: "surf", Status: "failed", Reason: "surf_model_failed"})
 		return true
 	}
-	w.activity(Record{Event: "surf_review", Category: "tool", MessageID: trace, Origin: "surf", Status: "not_shared", Content: strings.Join(d.Messages, "\n"), Reason: "surf_observe_only_or_no_share_target"})
+	status, reason := privateSurfReview(d)
+	w.activity(Record{Event: "surf_review", Category: "tool", MessageID: trace, Origin: "surf", Status: status, Content: strings.Join(d.Messages, "\n"), Reason: reason})
 	return true
+}
+
+func privateSurfReview(d companion.Decision) (string, string) {
+	// Only the host review adapter can set this non-JSON field. A model's
+	// reason string alone never proves delivery.
+	switch d.HostSurfShareState {
+	case "accepted", "prepared", "queued", "pending", "running", "unknown", "failed", "rejected", "cancelled":
+		return d.HostSurfShareState, "surf_share_" + d.HostSurfShareState
+	}
+	return "not_shared", "surf_observe_only_or_no_share_target"
 }
 
 func (t SurfTask) Prompt() string {
 	if t.Thread == "" {
+		if t.PrivateMayShare {
+			return "这是获准的一次独立网上冲浪。围绕兴趣“" + t.Topic + "”读取公开来源，使用本轮工具列出的分享目标。先发现候选，再核对实际读取的正文范围。确有值得分享的内容时可reply，以surf_item_id选定已读候选、surf_target_thread选定当前获准目标，messages说明有意思的地方。宿主将核对授权并投递来源链接，按实际回执记录结果。没有合适内容可silent，收藏用surf_action=bookmark。不要读取会话记忆、人物身份或密钥，不将私人信息放入搜索或分享。"
+		}
 		return "这是获准的一次自主网上冲浪，只供私人浏览与收藏，没有分享目标。围绕兴趣“" + t.Topic + "”读取公开来源；本次偏好" + t.PreferredKind + "候选。可使用web_discover发现真实目录、web_search检索和web_fetch分页读取正文，核对来源，不把标题或简介当作看过视频、听过音频。只允许公开读取与冲浪历史/收藏，不下载或准备素材、不发消息、不读取任何会话或私人记忆。不得把私聊、群聊、人物身份或密钥放入搜索。最终silent，可用surf_action=bookmark和surf_item_id收藏真正感兴趣的候选；没有合适内容也可安静结束。"
 	}
 	return "这是获准的一次自主网上冲浪。发现有趣、适合当前群且未重复的内容，就是自然的分享理由；不必等群友提问或正在聊同一话题。围绕本次兴趣“" + t.Topic + "”选择来源。先看标题，再决定是否继续读取；没有感兴趣的内容可以直接结束。像朋友分享喜欢的东西，直接说有意思在哪里，不用固定的“刚冲浪看到”“刚随手翻到”“群里有对X感兴趣的可以聊聊”开场结尾，也不要每条都反问或邀聊。注意最近已经分享过的内容和开头，别重复同一链接或话题。\n这次随机偏好形式：" + t.PreferredKind + "。video优先找真正可播放的视频，voice优先找可取得的音乐音频，image优先真实图片；应实际准备对应素材，不要只写文字说有视频或音乐。公开长视频优先可播放分享卡片。找不到合适素材可换候选或形式，不要把单个来源失败当作整次无法分享；确实无合适内容时仍可安静，不硬凑也不要求每次发。真实搜索并读取或下载核实，保留可靠的具体来源，不拿网站首页冒充文章或视频。不得把群聊、关系备注、私人身份或密钥放入搜索。"

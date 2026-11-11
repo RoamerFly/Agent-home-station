@@ -108,6 +108,8 @@ type Decision struct {
 	WaitForReply         bool                 `json:"wait_for_reply,omitempty"`
 	SurfItemID           string               `json:"surf_item_id,omitempty"`
 	SurfAction           string               `json:"surf_action,omitempty"`
+	SurfTargetThread     string               `json:"surf_target_thread,omitempty"`
+	HostSurfShareState   string               `json:"-"`
 	DeliveryIntent       string               `json:"delivery_intent,omitempty"`
 	Engagement           string               `json:"engagement,omitempty"`
 	QuoteReply           bool                 `json:"quote_reply,omitempty"`

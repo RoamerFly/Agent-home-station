@@ -65,6 +65,7 @@
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
       wechatRelocation: new Map(),
       wechatSurfDrafts: new Map(),
+      wechatSurfShareDrafts: new Map(),
       wechatOwnerDrafts: new Map(),
       wechatMemoryDrafts: new Map(),
       wechatCrossMemoryDrafts: new Map(),
@@ -2581,7 +2582,8 @@
     const content = appElement("div");
     box.append(appElement("h4", "本机冲浪调度"), status, content, feedback);
     const historyView = appSurfHistory(path, signal, active);
-    box.append(historyView.node);
+    const sharing = appSurfSharing(connection, path, signal, active);
+    box.append(sharing.node, historyView.node);
     view.surfDrafts ||= apps.wechatSurfDrafts;
     let schedule, reader, busy = false;
     void refresh();
@@ -2590,6 +2592,7 @@
         const result = await Promise.all([request(path + "/surf", { signal }), request(path + "/surf-reader", { signal })]);
         if (!active()) return;
         [schedule, reader] = result;
+        sharing.refresh();
         render();
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) status.textContent = error.message;
@@ -2639,6 +2642,7 @@
         const label = { started: "已开始，结果待核对", interrupted: "已中止", completed: "已完成" };
         status.textContent += " · 最近一轮 " + (label[run.state] || run.state);
         if (run.state === "completed") status.textContent += "，" + run.candidates + " 个候选，读到正文 " + run.read_candidates + " 项" + (run.bookmark ? "，收藏 " + run.bookmark : "");
+        if (run.share) status.textContent += " · 分享任务 " + run.share + "（结果请查投递与回执）";
       }
       let draft = view.surfDrafts.get(connection);
       if (!draft || (!draft.dirty && draft.revision !== schedule.revision)) {
@@ -2729,6 +2733,80 @@
     }
     return box;
   }
+  function appSurfSharing(connection, path, signal, active) {
+    const node = appElement("section", "", "configuration-surf-sharing");
+    const status = appElement("p", "", "app-scope-note"); status.setAttribute("role", "status");
+    const content = appElement("div");
+    const feedback = appElement("p", "", "app-scope-note"); feedback.setAttribute("role", "status");
+    node.append(appElement("h4", "冲浪分享授权"), status,
+      appElement("p", "独立选择公开来源和微信分享目标。默认关闭；目标还需当前会话回复授权。自主分享仅在冲浪运行时执行，手动分享在浏览记录中确认。", "app-scope-note"), content, feedback);
+    let serial = 0, busy = false, saved;
+    const draftKey = connection + ":grants";
+    async function refresh() {
+      const generation = ++serial;
+      try {
+        const result = await request(path + "/surf-share-grants", { signal });
+        if (!active() || generation !== serial) return;
+        saved = result; render();
+      } catch (error) {
+        if (active() && generation === serial && !appSessionExpired([{ status: "rejected", reason: error }])) status.textContent = error.message;
+      }
+    }
+    async function save(draft, revoke = false) {
+      if (busy || !active()) return;
+      busy = true; feedback.textContent = "正在保存…"; render();
+      const input = { revision: saved.grant.revision, auto: !revoke && draft.auto,
+        targets: revoke ? [] : [...draft.targets].sort(), sources: revoke ? [] : [...draft.sources].sort() };
+      const fingerprint = JSON.stringify(input);
+      draft.pending ||= {}; draft.pending[fingerprint] ||= newRequestID(); input.key = draft.pending[fingerprint];
+      try {
+        const result = await request(path + "/surf-share-grants", { method: "PUT", body: JSON.stringify(input), signal });
+        if (!active()) return;
+        apps.wechatSurfShareDrafts.delete(draftKey); saved = result;
+        feedback.textContent = revoke ? "分享授权已清空。" : "分享授权已保存。";
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          if (error.status === 409) await refresh();
+        }
+      } finally { busy = false; if (active() && saved) render(); }
+    }
+    function render() {
+      if (!saved) return;
+      const grant = saved.grant;
+      status.textContent = saved.current ? (grant.auto ? "已允许自主分享" : "仅允许手动确认分享") :
+        Object.keys(grant.targets || {}).length ? "已存授权当前不可用，请核对账号、来源与会话回复授权。" : "分享未授权";
+      let draft = apps.wechatSurfShareDrafts.get(draftKey);
+      if (!draft || (!draft.dirty && draft.revision !== grant.revision)) {
+        draft = { revision: grant.revision, targets: new Set(Object.keys(grant.targets || {})), sources: new Set(Object.keys(grant.sources || {})), auto: grant.auto, dirty: false };
+        apps.wechatSurfShareDrafts.set(draftKey, draft);
+      }
+      const form = appElement("form", "", "configuration-surf-form");
+      const checkbox = (parent, label, checked, change) => {
+        const wrapper = appElement("label", "", "configuration-owner-confirm");
+        const input = document.createElement("input"); input.type = "checkbox"; input.checked = checked; input.disabled = busy;
+        input.addEventListener("change", () => { change(input.checked); draft.dirty = true; });
+        wrapper.append(input, document.createTextNode(label)); parent.append(wrapper);
+      };
+      for (const [title, available, selected] of [["分享目标", saved.available_targets || [], draft.targets], ["公开来源", Object.keys(saved.available_sources || {}), draft.sources]]) {
+        const group = appElement("fieldset"); group.append(appElement("legend", title));
+        const valid = new Set(available);
+        for (const id of new Set([...available, ...selected])) checkbox(group, id + (valid.has(id) ? "" : "（当前不可用）"), selected.has(id), (on) => on ? selected.add(id) : selected.delete(id));
+        if (!available.length) group.append(appElement("p", "暂无可选项，请先保存来源或会话回复授权。", "app-scope-note"));
+        form.append(group);
+      }
+      checkbox(form, "允许自主分享已读内容", draft.auto, (on) => { draft.auto = on; });
+      const submit = appElement("button", "保存分享授权", "button compact primary"); submit.type = "submit";
+      submit.disabled = busy || draft.revision !== grant.revision;
+      const revoke = memoryButton("清空分享授权", "button compact secondary", () => save(draft, true)); revoke.disabled = busy;
+      form.append(submit, revoke);
+      form.addEventListener("submit", (event) => { event.preventDefault(); if (!submit.disabled) void save(draft); });
+      if (draft.revision !== grant.revision) form.append(appElement("p", "授权已变化，草稿保留。请载入新版本后重新选择。", "app-scope-note"),
+        memoryButton("载入最新分享授权", "button compact secondary", () => { apps.wechatSurfShareDrafts.delete(draftKey); render(); }));
+      content.replaceChildren(form);
+    }
+    return { node, refresh };
+  }
   function appSurfHistory(path, signal, active) {
     const node = appElement("section", "", "configuration-surf-live-history");
     const records = appElement("div", "", "configuration-surf-history");
@@ -2776,7 +2854,52 @@
               if (active() && serial === generation) button.disabled = false;
             }
           });
-          if (row.readable) detail.append(button, text);
+          if (row.readable) {
+            detail.append(button, text);
+            const shareBox = appElement("div");
+            const prepare = memoryButton("分享此来源", "button compact secondary", async () => {
+              prepare.disabled = true;
+              try {
+                const grants = await request(path + "/surf-share-grants", { signal });
+                if (!active() || serial !== generation) return;
+                if (!grants.current || !grants.grant.sources?.[row.source_id]) {
+                  shareBox.replaceChildren(appElement("p", "请先授权此公开来源和分享目标。", "app-scope-note")); return;
+                }
+                const form = appElement("form", "", "configuration-surf-form");
+                const targetLabel = appElement("label", "分享到");
+                const target = document.createElement("select");
+                target.setAttribute("aria-label", "分享到");
+                for (const id of Object.keys(grants.grant.targets)) { const option = document.createElement("option"); option.value = id; option.textContent = id; target.append(option); }
+                const draftKey = path + ":" + row.job;
+                const draft = apps.wechatSurfShareDrafts.get(draftKey) || { target: target.value, description: "" };
+                apps.wechatSurfShareDrafts.set(draftKey, draft);
+                if ([...target.options].some((option) => option.value === draft.target)) target.value = draft.target;
+                target.addEventListener("change", () => { draft.target = target.value; }); targetLabel.append(target);
+                const descriptionLabel = appElement("label", "分享说明（可选）");
+                const description = document.createElement("textarea"); description.maxLength = 1000; description.value = draft.description;
+                description.addEventListener("input", () => { draft.description = description.value; }); descriptionLabel.append(description);
+                const send = appElement("button", "确认分享链接", "button compact primary"); send.type = "submit";
+                const result = appElement("p", "同一目标的同一链接沿用原任务；结果未知时只查原键。", "app-scope-note"); result.setAttribute("role", "status");
+                form.append(targetLabel, descriptionLabel, send, result); shareBox.replaceChildren(form);
+                form.addEventListener("submit", async (event) => {
+                  event.preventDefault(); if (send.disabled || !active()) return;
+                  send.disabled = true;
+                  try {
+                    const receipt = await request(path + "/surf-shares", { method: "POST", signal,
+                      body: JSON.stringify({ job: row.job, target: target.value, description: description.value }) });
+                    if (!active() || serial !== generation) return;
+                    const states = { accepted: "原生服务已接受", prepared: "已登记，尚未提交", unknown: "结果未知，请查原任务", queued: "已排队", failed: "失败", cancelled: "已取消" };
+                    result.textContent = (states[receipt.state] || receipt.state) + " · " + receipt.idempotency_key + " · 可到投递与回执核对";
+                  } catch (error) {
+                    if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) result.textContent = error.message;
+                  } finally { if (active() && serial === generation) send.disabled = false; }
+                });
+              } catch (error) {
+                if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) shareBox.replaceChildren(appElement("p", error.message, "app-scope-note"));
+              } finally { if (active() && serial === generation) prepare.disabled = false; }
+            });
+            detail.append(prepare, shareBox);
+          }
           else detail.append(appElement("p", row.verified_public_read ? "当前来源授权已变化，保留历史摘要。" : "正文结果待核对。", "app-scope-note"));
           records.append(detail);
         }

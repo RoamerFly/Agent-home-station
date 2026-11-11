@@ -34,6 +34,8 @@ func surfInstallation(ctx context.Context, host *stationShareHost) (pluginhost.I
 }
 
 type stationSurfTools struct {
+	station        *stationWechat
+	shareGrant     *stationSurfShareGrants
 	worker         *stationWechatWorker
 	host           *stationShareHost
 	account, trace string
@@ -69,9 +71,13 @@ func (s *stationWechat) prepareSurf(ctx context.Context, w *stationWechatWorker,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return &stationSurfTools{worker: w, host: host, account: state.Account, trace: trace,
+		tools := &stationSurfTools{station: s, worker: w, host: host, account: state.Account, trace: trace,
 			revision: state.Revision, settings: state.Settings, installed: item, active: allowed,
-			known: map[string]mcptools.DiscoveryItem{}, read: map[string]bool{}, readJobs: map[string]pluginhost.Job{}}, nil
+			known: map[string]mcptools.DiscoveryItem{}, read: map[string]bool{}, readJobs: map[string]pluginhost.Job{}}
+		if grant, _, _, err := s.surfShareAuthority(ctx, w, state.Account); err == nil && grant.Auto {
+			tools.shareGrant = &grant
+		}
+		return tools, nil
 	}, nil
 }
 
@@ -151,9 +157,18 @@ func (t *stationSurfTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 			sources = append(sources, source.ID+"（"+source.Name+"）")
 		}
 	}
+	shareNote := ""
+	if t.shareGrant != nil {
+		targets := []string{}
+		for target := range t.shareGrant.Targets {
+			targets = append(targets, target)
+		}
+		slices.Sort(targets)
+		shareNote = "。若选择分享，最终reply中以surf_target_thread选择目标：" + strings.Join(targets, "、") + "；仍需当前授权和已读候选。"
+	}
 	return []mcptools.Tool{
 		{Name: "web_discover", Description: "按已授权的来源编号发现公开候选。来源：" + strings.Join(sources, "、"), InputSchema: json.RawMessage(`{"type":"object","properties":{"source_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["source_id"],"additionalProperties":false}`)},
-		{Name: "web_fetch", Description: "用本轮实际发现的 candidate_id 读取公开正文。续读传 offset 和上页 sha256。", InputSchema: json.RawMessage(`{"type":"object","properties":{"candidate_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"expected_sha256":{"type":"string"}},"required":["candidate_id"],"additionalProperties":false}`)},
+		{Name: "web_fetch", Description: "用本轮实际发现的 candidate_id 读取公开正文。续读传 offset 和上页 sha256。" + shareNote, InputSchema: json.RawMessage(`{"type":"object","properties":{"candidate_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"expected_sha256":{"type":"string"}},"required":["candidate_id"],"additionalProperties":false}`)},
 	}, nil
 }
 
@@ -283,6 +298,29 @@ func (t *stationSurfTools) ReviewSurf(ctx context.Context, decision companion.De
 	if err := t.check(ctx); err != nil {
 		return out, err
 	}
+	shareKey := ""
+	if decision.Action == "reply" && t.shareGrant != nil && t.read[decision.SurfItemID] && decision.SurfTargetThread != "" &&
+		len(decision.MediaIDs) == 0 && decision.ImageID == "" {
+		expected := localCheckpointKey(*t.shareGrant)
+		receipt, err := t.station.submitSurfShare(ctx, t.worker.connectionID, t.readJobs[decision.SurfItemID].ID, decision.SurfTargetThread,
+			strings.Join(decision.Messages, "\n"), true, func() error {
+				if err := t.check(ctx); err != nil {
+					return err
+				}
+				current, _, _, err := t.station.surfShareAuthority(ctx, t.worker, t.account)
+				if err != nil || localCheckpointKey(current) != expected {
+					return apphost.ErrObservationForbidden
+				}
+				return nil
+			})
+		shareKey = receipt.IdempotencyKey
+		if shareKey != "" {
+			out.Reason = "surf_share_" + receipt.State
+			out.HostSurfShareState = receipt.State
+		} else if err != nil {
+			out.Reason = "surf_share_blocked"
+		}
+	}
 	t.worker.surfMu.Lock()
 	defer t.worker.surfMu.Unlock()
 	state, err := t.worker.surfSchedule(t.account)
@@ -290,6 +328,7 @@ func (t *stationSurfTools) ReviewSurf(ctx context.Context, decision companion.De
 		return out, apphost.ErrLifecycleConflict
 	}
 	state.LastRun.State = "completed"
+	state.LastRun.Share = shareKey
 	state.LastRun.Candidates, state.LastRun.ReadCandidates = len(t.known), len(t.read)
 	if decision.Action == "silent" && decision.SurfAction == "bookmark" && t.read[decision.SurfItemID] {
 		if err := t.worker.saveSurfBookmark(t.account, t.readJobs[decision.SurfItemID], decision.SurfItemID); err != nil {

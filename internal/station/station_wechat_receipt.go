@@ -12,6 +12,36 @@ import (
 )
 
 func (s *stationWechat) ListReceipts(ctx context.Context, id, after string, limit int) (page apphost.ReceiptPage, resultErr error) {
+	if !artifactID(id, "wechat-") || after != "" && !identity.ValidPathID(after) || limit < 1 {
+		return apphost.ReceiptPage{}, apphost.ErrNotFound
+	}
+	if stationSurfReceiptKey(after) {
+		return s.listSurfShares(ctx, id, after, limit)
+	}
+	page, resultErr = s.listWorkerAndCrossReceipts(ctx, id, after, limit)
+	if resultErr != nil || page.NextAfter != "" {
+		return page, resultErr
+	}
+	room := limit - len(page.Items)
+	extra, err := s.listSurfShares(ctx, id, "", max(1, room))
+	if err != nil {
+		return page, err
+	}
+	if len(extra.Items) == 0 {
+		return page, nil
+	}
+	page.Coverage += "+" + extra.Coverage
+	page.Snapshot = localCheckpointKey(page.Snapshot, extra.Snapshot)
+	if room == 0 {
+		page.NextAfter = stationSurfReceiptStart
+		return page, nil
+	}
+	page.Items = append(page.Items, extra.Items...)
+	page.NextAfter = extra.NextAfter
+	return page, nil
+}
+
+func (s *stationWechat) listWorkerAndCrossReceipts(ctx context.Context, id, after string, limit int) (page apphost.ReceiptPage, resultErr error) {
 	page = apphost.ReceiptPage{Items: []apphost.Receipt{}, Coverage: "current_worker_checkpoint"}
 	if !artifactID(id, "wechat-") || after != "" && !identity.ValidPathID(after) || limit < 1 {
 		return page, apphost.ErrNotFound
@@ -83,6 +113,9 @@ func (s *stationWechat) ReadReceipt(ctx context.Context, id, key string) (apphos
 	}
 	if stationCrossReceiptKey(key) {
 		return s.readCrossMemoryReceipt(ctx, id, key)
+	}
+	if stationSurfReceiptKey(key) {
+		return s.readSurfShareReceipt(ctx, id, key)
 	}
 	native, nativeErr := s.WorkerSender(ctx, id)
 	if nativeErr != nil && (!errors.Is(nativeErr, apphost.ErrUnavailable) || ctx.Err() != nil) {

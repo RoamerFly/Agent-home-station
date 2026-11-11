@@ -60,6 +60,7 @@ type stationSurfRun struct {
 	Candidates     int       `json:"candidates"`
 	ReadCandidates int       `json:"read_candidates"`
 	Bookmark       string    `json:"bookmark,omitempty"`
+	Share          string    `json:"share,omitempty"`
 }
 
 type stationSurfUpdate struct {
@@ -335,6 +336,12 @@ func (w *stationWechatWorker) claimSurf(ctx context.Context, account string, now
 		return nil, err
 	}
 	quiet := state.Settings.clock()
+	mayShare := false
+	if root, err := workspacefs.OpenPath(w.dir); err == nil {
+		grant, err := readSurfShareGrants(root, account)
+		root.Close()
+		mayShare = err == nil && grant.Auto && len(grant.Targets) > 0
+	}
 	return &bot.SurfTask{Topic: topic, PreferredKind: "text", QuietDeadline: quiet.QuietDeadline(now),
-		PrivateBrowseTools: factory, PrivateQuietHours: &quiet, PrivateToolCalls: state.Settings.ToolCalls}, nil
+		PrivateBrowseTools: factory, PrivateQuietHours: &quiet, PrivateToolCalls: state.Settings.ToolCalls, PrivateMayShare: mayShare}, nil
 }

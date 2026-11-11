@@ -565,7 +565,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		}
 	}
 	if r.input.Preview {
-		status, reason := "not_shared", "surf_observe_only_or_no_share_target"
+		status, reason := privateSurfReview(r.decision)
 		if r.err != nil {
 			status, reason = "failed", "surf_model_failed"
 		}

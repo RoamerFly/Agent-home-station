@@ -26,6 +26,10 @@ func (w *stationWechatWorker) mediaResumeResult(request sending.MediaResumeReque
 
 func (s *stationWechat) requestDeliveryResume(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if stationSurfReceiptKey(r.PathValue("key")) {
+		websession.Fail(w, 409, "冲浪分享沿用原编号核对回执，未知结果请查询投递状态")
+		return
+	}
 	var input struct {
 		RequestKey string `json:"request_key"`
 	}
