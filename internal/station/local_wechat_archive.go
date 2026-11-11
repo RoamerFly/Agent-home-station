@@ -152,6 +152,12 @@ func (s *stationWechat) wechatArchiveRecords(ctx context.Context, store *compani
 	if err != nil {
 		return nil, err
 	}
+	if item.SourceAccount != "" {
+		native, err := s.WorkerSender(ctx, proof.Source.Connection)
+		if err != nil || !s.mappedArchiveAllowed(ctx, native, item) {
+			return nil, apphost.ErrObservationForbidden
+		}
+	}
 	if proof.Archive == "" || proof.Archive != localCheckpointKey(item) {
 		return nil, companion.ErrMemoryConflict
 	}

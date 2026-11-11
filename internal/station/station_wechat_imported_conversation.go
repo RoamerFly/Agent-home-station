@@ -89,6 +89,7 @@ func (s *stationWechat) readImportedConversation(owner *websession.Store) http.H
 		}
 		defer store.Close()
 		access := &stationAttachmentTools{
+			crossHost: s, crossConnection: id,
 			store: store, native: native, dir: worker.dir,
 			reads: map[string]time.Time{thread: grant},
 			trace: companion.Input{Channel: "wechat", Account: account, Thread: thread, MessageTime: time.Now().UTC().Format(time.RFC3339Nano)},

@@ -58,8 +58,8 @@ func (t *stationAttachmentTools) legacyMemoryAvailable(ctx context.Context) bool
 		return false
 	}
 	grant := t.reads[t.trace.Thread]
-	_, err := readStationLegacyMemory(t.dir, t.trace.Account, t.trace.Thread, grant)
-	return err == nil && t.historyAllowed(ctx) && t.store.LegacyHistoryAllowed(t.trace.Account, t.trace.Thread)
+	item, err := readStationLegacyMemory(t.dir, t.trace.Account, t.trace.Thread, grant)
+	return err == nil && t.crossHost.mappedArchiveAllowed(ctx, t.native, item) && t.historyAllowed(ctx) && t.store.LegacyHistoryAllowed(t.trace.Account, t.trace.Thread)
 }
 
 func (t *stationAttachmentTools) legacyMemory(ctx context.Context) (stationLegacyMemory, error) {
@@ -69,7 +69,7 @@ func (t *stationAttachmentTools) legacyMemory(ctx context.Context) (stationLegac
 	grant := t.reads[t.trace.Thread]
 	item, err := readStationLegacyMemory(t.dir, t.trace.Account, t.trace.Thread, grant)
 	if err == nil {
-		if !t.historyAllowed(ctx) || !t.store.LegacyHistoryAllowed(t.trace.Account, t.trace.Thread) {
+		if !t.crossHost.mappedArchiveAllowed(ctx, t.native, item) || !t.historyAllowed(ctx) || !t.store.LegacyHistoryAllowed(t.trace.Account, t.trace.Thread) {
 			return stationLegacyMemory{}, errors.New("wechat_legacy_history_not_authorized")
 		}
 		return item, nil

@@ -20,12 +20,16 @@ import (
 )
 
 type stationLegacyMemory struct {
-	Version   int                             `json:"version"`
-	Account   string                          `json:"account"`
-	Thread    string                          `json:"thread"`
-	Grant     time.Time                       `json:"grant"`
-	Digest    string                          `json:"digest"`
-	Selection companion.LegacyMemorySelection `json:"selection"`
+	Version       int                             `json:"version"`
+	Account       string                          `json:"account"`
+	Thread        string                          `json:"thread"`
+	Grant         time.Time                       `json:"grant"`
+	Digest        string                          `json:"digest"`
+	Selection     companion.LegacyMemorySelection `json:"selection"`
+	SourceAccount string                          `json:"source_account,omitempty"`
+	SourceSHA256  string                          `json:"source_sha256,omitempty"`
+	TargetDataset string                          `json:"target_dataset,omitempty"`
+	TargetOwner   string                          `json:"target_owner_proof,omitempty"`
 }
 
 type legacyMemoryImportView struct {
@@ -62,7 +66,9 @@ func readStationLegacyMemoryAt(root *os.Root, account, thread string, grant time
 		return item, err
 	}
 	if json.Unmarshal(raw, &item) != nil || item.Version != 1 || item.Account != account || item.Thread != thread ||
-		grant.IsZero() || !item.Grant.Equal(grant) || !legacyMemoryDigestValid(item.Digest) || len(item.Selection.Events) == 0 {
+		grant.IsZero() || !item.Grant.Equal(grant) || !legacyMemoryDigestValid(item.Digest) || len(item.Selection.Events) == 0 ||
+		(item.SourceAccount != "" || item.SourceSHA256 != "" || item.TargetDataset != "" || item.TargetOwner != "") &&
+			(!identity.ValidPathID(item.SourceAccount) || !legacyMemoryDigestValid(item.SourceSHA256) || !identity.ValidPathID(item.TargetDataset) || !legacyMemoryDigestValid(item.TargetOwner)) {
 		return stationLegacyMemory{}, errLegacyImportConflict
 	}
 	return item, nil

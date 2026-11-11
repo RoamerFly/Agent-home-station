@@ -18,6 +18,7 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 	s.ownerReader = identity
 	return stationhost.Attachment{
 		Mount: func(owner *websession.Store, mux *http.ServeMux) {
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/memory-archive", owner.Protect(s.memoryArchiveRoute(owner)))
 			actions := s.managementActions(owner, identity)
 			routes := wechatapp.ManagementHandlers{
 				Contacts: s.contactHandler(owner, "contacts"), Groups: s.contactHandler(owner, "groups"),

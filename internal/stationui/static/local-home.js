@@ -69,6 +69,7 @@
       wechatOwnerDrafts: new Map(),
       wechatMemoryDrafts: new Map(),
       wechatCrossMemoryDrafts: new Map(),
+      wechatArchiveDrafts: new Map(),
       douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
       douyinLiveClient: { path: "", result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
@@ -3322,6 +3323,72 @@
     return panel;
   }
 
+  function appMemoryArchiveImport(view, connection) {
+    const panel = appElement("section", "", "configuration-rounds configuration-memory-import");
+    const form = appElement("form", "", "configuration-surf-form");
+    const database = document.createElement("input"), account = document.createElement("input");
+    const draft = apps.wechatArchiveDrafts.get(connection) || { database: "", account: "" };
+    apps.wechatArchiveDrafts.set(connection, draft);
+    database.value = draft.database; account.value = draft.account;
+    database.required = account.required = true;
+    database.autocomplete = account.autocomplete = "off";
+    for (const [text, input] of [["旧记忆库完整路径", database], ["旧资料中的本地账号编号", account]]) {
+      const label = appElement("label", text); label.append(input); form.append(label);
+    }
+    const submit = appElement("button", "预览可接续会话", "button compact secondary"); submit.type = "submit";
+    const confirm = appElement("label", "", "configuration-owner-confirm");
+    const same = document.createElement("input"); same.type = "checkbox";
+    confirm.append(same, document.createTextNode("我确认旧资料与当前已登录连接属于同一个微信账号"));
+    const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
+    const rows = appElement("div", "", "configuration-round-records");
+    form.append(submit, confirm);
+    panel.append(appElement("h4", "从旧记忆库接续"),
+      appElement("p", "先预览会话和数量，再逐个接续已有历史读取授权的会话。请先暂停连接。当前登录、发送队列与普通聊天上下文不会被替换。", "app-scope-note"), form, feedback, rows);
+    let generation = 0, busy = false;
+    const active = () => appConfiguration === view && view.section === "conversations" && view.connection === connection && panel.isConnected;
+    function disabled(value) {
+      busy = value;
+      for (const input of [database, account, same, ...panel.querySelectorAll("button")]) input.disabled = value;
+    }
+    function reset() {
+      draft.database = database.value; draft.account = account.value;
+      generation++; same.checked = false; rows.replaceChildren(); feedback.textContent = "";
+    }
+    database.addEventListener("input", reset); account.addEventListener("input", reset);
+    async function call(thread = "", digest = "") {
+      if (!active() || busy) return;
+      const serial = ++generation;
+      disabled(true); feedback.textContent = digest ? "正在接续此会话…" : "正在只读核对来源…";
+      try {
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/memory-archive", {
+          method: "POST", body: JSON.stringify({ source_database: database.value.trim(), source_account: account.value.trim(), thread_id: thread, digest, same_account: same.checked }), signal: view.controller.signal,
+        });
+        if (!active() || serial !== generation) return;
+        if (!Array.isArray(result.conversations) || typeof result.source_sha256 !== "string") throw new Error("旧记忆预览格式无效。");
+        rows.replaceChildren();
+        for (const row of result.conversations) {
+          const card = appElement("article", "", "memory-detail-section");
+          card.append(appElement("strong", row.thread_id), appElement("p", "可接续原话 " + row.event_count + " 条 · 提炼记忆 " + row.memory_count + " 条"));
+          if (!row.history_granted) card.append(appElement("p", "请先在此页的会话设置中授予历史读取，再重新预览。", "app-scope-note"));
+          else if (result.applied) card.append(appElement("p", "已接续，可在已接续档案中按需读取。", "app-scope-note"));
+          else if (row.event_count) {
+            const applying = Boolean(result.digest && thread === row.thread_id);
+            card.append(memoryButton(applying ? "确认接续此会话" : "核对此会话", "button compact secondary", () => {
+              if (applying && !same.checked) { feedback.textContent = "请先确认新旧连接属于同一微信账号。"; same.focus(); return; }
+              void call(row.thread_id, applying ? result.digest : "");
+            }));
+          }
+          rows.append(card);
+        }
+        feedback.textContent = result.applied ? "会话档案已接续。" : "只读核对完成，来源摘要 " + result.source_sha256.slice(0, 12) + "。";
+      } catch (error) {
+        if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) { rows.replaceChildren(); feedback.textContent = error.message; }
+      } finally { disabled(false); }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); void call(); });
+    return panel;
+  }
+
   function appImportedConversation(view, connection, allowed) {
     const panel = appElement("section", "", "configuration-rounds");
     const form = appElement("form", "", "configuration-round-filters");
@@ -3635,6 +3702,10 @@
         break;
       case "conversations": {
         const status = selected && apps.accountStatuses.get(selected.id);
+        if (record.id === "wechat" && selected) {
+          if (view.memoryImportPanel?.connection !== selected.id) view.memoryImportPanel = { connection: selected.id, node: appMemoryArchiveImport(view, selected.id) };
+          controls.push(view.memoryImportPanel.node);
+        }
         if (status?.configured_policy && appWorkerLabels[status.worker]) {
           const allowed = status.configured_policy.history_threads || [];
           if (allowed.length) {

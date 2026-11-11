@@ -57,6 +57,17 @@ type LegacyMemoryFact struct {
 // fact is omitted; malformed snapshots return ErrLegacyMemoryUnsupported.
 // No host path is accepted or included in returned errors.
 func ReadLegacyMemorySelection(ctx context.Context, file *os.File, account, thread string) (LegacyMemorySelection, error) {
+	return readLegacyMemorySelection(ctx, file, account, thread, false)
+}
+
+// ReadRetainedLegacyMemorySelection is an explicit archive projection. Leaving
+// the recent window is not forgetting: retained, source-verified cold originals
+// remain readable, while suppressed/conflicted/blocked sources stay excluded.
+func ReadRetainedLegacyMemorySelection(ctx context.Context, file *os.File, account, thread string) (LegacyMemorySelection, error) {
+	return readLegacyMemorySelection(ctx, file, account, thread, true)
+}
+
+func readLegacyMemorySelection(ctx context.Context, file *os.File, account, thread string, retained bool) (LegacyMemorySelection, error) {
 	if file == nil || strings.TrimSpace(account) == "" || strings.TrimSpace(thread) == "" {
 		return LegacyMemorySelection{}, ErrLegacyMemoryUnsupported
 	}
@@ -70,7 +81,7 @@ func ReadLegacyMemorySelection(ctx context.Context, file *os.File, account, thre
 	if _, err := legacySelectionScope(ctx, db, scopeID, account, thread); err != nil {
 		return LegacyMemorySelection{}, legacyInventoryError(ctx, err)
 	}
-	events, err := legacySelectionEvents(ctx, db, scopeID, account, thread)
+	events, err := legacySelectionEvents(ctx, db, scopeID, account, thread, retained)
 	if err != nil {
 		return LegacyMemorySelection{}, legacyInventoryError(ctx, err)
 	}
@@ -116,14 +127,14 @@ func legacySelectionScope(ctx context.Context, db *sql.DB, scopeID, account, thr
 	return scope, nil
 }
 
-func legacySelectionEvents(ctx context.Context, db *sql.DB, scopeID, account, thread string) ([]LegacyMemoryEvent, error) {
+func legacySelectionEvents(ctx context.Context, db *sql.DB, scopeID, account, thread string, retained bool) ([]LegacyMemoryEvent, error) {
 	rows, err := db.QueryContext(ctx, `SELECT id,trace,role,sender,at,text,hash,complete,revision,payload
-		FROM events e WHERE scope=? AND e.active=1 AND e.suppressed=0
+		FROM events e WHERE scope=? AND (e.active=1 OR ?=1) AND e.suppressed=0
 		AND memory_user_text_reliable(e.role,e.text,e.payload)=1
 		AND COALESCE(json_extract(e.payload,'$.source.integrity'),'') IN ('observed','verified','verified_import')
 		AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)
 		AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.scope=e.scope AND c.event_id=e.id)
-		ORDER BY seq, id`, scopeID)
+		ORDER BY seq, id`, scopeID, retained)
 	if err != nil {
 		return nil, err
 	}
