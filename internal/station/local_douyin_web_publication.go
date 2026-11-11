@@ -123,7 +123,7 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 	if err != nil {
 		return apphost.PublicationReceipt{}, apphost.ErrPublicationInvalidDraft
 	}
-	result, err := stationbrowser.ContinueDouyinPublication(ctx, a.profile, stationbrowser.CreatorPublicationRequest{
+	result, err := p.home.douyinWeb.submitWork(ctx, a.profile, stationbrowser.CreatorPublicationRequest{
 		TaskID: req.Reference.TaskID, ManifestSHA256: req.Reference.ManifestSHA256,
 		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, MediaPath: media,
 		Progress: func(progressCtx context.Context, stage string) error {
@@ -138,9 +138,14 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 			return req.SaveCheckpoint(checkpointCtx, mustLocalDouyinJSON(checkpoint))
 		},
 	}, func() error { return req.CheckActive(ctx) })
+	// A verified late browser outcome only updates this task's local journal.
+	// It must survive request cancellation without granting another upload or
+	// submit. All external actions above still use the original context.
+	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer settleCancel()
 	if result.RemoteID != "" {
 		checkpoint.RemoteID = result.RemoteID
-		if err := req.SaveCheckpoint(ctx, mustLocalDouyinJSON(checkpoint)); err != nil {
+		if err := req.SaveCheckpoint(settleCtx, mustLocalDouyinJSON(checkpoint)); err != nil {
 			return apphost.PublicationReceipt{}, err
 		}
 	}
@@ -150,16 +155,14 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 	if result.Stage == "rejected" {
 		checkpoint.Rejected, checkpoint.RejectionCode = true, result.RejectionCode
 		checkpoint.ErrorCode = "creator_rejected"
-		if err := req.SaveCheckpoint(ctx, mustLocalDouyinJSON(checkpoint)); err != nil {
+		if err := req.SaveCheckpoint(settleCtx, mustLocalDouyinJSON(checkpoint)); err != nil {
 			return apphost.PublicationReceipt{}, err
 		}
 		return localDouyinPublicationReceipt(req.Reference, result), nil
 	}
 	if err != nil {
 		checkpoint.ErrorCode = localDouyinCreatorErrorCode(err)
-		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-		if saveErr := req.SaveCheckpoint(saveCtx, mustLocalDouyinJSON(checkpoint)); saveErr != nil {
+		if saveErr := req.SaveCheckpoint(settleCtx, mustLocalDouyinJSON(checkpoint)); saveErr != nil {
 			return apphost.PublicationReceipt{}, saveErr
 		}
 		progress, _ := p.PublicationCheckpointProgress(mustLocalDouyinJSON(checkpoint))
@@ -213,7 +216,7 @@ func (p *localDouyinWebPublication) reconcile(ctx context.Context, access localD
 	// an owner who revokes it must still be able to account for an already
 	// submitted work. It does, however, re-check the exact account/profile so a
 	// relogin cannot send an old receipt lookup through a different account.
-	result, err := stationbrowser.QueryDouyinPublication(ctx, access.profile, checkpoint.RemoteID, p.queryAuthorization(ctx, access, reference))
+	result, err := p.home.douyinWeb.queryWork(ctx, access.profile, checkpoint.RemoteID, p.queryAuthorization(ctx, access, reference))
 	if err != nil {
 		return apphost.PublicationReceipt{Reference: reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
 	}
@@ -270,7 +273,7 @@ func (p *localDouyinWebPublication) RecoverPublication(ctx context.Context, req 
 	if err := authorize(); err != nil {
 		return apphost.PublicationReceipt{}, err
 	}
-	result, err := stationbrowser.FindDouyinPublication(ctx, a.profile, stationbrowser.CreatorPublicationQuery{
+	result, err := p.home.douyinWeb.findWork(ctx, a.profile, stationbrowser.CreatorPublicationQuery{
 		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, CreatedAt: req.CreatedAt,
 	}, authorize)
 	if err != nil {

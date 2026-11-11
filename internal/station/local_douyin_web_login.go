@@ -120,6 +120,9 @@ type localDouyinWebLogin struct {
 	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
 	probeNotice      func(context.Context, string, func() error) (string, error)
 	readNotice       func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error)
+	submitWork       func(context.Context, string, stationbrowser.CreatorPublicationRequest, func() error) (stationbrowser.CreatorPublicationResult, error)
+	queryWork        func(context.Context, string, string, func() error) (stationbrowser.CreatorPublicationResult, error)
+	findWork         func(context.Context, string, stationbrowser.CreatorPublicationQuery, func() error) (stationbrowser.CreatorPublicationResult, error)
 	noticeTicket     localDouyinNoticeTicket
 	noticeCursors    map[string]localDouyinNoticeContinuation
 	interact         func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
@@ -137,6 +140,7 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		readImages: stationbrowser.ReadDouyinCreatorImages, imageVision: stationLocalVision{version: h.localStationVisionVersion, observe: h.observeLocalStationImages},
 		probeNotice: stationbrowser.DouyinNoticeAccount, readNotice: stationbrowser.ReadDouyinNotice,
+		submitWork: stationbrowser.ContinueDouyinPublication, queryWork: stationbrowser.QueryDouyinPublication, findWork: stationbrowser.FindDouyinPublication,
 		visual: stationLocalVision{version: h.localDouyinVisualVersion, observe: h.observeLocalStationImages},
 		open: func(ctx context.Context, profile string) (localDouyinLoginWindow, error) {
 			return stationbrowser.OpenDouyinLogin(ctx, profile)

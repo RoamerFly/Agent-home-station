@@ -153,3 +153,53 @@ func TestLocalDouyinPublicationStageAndPreSubmitRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalDouyinPublicationLateReceiptPersistsAfterRequestCancellation(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "accepted", true: "rejected"}[rejected], func(t *testing.T) {
+			f, p, _, ref := webPublicationFixture(t)
+			grant, err := p.PublicationGrant(t.Context(), ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var saved localDouyinPublicationCheckpoint
+			payload := "synthetic exact media bytes"
+			f.handler.home.douyinWeb.submitWork = func(ctx context.Context, _ string, in stationbrowser.CreatorPublicationRequest, _ func() error) (stationbrowser.CreatorPublicationResult, error) {
+				if err := in.BeforeSubmit(ctx); err != nil {
+					return stationbrowser.CreatorPublicationResult{}, err
+				}
+				cancel()
+				if rejected {
+					return stationbrowser.CreatorPublicationResult{Stage: "rejected", Submitted: true, RejectionCode: 1001}, stationbrowser.ErrCreatorPublicationRejected
+				}
+				return stationbrowser.CreatorPublicationResult{Stage: "accepted", Submitted: true, RemoteID: "7391234567890123456"}, nil
+			}
+			request := apphost.PublicationRequest{Reference: apphost.PublicationReference{Target: ref, TaskID: strings.Repeat("c", 64), ManifestSHA256: strings.Repeat("d", 64)},
+				Draft:        apphost.PublicationDraft{Target: ref, Title: "late", Options: json.RawMessage(`{"visibility":"private"}`), Artifacts: []apphost.PublicationArtifact{{ID: "synthetic", Name: "movie.mp4", Bytes: int64(len(payload)), SHA256: sha256Hex([]byte(payload))}}},
+				GrantVersion: grant.Version, CheckActive: func(ctx context.Context) error { return ctx.Err() },
+				SaveCheckpoint: func(ctx context.Context, raw json.RawMessage) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					return json.Unmarshal(raw, &saved)
+				},
+				OpenArtifact: func(context.Context, apphost.PublicationArtifact) (io.ReadCloser, error) {
+					return io.NopCloser(strings.NewReader(payload)), nil
+				},
+			}
+			receipt, err := p.ContinuePublication(ctx, request)
+			if err != nil || !saved.Submitted {
+				t.Fatalf("late receipt lost after cancellation: %+v %+v %v", receipt, saved, err)
+			}
+			if rejected {
+				if receipt.State != "failed" || !saved.Rejected || saved.RejectionCode != 1001 {
+					t.Fatalf("late rejection lost: %+v %+v", receipt, saved)
+				}
+			} else if receipt.State != "accepted" || receipt.Reference.RemoteID != "7391234567890123456" || saved.RemoteID != receipt.Reference.RemoteID {
+				t.Fatalf("late work identity lost: %+v %+v", receipt, saved)
+			}
+		})
+	}
+}
