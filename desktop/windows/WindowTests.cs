@@ -417,6 +417,37 @@ namespace WechatAgent.Desktop {
         static ToolStripMenuItem WechatStartupItem(MainForm form) {
             return (ToolStripMenuItem)typeof(MainForm).GetField("wechatStartupItem", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
         }
+        static async Task WebViewRecoveryTests(string package, string root) {
+            var workspace = Path.Combine(root, "station-webview-recovery");
+            var deployment = Deployment.LocalStationDefault(workspace);
+            deployment.StationExe = Path.Combine(package, "agent-home-station-server.exe");
+            deployment.Url = FreeLocalUrl();
+            var emptyRuntime = Path.Combine(workspace, "empty-runtime");
+            Directory.CreateDirectory(emptyRuntime);
+            new CloseSettings(workspace).Save("exit");
+            using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset))
+            using (var form = new MainForm(deployment, activation, new ServiceController(deployment), false)) {
+                var retry = (Button)typeof(MainForm).GetField("retry", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                var download = (LinkLabel)typeof(MainForm).GetField("getWebView", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                form.Show();
+                const string runtimeOverride = "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER";
+                var original = Environment.GetEnvironmentVariable(runtimeOverride);
+                try {
+                    Environment.SetEnvironmentVariable(runtimeOverride, emptyRuntime);
+                    await form.StartServices();
+                    Assert(retry.Visible && retry.Text == "重试" && download.Visible, "missing WebView2 did not offer runtime recovery");
+                    Assert(!LocalPortOpen(deployment.Url), "missing WebView2 started the station before runtime recovery");
+                } finally {
+                    Environment.SetEnvironmentVariable(runtimeOverride, original);
+                }
+                retry.PerformClick();
+                await Wait(() => form.Controls.OfType<WebView2>().Any(candidate => candidate.CoreWebView2 != null && candidate.Visible), "retry did not start the station and initialize WebView2");
+                Assert(!download.Visible && LocalPortOpen(deployment.Url), "WebView2 recovery left a stale download link or failed to start the station");
+                form.Close();
+                await Wait(() => form.IsDisposed, "recovered desktop did not close");
+                await Wait(() => !LocalPortOpen(deployment.Url), "recovered desktop did not stop its station");
+            }
+        }
         static async Task WechatStartupMenuTests(string package, string root) {
             var workspace = Path.Combine(root, "station-wechat-menu");
             var secrets = Path.Combine(workspace, "secrets");
@@ -461,8 +492,9 @@ namespace WechatAgent.Desktop {
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
             Program.RegisterDependencies();
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            string localStationPackage = args.Length == 2 && args[0] == "--local-station" ? Path.GetFullPath(args[1]) : null;
-            if (args.Length != 0 && localStationPackage == null) { Console.Error.WriteLine("参数：--local-station <预览包目录>"); return 2; }
+            bool webViewRecoveryOnly = args.Length == 2 && args[0] == "--webview-recovery";
+            string localStationPackage = args.Length == 2 && (args[0] == "--local-station" || webViewRecoveryOnly) ? Path.GetFullPath(args[1]) : null;
+            if (args.Length != 0 && localStationPackage == null) { Console.Error.WriteLine("参数：--local-station 或 --webview-recovery <预览包目录>"); return 2; }
             Exception failure = null;
             Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e) { failure = e.Exception; };
             // Keep room for the station's fish and browser profile IDs under a deep package path.
@@ -471,7 +503,10 @@ namespace WechatAgent.Desktop {
             using (var host = new Form { ShowInTaskbar = false, Opacity = 0, Location = new Point(-20000, -20000), StartPosition = FormStartPosition.Manual }) {
                 host.Shown += async delegate {
                     try {
-                        if (localStationPackage != null) await LocalStationFormTests(localStationPackage, root);
+                        if (localStationPackage != null) {
+                            await WebViewRecoveryTests(localStationPackage, root);
+                            if (!webViewRecoveryOnly) await LocalStationFormTests(localStationPackage, root);
+                        }
                         else { LoadingSurfaceTests(root); await InstanceTests(root); await FormTests(root); }
                     }
                     catch (Exception error) { failure = error; }
@@ -480,7 +515,8 @@ namespace WechatAgent.Desktop {
                 Application.Run(host);
             }
             if (failure != null) { Console.Error.WriteLine(failure); return 1; }
-            if (localStationPackage != null) Console.WriteLine("LocalStation desktop window assertions passed: " + assertions + "; actual isolated local service, WebView page and owned-process shutdown; no WeChat/native process.");
+            if (webViewRecoveryOnly) Console.WriteLine("WebView2 recovery assertions passed: " + assertions + "; isolated missing runtime override, retry and owned-process shutdown.");
+            else if (localStationPackage != null) Console.WriteLine("LocalStation desktop window assertions passed: " + assertions + "; actual isolated local service, WebView page and owned-process shutdown; no WeChat/native process.");
             else Console.WriteLine("Desktop window lifecycle assertions passed: " + assertions + "; 8 real WinForms/WebView exit cycles, 12 simultaneous duplicate probes; synthetic services, no WeChat sends.");
             return 0;
         }

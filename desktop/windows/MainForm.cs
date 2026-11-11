@@ -22,7 +22,9 @@ namespace WechatAgent.Desktop {
         readonly ToolStripMenuItem startItem = new ToolStripMenuItem("启动全部服务"), stopItem = new ToolStripMenuItem("停止全部服务"), exitItem = new ToolStripMenuItem("退出并停止全部服务");
         readonly ToolStripMenuItem wechatStartupItem = new ToolStripMenuItem("下次启动时运行微信服务");
         readonly Label status = new Label();
+        const string WebViewRuntimeDownload = "https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download";
         readonly Button retry = new Button(), cancel = new Button();
+        readonly LinkLabel getWebView = new LinkLabel { AutoSize = true, Visible = false, Text = "获取 WebView2" };
         readonly Panel placeholder = new Panel();
         readonly LifecycleSurface lifecycle = new LifecycleSurface();
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
@@ -61,7 +63,9 @@ namespace WechatAgent.Desktop {
             cancel.Text = "取消退出"; cancel.AccessibleName = cancel.Text; cancel.AutoSize = true; cancel.MinimumSize = new Size(120, 44); cancel.Visible = false;
             lifecycle.Dock=DockStyle.Fill;
             status.TextChanged+=delegate { lifecycle.Detail(status.Text); };
-            buttons.Controls.AddRange(new Control[] {retry, cancel}); center.Controls.Add(lifecycle, 0, 0); center.Controls.Add(buttons, 0, 1);
+            getWebView.Anchor = AnchorStyles.Left;
+            getWebView.Margin = new Padding(12, 0, 0, 0);
+            buttons.Controls.AddRange(new Control[] {retry, cancel, getWebView}); center.Controls.Add(lifecycle, 0, 0); center.Controls.Add(buttons, 0, 1);
             placeholder.Controls.Add(center); Controls.Add(placeholder);
             var show = new ToolStripMenuItem("打开管理页"); show.Click += delegate { RestoreWindow(); };
             var hide = new ToolStripMenuItem("收起到托盘（保持运行）"); hide.Click += delegate { ToTray(); };
@@ -97,6 +101,12 @@ namespace WechatAgent.Desktop {
             tray.Icon = Icon; tray.Text = "Agent-home-station · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };
             retry.Click += async delegate { await StartServices(); };
+            getWebView.LinkClicked += delegate {
+                try { Process.Start(new ProcessStartInfo(WebViewRuntimeDownload) { UseShellExecute = true }); }
+                catch (System.ComponentModel.Win32Exception) {
+                    status.Text = "无法打开默认浏览器。请在发行目录的 README.txt 中查看微软下载地址。";
+                }
+            };
             cancel.Click += delegate { if (!stoppingCommitted && operation != null) { exitRequested = false; operation.Cancel(); } };
             controller.Progress = text => {
                 status.Text = text;
@@ -186,15 +196,28 @@ namespace WechatAgent.Desktop {
             busy = value; startItem.Enabled = stopItem.Enabled = !value;
             wechatStartupItem.Enabled = !value;
             retry.Visible = false; cancel.Visible = value && stopping; cancel.Enabled = true;
+            if (value) { getWebView.Visible = false; SetRetryText("重新启动"); }
         }
         internal async Task StartServices() {
             if (busy || closeQueued || allowExit) return; SetBusy(true, false); operation = new CancellationTokenSource();
             try {
                 status.Text = "正在启动 Agent-home-station…"; tray.Text = "Agent-home-station · 正在启动";
                 lifecycle.State("欢迎回家","正在准备大肥鱼的工作台…");
+                if (web == null) {
+                    Program.ConfigureWebViewLoader(deployment.Workspace);
+                    CoreWebView2Environment.GetAvailableBrowserVersionString();
+                }
                 await controller.Start(operation.Token);
                 if (!exitRequested) await ShowPage();
                 tray.Text = "Agent-home-station · 运行中";
+            } catch (WebView2RuntimeNotFoundException) {
+                if (!IsDisposed && !Disposing && !allowExit) {
+                    ClosePage();
+                    status.Text = "请安装 Microsoft Edge WebView2 Runtime，然后点击重试。";
+                    lifecycle.State("缺少桌面运行组件", status.Text, false);
+                    SetRetryText("重试"); getWebView.Visible = true;
+                    tray.Text = "Agent-home-station · 缺少 WebView2"; RestoreWindow();
+                }
             } catch (Exception error) { if (!IsDisposed && !Disposing) Error(error); }
             finally { operation.Dispose(); operation = null; if (!IsDisposed && !Disposing) { SetBusy(false, false); if (web == null) retry.Visible = true; } }
             if (exitRequested) await StopServices(true);
@@ -312,6 +335,7 @@ namespace WechatAgent.Desktop {
         }
         bool Local(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.GetLeftPart(UriPartial.Authority) == deployment.Url && uri.UserInfo == ""; }
         static bool Http(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"); }
+        void SetRetryText(string text) { retry.Text = retry.AccessibleName = text; }
         void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
             if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }

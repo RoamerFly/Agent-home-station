@@ -1,7 +1,9 @@
 Agent-home-station Windows 便携包
 
 适用 Windows x64。请将整个压缩包解压到当前用户可写的本地目录，双击 AgentHomeStation.exe。
-系统需有 Microsoft Edge WebView2 Runtime。微软官方下载 https://developer.microsoft.com/microsoft-edge/webview2/consumer/
+系统需有 Microsoft Edge WebView2 Runtime。提示缺少桌面运行组件时，点「获取 WebView2」，安装后返回工作站点「重试」。
+微软官方下载 https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download
+离线电脑可提前准备微软的 Evergreen Standalone Installer x64。
 首次使用时准备大肥鱼的家，配置自己的模型服务后即可聊天。
 含微信运行时的便携包会启动本机微信服务，可从「应用 → 微信」登录自己的账号。
 基础包提供本地工作台。微信需要随包运行时，抖音、OBS 和项目工具各按所用能力准备。
