@@ -55,10 +55,11 @@ type InteractionRequest struct {
 	SaveCheckpoint func(context.Context, json.RawMessage) error `json:"-"`
 }
 type InteractionQuery struct {
-	Reference  InteractionReference `json:"reference"`
-	Draft      InteractionDraft     `json:"draft"`
-	Checkpoint json.RawMessage      `json:"-"`
-	Cancel     bool                 `json:"cancel"`
+	Reference   InteractionReference        `json:"reference"`
+	Draft       InteractionDraft            `json:"draft"`
+	Checkpoint  json.RawMessage             `json:"-"`
+	Cancel      bool                        `json:"cancel"`
+	CheckActive func(context.Context) error `json:"-"`
 }
 type InteractionReceipt struct {
 	Reference     InteractionReference `json:"reference"`
@@ -87,6 +88,73 @@ type InteractionResourceProvider interface {
 	ResolveInteractionResource(context.Context, InteractionDraft) (string, error)
 }
 
+type InteractionContinuationPlan struct {
+	Action    string `json:"action"`
+	NotBefore string `json:"not_before,omitempty"`
+}
+
+// Planning is read-only. Only the trusted adapter can interpret its private
+// checkpoint as proof that another external attempt has not started.
+type InteractionContinuationProvider interface {
+	PlanInteractionContinuation(context.Context, InteractionQuery) (InteractionContinuationPlan, error)
+}
+
+func (p *Interactor) PlanContinuation(ctx context.Context, actor pluginhost.Invocation, id string) (InteractionContinuationPlan, error) {
+	if p == nil || p.store == nil {
+		return InteractionContinuationPlan{}, ErrInteractionUnavailable
+	}
+	job, err := p.store.Job(ctx, id)
+	if err != nil {
+		return InteractionContinuationPlan{}, err
+	}
+	record, err := interactionFromJob(job)
+	if err != nil {
+		return InteractionContinuationPlan{}, err
+	}
+	if !sameActor(actor, job.Context) {
+		return InteractionContinuationPlan{}, ErrInteractionOwnership
+	}
+	// Creating a draft does not authorize a background submission.
+	if job.State == "pending" || job.Recovery() == "terminal" || job.CancelRequested {
+		return InteractionContinuationPlan{}, nil
+	}
+	entry, provider, err := p.providerFor(ctx, record.Draft.Target)
+	if err != nil {
+		return InteractionContinuationPlan{}, err
+	}
+	planner, ok := provider.(InteractionContinuationProvider)
+	if !ok {
+		return InteractionContinuationPlan{}, ErrInteractionUnavailable
+	}
+	grant, err := provider.GrantInteraction(ctx, providerInteractionDraft(record.Draft))
+	if err != nil || !grant.Allowed || grant.Version != job.ConfigRevision || job.PackageDigest != interactionDigest(entry, record.Draft.Target) || job.Version != entry.Registration {
+		return InteractionContinuationPlan{}, ErrInteractionDenied
+	}
+	if p.validate != nil && p.validate(ctx, job, record.Draft) != nil {
+		return InteractionContinuationPlan{}, ErrInteractionDenied
+	}
+	state, err := p.checkpoint(ctx, job, record)
+	if err != nil {
+		return InteractionContinuationPlan{}, err
+	}
+	plan, err := planner.PlanInteractionContinuation(ctx, InteractionQuery{Reference: p.reference(job, record), Draft: providerInteractionDraft(record.Draft), Checkpoint: state.Records[interactionCheckpointKey]})
+	if err != nil {
+		return InteractionContinuationPlan{}, err
+	}
+	if plan.Action != "status" && plan.Action != "resume" {
+		return InteractionContinuationPlan{}, ErrInteractionInvalid
+	}
+	if plan.Action == "resume" && (job.State != "submitting" || job.RemoteID != "") {
+		return InteractionContinuationPlan{}, ErrInteractionConflict
+	}
+	if plan.NotBefore != "" {
+		if _, err := time.Parse(time.RFC3339Nano, plan.NotBefore); err != nil {
+			return InteractionContinuationPlan{}, ErrInteractionInvalid
+		}
+	}
+	return plan, nil
+}
+
 type interactionRecord struct {
 	Draft    InteractionDraft `json:"draft"`
 	Manifest string           `json:"manifest_sha256"`
@@ -113,9 +181,16 @@ type InteractionPage struct {
 	Limit   int               `json:"limit"`
 }
 type Interactor struct {
-	registry Registry
-	store    *pluginhost.Store
-	validate func(context.Context, pluginhost.Job, InteractionDraft) error
+	registry   Registry
+	store      *pluginhost.Store
+	validate   func(context.Context, pluginhost.Job, InteractionDraft) error
+	queryGuard func(context.Context, pluginhost.Job, InteractionDraft) error
+}
+
+func (p *Interactor) WithQueryGuard(check func(context.Context, pluginhost.Job, InteractionDraft) error) *Interactor {
+	copy := *p
+	copy.queryGuard = check
+	return &copy
 }
 
 func NewInteractor(registry Registry, store *pluginhost.Store, validate func(context.Context, pluginhost.Job, InteractionDraft) error) *Interactor {
@@ -289,7 +364,14 @@ func (p *Interactor) query(ctx context.Context, job pluginhost.Job, record inter
 	if checkpointErr != nil {
 		return p.view(job, record), checkpointErr
 	}
-	receipt, err := provider.QueryInteraction(ctx, InteractionQuery{Reference: p.reference(job, record), Draft: providerInteractionDraft(record.Draft), Checkpoint: checkpoint.Records[interactionCheckpointKey], Cancel: cancel})
+	var active func(context.Context) error
+	if p.queryGuard != nil {
+		active = func(c context.Context) error { return p.queryGuard(c, job, record.Draft) }
+		if err := active(ctx); err != nil {
+			return p.view(job, record), err
+		}
+	}
+	receipt, err := provider.QueryInteraction(ctx, InteractionQuery{Reference: p.reference(job, record), Draft: providerInteractionDraft(record.Draft), Checkpoint: checkpoint.Records[interactionCheckpointKey], Cancel: cancel, CheckActive: active})
 	if err != nil {
 		// A failed lookup is not a successful reconciliation. Preserve the
 		// durable unknown task while letting callers explain the actual failure.

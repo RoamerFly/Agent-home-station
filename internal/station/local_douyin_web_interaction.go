@@ -45,6 +45,31 @@ func (p *localDouyinWebInteraction) ResolveInteractionResource(ctx context.Conte
 	return "video:" + target.videoID, nil
 }
 
+func (p *localDouyinWebInteraction) PlanInteractionContinuation(ctx context.Context, in apphost.InteractionQuery) (apphost.InteractionContinuationPlan, error) {
+	checkpoint, err := p.checkpoint(in.Checkpoint, in.Reference)
+	if err != nil {
+		return apphost.InteractionContinuationPlan{}, err
+	}
+	if checkpoint.Submitted || checkpoint.RemoteID != "" || in.Reference.RemoteID != "" {
+		return apphost.InteractionContinuationPlan{Action: "status"}, nil
+	}
+	a, err := p.access(ctx)
+	if err != nil || p.ref(a) != in.Reference.Target {
+		return apphost.InteractionContinuationPlan{}, apphost.ErrInteractionDenied
+	}
+	plan := apphost.InteractionContinuationPlan{Action: "resume"}
+	if in.Draft.Kind == "reply_comment" {
+		if until, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil {
+			var cooling *douyinReplyCooling
+			if !errors.As(err, &cooling) {
+				return apphost.InteractionContinuationPlan{}, apphost.ErrInteractionUnavailable
+			}
+			plan.NotBefore = until.Format(time.RFC3339Nano)
+		}
+	}
+	return plan, nil
+}
+
 func (p *localDouyinWebInteraction) ResolveInteractionSubject(ctx context.Context, d apphost.InteractionDraft) (string, error) {
 	a, err := p.access(ctx)
 	if err != nil || p.ref(a) != d.Target || d.Kind != "reply_comment" || !a.record.RepliesEnabled || !a.record.CommentsEnabled {
@@ -125,7 +150,7 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 		return apphost.InteractionReceipt{}, err
 	}
 	if c.Submitted {
-		return p.QueryInteraction(ctx, apphost.InteractionQuery{Reference: in.Reference, Draft: in.Draft, Checkpoint: in.Checkpoint})
+		return p.QueryInteraction(ctx, apphost.InteractionQuery{Reference: in.Reference, Draft: in.Draft, Checkpoint: in.Checkpoint, CheckActive: in.CheckActive})
 	}
 	if err := in.CheckActive(ctx); err != nil {
 		return apphost.InteractionReceipt{}, err
@@ -202,6 +227,11 @@ func (p *localDouyinWebInteraction) PerformInteraction(ctx context.Context, in a
 }
 
 func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in apphost.InteractionQuery) (apphost.InteractionReceipt, error) {
+	if in.CheckActive != nil {
+		if err := in.CheckActive(ctx); err != nil {
+			return apphost.InteractionReceipt{}, err
+		}
+	}
 	if in.Reference.Target != in.Draft.Target {
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionInvalid
 	}
@@ -229,6 +259,11 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 	authorize := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if in.CheckActive != nil {
+			if err := in.CheckActive(ctx); err != nil {
+				return err
+			}
 		}
 		current, err := p.access(ctx)
 		if err != nil || p.ref(current) != in.Reference.Target || current.profile != a.profile || !(&localDouyinWebPublication{home: p.home, installation: p.installation}).profileAvailable(current.record) {

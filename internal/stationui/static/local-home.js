@@ -2648,6 +2648,11 @@
         if (run.application_reads) status.textContent += " · 应用读取 " + run.application_reads + " 项";
         if (run.interaction_tasks?.length) status.textContent += " · 应用互动任务 " + run.interaction_tasks.length + " 项（结果请到对应应用核对）";
       }
+      const continuation = schedule.interaction_continuations;
+      if (continuation && (continuation.waiting || continuation.checking || continuation.blocked)) {
+        status.textContent += " · 自动续办：等待 " + continuation.waiting + "，核对中 " + continuation.checking + "，受阻 " + continuation.blocked;
+        if (continuation.next) status.textContent += " · 下次核对 " + new Date(continuation.next).toLocaleString("zh-CN");
+      }
       let draft = view.surfDrafts.get(connection);
       if (!draft || (!draft.dirty && draft.revision !== schedule.revision)) {
         draft = { revision: schedule.revision, settings: structuredClone(schedule.settings), dirty: false };

@@ -21,6 +21,14 @@ func (p *WebApp) ResolveInteractionResource(ctx context.Context, draft apphost.I
 	return provider.ResolveInteractionResource(ctx, draft)
 }
 
+func (p *WebApp) PlanInteractionContinuation(ctx context.Context, in apphost.InteractionQuery) (apphost.InteractionContinuationPlan, error) {
+	provider, ok := p.interaction.(apphost.InteractionContinuationProvider)
+	if !ok {
+		return apphost.InteractionContinuationPlan{}, apphost.ErrInteractionUnavailable
+	}
+	return provider.PlanInteractionContinuation(ctx, in)
+}
+
 func (p *WebApp) ResolveInteractionSubject(ctx context.Context, draft apphost.InteractionDraft) (string, error) {
 	provider, ok := p.interaction.(apphost.InteractionSubjectProvider)
 	if !ok {

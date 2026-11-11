@@ -64,6 +64,7 @@ type localChatService struct {
 	// source handling, SQLite and HTTP boundary.
 	modelFactory func() (companion.LanguageModel, error)
 	followups    *localTaskFollowupWorker
+	surfActions  *localSurfActionWorker
 }
 
 func newLocalChatService(home *localHomeService) *localChatService {
@@ -77,6 +78,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 			tts: newLocalTTSBackend(home.dataDir, home.root),
 		}}
 	h.followups = &localTaskFollowupWorker{service: h, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	h.surfActions = newLocalSurfActionWorker(h)
 	return h
 }
 
@@ -177,6 +179,9 @@ func (h *localChatService) CloseContext(ctx context.Context) error {
 				h.closeErr = errors.Join(h.closeErr, processes.Close())
 			}
 			if h.projectTools != nil {
+				if h.surfActions != nil && h.surfActions.started.Load() {
+					<-h.surfActions.done
+				}
 				h.closeErr = errors.Join(h.closeErr, h.projectTools.close())
 			}
 			if store != nil {

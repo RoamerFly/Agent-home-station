@@ -37,6 +37,10 @@ type localInteractionInput struct {
 }
 
 func (h *localChatService) interactionHost() (*apphost.Interactor, pluginhost.Invocation, error) {
+	return h.interactionHostWithGuard(nil)
+}
+
+func (h *localChatService) interactionHostWithGuard(check func(context.Context, pluginhost.Job, apphost.InteractionDraft) error) (*apphost.Interactor, pluginhost.Invocation, error) {
 	identity, err := h.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil || h.stopping.Load() {
 		return nil, pluginhost.Invocation{}, apphost.ErrInteractionUnavailable
@@ -46,7 +50,12 @@ func (h *localChatService) interactionHost() (*apphost.Interactor, pluginhost.In
 	if err != nil {
 		return nil, actor, err
 	}
-	return apphost.NewInteractor(h.applications, host.store, func(ctx context.Context, job pluginhost.Job, d apphost.InteractionDraft) error {
+	validate := func(ctx context.Context, job pluginhost.Job, d apphost.InteractionDraft) error {
+		if check != nil {
+			if err := check(ctx, job, d); err != nil {
+				return err
+			}
+		}
 		var origin struct {
 			Kind string `json:"kind"`
 		}
@@ -60,7 +69,12 @@ func (h *localChatService) interactionHost() (*apphost.Interactor, pluginhost.In
 			return apphost.ErrInteractionDenied
 		}
 		return nil
-	}), actor, nil
+	}
+	interactor := apphost.NewInteractor(h.applications, host.store, validate)
+	if check != nil {
+		interactor = interactor.WithQueryGuard(validate)
+	}
+	return interactor, actor, nil
 }
 
 func (h *localChatService) interactionTargets(ctx context.Context) []map[string]any {

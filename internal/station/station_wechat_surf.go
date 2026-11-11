@@ -18,6 +18,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
@@ -294,11 +295,18 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 503, "微信冲浪设置暂不可读或保存")
 	default:
 		state.LastKey, state.LastRequest = "", ""
+		var continuation *surfActionSummary
+		if s.localChat != nil && s.localChat.surfActions != nil && s.ownerReader != nil {
+			if owner, err := s.ownerReader(); err == nil {
+				continuation = s.localChat.surfActions.summary(surfWaitNamespace(pluginhost.Invocation{Account: owner.FishID, Requester: owner.ID}), id)
+			}
+		}
 		websession.Respond(w, 200, struct {
 			stationSurfSchedule
-			PublicReaderReady      bool `json:"public_reader_ready"`
-			ApplicationReaderReady bool `json:"application_reader_ready"`
-		}{state, ready && state.Settings.hasPublicSources(), appReady})
+			PublicReaderReady        bool               `json:"public_reader_ready"`
+			ApplicationReaderReady   bool               `json:"application_reader_ready"`
+			InteractionContinuations *surfActionSummary `json:"interaction_continuations,omitempty"`
+		}{state, ready && state.Settings.hasPublicSources(), appReady, continuation})
 	}
 }
 

@@ -278,6 +278,9 @@ func (t *stationSurfTools) callSurfApp(ctx context.Context, raw json.RawMessage)
 	}
 	if task, ok := result.(apphost.InteractionView); ok && task.JobID != "" {
 		t.appTasks[task.JobID] = true
+		if task.State != "pending" && t.station.localChat.surfActions != nil {
+			t.station.localChat.surfActions.notify()
+		}
 	}
 	if err := t.recordSurfAppProgress(); err != nil {
 		return "", err
