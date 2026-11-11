@@ -29,6 +29,8 @@ type syntheticCreatorTransport struct {
 	uploads, submits, queries, finds int
 	lost, revoke                     bool
 	profile, task, manifest          string
+	submittedAt                      string
+	beforeFindReturn                 func() error
 }
 
 func (s *syntheticCreatorTransport) bind(m *localDouyinWebLogin) {
@@ -47,10 +49,18 @@ func (s *syntheticCreatorTransport) bind(m *localDouyinWebLogin) {
 		if err := authorize(); err != nil {
 			return stationbrowser.CreatorPublicationResult{}, err
 		}
-		if profile != s.profile || in.Title != "合成视频标题" || in.Body != "合成视频正文" || in.Visibility != "private" || in.CreatedAt == "" {
+		submitted, err := time.Parse(time.RFC3339Nano, in.CreatedAt)
+		before, endErr := time.Parse(time.RFC3339Nano, in.CreatedBefore)
+		if profile != s.profile || in.Title != "合成视频标题" || in.Body != "合成视频正文" || in.Visibility != "private" ||
+			in.CreatedAt != s.submittedAt || err != nil || endErr != nil || before.Sub(submitted) != stationbrowser.DouyinCreatorPublicationTimeout {
 			return stationbrowser.CreatorPublicationResult{}, errors.New("synthetic recovery query changed original")
 		}
 		s.finds++
+		if s.beforeFindReturn != nil {
+			if err := s.beforeFindReturn(); err != nil {
+				return stationbrowser.CreatorPublicationResult{}, err
+			}
+		}
 		return stationbrowser.CreatorPublicationResult{Stage: "published", RemoteID: "7391234567890123456", Submitted: true, Published: true}, nil
 	}
 }
@@ -95,9 +105,10 @@ func (s *syntheticCreatorTransport) submit(ctx context.Context, profile string, 
 	}
 	state, err := host.store.ReadHostState(ctx, "application-douyin", in.TaskID)
 	var checkpoint localDouyinPublicationCheckpoint
-	if err != nil || json.Unmarshal(state.Records["progress"], &checkpoint) != nil || !checkpoint.Submitted || checkpoint.TaskID != in.TaskID || checkpoint.ManifestSHA256 != in.ManifestSHA256 || checkpoint.Bytes != int64(len(data)) || checkpoint.MediaSHA256 != sha256Hex(data) {
+	if err != nil || json.Unmarshal(state.Records["progress"], &checkpoint) != nil || !checkpoint.Submitted || checkpoint.SubmittedAt == "" || checkpoint.TaskID != in.TaskID || checkpoint.ManifestSHA256 != in.ManifestSHA256 || checkpoint.Bytes != int64(len(data)) || checkpoint.MediaSHA256 != sha256Hex(data) {
 		return stationbrowser.CreatorPublicationResult{}, errors.New("synthetic submit preceded durable matching checkpoint")
 	}
+	s.submittedAt = checkpoint.SubmittedAt
 	if err := authorize(); err != nil {
 		return stationbrowser.CreatorPublicationResult{}, err
 	}
@@ -330,5 +341,24 @@ func TestDouyinPublicationVideoRevocationBeforeSubmitBlocksExternalWrite(t *test
 	_, _ = f.request("POST", "/api/local/publications", map[string]any{"action": "resume", "job_id": job}, true)
 	if s.submits != 0 || s.uploads != 1 {
 		t.Fatal("revoked task resumed external effect")
+	}
+}
+
+func TestDouyinLostReceiptDoesNotAcceptMatchAfterOriginalIsForgotten(t *testing.T) {
+	f, transport, job, _ := creatorPublicationChat(t, true, false, false)
+	store, in, err := f.handler.chat.conversation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.beforeFindReturn = func() error {
+		return store.Clear(companion.ScopeID(in.Channel, in.Account, in.Thread))
+	}
+	action := map[string]any{"action": "status", "job_id": job}
+	if code, out := f.request("POST", "/api/local/publications", action, true); code != 403 || out["remote_id"] != nil {
+		t.Fatal("forgotten draft match reached the owner view", code, out)
+	}
+	if code, out := f.request("POST", "/api/local/publications", action, true); code != 403 || out["remote_id"] != nil ||
+		transport.finds != 1 || transport.uploads != 1 || transport.submits != 1 {
+		t.Fatal("invalidated recovery read or resubmitted the work", code, out, transport.finds, transport.uploads, transport.submits)
 	}
 }

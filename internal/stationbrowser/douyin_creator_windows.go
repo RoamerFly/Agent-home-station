@@ -84,7 +84,7 @@ func readDouyinCreatorWorks(ctx context.Context, profile, target string, input D
 func runDouyinCreator(ctx context.Context, profile, target string, in CreatorPublicationRequest, authorize func() error, fixture bool) (CreatorPublicationResult, error) {
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 10*time.Minute)
+		ctx, cancel = context.WithTimeout(ctx, DouyinCreatorPublicationTimeout)
 		defer cancel()
 	}
 	result := CreatorPublicationResult{Submitted: in.Submitted, RemoteID: in.RemoteID}

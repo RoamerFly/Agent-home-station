@@ -66,6 +66,28 @@ func TestCreatorManageRecoveryRequiresExactWorkAndPrivacy(t *testing.T) {
 	}
 }
 
+func TestCreatorManageRecoveryUsesSubmissionWindow(t *testing.T) {
+	q, earlier := syntheticCreatorWork(t)
+	submitted := time.Now().Add(-20 * time.Minute).UTC()
+	q.CreatedAt = submitted.Format(time.RFC3339Nano)
+	q.CreatedBefore = submitted.Add(DouyinCreatorPublicationTimeout).Format(time.RFC3339Nano)
+	_, work := syntheticCreatorWork(t)
+	work["aweme_id"] = "7391234567890123457"
+	work["status"].(map[string]any)["aweme_id"] = work["aweme_id"]
+	work["create_time"] = submitted.Add(time.Second).Unix()
+	_, later := syntheticCreatorWork(t)
+	later["aweme_id"] = "7391234567890123458"
+	later["status"].(map[string]any)["aweme_id"] = later["aweme_id"]
+	later["create_time"] = submitted.Add(DouyinCreatorPublicationTimeout + time.Second).Unix()
+	if got := creatorManageReceipt(creatorWorkList(earlier, work, later), &q, ""); got.RemoteID != work["aweme_id"] {
+		t.Fatalf("submitted work not isolated from same-caption posts: %#v", got)
+	}
+	q.CreatedBefore = q.CreatedAt
+	if got := creatorManageReceipt(creatorWorkList(work), &q, ""); got.RemoteID != "" {
+		t.Fatalf("invalid time window accepted: %#v", got)
+	}
+}
+
 func TestLocalCreatorManageRecoveryDoesNotUploadOrPublish(t *testing.T) {
 	if !Available() {
 		t.Skip("Edge unavailable")

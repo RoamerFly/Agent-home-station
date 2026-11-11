@@ -59,6 +59,10 @@ func TestLocalDouyinPublicationRecoveryRejectsChangedIdentityBeforeBrowser(t *te
 	reference := apphost.PublicationReference{Target: ref, TaskID: strings.Repeat("a", 64), ManifestSHA256: strings.Repeat("b", 64)}
 	checkpoint := localDouyinPublicationCheckpoint{Version: 1, TaskID: reference.TaskID, ManifestSHA256: reference.ManifestSHA256, Submitted: true}
 	req := apphost.PublicationRecoveryRequest{Reference: reference, Checkpoint: mustLocalDouyinJSON(checkpoint), CreatedAt: "2026-11-01T00:00:00Z", Draft: apphost.PublicationDraft{Target: ref, Title: "合成标题", Body: "合成正文", Options: json.RawMessage(`{"visibility":"private"}`), Artifacts: []apphost.PublicationArtifact{{ID: "synthetic"}}}}
+	receipt, err := p.RecoverPublication(t.Context(), req)
+	if err != nil || receipt.State != "unknown" || receipt.Progress == nil || receipt.Progress.ErrorCode != "submission_time_unverified" {
+		t.Fatal("legacy draft became eligible for caption matching", receipt, err)
+	}
 	changed := req
 	changed.Draft.Target.AccountID = "other-account"
 	if _, err := p.RecoverPublication(t.Context(), changed); !errors.Is(err, apphost.ErrPublicationConflict) {

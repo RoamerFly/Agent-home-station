@@ -3,7 +3,10 @@ package stationbrowser
 import (
 	"context"
 	"errors"
+	"time"
 )
+
+const DouyinCreatorPublicationTimeout = 10 * time.Minute
 
 type CreatorPublicationRequest struct {
 	TaskID, ManifestSHA256  string
@@ -27,7 +30,7 @@ type CreatorPublicationResult struct {
 }
 
 type CreatorPublicationQuery struct {
-	Title, Body, Visibility, CreatedAt string
+	Title, Body, Visibility, CreatedAt, CreatedBefore string
 }
 
 var (

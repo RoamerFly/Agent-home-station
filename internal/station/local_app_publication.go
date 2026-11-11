@@ -45,7 +45,10 @@ func (h *localChatService) publicationHost() (*apphost.Publisher, pluginhost.Inv
 	if err != nil {
 		return nil, actor, err
 	}
-	return apphost.NewPublisher(h.applications, host.store, h.validatePublication, h.openPublicationArtifact), actor, nil
+	publisher := apphost.NewPublisher(h.applications, host.store, h.validatePublication, h.openPublicationArtifact)
+	return publisher.WithRecoveryGuard(func(ctx context.Context, job pluginhost.Job, draft apphost.PublicationDraft) error {
+		return h.validatePublication(ctx, job, apphost.PublicationDraft{Origin: draft.Origin})
+	}), actor, nil
 }
 
 func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage) (string, error) {

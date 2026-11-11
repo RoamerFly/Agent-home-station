@@ -93,10 +93,11 @@ type PublicationProgress struct {
 // submitted task whose response ID was lost. It receives the immutable draft
 // and host creation time, never authority to submit another copy.
 type PublicationRecoveryRequest struct {
-	Reference  PublicationReference
-	Draft      PublicationDraft
-	Checkpoint json.RawMessage
-	CreatedAt  string
+	Reference   PublicationReference
+	Draft       PublicationDraft
+	Checkpoint  json.RawMessage
+	CreatedAt   string
+	CheckActive func(context.Context) error
 }
 type PublicationRecoveryProvider interface {
 	RecoverPublication(context.Context, PublicationRecoveryRequest) (PublicationReceipt, error)
@@ -164,14 +165,23 @@ type PublicationPage struct {
 }
 
 type Publisher struct {
-	registry Registry
-	store    *pluginhost.Store
-	validate func(context.Context, pluginhost.Job, PublicationDraft) error
-	open     func(context.Context, PublicationArtifact) (io.ReadCloser, error)
+	registry      Registry
+	store         *pluginhost.Store
+	validate      func(context.Context, pluginhost.Job, PublicationDraft) error
+	recoveryGuard func(context.Context, pluginhost.Job, PublicationDraft) error
+	open          func(context.Context, PublicationArtifact) (io.ReadCloser, error)
 }
 
 func NewPublisher(registry Registry, store *pluginhost.Store, validate func(context.Context, pluginhost.Job, PublicationDraft) error, open func(context.Context, PublicationArtifact) (io.ReadCloser, error)) *Publisher {
 	return &Publisher{registry: registry, store: store, validate: validate, open: open}
+}
+
+// WithRecoveryGuard authorizes the use of the original draft for lost-ID
+// matching. Direct receipt lookup by an already verified ID needs no draft.
+func (p *Publisher) WithRecoveryGuard(check func(context.Context, pluginhost.Job, PublicationDraft) error) *Publisher {
+	copy := *p
+	copy.recoveryGuard = check
+	return &copy
 }
 
 // ResolveTarget converts a user-facing application/connection pair into the
@@ -474,6 +484,9 @@ func (p *Publisher) status(ctx context.Context, job pluginhost.Job, record publi
 	}
 	receipt, err := p.reconcile(ctx, job, record, provider, false)
 	if err != nil {
+		if errors.Is(err, ErrPublicationDenied) {
+			return viewFor(job, record), err
+		}
 		return viewFor(job, record), nil
 	}
 	settled, err := p.settle(ctx, job, record, receipt)

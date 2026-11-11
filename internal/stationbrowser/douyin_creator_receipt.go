@@ -9,9 +9,16 @@ import (
 )
 
 func validCreatorPublicationQuery(q CreatorPublicationQuery) bool {
-	_, err := time.Parse(time.RFC3339Nano, q.CreatedAt)
-	return err == nil && strings.TrimSpace(q.Title+q.Body) != "" &&
-		(q.Visibility == "private" || q.Visibility == "public" || q.Visibility == "friends")
+	start, err := time.Parse(time.RFC3339Nano, q.CreatedAt)
+	if err != nil || strings.TrimSpace(q.Title+q.Body) == "" ||
+		(q.Visibility != "private" && q.Visibility != "public" && q.Visibility != "friends") {
+		return false
+	}
+	if q.CreatedBefore == "" {
+		return true
+	}
+	end, err := time.Parse(time.RFC3339Nano, q.CreatedBefore)
+	return err == nil && end.After(start)
 }
 
 // creatorManageReceipt reads only the creator page's own work-list response.
@@ -44,6 +51,16 @@ func creatorManageReceipt(raw []byte, query *CreatorPublicationQuery, knownID st
 	if json.Unmarshal(raw, &page) != nil || page.StatusCode == nil || *page.StatusCode != 0 {
 		return unknown
 	}
+	latest := time.Now().Add(time.Minute).Unix()
+	var earliest int64
+	if query != nil {
+		created, _ := time.Parse(time.RFC3339Nano, query.CreatedAt)
+		earliest = created.Unix()
+		if query.CreatedBefore != "" {
+			before, _ := time.Parse(time.RFC3339Nano, query.CreatedBefore)
+			latest = min(latest, before.Unix())
+		}
+	}
 	text := func(s string) string {
 		return strings.Join(strings.Fields(strings.NewReplacer("\u200b", "", "\ufeff", "").Replace(s)), " ")
 	}
@@ -59,8 +76,7 @@ func creatorManageReceipt(raw []byte, query *CreatorPublicationQuery, knownID st
 			continue
 		}
 		if query != nil {
-			created, err := time.Parse(time.RFC3339Nano, query.CreatedAt)
-			if err != nil || w.Created < created.Unix() || w.Created > time.Now().Add(time.Minute).Unix() ||
+			if w.Created < earliest || w.Created > latest ||
 				text(w.Title) != text(query.Title) || text(w.Caption) != text(query.Body) ||
 				text(w.Description) != text(query.Title+" "+query.Body) {
 				continue

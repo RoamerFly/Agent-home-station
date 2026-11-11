@@ -140,9 +140,28 @@ func (p *Publisher) reconcile(ctx context.Context, job pluginhost.Job, record pu
 			return PublicationReceipt{}, err
 		}
 		if recovery, ok := provider.(PublicationRecoveryProvider); ok && !cancel && !job.CancelRequested && ref.RemoteID == "" {
+			check := func(ctx context.Context) error {
+				current, err := p.store.Job(ctx, job.ID)
+				if err != nil || current.Revision != job.Revision || current.CancelRequested {
+					return ErrPublicationDenied
+				}
+				if p.recoveryGuard != nil && p.recoveryGuard(ctx, current, record.Draft) != nil {
+					return ErrPublicationDenied
+				}
+				return ctx.Err()
+			}
 			draft := cloneDraft(record.Draft)
 			draft.Origin, draft.Project = nil, nil
-			return recovery.RecoverPublication(ctx, PublicationRecoveryRequest{Reference: ref, Draft: draft, Checkpoint: state.Records[publicationCheckpointKey], CreatedAt: job.Created})
+			receipt, err := recovery.RecoverPublication(ctx, PublicationRecoveryRequest{Reference: ref, Draft: draft, Checkpoint: state.Records[publicationCheckpointKey], CreatedAt: job.Created, CheckActive: check})
+			if err != nil {
+				return PublicationReceipt{}, err
+			}
+			if receipt.Reference.RemoteID != "" {
+				if err := check(ctx); err != nil {
+					return PublicationReceipt{}, err
+				}
+			}
+			return receipt, nil
 		}
 		return workflow.ReconcilePublication(ctx, ref, state.Records[publicationCheckpointKey], cancel)
 	}

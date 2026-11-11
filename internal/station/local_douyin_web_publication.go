@@ -31,6 +31,7 @@ type localDouyinPublicationCheckpoint struct {
 	MediaSHA256    string `json:"media_sha256"`
 	Bytes          int64  `json:"bytes"`
 	Submitted      bool   `json:"submitted"`
+	SubmittedAt    string `json:"submitted_at,omitempty"`
 	RemoteID       string `json:"remote_id,omitempty"`
 	Rejected       bool   `json:"rejected,omitempty"`
 	RejectionCode  int    `json:"rejection_code,omitempty"`
@@ -135,6 +136,7 @@ func (p *localDouyinWebPublication) ContinuePublication(ctx context.Context, req
 				return err
 			}
 			checkpoint.Submitted = true
+			checkpoint.SubmittedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			return req.SaveCheckpoint(checkpointCtx, mustLocalDouyinJSON(checkpoint))
 		},
 	}, func() error { return req.CheckActive(ctx) })
@@ -260,24 +262,54 @@ func (p *localDouyinWebPublication) RecoverPublication(ctx context.Context, req 
 	if err != nil {
 		return apphost.PublicationReceipt{}, apphost.ErrPublicationInvalidDraft
 	}
-	if _, err = time.Parse(time.RFC3339Nano, req.CreatedAt); err != nil {
+	created, err := time.Parse(time.RFC3339Nano, req.CreatedAt)
+	if err != nil {
 		return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
 	}
 	a, err := p.access(ctx)
 	if err != nil {
 		return apphost.PublicationReceipt{}, err
 	}
+	if err := p.queryAuthorization(ctx, a, req.Reference)(); err != nil {
+		return apphost.PublicationReceipt{}, err
+	}
+	if checkpoint.SubmittedAt == "" {
+		// Old records cannot tell when a prepared draft actually posted.
+		return apphost.PublicationReceipt{Reference: req.Reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: "submission_time_unverified"}}, nil
+	}
+	submitted, err := time.Parse(time.RFC3339Nano, checkpoint.SubmittedAt)
+	if err != nil || submitted.Before(created) || submitted.After(time.Now()) {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationConflict
+	}
+	if req.CheckActive == nil {
+		return apphost.PublicationReceipt{}, apphost.ErrPublicationDenied
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	authorize := p.queryAuthorization(ctx, a, req.Reference)
+	checkAccount := p.queryAuthorization(ctx, a, req.Reference)
+	authorize := func() error {
+		if err := req.CheckActive(ctx); err != nil {
+			return err
+		}
+		return checkAccount()
+	}
 	if err := authorize(); err != nil {
 		return apphost.PublicationReceipt{}, err
 	}
 	result, err := p.home.douyinWeb.findWork(ctx, a.profile, stationbrowser.CreatorPublicationQuery{
-		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, CreatedAt: req.CreatedAt,
+		Title: req.Draft.Title, Body: req.Draft.Body, Visibility: visibility, CreatedAt: checkpoint.SubmittedAt,
+		CreatedBefore: submitted.Add(stationbrowser.DouyinCreatorPublicationTimeout).Format(time.RFC3339Nano),
 	}, authorize)
+	if errors.Is(err, apphost.ErrPublicationDenied) {
+		return apphost.PublicationReceipt{}, err
+	}
 	if err != nil {
 		return apphost.PublicationReceipt{Reference: req.Reference, State: "unknown", Progress: &apphost.PublicationProgress{Stage: "posting", ErrorCode: localDouyinCreatorErrorCode(err)}}, nil
+	}
+	if result.RemoteID != "" {
+		if err := authorize(); err != nil {
+			return apphost.PublicationReceipt{}, err
+		}
 	}
 	return localDouyinPublicationReceipt(req.Reference, result), nil
 }
@@ -358,6 +390,11 @@ func localDouyinPublicationCheckpointFrom(raw json.RawMessage, reference apphost
 		(checkpoint.MediaSHA256 != "" && !localDouyinPublicationHex(checkpoint.MediaSHA256)) || checkpoint.Bytes < 0 || strings.ContainsAny(checkpoint.RemoteID, "\x00\r\n") ||
 		(checkpoint.Rejected && (!checkpoint.Submitted || checkpoint.RejectionCode == 0)) {
 		return localDouyinPublicationCheckpoint{}, apphost.ErrPublicationConflict
+	}
+	if checkpoint.SubmittedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, checkpoint.SubmittedAt); !checkpoint.Submitted || err != nil {
+			return localDouyinPublicationCheckpoint{}, apphost.ErrPublicationConflict
+		}
 	}
 	return checkpoint, nil
 }
