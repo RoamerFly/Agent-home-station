@@ -4463,7 +4463,7 @@
     const preview = projectTools.obsPreview;
     preview.generation += 1; window.clearTimeout(preview.timer); preview.timer = 0;
     preview.active = false; preview.loading = false; preview.applying = false; preview.polling = false; preview.starting = false; preview.stopping = false;
-    replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = "";
+    replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = ""; preview.obsStatus = null;
   }
   function applyOBSPreview(payload) {
     const preview = projectTools.obsPreview;
@@ -4475,11 +4475,12 @@
     preview.active = payload.active === true;
     preview.scene = typeof payload.scene === "string" ? payload.scene.slice(0, 180) : "";
     preview.observedAt = typeof payload.observed_at === "string" ? payload.observed_at.slice(0, 80) : "";
+    if (preview.active && payload.obs_status) preview.obsStatus = payload.obs_status;
     if (preview.active && payload.image_data) {
       replaceOBSPreviewImage(payload.image_data);
     } else if (!preview.active) {
       window.clearTimeout(preview.timer); preview.timer = 0; preview.polling = false;
-      replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = "";
+      replaceOBSPreviewImage(""); preview.scene = ""; preview.observedAt = ""; preview.obsStatus = null;
     }
   }
   function scheduleOBSPreviewFrame() {
@@ -4520,6 +4521,10 @@
     if (action === "stop") { preview.generation += 1; window.clearTimeout(preview.timer); preview.timer = 0; preview.stopping = true; }
     const generation = preview.generation;
     preview.polling = action === "frame";
+    if (preview.polling) {
+      const inspect = $("#obs-preview-inspect");
+      if (inspect) inspect.disabled = true;
+    }
     preview.applying = action !== "frame";
     preview.error = "";
     if (!background) renderProjectTools();
@@ -4565,8 +4570,8 @@
     const note = !tool.installed ? "安装后可登记本机 OBS WebSocket，再按需查看节目画面。"
       : !tool.enabled ? "先保存本机 OBS 凭据，再启用工具；停用时不会保留浏览器中的画面。"
       : !preview.configured ? "还没有保存 OBS 凭据。请先停用工具并登记本机回环端口与密码。"
-      : preview.active ? "预览只读取 OBS 当前节目画面，离开本页、停用工具或 60 秒无操作后会自动清除。"
-      : "已准备好。开始预览后只显示当前节目画面，不会开播、切换场景或写入 OBS。";
+      : preview.active ? "离开本页、停用工具或 60 秒无操作后自动清除预览。"
+      : "已准备好，可以查看当前节目画面和本机 OBS 状态。";
     panel.append(appElement("span", note, "obs-preview-note"));
     if (preview.error) panel.append(appElement("p", preview.error, "obs-preview-error"));
     if (tool.installed && !tool.enabled) {
@@ -4588,6 +4593,14 @@
       const stop = appElement("button", preview.stopping ? "正在停止…" : "停止预览", "button compact secondary"); stop.type = "button"; stop.disabled = preview.stopping || !preview.active;
       stop.addEventListener("click", () => void requestOBSPreview("stop"));
       controls.append(preview.active || preview.starting || preview.stopping ? stop : start);
+      if (preview.active) {
+        const inspect = appElement("button", "读取 OBS 状态", "button compact secondary");
+        inspect.id = "obs-preview-inspect";
+        inspect.type = "button";
+        inspect.disabled = preview.applying || preview.polling || preview.stopping;
+        inspect.addEventListener("click", () => void requestOBSPreview("inspect"));
+        controls.append(inspect);
+      }
       panel.append(controls);
     }
     if (preview.active && preview.imageURL) {
@@ -4597,6 +4610,29 @@
       const updated = Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleString("zh-CN", { hour12: false }) : "";
       const metadata = [preview.scene ? `场景：${preview.scene}` : "当前节目画面", updated ? `更新于 ${updated}` : "正在读取"].join(" · ");
       panel.append(appElement("span", metadata, "obs-preview-meta"));
+    }
+    if (preview.active && preview.obsStatus) {
+      const status = preview.obsStatus;
+      const statusPanel = appElement("div", "", "obs-preview-status");
+      const describe = (active) => active === true ? "运行中" : active === false ? "已停止" : "读取不到";
+      const stream = status.streaming?.reconnecting === true ? "重连中" : describe(status.streaming?.active);
+      statusPanel.append(appElement("span", [`虚拟摄像头 ${describe(status.virtual_camera)}`, `OBS 推流 ${stream}`, `OBS 录制 ${describe(status.recording)}`].join(" · "), "obs-preview-meta"));
+      const readAt = new Date(status.observed_at);
+      if (Number.isFinite(readAt.getTime())) statusPanel.append(appElement("span", `状态读取于 ${readAt.toLocaleString("zh-CN", { hour12: false })}`, "obs-preview-meta"));
+      const audio = status.audio;
+      if (audio && Array.isArray(audio.inputs)) {
+        const inputs = appElement("ul", "", "obs-preview-inputs");
+        for (const input of audio.inputs) {
+          const gain = typeof input.volume === "number" ? ` · 音量设置 ${Math.round(input.volume * 100)}%` : "";
+          inputs.append(appElement("li", `${input.name} · ${input.muted ? "静音" : "未静音"}${gain}`, "obs-preview-meta"));
+        }
+        if (audio.inputs.length) statusPanel.append(inputs);
+        else if (audio.complete) statusPanel.append(appElement("span", "当前 OBS 没有音源", "obs-preview-meta"));
+        if (!audio.complete) statusPanel.append(appElement("span", `部分输入状态未读到，已核对 ${audio.checked}/${audio.total} 个输入`, "obs-preview-meta"));
+      } else {
+        statusPanel.append(appElement("span", "读取不到 OBS 音源", "obs-preview-meta"));
+      }
+      panel.append(statusPanel);
     }
     return panel;
   }

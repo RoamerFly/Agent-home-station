@@ -101,6 +101,18 @@ def verify(binary, output):
                             fulfill(route, {"error": "合成 OBS 读取失败"}, 502)
                             return
                         fulfill(route, view(state, image=True))
+                    elif action == "inspect":
+                        assert set(body) == {"action"} and state["active"]
+                        result = view(state, image=True)
+                        result["obs_status"] = {
+                            "observed_at": "2030-01-02T03:04:06Z", "virtual_camera": True,
+                            "streaming": {"active": False, "reconnecting": False},
+                            "audio": {"total": 3, "checked": 2, "complete": False, "inputs": [
+                                {"name": "独立音乐", "muted": False, "volume": 0.5},
+                                {"name": "合成麦克风", "muted": True},
+                            ]},
+                        }
+                        fulfill(route, result)
                     elif action == "stop":
                         assert set(body) == {"action"}
                         state["active"] = False
@@ -119,7 +131,7 @@ def verify(binary, output):
                 panel = page.locator("#obs-preview-panel")
                 expect(page.get_by_text("确认仅访问本机 OBS WebSocket", exact=True)).to_be_visible()
                 page.get_by_label("确认仅访问本机 OBS WebSocket").check()
-                page.get_by_role("button", name="安装").click()
+                page.get_by_role("button", name="安装预览工具", exact=True).click()
                 expect(panel.get_by_text("OBS 当前节目画面", exact=True)).to_be_visible()
                 expect(page.get_by_role("button", name="启用")).to_be_disabled()
                 panel.get_by_label("OBS 回环端口").fill("4456")
@@ -136,8 +148,16 @@ def verify(binary, output):
                 image = panel.locator("img.obs-preview-image")
                 expect(image).to_have_attribute("src", re.compile(r"^blob:"))
                 page.wait_for_function("document.querySelector('#obs-preview-panel img.obs-preview-image')?.naturalWidth > 0")
+                expect(panel.get_by_text("独立音乐", exact=False)).to_have_count(0)
+                panel.get_by_role("button", name="读取 OBS 状态", exact=True).click()
+                expect(panel.get_by_text("虚拟摄像头 运行中 · OBS 推流 已停止 · OBS 录制 读取不到", exact=True)).to_be_visible()
+                expect(panel.get_by_text("独立音乐 · 未静音 · 音量设置 50%", exact=True)).to_be_visible()
+                expect(panel.get_by_text("合成麦克风 · 静音", exact=True)).to_be_visible()
+                expect(panel.get_by_text("部分输入状态未读到，已核对 2/3 个输入", exact=True)).to_be_visible()
                 page.wait_for_timeout(1650)
                 assert [item["action"] for item in writes].count("frame") == 1
+                assert [item["action"] for item in writes].count("inspect") == 1
+                expect(panel.get_by_text("独立音乐 · 未静音 · 音量设置 50%", exact=True)).to_be_visible()
                 panel.screenshot(path=str(output / "obs-preview-active-light.png"))
                 assert_no_horizontal_overflow(page, "OBS preview desktop")
                 page.set_viewport_size({"width": 390, "height": 760})
@@ -148,6 +168,7 @@ def verify(binary, output):
                 fail_frame = True
                 page.wait_for_timeout(1650)
                 expect(panel.locator("img.obs-preview-image")).to_have_count(0)
+                expect(panel.get_by_text("独立音乐", exact=False)).to_have_count(0)
                 expect(panel.get_by_text("合成 OBS 读取失败", exact=True)).to_be_visible()
                 fail_frame = False
                 with page.expect_response(lambda response: response.url.endswith("/preview") and response.request.method == "POST"):

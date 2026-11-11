@@ -39,7 +39,7 @@ var (
 	ErrProtocol = errors.New("invalid OBS preview protocol response")
 	// ErrAuthentication means the endpoint required authentication which could not succeed.
 	ErrAuthentication = errors.New("OBS preview authentication failed")
-	// ErrRequestRejected means OBS explicitly rejected one of the two read requests.
+	// ErrRequestRejected means OBS explicitly rejected a request.
 	ErrRequestRejected = errors.New("OBS preview request rejected")
 	// ErrInvalidFrame means the returned screenshot was not the requested bounded JPEG.
 	ErrInvalidFrame = errors.New("invalid OBS preview frame")
@@ -49,14 +49,24 @@ var (
 // canonical data:image/jpeg;base64 URL for a decoded JPEG no larger than
 // 640x360. OBS may aspect-fit a source on older server versions.
 type Frame struct {
-	Scene     string `json:"scene"`
-	ImageData string `json:"imageData"`
+	Scene     string         `json:"scene"`
+	ImageData string         `json:"imageData"`
+	Status    *PreviewStatus `json:"status,omitempty"`
 }
 
 // Capture connects only to a numeric loopback OBS WebSocket port and returns a
 // verified screenshot of the current program scene. password is never retained
 // or included in returned errors.
 func Capture(ctx context.Context, port int, password string) (Frame, error) {
+	return capturePreview(ctx, port, password, false)
+}
+
+// CaptureWithStatus reads the program picture and OBS status on one authenticated connection.
+func CaptureWithStatus(ctx context.Context, port int, password string) (Frame, error) {
+	return capturePreview(ctx, port, password, true)
+}
+
+func capturePreview(ctx context.Context, port int, password string, inspect bool) (Frame, error) {
 	if port < 1 || port > 65535 {
 		return Frame{}, ErrInvalidPort
 	}
@@ -68,14 +78,11 @@ func Capture(ctx context.Context, port int, password string) (Frame, error) {
 		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
 		defer cancel()
 	}
-	return capture(ctx, port, password, websocket.Dialer{
-		Proxy:            nil,
+	dialer := websocket.Dialer{
 		HandshakeTimeout: defaultTimeout,
-	})
-}
-
-func capture(ctx context.Context, port int, password string, dialer websocket.Dialer) (frame Frame, err error) {
-	err = withOBS(ctx, port, password, dialer, func(ctx context.Context, conn *websocket.Conn) error {
+	}
+	var frame Frame
+	err := withOBS(ctx, port, password, dialer, func(ctx context.Context, conn *websocket.Conn) error {
 		scene, err := requestScene(ctx, conn)
 		if err != nil {
 			return err
@@ -85,10 +92,18 @@ func capture(ctx context.Context, port int, password string, dialer websocket.Di
 			return err
 		}
 		frame = Frame{Scene: scene, ImageData: imageData}
+		if inspect {
+			frame.Status = readPreviewStatus(ctx, conn)
+		}
 		return nil
 	})
 	return frame, err
 }
+
+type requestRejection int
+
+func (e requestRejection) Error() string        { return ErrRequestRejected.Error() }
+func (e requestRejection) Is(target error) bool { return target == ErrRequestRejected }
 
 func withOBS(ctx context.Context, port int, password string, dialer websocket.Dialer, use func(context.Context, *websocket.Conn) error) error {
 	endpoint := url.URL{Scheme: "ws", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
@@ -244,7 +259,7 @@ func request(ctx context.Context, conn *websocket.Conn, requestType string, requ
 		return ErrProtocol
 	}
 	if !response.RequestStatus.Result || response.RequestStatus.Code != 100 {
-		return ErrRequestRejected
+		return requestRejection(response.RequestStatus.Code)
 	}
 	if responseData == nil {
 		return nil
@@ -355,8 +370,11 @@ func normalizeJPEG(data string) (string, error) {
 		return "", ErrInvalidFrame
 	}
 	decoded, err := jpeg.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", ErrInvalidFrame
+	}
 	width, height := decoded.Bounds().Dx(), decoded.Bounds().Dy()
-	if err != nil || width < 1 || height < 1 || width > previewWidth || height > previewHeight {
+	if width < 1 || height < 1 || width > previewWidth || height > previewHeight {
 		return "", ErrInvalidFrame
 	}
 	return jpegDataPrefix + base64.StdEncoding.EncodeToString(raw), nil

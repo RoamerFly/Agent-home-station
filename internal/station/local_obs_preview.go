@@ -33,24 +33,26 @@ type localOBSPreview struct {
 }
 
 type localOBSPreviewSession struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	timer      *time.Timer
-	expires    time.Time
-	nextFrame  time.Time
-	scene      string
-	observedAt string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	timer       *time.Timer
+	expires     time.Time
+	nextFrame   time.Time
+	nextInspect time.Time
+	scene       string
+	observedAt  string
 }
 
 type localOBSView struct {
-	Configured     bool   `json:"configured"`
-	ConfigRevision int    `json:"config_revision"`
-	Port           int    `json:"port"`
-	Enabled        bool   `json:"enabled"`
-	Active         bool   `json:"active"`
-	Scene          string `json:"scene,omitempty"`
-	ObservedAt     string `json:"observed_at,omitempty"`
-	ImageData      string `json:"image_data,omitempty"`
+	Configured     bool                      `json:"configured"`
+	ConfigRevision int                       `json:"config_revision"`
+	Port           int                       `json:"port"`
+	Enabled        bool                      `json:"enabled"`
+	Active         bool                      `json:"active"`
+	Scene          string                    `json:"scene,omitempty"`
+	ObservedAt     string                    `json:"observed_at,omitempty"`
+	ImageData      string                    `json:"image_data,omitempty"`
+	OBSStatus      *obspreview.PreviewStatus `json:"obs_status,omitempty"`
 }
 
 var errOBSPreviewBusy = errors.New("OBS preview frame still in flight")
@@ -96,7 +98,7 @@ func (p *localOBSPreview) ticket() uint64 {
 	return p.epoch
 }
 
-func (p *localOBSPreview) claim(start bool, ticket uint64) (*localOBSPreviewSession, error) {
+func (p *localOBSPreview) claim(action string, ticket uint64) (*localOBSPreviewSession, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || ticket != p.epoch {
@@ -105,7 +107,7 @@ func (p *localOBSPreview) claim(start bool, ticket uint64) (*localOBSPreviewSess
 	if p.inFlight != nil {
 		return nil, errOBSPreviewBusy
 	}
-	if start {
+	if action == "start" {
 		if p.session != nil {
 			return nil, errOBSPreviewBusy
 		}
@@ -116,10 +118,14 @@ func (p *localOBSPreview) claim(start bool, ticket uint64) (*localOBSPreviewSess
 	}
 	now := time.Now()
 	session := p.session
-	if now.Before(session.nextFrame) {
+	next := &session.nextFrame
+	if action == "inspect" {
+		next = &session.nextInspect
+	}
+	if now.Before(*next) {
 		return nil, errOBSPreviewFast
 	}
-	session.nextFrame = now.Add(localOBSFrameInterval)
+	*next = now.Add(localOBSFrameInterval)
 	session.expires = now.Add(localOBSPreviewIdle)
 	expires := session.expires
 	if session.timer != nil {
@@ -136,7 +142,7 @@ func (p *localOBSPreview) claim(start bool, ticket uint64) (*localOBSPreviewSess
 	return session, nil
 }
 
-func (p *localOBSPreview) read(ctx context.Context, session *localOBSPreviewSession, port int, password string) (obspreview.Frame, error) {
+func (p *localOBSPreview) read(ctx context.Context, session *localOBSPreviewSession, port int, password string, inspect bool) (obspreview.Frame, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	unbind := context.AfterFunc(session.ctx, cancel)
@@ -146,6 +152,9 @@ func (p *localOBSPreview) read(ctx context.Context, session *localOBSPreviewSess
 	}
 	if p.capture != nil {
 		return p.capture(ctx, port, password)
+	}
+	if inspect {
+		return obspreview.CaptureWithStatus(ctx, port, password)
 	}
 	return obspreview.Capture(ctx, port, password)
 }
@@ -163,6 +172,7 @@ func (p *localOBSPreview) finish(session *localOBSPreviewSession, view localOBSV
 	}
 	session.scene, session.observedAt = frame.Scene, time.Now().UTC().Format(time.RFC3339)
 	view.Active, view.Scene, view.ObservedAt, view.ImageData = true, session.scene, session.observedAt, frame.ImageData
+	view.OBSStatus = frame.Status
 	return view, nil
 }
 
@@ -249,7 +259,7 @@ func (s *localProjectTools) prepareOBS(ctx context.Context, in localOBSInput, se
 		if err != nil || config.Revision != view.ConfigRevision || json.Unmarshal(config.Values["password"], &password) != nil || password == "" {
 			return view, nil, "", pluginhost.ErrRevision
 		}
-		session, err := s.obs.claim(in.Action == "start", ticket)
+		session, err := s.obs.claim(in.Action, ticket)
 		return view, session, password, err
 	}
 }
@@ -267,17 +277,21 @@ func (s *localProjectTools) obsPreview(owner *websession.Store, w http.ResponseW
 				websession.Fail(w, 400, "请填写有效的 OBS 本机端口及 WebSocket 密码")
 				return
 			}
-		} else if (in.Action != "start" && in.Action != "frame" && in.Action != "stop") || in.Port != 0 || in.Password != "" || in.ConfigRevision != 0 {
+		} else if (in.Action != "start" && in.Action != "frame" && in.Action != "inspect" && in.Action != "stop") || in.Port != 0 || in.Password != "" || in.ConfigRevision != 0 {
 			websession.Fail(w, 400, "OBS 预览操作无效")
 			return
 		}
 	}
-	view, session, password, err := s.prepareOBS(r.Context(), in, func() bool {
+	sessionOK := func() bool {
 		_, _, ok := owner.Lookup(r)
 		return ok
-	})
+	}
+	view, session, password, err := s.prepareOBS(r.Context(), in, sessionOK)
 	if err == nil && session != nil {
-		frame, readErr := s.obs.read(r.Context(), session, view.Port, password)
+		frame, readErr := s.obs.read(r.Context(), session, view.Port, password, in.Action == "inspect")
+		if !sessionOK() {
+			readErr = errOBSPreviewSession
+		}
 		view, err = s.obs.finish(session, view, frame, readErr)
 	}
 	if err != nil {

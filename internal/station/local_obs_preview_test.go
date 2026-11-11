@@ -195,7 +195,7 @@ func TestLocalOBSStopFencesQueuedStart(t *testing.T) {
 	var preview localOBSPreview
 	ticket := preview.ticket()
 	preview.stop()
-	if session, err := preview.claim(true, ticket); session != nil || !errors.Is(err, errOBSPreviewInactive) {
+	if session, err := preview.claim("start", ticket); session != nil || !errors.Is(err, errOBSPreviewInactive) {
 		t.Fatalf("a queued start survived stop: %+v %v", session, err)
 	}
 }
@@ -209,7 +209,9 @@ func TestLocalOBSPreviewReadsProgramThroughWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(picture.Bytes())
+	var connections atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		number := connections.Add(1)
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
 			t.Error(err)
@@ -226,10 +228,11 @@ func TestLocalOBSPreviewReadsProgramThroughWebSocket(t *testing.T) {
 		var message struct {
 			Op int `json:"op"`
 			D  struct {
-				RequestType        string `json:"requestType"`
-				RequestID          string `json:"requestId"`
-				Authentication     string `json:"authentication"`
-				EventSubscriptions *int   `json:"eventSubscriptions"`
+				RequestType        string         `json:"requestType"`
+				RequestID          string         `json:"requestId"`
+				Authentication     string         `json:"authentication"`
+				EventSubscriptions *int           `json:"eventSubscriptions"`
+				RequestData        map[string]any `json:"requestData"`
 			} `json:"d"`
 		}
 		if !write(0, map[string]any{"rpcVersion": 1, "authentication": map[string]string{"salt": "c2FsdA==", "challenge": "Y2hhbGxlbmdl"}}) {
@@ -243,19 +246,42 @@ func TestLocalOBSPreviewReadsProgramThroughWebSocket(t *testing.T) {
 		if !write(2, map[string]int{"negotiatedRpcVersion": 1}) {
 			return
 		}
-		for _, reply := range []struct {
+		type response struct {
 			method string
-			data   map[string]string
-		}{
-			{"GetCurrentProgramScene", map[string]string{"currentProgramSceneName": "合成 OBS 场景"}},
-			{"GetSourceScreenshot", map[string]string{"imageData": data}},
-		} {
+			data   any
+			code   int
+			input  string
+		}
+		replies := []response{
+			{"GetCurrentProgramScene", map[string]string{"currentProgramSceneName": "合成 OBS 场景"}, 100, ""},
+			{"GetSourceScreenshot", map[string]string{"imageData": data}, 100, ""},
+		}
+		if number == 2 {
+			replies = append(replies,
+				response{"GetVirtualCamStatus", map[string]bool{"outputActive": true}, 100, ""},
+				response{"GetRecordStatus", map[string]bool{}, 100, ""},
+				response{"GetStreamStatus", map[string]bool{"outputActive": false, "outputReconnecting": false}, 100, ""},
+				response{"GetInputList", map[string]any{"inputs": []map[string]string{
+					{"inputName": "蓝色画面"}, {"inputName": "合成麦克风"}, {"inputName": "独立音乐"},
+				}}, 100, ""},
+				response{"GetInputMute", nil, 604, "蓝色画面"},
+				response{"GetInputMute", map[string]bool{"inputMuted": true}, 100, "合成麦克风"},
+				response{"GetInputVolume", map[string]float64{"inputVolumeMul": 0}, 100, "合成麦克风"},
+				response{"GetInputMute", map[string]bool{"inputMuted": false}, 100, "独立音乐"},
+				response{"GetInputVolume", nil, 600, "独立音乐"},
+			)
+		}
+		for _, reply := range replies {
+			message.D.RequestData = nil
 			if err := conn.ReadJSON(&message); err != nil || message.Op != 6 || message.D.RequestType != reply.method || message.D.RequestID == "" {
 				t.Errorf("expected OBS read %s, got %s: %v", reply.method, message.D.RequestType, err)
 				return
 			}
+			if name, _ := message.D.RequestData["inputName"].(string); name != reply.input {
+				t.Errorf("wrong audio input for %s", reply.method)
+			}
 			if !write(7, map[string]any{"requestType": reply.method, "requestId": message.D.RequestID,
-				"requestStatus": map[string]any{"result": true, "code": 100}, "responseData": reply.data}) {
+				"requestStatus": map[string]any{"result": reply.code == 100, "code": reply.code}, "responseData": reply.data}) {
 				return
 			}
 		}
@@ -273,5 +299,26 @@ func TestLocalOBSPreviewReadsProgramThroughWebSocket(t *testing.T) {
 	got, _ := out["image_data"].(string)
 	if code != http.StatusOK || out["scene"] != "合成 OBS 场景" || !strings.HasPrefix(got, "data:image/jpeg;base64,") {
 		t.Fatalf("program preview through WebSocket: %d %v", code, out["error"])
+	}
+	if code, _ := f.request("POST", obsPreviewPath, localOBSInput{Action: "inspect"}, false); code != http.StatusForbidden {
+		t.Fatalf("status read bypassed CSRF: %d", code)
+	}
+	code, out = f.request("POST", obsPreviewPath, localOBSInput{Action: "inspect"}, true)
+	status, ok := out["obs_status"].(map[string]any)
+	if code != http.StatusOK || !ok || status["virtual_camera"] != true || status["recording"] != nil || status["observed_at"] == nil || status["streaming"].(map[string]any)["active"] != false {
+		t.Fatalf("OBS state through WebSocket: %d %v", code, status)
+	}
+	audio := status["audio"].(map[string]any)
+	inputs := audio["inputs"].([]any)
+	if audio["checked"] != float64(2) || audio["total"] != float64(3) || audio["complete"] != false || len(inputs) != 2 {
+		t.Fatalf("audio source coverage: %v", audio)
+	}
+	mic, music := inputs[0].(map[string]any), inputs[1].(map[string]any)
+	if mic["name"] != "合成麦克风" || mic["muted"] != true || mic["volume"] != float64(0) || music["name"] != "独立音乐" || music["muted"] != false || music["volume"] != nil {
+		t.Fatalf("audio states: %v", inputs)
+	}
+	code, out = f.request("POST", obsPreviewPath, localOBSInput{Action: "stop"}, true)
+	if code != http.StatusOK || out["obs_status"] != nil || connections.Load() != 2 {
+		t.Fatalf("stop disclosed old status or reconnected: %d %v", code, out)
 	}
 }

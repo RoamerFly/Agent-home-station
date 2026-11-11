@@ -356,6 +356,8 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .obs-preview-config label { display: grid; gap: 4px; color: var(--muted); font-size: .76rem; font-weight: 700; }
 .obs-preview-config input { box-sizing: border-box; width: 100%; min-width: 0; }
 .obs-preview-image { display: block; width: min(100%, 38rem); aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 10px; object-fit: contain; background: #101020; }
+.obs-preview-status { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.obs-preview-inputs { margin: 0; padding-inline-start: 1.2rem; }
 @media (max-width: 620px) { .obs-preview-config { grid-template-columns: 1fr; } .obs-preview-config .button { justify-self: start; } }
 .artifact-downloads { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .artifact-download { color: var(--accent-deep); font-size: .8rem; font-weight: 800; text-decoration: none; }

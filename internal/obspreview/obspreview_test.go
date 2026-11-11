@@ -176,6 +176,9 @@ func TestNormalizeJPEGAcceptsBoundedAspectFitAndRejectsOversize(t *testing.T) {
 	if _, err := normalizeJPEG(overwide); !errors.Is(err, ErrInvalidFrame) {
 		t.Fatalf("oversize JPEG error = %v", err)
 	}
+	if _, err := normalizeJPEG(jpegDataPrefix + "AQID"); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("malformed JPEG error = %v", err)
+	}
 }
 
 func testServer(t *testing.T, handler func(*websocket.Conn)) *httptest.Server {

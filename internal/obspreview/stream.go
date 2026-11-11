@@ -24,8 +24,8 @@ var (
 // StreamStatus is an instantaneous observation of the local OBS encoder.
 // It neither proves platform acceptance nor settles a pending start or stop.
 type StreamStatus struct {
-	Active       bool
-	Reconnecting bool
+	Active       bool `json:"active"`
+	Reconnecting bool `json:"reconnecting"`
 }
 
 // OwnedStream is the wire control for one dedicated encoder lease. The Windows

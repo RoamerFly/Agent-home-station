@@ -11,6 +11,8 @@
 
 私有编码器使用自己的 Windows 桌面和节目配置。只读节目预览继续连接由你独立启动的 OBS。本机校验失败时，优先检查 ZIP 版本、目录位置和是否修改了已安装的模块。平台未登记或授权不可用时，目标列表为空。
 
+在「抖音 → 详细配置 → 直播与本机预览」可打开 OBS 本机预览。开始预览后点击「读取 OBS 状态」，可查看当前 OBS 的虚拟摄像头、推流、录制及各音源的静音和音量设置。状态按点击时读取，显示读取时间。输入较多或 OBS 无法返回全部设置时，界面会显示本次读取范围。音量设置是推子数值，实际信号与直播伴侣接收音频仍需现场核对。[OBS WebSocket v5 协议](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)
+
 在本机聊天里让大肥鱼使用已有作品时，她可先调用 `artifact_publish` 取得成品编号及 SHA-256，再按需发现 `app_live`。开始会话同时提供 `program_artifact_id` 与 `program_sha256`，`program_loop` 指定是否循环；原会话查询和停止只提供原编号。节目引用跟随原任务保存，不能在查询或重试中悄悄换片。播放完一遍不等于结束直播：未开启循环时媒体源按其结束行为停止呈现，直播会话仍按授权时长或明确停止收口。
 
 宿主先验证原件、身份及来源，读取视频元数据并解码一帧。编码器使用另行核验过的私有文件，按视频比例居中显示并保留音频；家目录原文件后来被编辑不改变已选版本。来源被遗忘或家目录授权撤销后，输出检查会停止原会话。首版节目输入明确限于 MP4，不接受网络播放列表、任意 OBS 配置或媒体 URL；其他容器可先用媒体工具转码。该本地媒体源使用 [OBS 33.0.1 的官方媒体源设置](https://github.com/obsproject/obs-studio/blob/33.0.1/plugins/obs-ffmpeg/obs-ffmpeg-source.c)。生成配置、实际编码画面及平台开播是三个不同的验证阶段，部署记录分别说明。
@@ -30,7 +32,7 @@
 ```powershell
 $env:AHS_TEST_OBS_ZIP = 'E:\验证\OBS-Studio-33.0.1-Windows-x64.zip'
 $env:AHS_TEST_OBS_FFMPEG = 'E:\验证\runtimes\windows-media\ffmpeg.exe'
-go test ./internal/obsportable -run '^TestOfficialOBSProgram(Camera|Loopback)$' -count=1 -v -timeout 145s
+go test ./internal/obsportable -run '^TestOfficialOBS(PreviewReadsProgramAndAudio|Program(Camera|Loopback))$' -count=1 -v -timeout 240s
 # 将发行包的 windows-media 目录加入当前 PATH，供工作站调用 FFmpeg 和 ffprobe。
 go test ./internal/station -run '^TestLocalLive(VerifiedEncoderDoesNotImplyAPlatformGrant|PortableOBSProgramReachesLoopbackThroughChat)$' -count=1 -v -timeout 150s
 ```

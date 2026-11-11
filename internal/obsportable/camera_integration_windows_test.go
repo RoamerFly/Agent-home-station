@@ -5,6 +5,7 @@ package obsportable
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -20,10 +21,85 @@ import (
 
 	"github.com/bluenviron/gortmplib"
 	"github.com/bluenviron/gortmplib/pkg/message"
+	"github.com/google/uuid"
 	"golang.org/x/sys/windows"
 
+	"wechat-bot/internal/obspreview"
 	"wechat-bot/internal/rtmprelay"
 )
+
+func TestOfficialOBSPreviewReadsProgramAndAudio(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
+	defer cancel()
+	installation, media := installOfficialTestProgram(t, ctx)
+	defer media.Source.Close()
+	root, err := os.OpenRoot(installation.studio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := writeProfileWithMedia(ctx, root, installation.studio, 1, "fixture-relay-ticket", &ownedMedia{Media: *media}); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Remove(filepath.FromSlash("config/obs-studio/basic/profiles/" + profileName + "/service.json")); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := socket.Addr().(*net.TCPAddr).Port
+	if err := socket.Close(); err != nil {
+		t.Fatal(err)
+	}
+	password := uuid.NewString()
+	config, err := json.Marshal(map[string]any{"first_load": false, "server_enabled": true, "server_port": port, "auth_required": true, "server_password": password, "alerts_enabled": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(filepath.FromSlash("config/obs-studio/plugin_config/obs-websocket/config.json"), config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(installation.studio, filepath.FromSlash(executable))
+	args := cameraArguments()
+	process, err := obspreview.LaunchPortableEncoderProcess(ctx, obspreview.EncoderLaunch{
+		Executable: exe, Directory: filepath.Dir(exe), SHA256: installation.files[executable], Arguments: args[:len(args)-1],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := process.Stop(stop); err != nil {
+			t.Errorf("release isolated OBS: %v", err)
+		}
+	}()
+	read, stop := context.WithTimeout(ctx, 30*time.Second)
+	defer stop()
+	for {
+		frame, err := obspreview.CaptureWithStatus(read, port, password)
+		if err == nil {
+			status := frame.Status
+			if frame.Scene != "Station Program" || frame.ImageData == "" || status == nil ||
+				status.VirtualCamera == nil || *status.VirtualCamera || status.Streaming == nil || status.Streaming.Active ||
+				status.Recording == nil || *status.Recording || status.Audio == nil || !status.Audio.Complete {
+				t.Fatalf("isolated OBS program/status not confirmed: scene=%q status=%+v", frame.Scene, status)
+			}
+			for _, input := range status.Audio.Inputs {
+				if input.Name == "Station Media" && !input.Muted && input.Volume != nil && *input.Volume == 1 {
+					return
+				}
+			}
+			t.Fatalf("isolated media audio input not observed: %+v", status.Audio.Inputs)
+		}
+		select {
+		case <-read.Done():
+			t.Fatalf("isolated OBS status could not be read: %v", err)
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
 
 func installOfficialTestProgram(t *testing.T, ctx context.Context) (*Installation, *Media) {
 	t.Helper()
