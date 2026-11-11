@@ -36,8 +36,14 @@ type localDouyinMemoryPage struct {
 }
 
 func (t *localToolSet) douyinMemoryState(ctx context.Context) (localDouyinWebRecord, error) {
-	if !t.douyinMemoryRequested || t.publications == nil || t.run == nil || !t.run.Tracked ||
-		t.checkAppObservationIdentity() != nil || t.run.CheckSource(ctx) != nil {
+	if !t.douyinMemoryRequested || t.publications == nil || t.checkAppObservationIdentity() != nil {
+		return localDouyinWebRecord{}, apphost.ErrObservationForbidden
+	}
+	if t.douyinMemoryOrigin != nil {
+		if err := t.douyinMemoryOrigin(ctx); err != nil {
+			return localDouyinWebRecord{}, err
+		}
+	} else if t.run == nil || !t.run.Tracked || t.run.CheckSource(ctx) != nil {
 		return localDouyinWebRecord{}, apphost.ErrObservationForbidden
 	}
 	if _, ok := t.publications.applications.Lookup(douyinapp.ID); !ok {
@@ -347,6 +353,10 @@ func (t *localToolSet) readDouyinMemory(ctx context.Context, db *sql.DB, record 
 }
 
 func (t *localToolSet) auditDouyinMemory(ctx context.Context, db *sql.DB, proof localDouyinMemoryProof, action string, count int, result string) error {
+	if t.douyinMemoryOrigin != nil {
+		// The native origin records its own direction and request proof.
+		return nil
+	}
 	searches, reads := 0, 0
 	if action == "search" {
 		searches++

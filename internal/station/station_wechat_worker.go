@@ -51,6 +51,7 @@ type stationWechat struct {
 	documents              stationDocumentTools
 	ownerReader            stationservices.OwnerReader
 	stationConversation    func() (*companion.Store, companion.Input, error)
+	localChat              *localChatService
 	contactCursor          cipher.AEAD
 }
 

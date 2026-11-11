@@ -36,6 +36,7 @@ type localToolSet struct {
 	wechatMemoryRefs      map[string]localWechatMemoryReference
 	wechatMemoryPages     map[string]localWechatMemoryPage
 	douyinMemoryRequested bool
+	douyinMemoryOrigin    func(context.Context) error
 	douyinMemoryProofs    map[localDouyinMemoryProof]struct{}
 	douyinMemoryRefs      map[string]localDouyinMemoryReference
 	douyinMemoryPages     map[string]localDouyinMemoryPage

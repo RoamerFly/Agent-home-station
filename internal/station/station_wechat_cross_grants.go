@@ -21,6 +21,7 @@ import (
 
 const stationWechatCrossGrantsFile = "wechat-cross-memory-grants.json"
 const stationWechatToStationGrantsFile = "wechat-to-station-memory-grants.json"
+const stationWechatToDouyinGrantsFile = "wechat-to-douyin-memory-grants.json"
 
 // This direction is independent of StationReads. Authority is tied to the
 // current native owner binding and the exact underlying policy grant versions.
@@ -32,6 +33,7 @@ type stationWechatCrossGrants struct {
 	OwnerRevision int                  `json:"owner_revision"`
 	Sources       map[string]time.Time `json:"sources"`
 	Origins       map[string]time.Time `json:"origins"`
+	AppSources    map[string]string    `json:"app_sources,omitempty"`
 	ActivatedAt   time.Time            `json:"activated_at,omitzero"`
 	LastKey       string               `json:"last_key,omitempty"`
 	LastInput     string               `json:"last_input,omitempty"`
@@ -43,6 +45,7 @@ type stationWechatCrossGrantInput struct {
 	Key           string   `json:"request_key"`
 	Sources       []string `json:"sources"`
 	Origins       []string `json:"origins"`
+	AppSources    []string `json:"app_sources,omitempty"`
 }
 
 func emptyWechatCrossGrants(account string) stationWechatCrossGrants {
@@ -73,7 +76,15 @@ func readWechatDirectionGrants(worker *stationWechatWorker, account, filename st
 	if (len(view.Sources) > 0 || len(view.Origins) > 0) && (view.OwnerRevision == 0 || view.ActivatedAt.IsZero()) {
 		return stationWechatCrossGrants{}, apphost.ErrUnavailable
 	}
-	if filename == stationWechatToStationGrantsFile && len(view.Sources) != 0 {
+	if filename != stationWechatCrossGrantsFile && len(view.Sources) != 0 || filename != stationWechatToDouyinGrantsFile && len(view.AppSources) != 0 {
+		return stationWechatCrossGrants{}, apphost.ErrUnavailable
+	}
+	for kind, scope := range view.AppSources {
+		if !slices.Contains(localDouyinMemoryKinds[:], kind) || len(scope) != 64 || !identity.ValidPathID(scope) {
+			return stationWechatCrossGrants{}, apphost.ErrUnavailable
+		}
+	}
+	if filename == stationWechatToDouyinGrantsFile && ((len(view.AppSources) == 0) != (len(view.Origins) == 0) || len(view.AppSources) > len(localDouyinMemoryKinds)) {
 		return stationWechatCrossGrants{}, apphost.ErrUnavailable
 	}
 	return view, nil
@@ -119,6 +130,12 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 	if stationSource {
 		filename = stationWechatToStationGrantsFile
 	}
+	return s.wechatMemoryFileRoute(session, readOwner, filename)
+}
+
+func (s *stationWechat) wechatMemoryFileRoute(session *websession.Store, readOwner stationservices.OwnerReader, filename string) http.HandlerFunc {
+	stationSource := filename != stationWechatCrossGrantsFile
+	douyinSource := filename == stationWechatToDouyinGrantsFile
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		person, err := readOwner()
@@ -143,7 +160,7 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 				return
 			}
 			invalidScope := stationSource && len(input.Sources) != 0 || !stationSource && (len(input.Sources) == 0) != (len(input.Origins) == 0)
-			if input.Revision < 0 || input.OwnerRevision < 0 || !identity.ValidPathID(input.Key) || !validWechatCrossThreads(input.Sources) || !validWechatCrossThreads(input.Origins) || invalidScope {
+			if input.Revision < 0 || input.OwnerRevision < 0 || !identity.ValidPathID(input.Key) || !validWechatCrossThreads(input.Sources) || !validWechatCrossThreads(input.Origins) || invalidScope || !validDouyinDirectionSources(input, douyinSource) {
 				websession.Fail(w, 400, "请选择发起会话和来源会话，或全部清空以撤权")
 				return
 			}
@@ -200,6 +217,17 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 		privateAllowed := false
 		validBinding := false
 		scopesCurrent := false
+		appSources := []localDouyinMemorySource{}
+		if douyinSource && s.localChat != nil {
+			appSources, err = s.douyinDirectionSources(r.Context(), person)
+			if err != nil {
+				if r.Method == http.MethodPut && len(input.Origins) > 0 {
+					websession.Fail(w, 409, "抖音记忆来源暂不可核对")
+					return
+				}
+				appSources = nil
+			}
+		}
 		if worker != nil {
 			worker.mu.Lock()
 			defer worker.mu.Unlock()
@@ -244,6 +272,7 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 						return
 					}
 					nextSources, nextOrigins := map[string]time.Time{}, map[string]time.Time{}
+					nextAppSources := map[string]string{}
 					if len(input.Origins) > 0 {
 						if !validBinding || input.OwnerRevision != binding.Revision || liveDataset != binding.Binding.Dataset {
 							websession.Fail(w, 409, "请先核对当前微信本人绑定")
@@ -265,8 +294,20 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 							}
 							nextOrigins[thread] = stamp
 						}
+						for _, kind := range input.AppSources {
+							for _, source := range appSources {
+								if source.Kind == kind {
+									nextAppSources[kind] = source.Scope
+								}
+							}
+							if nextAppSources[kind] == "" {
+								websession.Fail(w, 409, "请先核对抖音来源的当前留存与读取授权")
+								return
+							}
+						}
 					}
 					view.Sources, view.Origins = nextSources, nextOrigins
+					view.AppSources = nextAppSources
 					view.Fish, view.Owner = person.FishID, person.ID
 					view.OwnerRevision = binding.Revision
 					view.ActivatedAt = time.Now().UTC()
@@ -285,6 +326,14 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 			for thread, stamp := range view.Origins {
 				scopesCurrent = scopesCurrent && stamp.Equal(worker.policy.Grants[thread])
 			}
+			if douyinSource {
+				scopesCurrent = scopesCurrent && len(view.AppSources) > 0
+				for kind, scope := range view.AppSources {
+					scopesCurrent = scopesCurrent && slices.ContainsFunc(appSources, func(source localDouyinMemorySource) bool {
+						return source.Kind == kind && source.Scope == scope
+					})
+				}
+			}
 		}
 		if !current() {
 			websession.Fail(w, 401, "请重新登录")
@@ -295,13 +344,14 @@ func (s *stationWechat) wechatMemoryDirectionRoute(session *websession.Store, re
 		view.LastKey, view.LastInput = "", ""
 		websession.Respond(w, 200, struct {
 			stationWechatCrossGrants
-			BindingRevision  int      `json:"current_owner_revision"`
-			BindingReady     bool     `json:"owner_bound"`
-			PrivateAllowed   bool     `json:"private_reply_authorized"`
-			ScopesCurrent    bool     `json:"scopes_current"`
-			AvailableSources []string `json:"available_sources"`
-			AvailableOrigins []string `json:"available_origins"`
-		}{view, binding.Revision, validBinding, privateAllowed, scopesCurrent, sources, origins})
+			BindingRevision     int                       `json:"current_owner_revision"`
+			BindingReady        bool                      `json:"owner_bound"`
+			PrivateAllowed      bool                      `json:"private_reply_authorized"`
+			ScopesCurrent       bool                      `json:"scopes_current"`
+			AvailableSources    []string                  `json:"available_sources"`
+			AvailableOrigins    []string                  `json:"available_origins"`
+			AvailableAppSources []localDouyinMemorySource `json:"available_app_sources,omitempty"`
+		}{view, binding.Revision, validBinding, privateAllowed, scopesCurrent, sources, origins, appSources})
 	}
 }
 
@@ -318,12 +368,16 @@ func (worker *stationWechatWorker) crossAuthority(account string) (stationWechat
 }
 
 func (worker *stationWechatWorker) wechatDirectionAuthority(account string, stationSource bool) (stationWechatCrossGrants, stationWechatOwnerState, stationWechatPolicy, error) {
-	worker.ownerMu.Lock()
-	defer worker.ownerMu.Unlock()
 	filename := stationWechatCrossGrantsFile
 	if stationSource {
 		filename = stationWechatToStationGrantsFile
 	}
+	return worker.wechatFileAuthority(account, filename)
+}
+
+func (worker *stationWechatWorker) wechatFileAuthority(account, filename string) (stationWechatCrossGrants, stationWechatOwnerState, stationWechatPolicy, error) {
+	worker.ownerMu.Lock()
+	defer worker.ownerMu.Unlock()
 	grants, err := readWechatDirectionGrants(worker, account, filename)
 	if err != nil {
 		return grants, stationWechatOwnerState{}, stationWechatPolicy{}, err
@@ -353,6 +407,15 @@ func (s *stationWechat) verifyWechatCrossScope(ctx context.Context, id string, i
 }
 
 func (s *stationWechat) verifyWechatMemoryDirection(ctx context.Context, id string, in companion.Input, source string, owner stationservices.Owner, forward, stationSource bool) (stationWechatCrossAccess, error) {
+	filename := stationWechatCrossGrantsFile
+	if stationSource {
+		filename = stationWechatToStationGrantsFile
+	}
+	return s.verifyWechatMemoryFile(ctx, id, in, source, owner, forward, filename)
+}
+
+func (s *stationWechat) verifyWechatMemoryFile(ctx context.Context, id string, in companion.Input, source string, owner stationservices.Owner, forward bool, filename string) (stationWechatCrossAccess, error) {
+	stationSource := filename != stationWechatCrossGrantsFile
 	deny := func() (stationWechatCrossAccess, error) {
 		return stationWechatCrossAccess{}, apphost.ErrObservationForbidden
 	}
@@ -363,7 +426,7 @@ func (s *stationWechat) verifyWechatMemoryDirection(ctx context.Context, id stri
 	if err != nil || worker == nil {
 		return deny()
 	}
-	grants, binding, policy, grantErr := worker.wechatDirectionAuthority(in.Account, stationSource)
+	grants, binding, policy, grantErr := worker.wechatFileAuthority(in.Account, filename)
 	sourceGrant, originGrant, privateGrant := policy.HistoryGrants[source], policy.Grants[in.Thread], time.Time{}
 	if binding.Binding != nil && !forward {
 		privateGrant = policy.Grants[binding.Binding.Sender]
@@ -386,7 +449,7 @@ func (s *stationWechat) verifyWechatMemoryDirection(ctx context.Context, id stri
 			return deny()
 		}
 	}
-	fresh, freshBinding, current, readErr := worker.wechatDirectionAuthority(in.Account, stationSource)
+	fresh, freshBinding, current, readErr := worker.wechatFileAuthority(in.Account, filename)
 	unchanged := readErr == nil && fresh.Revision == grants.Revision && freshBinding.Revision == binding.Revision && sourceGrant.Equal(current.HistoryGrants[source]) && originGrant.Equal(current.Grants[in.Thread])
 	if forward {
 		unchanged = unchanged && sourceFile.Equal(current.AttachmentGrants[source]) && targetFile.Equal(current.MediaReplyGrants[in.Thread])
@@ -402,6 +465,9 @@ func (s *stationWechat) verifyWechatMemoryDirection(ctx context.Context, id stri
 	}
 	if stationSource {
 		digest = localCheckpointKey("wechat-to-station-v1", digest, owner)
+	}
+	if filename == stationWechatToDouyinGrantsFile {
+		digest = localCheckpointKey("wechat-to-douyin-v1", digest, grants.AppSources)
 	}
 	return stationWechatCrossAccess{Digest: digest, PrivateTarget: b.Sender, GrantRevision: grants.Revision}, nil
 }

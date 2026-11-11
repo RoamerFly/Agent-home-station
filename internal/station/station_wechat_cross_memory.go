@@ -16,10 +16,13 @@ import (
 const stationWechatCrossToolName = "wechat_cross_memory"
 
 type stationWechatCrossProof struct {
-	Thread, Digest, Instance, Epoch, Event      string
-	EventRevision, GrantRevision                int
-	Station                                     bool `json:"station,omitempty"`
-	StationInstance, StationEpoch, StationScope string
+	Thread, Digest, Instance, Epoch, Event              string
+	EventRevision, GrantRevision                        int
+	Station                                             bool `json:"station,omitempty"`
+	Douyin                                              bool `json:"douyin,omitempty"`
+	StationInstance, StationEpoch, StationScope         string
+	DouyinKind, DouyinScope, DouyinBinding, DouyinEpoch string
+	DouyinRevision                                      uint64
 }
 type stationWechatCrossRef struct {
 	Proof   stationWechatCrossProof
@@ -31,11 +34,13 @@ type stationWechatCrossPage struct {
 	Query, Since, Before, Cursor string
 }
 type stationWechatCrossTurn struct {
-	Required bool
-	Target   string
-	Proofs   []stationWechatCrossProof
-	Refs     map[string]stationWechatCrossRef
-	Pages    map[string]stationWechatCrossPage
+	Required    bool
+	Target      string
+	Proofs      []stationWechatCrossProof
+	Refs        map[string]stationWechatCrossRef
+	Pages       map[string]stationWechatCrossPage
+	Douyin      *localToolSet
+	DouyinProof stationWechatCrossProof
 }
 type stationWechatCrossInput struct {
 	Action       string `json:"action"`
@@ -51,27 +56,42 @@ type stationWechatCrossInput struct {
 	Length       *int   `json:"length"`
 	SourceOffset *int   `json:"source_offset"`
 	SourceLimit  *int   `json:"source_limit"`
+	SourceID     string `json:"source_id"`
+	WorkID       string `json:"work_id"`
 }
 
 func stationWechatCrossTool() mcptools.Tool {
-	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话与工作站许可。search指定query；查微信时填thread_id，查工作站时填source=station且省略thread_id。默认5条摘要。read凭本轮reference按字节或来源分页。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station"]},"thread_id":{"type":"string"},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话、工作站与获准抖音来源。search指定query；查微信时填thread_id，查工作站时填source=station且省略thread_id。查抖音时填source=douyin及source_id，可用work_id过滤。抖音只检索本机已留存资料。默认5条摘要。read凭本轮reference按字节或来源分页。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station","douyin"]},"source_id":{"type":"string"},"work_id":{"type":"string"},"thread_id":{"type":"string"},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 // Only configuration metadata is considered for discovery. No source text or
 // cross-conversation query is loaded into an ordinary first model request.
 func (t *stationAttachmentTools) crossAuthorization() string {
-	wechat, station := t.crossDirectionAuthorization(false), t.crossDirectionAuthorization(true)
-	if station == "" {
+	wechat, station, douyin := t.crossDirectionAuthorization(false), t.crossDirectionAuthorization(true), t.crossFileAuthorization(stationWechatToDouyinGrantsFile)
+	if station == "" && douyin == "" {
 		return wechat
 	}
-	return "cross-" + localCheckpointKey(wechat, station)
+	return "cross-" + localCheckpointKey(wechat, station, douyin)
 }
 
 func (t *stationAttachmentTools) crossDirectionAuthorization(stationSource bool) string {
+	filename := stationWechatCrossGrantsFile
+	if stationSource {
+		filename = stationWechatToStationGrantsFile
+	}
+	return t.crossFileAuthorization(filename)
+}
+
+func (t *stationAttachmentTools) crossFileAuthorization(filename string) string {
+	stationSource := filename == stationWechatToStationGrantsFile
+	douyinSource := filename == stationWechatToDouyinGrantsFile
 	if t.crossHost == nil || t.crossHost.ownerReader == nil || t.store == nil || t.blocked == nil || t.blocked() || t.trace.Preview || t.trace.Surf || t.trace.ReportOnly || t.trace.Channel != "wechat" || t.trace.Mode != "direct" || !t.trace.Directed {
 		return ""
 	}
 	if stationSource && (t.crossHost.stationConversation == nil || !mentionsStationMemory(t.trace.OriginalText)) {
+		return ""
+	}
+	if douyinSource && (t.crossHost.localChat == nil || !mentionsDouyinMemory(t.trace.OriginalText)) {
 		return ""
 	}
 	owner, err := t.crossHost.ownerReader()
@@ -82,12 +102,18 @@ func (t *stationAttachmentTools) crossDirectionAuthorization(stationSource bool)
 	if err != nil || w == nil {
 		return ""
 	}
-	g, b, p, err := w.wechatDirectionAuthority(t.trace.Account, stationSource)
+	g, b, p, err := w.wechatFileAuthority(t.trace.Account, filename)
 	if err != nil || b.Binding == nil || g.OwnerRevision != b.Revision || b.Binding.Sender != t.trace.Sender || b.Binding.Fish != owner.FishID || b.Binding.Owner != owner.ID || g.Fish != owner.FishID || g.Owner != owner.ID || g.Origins[t.trace.Thread].IsZero() || !g.Origins[t.trace.Thread].Equal(p.Grants[t.trace.Thread]) {
 		return ""
 	}
 	if stationSource {
 		return "station-" + localCheckpointKey(g.Account, g.Revision, b.Revision, owner, t.trace.Thread, t.trace.Sender, g.Origins[t.trace.Thread], p.Grants[b.Binding.Sender])
+	}
+	if douyinSource {
+		if len(g.AppSources) == 0 {
+			return ""
+		}
+		return "douyin-" + localCheckpointKey(g.Account, g.Revision, b.Revision, owner, t.trace.Thread, t.trace.Sender, g.Origins[t.trace.Thread], p.Grants[b.Binding.Sender], g.AppSources)
 	}
 	current := map[string]any{}
 	for thread, stamp := range g.Sources {
@@ -117,14 +143,21 @@ func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old statio
 	deny := func() (stationWechatCrossProof, error) {
 		return stationWechatCrossProof{}, apphost.ErrObservationForbidden
 	}
-	if t.crossDirectionAuthorization(old.Station) == "" || ctx.Err() != nil {
+	filename := stationWechatCrossGrantsFile
+	if old.Station {
+		filename = stationWechatToStationGrantsFile
+	}
+	if old.Douyin {
+		filename = stationWechatToDouyinGrantsFile
+	}
+	if old.Station && old.Douyin || t.crossFileAuthorization(filename) == "" || ctx.Err() != nil {
 		return deny()
 	}
 	owner, err := t.crossHost.ownerReader()
 	if err != nil {
 		return deny()
 	}
-	access, err := t.crossHost.verifyWechatMemoryDirection(ctx, t.crossConnection, t.trace, old.Thread, owner, forward, old.Station)
+	access, err := t.crossHost.verifyWechatMemoryFile(ctx, t.crossConnection, t.trace, old.Thread, owner, forward, filename)
 	if err != nil {
 		return deny()
 	}
@@ -140,7 +173,7 @@ func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old statio
 	if err != nil {
 		return deny()
 	}
-	next := stationWechatCrossProof{Thread: old.Thread, Digest: access.Digest, Instance: t.store.SourceInstanceID(), Epoch: epoch, Event: source.EventID, EventRevision: source.Revision, GrantRevision: access.GrantRevision, Station: old.Station}
+	next := stationWechatCrossProof{Thread: old.Thread, Digest: access.Digest, Instance: t.store.SourceInstanceID(), Epoch: epoch, Event: source.EventID, EventRevision: source.Revision, GrantRevision: access.GrantRevision, Station: old.Station, Douyin: old.Douyin}
 	if old.Station {
 		store, scope, err := t.stationMemoryStore()
 		if err != nil {
@@ -151,6 +184,13 @@ func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old statio
 		if err != nil {
 			return deny()
 		}
+	}
+	if old.Douyin && old.DouyinScope != "" {
+		if err := t.checkWechatDouyinStoredProof(ctx, owner, old); err != nil {
+			return deny()
+		}
+		next.DouyinKind, next.DouyinScope, next.DouyinBinding, next.DouyinEpoch, next.DouyinRevision =
+			old.DouyinKind, old.DouyinScope, old.DouyinBinding, old.DouyinEpoch, old.DouyinRevision
 	}
 	if old.Digest != "" && old != next {
 		return deny()
@@ -197,6 +237,9 @@ func (t *stationAttachmentTools) checkCrossResults(ctx context.Context) error {
 			return err
 		}
 	}
+	if t.cross.Douyin != nil {
+		return t.cross.Douyin.checkDouyinMemoryResults(ctx)
+	}
 	return nil
 }
 
@@ -207,6 +250,12 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 	}
 	if t.cross == nil {
 		t.cross = &stationWechatCrossTurn{Required: true, Refs: map[string]stationWechatCrossRef{}, Pages: map[string]stationWechatCrossPage{}}
+	}
+	if t.isDouyinMemoryCall(in) {
+		return t.callWechatDouyinMemory(ctx, in)
+	}
+	if in.SourceID != "" || in.WorkID != "" {
+		return "", apphost.ErrObservationInvalid
 	}
 	noPages := in.Reference == "" && in.Offset == nil && in.Length == nil && in.SourceOffset == nil && in.SourceLimit == nil
 	switch in.Action {
@@ -249,7 +298,19 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 		if err := t.checkCrossResults(ctx); err != nil {
 			return "", err
 		}
-		return localMemoryJSON(map[string]any{"account_id": t.trace.Account, "sources": threads, "station_available": stationAvailable, "delivery": "owner_private_only"})
+		douyinSources := []localDouyinMemorySource{}
+		if t.crossFileAuthorization(stationWechatToDouyinGrantsFile) != "" {
+			result, err := t.callWechatDouyinMemory(ctx, stationWechatCrossInput{Action: "sources", Source: "douyin"})
+			if err != nil {
+				return "", err
+			}
+			var listing struct{ Sources []localDouyinMemorySource }
+			if json.Unmarshal([]byte(result), &listing) != nil {
+				return "", apphost.ErrUnavailable
+			}
+			douyinSources = listing.Sources
+		}
+		return localMemoryJSON(map[string]any{"account_id": t.trace.Account, "sources": threads, "station_available": stationAvailable, "douyin_sources": douyinSources, "delivery": "owner_private_only"})
 	case "read":
 		if in.Reference == "" || in.Source != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
 			return "", errors.New("请凭本轮引用读取")
@@ -386,6 +447,20 @@ func (t *stationAttachmentTools) auditCrossMemory(proof stationWechatCrossProof,
 	if proof.Station {
 		direction, thread = "wechat_to_station", proof.StationScope
 		keyKind = direction
+	}
+	if proof.Douyin {
+		direction, thread = "wechat_to_douyin", "douyin"
+		keyKind = direction
+		if t.cross != nil && t.cross.Douyin != nil {
+			scopes := []string{}
+			for sourceProof := range t.cross.Douyin.douyinMemoryProofs {
+				scopes = append(scopes, sourceProof.Source.Scope)
+			}
+			slices.Sort(scopes)
+			if len(scopes) > 0 {
+				thread = strings.Join(slices.Compact(scopes), ".")
+			}
+		}
 	}
 	key := localCheckpointKey(keyKind, t.trace.Account, t.trace.Thread, t.trace.TraceID, thread, proof.GrantRevision)
 	return writeWechatMemoryAudit(w, localWechatMemoryAudit{Direction: direction, OriginThread: t.trace.Thread, Account: t.trace.Account, Thread: thread, Fish: owner.FishID, Owner: owner.ID, Request: key, Revision: proof.GrantRevision}, search, count, result)

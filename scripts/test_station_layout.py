@@ -302,23 +302,30 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     memory_writes = []
     cross_writes = []
     station_writes = []
+    douyin_writes = []
     cross_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/cross-memory-grants$")
     station_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/station-memory-grants$")
     cross_states = {key: {"revision": 0, "owner_revision": 0, "sources": {}, "origins": {}}
                     for key in ("wechat-synthetic-one", "wechat-synthetic-two")}
     station_states = {key: dict(value) for key, value in cross_states.items()}
+    douyin_states = {key: {**value, "app_sources": {}} for key, value in cross_states.items()}
+    douyin_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/douyin-memory-grants$")
     def cross_grants(route):
         path = urlparse(route.request.url).path
         connection = path.split("/")[-2]
-        is_station = path.endswith("/station-memory-grants")
-        state, owner_state = (station_states if is_station else cross_states)[connection], saved[connection]
+        is_douyin = path.endswith("/douyin-memory-grants")
+        is_station = path.endswith("/station-memory-grants") or is_douyin
+        state, owner_state = (douyin_states if is_douyin else station_states if is_station else cross_states)[connection], saved[connection]
         if route.request.method == "PUT":
             body = route.request.post_data_json
             assert route.request.headers.get("x-csrf-token")
             assert body["revision"] == state["revision"] and body["request_key"]
             assert not body["origins"] or body["owner_revision"] == owner_state["revision"]
             assert not is_station or not body["sources"]
-            (station_writes if is_station else cross_writes).append(body)
+            (douyin_writes if is_douyin else station_writes if is_station else cross_writes).append(body)
+            if is_douyin:
+                assert "app_sources" in body
+                state["app_sources"] = {kind: "synthetic-" + kind for kind in body["app_sources"]}
             state.update(revision=state["revision"] + 1, owner_revision=owner_state["revision"],
                          sources={key: "2026-01-01T00:00:00Z" for key in body["sources"]},
                          origins={key: "2026-01-01T00:00:00Z" for key in body["origins"]})
@@ -328,9 +335,12 @@ def verify_wechat_owner_binding(page, panel, nav, output):
                             "scopes_current": state["owner_revision"] == owner_state["revision"] and bool(state["origins"]),
                             "owner_bound": bool(owner_state.get("binding")), "private_reply_authorized": bool(owner_state.get("binding")),
                             "available_sources": ["memory-b@chatroom"] if connection.endswith("one") and not is_station else [],
-                            "available_origins": ["memory-a@chatroom"] if connection.endswith("one") else []})
+                            "available_origins": ["memory-a@chatroom"] if connection.endswith("one") else [],
+                            "available_app_sources": [{"kind": "works", "source_id": "synthetic-works"}, {"kind": "notices", "source_id": "synthetic-notices"}]
+                                if is_douyin and connection.endswith("one") else []})
     page.route(cross_pattern, cross_grants)
     page.route(station_pattern, cross_grants)
+    page.route(douyin_pattern, cross_grants)
     memory_pattern = re.compile(r"/api/apps/wechat/connections/wechat-synthetic-\w+/memory-grants$")
     grants = {"wechat-synthetic-one": {"revision": 0, "station_reads": {}, "available_history_threads": ["memory-a@chatroom", "memory-b@chatroom"]},
               "wechat-synthetic-two": {"revision": 0, "station_reads": {}, "available_history_threads": []}}
@@ -388,8 +398,10 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     memory = panel.locator(".configuration-owner-binding").filter(has=page.get_by_role("heading", name="工作站按需查微信", exact=True))
     cross = panel.locator(".configuration-owner-binding").filter(has=page.get_by_role("heading", name="微信本人跨群查询", exact=True))
     station_memory = panel.locator(".configuration-owner-binding").filter(has=page.get_by_role("heading", name="微信按需查工作站", exact=True))
+    douyin_memory = panel.locator(".configuration-owner-binding").filter(has=page.get_by_role("heading", name="微信按需查抖音", exact=True))
+    expect(douyin_memory.get_by_text("请先绑定微信本人。", exact=True)).to_be_visible()
     expect(cross.get_by_text("请先绑定微信本人。", exact=True)).to_be_visible()
-    assert not cross_writes
+    assert not cross_writes and not douyin_writes
     expect(memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True)).not_to_be_checked()
     assert not memory_writes
     memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True).check()
@@ -432,6 +444,19 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     assert station_writes[0]["origins"] == ["memory-a@chatroom"] and len(cross_writes) == 1 and len(memory_writes) == 1
     station_memory.scroll_into_view_if_needed()
     page.screenshot(path=str(output/"wechat-to-station-grants-narrow.png"))
+    douyin_memory.get_by_role("button", name="载入最新抖音查询范围").click()
+    douyin_memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True).check()
+    douyin_memory.get_by_role("checkbox", name="本人作品文字", exact=True).check()
+    page.keyboard.press("Escape")
+    page.locator("#app-configuration-open").click()
+    nav.get_by_role("button", name="账号与授权", exact=True).click()
+    expect(douyin_memory.get_by_role("checkbox", name="本人作品文字", exact=True)).to_be_checked()
+    assert not douyin_writes
+    douyin_memory.get_by_role("button", name="保存微信抖音查询范围", exact=True).click()
+    expect(douyin_memory.get_by_text("微信抖音查询范围已保存。", exact=True)).to_be_visible()
+    assert douyin_writes[0]["app_sources"] == ["works"] and douyin_writes[0]["origins"] == ["memory-a@chatroom"]
+    douyin_memory.scroll_into_view_if_needed()
+    page.screenshot(path=str(output/"wechat-to-douyin-grants-narrow.png"))
     owner.get_by_role("button", name="核验消息发送者").click()
     expect(owner.get_by_text("此消息的原生发送者与已绑定本人一致。", exact=True)).to_be_visible()
     message.fill("member-message")
@@ -447,6 +472,7 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     expect(memory.get_by_role("checkbox", name="memory-a@chatroom", exact=True)).to_have_count(0)
     expect(cross.get_by_role("checkbox", name="memory-b@chatroom", exact=True)).to_have_count(0)
     expect(station_origin).to_have_count(0)
+    expect(douyin_memory.get_by_role("checkbox", name="本人作品文字", exact=True)).to_have_count(0)
     panel.get_by_label("当前连接").select_option("wechat-synthetic-one")
     owner.get_by_role("button", name="解除本人绑定").click()
     expect(owner.get_by_text("微信本人绑定已解除。", exact=True)).to_be_visible()
@@ -458,11 +484,15 @@ def verify_wechat_owner_binding(page, panel, nav, output):
     station_memory.get_by_role("button", name="撤销全部工作站查询范围", exact=True).click()
     expect(station_memory.get_by_text("微信工作站查询范围已保存。", exact=True)).to_be_visible()
     assert station_writes[-1]["origins"] == [] and len(station_writes) == 2
+    douyin_memory.get_by_role("button", name="撤销全部抖音查询范围", exact=True).click()
+    expect(douyin_memory.get_by_text("微信抖音查询范围已保存。", exact=True)).to_be_visible()
+    assert douyin_writes[-1]["origins"] == [] and douyin_writes[-1]["app_sources"] == [] and len(douyin_writes) == 2
     assert [row["action"] for row in writes] == ["preview", "bind", "check", "check", "revoke"]
     page.unroute(pattern)
     page.unroute(memory_pattern)
     page.unroute(cross_pattern)
     page.unroute(station_pattern)
+    page.unroute(douyin_pattern)
 
 
 def verify_wechat_surf_schedule(page, panel, nav, output):

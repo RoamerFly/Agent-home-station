@@ -2349,7 +2349,7 @@
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
     view.surfAbort?.abort();
-    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
+    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -2761,6 +2761,7 @@
           feedback.textContent = action === "bind" ? "微信本人绑定已保存。" : "微信本人绑定已解除。";
           view.crossMemoryRefresh?.();
           view.stationMemoryRefresh?.();
+          view.douyinMemoryRefresh?.();
         }
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -2836,23 +2837,24 @@
     return panel;
   }
   function appWechatCrossMemoryGrants(view, connection, stationSource = false) {
+    const douyinSource = stationSource === "douyin";
     const panel = appElement("section", "", "configuration-owner-binding");
     const content = appElement("div"), status = appElement("p", "", "app-scope-note"), feedback = appElement("p", "", "app-scope-note");
     feedback.setAttribute("role", "status");
-    const title = stationSource ? "微信按需查工作站" : "微信本人跨群查询";
-    const description = stationSource ? "选择允许本人发起查询的微信会话。查询范围是当前本机主人的工作站聊天，结果只通过本人私聊回传。" : "分别选择发起会话和查询来源。只有已绑定的本人可以发起，群内查询的结果私下回传给本人。";
+    const title = douyinSource ? "微信按需查抖音" : stationSource ? "微信按需查工作站" : "微信本人跨群查询";
+    const description = douyinSource ? "选择允许本人发起的微信会话和获准抖音资料。来源取当前本机留存授权，结果通过本人私聊回传。" : stationSource ? "选择允许本人发起查询的微信会话。查询范围是当前本机主人的工作站聊天，结果只通过本人私聊回传。" : "分别选择发起会话和查询来源。只有已绑定的本人可以发起，群内查询的结果私下回传给本人。";
     panel.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
     if (!stationSource) panel.append(appElement("p", "同账号跨群查询按需返回摘要和本轮引用。结果通过本人私聊回传，投递状态可在投递与回执中核对。", "app-scope-note"));
     panel.append(status, content, feedback);
-    const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + (stationSource ? "/station-memory-grants" : "/cross-memory-grants");
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + (douyinSource ? "/douyin-memory-grants" : stationSource ? "/station-memory-grants" : "/cross-memory-grants");
     const active = () => appConfiguration === view && view.section === "account" && view.connection === connection && panel.isConnected && !view.controller.signal.aborted;
     const drafts = apps.wechatCrossMemoryDrafts;
     const draftKey = stationSource ? path : connection;
-    const refreshField = stationSource ? "stationMemoryRefresh" : "crossMemoryRefresh";
-    const rangeLabel = stationSource ? "工作站查询范围" : "跨群查询范围";
+    const refreshField = douyinSource ? "douyinMemoryRefresh" : stationSource ? "stationMemoryRefresh" : "crossMemoryRefresh";
+    const rangeLabel = douyinSource ? "抖音查询范围" : stationSource ? "工作站查询范围" : "跨群查询范围";
     let draft = drafts.get(draftKey), value = null, busy = true, writing = false, refreshPending = false, serial = 0;
     function savedDraft(result) { return { revision: result.revision, ownerRevision: result.current_owner_revision,
-      sources: new Set(Object.keys(result.sources || {})), origins: new Set(Object.keys(result.origins || {})), key: newRequestID() }; }
+      appSources: new Set(Object.keys(result.app_sources || {})), sources: new Set(Object.keys(result.sources || {})), origins: new Set(Object.keys(result.origins || {})), key: newRequestID() }; }
     async function read() {
       const ticket = ++serial;
       try {
@@ -2884,10 +2886,31 @@
         if (!available.length) group.append(appElement("p", field === "sources" ? "请先授权来源会话的历史读取。" : "请先授权发起会话的回复。", "app-scope-note"));
         form.append(group);
       }
+      if (douyinSource) {
+        draft.appSources ||= new Set();
+        const group = appElement("fieldset", "", "configuration-cross-scope");
+        group.append(appElement("legend", "允许查询的抖音记忆来源"));
+        const labels = { works: "本人作品文字", comments: "本人作品评论", notices: "互动通知" };
+        const available = value.available_app_sources || [];
+        for (const kind of new Set([...available.map((source) => source.kind), ...draft.appSources])) {
+          const label = appElement("label", "", "configuration-owner-confirm");
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox"; checkbox.checked = draft.appSources.has(kind); checkbox.disabled = busy;
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) draft.appSources.add(kind); else draft.appSources.delete(kind);
+            draft.key = newRequestID();
+          });
+          label.append(checkbox, document.createTextNode((labels[kind] || kind) +
+            (available.some((source) => source.kind === kind) ? "" : " · 当前来源已撤销")));
+          group.append(label);
+        }
+        if (!available.length) group.append(appElement("p", "请在抖音详细配置中核对本机记忆留存与读取授权。", "app-scope-note"));
+        form.append(group);
+      }
       const save = appElement("button", "保存微信" + rangeLabel, "button compact primary"); save.type = "submit"; save.disabled = busy;
       const revoke = memoryButton("撤销全部" + rangeLabel, "button compact secondary", () => {
         if (busy || !active()) return;
-        draft.sources.clear(); draft.origins.clear(); draft.key = newRequestID(); render(); void write();
+        draft.sources.clear(); draft.origins.clear(); draft.appSources?.clear(); draft.key = newRequestID(); render(); void write();
       });
       revoke.disabled = busy; form.append(save, revoke);
       async function write() {
@@ -2895,7 +2918,7 @@
         busy = true; writing = true; feedback.textContent = ""; render();
         try {
           const result = await request(path, { method: "PUT", body: JSON.stringify({ revision: draft.revision, owner_revision: draft.ownerRevision, request_key: draft.key,
-            sources: [...draft.sources], origins: [...draft.origins] }), signal: view.controller.signal });
+            sources: [...draft.sources], origins: [...draft.origins], ...(douyinSource ? { app_sources: [...draft.appSources] } : {}) }), signal: view.controller.signal });
           if (!active()) return;
           value = result; draft = savedDraft(result); drafts.set(draftKey, draft); feedback.textContent = "微信" + rangeLabel + "已保存。";
         } catch (error) {
@@ -3289,6 +3312,8 @@
           controls.push(view.crossMemoryPanel.node);
           if (view.stationMemoryPanel?.connection !== selected.id) view.stationMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, true) };
           controls.push(view.stationMemoryPanel.node);
+          if (view.douyinMemoryPanel?.connection !== selected.id) view.douyinMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, "douyin") };
+          controls.push(view.douyinMemoryPanel.node);
         }
         break;
       case "conversations": {

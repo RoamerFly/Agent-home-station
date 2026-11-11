@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
@@ -180,7 +181,7 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		registry, err := apphost.New(entry)
+		registry, err := apphost.New(entry, douyinapp.NewWebOnly(nil).Registration())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -738,5 +739,10 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 		policy["reply_threads"] = []string{origin, source, ownerID}
 		req("PUT", path+"/policy", policy, 200)
 		checkStationMemoryDirection(t, f, path, origin, source, ownerID, makeTools, config)
+	})
+	t.Run("douyin-source", func(t *testing.T) {
+		policy["reply_threads"] = []string{origin, source, ownerID}
+		req("PUT", path+"/policy", policy, 200)
+		checkWechatDouyinMemoryDirection(t, f, path, origin, ownerID, makeTools, config)
 	})
 }
