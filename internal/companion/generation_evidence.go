@@ -126,6 +126,21 @@ func (e *Engine) ValidateGenerationEvidence(ctx context.Context, evidence Genera
 	if current != evidence || evidence.Authorization != "" && !e.memoryResultAuthorized(evidence.Authorization) {
 		return generationEvidenceChanged()
 	}
+	return e.validateGenerationSources(ctx)
+}
+
+// Cross-application sources can change independently of the conversation's
+// RecallEpoch. Check the host's existing proofs before reusing model context
+// or accepting actions derived from it.
+func (e *Engine) validateGenerationSources(ctx context.Context) error {
+	if scoped, ok := e.Tools.(interface{ ValidateGenerationSources(context.Context) error }); ok {
+		if err := scoped.ValidateGenerationSources(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return generationEvidenceChanged()
+		}
+	}
 	return nil
 }
 

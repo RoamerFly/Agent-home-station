@@ -50,6 +50,10 @@ type localToolSet struct {
 // runner's existing autonomous loop instead of a zero/default tool-call quota.
 func (*localToolSet) AutonomousActions() bool { return true }
 
+func (t *localToolSet) RequestScopedMemory() bool {
+	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0
+}
+
 func (h *localChatService) tools(store *companion.Store, in companion.Input) *localToolSet {
 	access := &localWorkspaceAccess{home: h.home, fishID: in.Account, ownerID: in.Sender}
 	h.mu.Lock()
@@ -81,14 +85,18 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 	return tools
 }
 
-func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
+func (t *localToolSet) ValidateGenerationSources(ctx context.Context) error {
 	if err := t.checkMemoryLink(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
-		return nil, err
+		return err
 	}
-	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+	return t.checkDouyinMemoryResults(ctx)
+}
+
+func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
+	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return nil, err
 	}
 	if t.continuationGuard != nil {
@@ -142,13 +150,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
-	if err := t.checkMemoryLink(ctx); err != nil {
-		return "", err
-	}
-	if err := t.checkWechatMemoryResults(ctx); err != nil {
-		return "", err
-	}
-	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return "", err
 	}
 	if t.continuationGuard != nil {

@@ -132,13 +132,7 @@ func (t *localToolSet) checkAppObservationIdentity() error {
 }
 
 func (t *localToolSet) checkAppObservations(ctx context.Context) error {
-	if err := t.checkMemoryLink(ctx); err != nil {
-		return err
-	}
-	if err := t.checkWechatMemoryResults(ctx); err != nil {
-		return err
-	}
-	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return err
 	}
 	for _, proof := range t.noticeReads {

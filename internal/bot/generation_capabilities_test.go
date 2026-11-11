@@ -96,6 +96,23 @@ func TestGenerationReviewForkPreservesCallbacksAndIsolatesTrace(t *testing.T) {
 	}
 }
 
+func TestGenerationWrapperRespectsPrivateQuoteToolScope(t *testing.T) {
+	probe := &backgroundCapabilityProbe{}
+	wrapped := &generationTools{inner: probe, job: &generationJob{input: companion.Input{PrivateQuote: "777"}}}
+	tools, err := wrapped.List(t.Context())
+	if err != nil || len(tools) != 1 || tools[0].Name != "server_read" {
+		t.Fatal("wrapper extended the private tool directory", tools, err)
+	}
+	for _, name := range []string{"incoming_media_read", "wechat_queue_control"} {
+		if _, err := wrapped.Call(t.Context(), name, json.RawMessage(`{}`)); err == nil {
+			t.Fatal("wrapper executed a tool outside private scope", name)
+		}
+	}
+	if probe.count != 0 {
+		t.Fatal("private tool crossed into the host")
+	}
+}
+
 type ephemeralGenerationProbe struct{ backgroundCapabilityProbe }
 
 func (*ephemeralGenerationProbe) EphemeralToolResult(name string) bool {

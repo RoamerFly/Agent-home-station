@@ -647,6 +647,13 @@ func (t *generationTools) MemoryResultAuthorized(stamp string) bool {
 	return false
 }
 
+func (t *generationTools) ValidateGenerationSources(ctx context.Context) error {
+	if scoped, ok := t.inner.(interface{ ValidateGenerationSources(context.Context) error }); ok {
+		return scoped.ValidateGenerationSources(ctx)
+	}
+	return nil
+}
+
 func (t *generationTools) ForkTools() companion.ToolAccess {
 	factory, ok := t.inner.(interface{ ForkTools() companion.ToolAccess })
 	if !ok {
@@ -705,6 +712,9 @@ func (t *generationTools) RoutePrivateReply(ctx context.Context, messages []stri
 func (t *generationTools) List(ctx context.Context) ([]mcptools.Tool, error) {
 	tools, err := t.inner.List(ctx)
 	in := t.job.input
+	if in.PrivateQuote != "" || t.PrivateReplyRequired() {
+		return tools, err
+	}
 	if !in.Preview && !in.Surf && !in.ReportOnly && t.worker.config.Analyzer != nil {
 		tools = append(tools, incomingObservationTool())
 	}
@@ -751,6 +761,9 @@ func (t *generationTools) RetainToolOutput(ctx context.Context, name, result str
 	return "", nil
 }
 func (t *generationTools) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if (name == "incoming_media_read" || name == "wechat_queue_control") && (t.job.input.PrivateQuote != "" || t.PrivateReplyRequired()) {
+		return "", errors.New("private_memory_tool_scope_not_authorized")
+	}
 	policy, scoped := t.inner.(interface{ EphemeralToolResult(string) bool })
 	ephemeral := scoped && policy.EphemeralToolResult(name)
 	if !ephemeral {

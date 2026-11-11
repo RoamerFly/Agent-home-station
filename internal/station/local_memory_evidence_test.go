@@ -104,6 +104,36 @@ func TestMemoryEvidenceDurableRecoveryAndReplay(t *testing.T) {
 			t.Fatal(code, out)
 		}
 	}
+	_, owner, err := f.handler.chat.conversation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditDir := filepath.Join(f.handler.home.dataDir, "local-companion", owner.Account, "reply-audits", companion.ScopeID(owner.Channel, owner.Account, owner.Thread))
+	files, err := os.ReadDir(auditDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures := 0
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".json") || strings.HasSuffix(file.Name(), ".meta.json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(auditDir, file.Name()))
+		var audit companion.ReplyAudit
+		if err != nil || json.Unmarshal(data, &audit) != nil {
+			t.Fatal("unreadable synthetic audit", err)
+		}
+		if audit.TriggerMessageID != "memory-interrupted" {
+			continue
+		}
+		failures++
+		if audit.State != "request_failed" || len(audit.Snapshot) != 0 || strings.Contains(string(data), "银河") {
+			t.Fatal("cross-source failure audit retained private content")
+		}
+	}
+	if failures != 1 {
+		t.Fatal("missing cross-source failure audit metadata", failures)
+	}
 	tools := projectFollowupFixtureTools(t, f, "memory-completed")
 	if len(tools.run.Operations) != 1 {
 		t.Fatal(tools.run.Operations)

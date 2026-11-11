@@ -93,8 +93,8 @@ func TestMemoryLinkRestartArtifactAndMidModelRevocation(t *testing.T) {
 			return `{"action":"reply","messages":["SHOULD_NOT_BE_SAVED"]}`, nil
 		}), nil
 	}
-	if code, _ := linkedChatSend(f, "revoked-during-linked-model", "restart-link-child"); code != 409 || calls != 1 {
-		t.Fatal("mid-model revoke escaped final fence", code, calls)
+	if code, out := linkedChatSend(f, "revoked-during-linked-model", "restart-link-child"); code != 409 || out["code"] != "generation_evidence_changed" || calls != 1 {
+		t.Fatal("mid-model revoke escaped generation fence", code, out, calls)
 	}
 	if _, err := f.handler.home.artifacts.read(a.ID); err == nil {
 		t.Fatal("revoked link-only artifact remained readable")

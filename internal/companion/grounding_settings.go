@@ -73,6 +73,9 @@ func (e *Engine) groundingChatValidated(ctx context.Context, system string, mess
 	if err := ValidateContextWindow(system, messages, nil, settings.ContextWindow, options.MaxTokens); err != nil {
 		return "", err
 	}
+	if err := e.validateGenerationSources(ctx); err != nil {
+		return "", err
+	}
 	var answer string
 	if model, ok := e.model.(validatedGroundingLanguageModel); ok && validate != nil {
 		answer, err = model.ChatGroundingValidated(ctx, system, messages, options, validate)

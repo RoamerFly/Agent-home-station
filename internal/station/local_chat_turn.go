@@ -149,6 +149,10 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	decision, err := engine.Respond(ctx, in)
 	if err != nil {
 		message, code := "本轮聊天处理未完成，原消息保留，可查看后重试", "local_turn_failed"
+		var changed *companion.GenerationEvidenceChangedError
+		if errors.As(err, &changed) {
+			return response, &localTurnError{status: 409, code: "generation_evidence_changed", stage: "conversation", message: "本轮使用的资料或授权已变化，已暂停生成，原消息和已完成操作保留"}
+		}
 		if diagnostic, ok := deepseek.ErrorDiagnostics(err); ok {
 			message, code = deepseek.UserMessage(err)+"；原消息保留，可查看后重试", diagnostic.Code
 		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -172,7 +176,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	if err = tools.checkAppObservations(ctx); err != nil {
 		return fail(409, "应用读取授权已变化，本次回复未写入聊天")
 	}
-	in.RequestScopedReply = len(tools.wechatMemoryProofs) > 0 || len(tools.douyinMemoryProofs) > 0
+	in.RequestScopedReply = tools.RequestScopedMemory()
 	if continuationID != "" {
 		if err = h.checkLocalTaskContinuation(ctx, store, in, continuationID); err != nil {
 			return fail(409, "后台任务状态或授权已变化，本次结果未写入聊天")

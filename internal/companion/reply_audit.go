@@ -72,6 +72,13 @@ func (e *Engine) writeReplyAudit(in Input, d Decision, risks []string, state str
 	h := sha256.Sum256([]byte(scope + trigger + at.Format(time.RFC3339Nano)))
 	id := hex.EncodeToString(h[:])
 	a := ReplyAudit{ID: id, Scope: scope, At: at, TriggerMessageID: trigger, Sender: in.Sender, Contexts: d.ReplyContexts, State: state, RiskFlags: risks, ReviewFailure: d.ReviewFailure, ExpiresAt: at.AddDate(0, 0, cfg.RetentionDays), ReviewSettings: e.Config.GroundingConfig(), ReviewTransport: e.groundingTransport()}
+	local, hasLocal := e.Tools.(interface{ RequestScopedMemory() bool })
+	private, hasRoute := e.Tools.(PrivateReplyRouter)
+	if in.PrivateQuote != "" || in.RequestScopedReply || hasLocal && local.RequestScopedMemory() || hasRoute && private.PrivateReplyRequired() {
+		// Private app evidence stays in its source and in the current request.
+		// Keep operational metadata without snapshotting the model payload.
+		snapshot, a.Contexts, a.ReviewFailure = nil, nil, nil
+	}
 	if len(snapshot) > 0 {
 		if prepared := e.preparedContext(); len(prepared) > 0 {
 			b, _ := json.Marshal(map[string]any{"model_request": json.RawMessage(prepared), "review_input": json.RawMessage(snapshot), "decision": d})

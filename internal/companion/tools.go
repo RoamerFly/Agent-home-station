@@ -379,6 +379,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				e.reportContext(system+budget, modelTurns, activeTools)
 				contextReported = true
 			}
+			if err := e.validateGenerationSources(ctx); err != nil {
+				return Decision{}, err
+			}
 			e.capturePreparedContext(system+budget, modelTurns, activeTools)
 			answer, err = native.ChatFunctions(ctx, system+budget, modelTurns, activeTools)
 		} else {
@@ -388,6 +391,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if !contextReported {
 				e.reportContext(system, modelTurns, nil)
 				contextReported = true
+			}
+			if err := e.validateGenerationSources(ctx); err != nil {
+				return Decision{}, err
 			}
 			e.capturePreparedContext(system, modelTurns, nil)
 			answer, err = e.model.Chat(ctx, system, modelTurns)

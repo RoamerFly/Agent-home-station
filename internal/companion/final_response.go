@@ -26,6 +26,9 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		if _, err := r.followups(ctx, &turns); err != nil {
 			return Decision{}, err
 		}
+		if err := r.validateGenerationSources(ctx); err != nil {
+			return Decision{}, err
+		}
 		answer, err := r.model.Chat(ctx, system, compactActionTurns(system, turns))
 		if err != nil {
 			return Decision{}, err
