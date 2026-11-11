@@ -189,14 +189,13 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			return
 		}
 		scope := localCheckpointKey(identity.FishID, identity.LocalOwner.ID, session, input.Revision, record.NoticeAccount)
-		after, err := m.noticeCursor(scope, input.Continuation)
-		if err != nil {
-			localDouyinNoticeFailure(w, err)
-			return
-		}
 		if input.Action == "prepare" {
 			if input.Ticket != "" {
 				websession.Fail(w, http.StatusBadRequest, "请重新准备本次通知读取")
+				return
+			}
+			if _, err := m.noticeCursor(scope, input.Continuation, false); err != nil {
+				localDouyinNoticeFailure(w, err)
 				return
 			}
 			value, err := localDouyinWebID()
@@ -230,10 +229,15 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			localDouyinNoticeFailure(w, err)
 			return
 		}
+		after, err := m.noticeCursor(scope, input.Continuation, true)
+		if err != nil {
+			localDouyinNoticeFailure(w, err)
+			return
+		}
 		page, err := m.readNotice(ctx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true, Pages: input.Pages, After: after}, authorize)
 		if err != nil {
 			if errors.Is(err, stationbrowser.ErrDouyinNoticeAccountChanged) && authorize() == nil {
-				err = errors.Join(err, m.captureMemory(ctx, record, douyinMemoryNotices, "", nil))
+				err = errors.Join(err, m.revokeChangedNoticeAccount(ctx, record))
 			}
 			localDouyinNoticeFailure(w, err)
 			return
@@ -243,7 +247,7 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			return
 		}
 		if page.Account != record.NoticeAccount {
-			err = m.captureMemory(ctx, record, douyinMemoryNotices, "", nil)
+			err = m.revokeChangedNoticeAccount(ctx, record)
 			localDouyinNoticeFailure(w, errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err))
 			return
 		}
@@ -251,12 +255,20 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			websession.Fail(w, http.StatusServiceUnavailable, "通知已读取，可能已标记已读，本机记忆保存未完成")
 			return
 		}
-		next := m.finishNoticeCursor(scope, input.Continuation, after, page, nextToken)
+		next := m.finishNoticeCursor(scope, after, page, nextToken)
 		websession.Respond(w, http.StatusOK, localDouyinNoticeResult(page, next, input.Pages))
 	}))
 }
 
-func (m *localDouyinWebLogin) noticeCursor(scope, token string) (stationbrowser.DouyinNoticeCheckpoint, error) {
+func (m *localDouyinWebLogin) revokeChangedNoticeAccount(ctx context.Context, record localDouyinWebRecord) error {
+	// Keep the profile and other feature permissions. Only revoke the stale
+	// notice binding, and never overwrite a concurrent owner update.
+	empty := ""
+	_, _, err := m.apply(ctx, record.FishID, &localDouyinWebInput{Action: "set_notice", Revision: record.Revision, noticeAccount: &empty})
+	return err
+}
+
+func (m *localDouyinWebLogin) noticeCursor(scope, token string, consume bool) (stationbrowser.DouyinNoticeCheckpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, value := range m.noticeCursors {
@@ -271,15 +283,17 @@ func (m *localDouyinWebLogin) noticeCursor(scope, token string) (stationbrowser.
 	if !ok || value.scope != scope {
 		return stationbrowser.DouyinNoticeCheckpoint{}, stationbrowser.ErrDouyinNoticeCursorChanged
 	}
+	if consume {
+		// Once the browser can start, an unknown outcome may have marked
+		// notices read. A new ticket cannot replay this same continuation.
+		delete(m.noticeCursors, token)
+	}
 	return value.checkpoint, nil
 }
 
-func (m *localDouyinWebLogin) finishNoticeCursor(scope, previous string, after stationbrowser.DouyinNoticeCheckpoint, page stationbrowser.DouyinNoticePage, token string) string {
+func (m *localDouyinWebLogin) finishNoticeCursor(scope string, after stationbrowser.DouyinNoticeCheckpoint, page stationbrowser.DouyinNoticePage, token string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if page.PagesRead > 0 {
-		delete(m.noticeCursors, previous)
-	}
 	if !page.HasMore || page.Next.Pages <= after.Pages {
 		return ""
 	}

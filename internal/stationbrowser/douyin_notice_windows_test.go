@@ -17,7 +17,7 @@ func TestDouyinNoticeNativeReadRequiresBoundAccountAndMarkReadConsent(t *testing
 		t.Skip("Edge unavailable")
 	}
 	var listCalls, otherWrites atomic.Int32
-	var changed, scroll, stalled, unavailable atomic.Bool
+	var changed, scroll, stalled, unavailable, switchAccount atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/help":
@@ -30,6 +30,10 @@ func TestDouyinNoticeNativeReadRequiresBoundAccountAndMarkReadConsent(t *testing
 			missingControl := "false"
 			if unavailable.Load() {
 				missingControl = "true"
+			}
+			changeAccount := ""
+			if switchAccount.Load() {
+				changeAccount = `document.querySelector('#RENDER_DATA').textContent = encodeURIComponent('{"app":{"odin":{"user_id":"2345678901","user_is_auth":1}}}');`
 			}
 			_, _ = w.Write([]byte(`<!doctype html><script type="application/json" id="RENDER_DATA">` + data + `</script>
 <div data-e2e="notice-entry"><button data-e2e="something-button" onmouseenter="loadNotice()">通知</button></div>
@@ -56,6 +60,7 @@ function loadNotice(max = 0) {
        list.onscroll = () => { list.onscroll = null; loadMore(); };
      }
      if (` + missingControl + `) panel.querySelector('.sKMx4DKd').innerHTML = '<p>合成用户评论了你的作品</p>';
+     ` + changeAccount + `
    } else {
      panel.querySelector('.sKMx4DKd').innerHTML = '<p>合成用户赞了你的作品</p>';
    }
@@ -165,6 +170,12 @@ function loadMore() {
 		}, true)
 	if !errors.Is(err, denied) || listCalls.Load() != before+1 || otherWrites.Load() != 0 {
 		t.Fatalf("revocation admitted next request: %v calls=%d", err, listCalls.Load())
+	}
+	switchAccount.Store(true)
+	before = listCalls.Load()
+	if page, err := read(&DouyinNoticeRequest{Account: account.Account, AllowMarkRead: true, Pages: 2}); !errors.Is(err, ErrDouyinNoticeAccountChanged) ||
+		len(page.Items) != 0 || listCalls.Load() != before+1 || otherWrites.Load() != 0 {
+		t.Fatalf("changed account reached next notice request: %+v %v calls=%d", page, err, listCalls.Load())
 	}
 }
 

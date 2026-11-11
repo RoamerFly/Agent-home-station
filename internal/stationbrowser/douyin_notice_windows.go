@@ -69,6 +69,7 @@ func isDouyinNoticeHost(host string) bool {
 
 type noticeReadOutcome struct {
 	page DouyinNoticePage
+	next *noticeIntent
 	err  error
 }
 
@@ -85,6 +86,20 @@ type noticeRequestFence struct {
 type noticeIntent struct {
 	frame    string
 	position noticePosition
+}
+
+func checkNoticeAccount(ctx context.Context, session readerSession, id string, world int64, target, account string, authorize func() error) error {
+	if err := authorize(); err != nil {
+		return err
+	}
+	switch current := noticePageState(ctx, session, id, world, target, false).Account; current {
+	case "":
+		return ErrDouyinNoticeUnavailable
+	case account:
+		return nil
+	default:
+		return ErrDouyinNoticeAccountChanged
+	}
 }
 
 func (f *noticeRequestFence) allowResource(raw, kind string) bool {
@@ -112,16 +127,16 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 	var checkpoint DouyinNoticeCheckpoint
 	seen := map[noticePosition]bool{}
 	failed := false
-	report := func(page DouyinNoticePage, err error) {
+	report := func(outcome noticeReadOutcome) {
 		if failed {
 			return
 		}
-		if err != nil {
+		if outcome.err != nil {
 			failed = true
 			f.intent.Store(nil)
 		}
 		select {
-		case out <- noticeReadOutcome{page: page, err: err}:
+		case out <- outcome:
 		case <-ctx.Done():
 		}
 	}
@@ -131,7 +146,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 			return
 		case event, ok := <-session.Events():
 			if !ok {
-				report(DouyinNoticePage{}, ErrDouyinNoticeUnavailable)
+				report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
 				return
 			}
 			if event.SessionID != f.sessionID || event.Method != "Fetch.requestPaused" {
@@ -146,7 +161,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 				Request       struct{ URL, Method string }
 			}
 			if json.Unmarshal(event.Params, &req) != nil || req.ID == "" {
-				report(DouyinNoticePage{}, ErrDouyinNoticeUnavailable)
+				report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
 				continue
 			}
 			method := "Fetch.failRequest"
@@ -158,6 +173,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 				if exact && req.ID == admitted && req.Frame == admittedIntent.frame && !failed {
 					admitted = ""
 					var page DouyinNoticePage
+					var nextIntent *noticeIntent
 					err := ErrDouyinNoticeUnavailable
 					if req.Status == 200 {
 						page, err = readDouyinNoticeResponse(ctx, session, f.sessionID, req.ID)
@@ -169,7 +185,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						checkpoint = noticeCheckpoint(checkpoint, admittedIntent.position, page)
 						if checkpoint.Pages <= f.after.Pages && (!page.HasMore ||
 							checkpoint.Pages == f.after.Pages && checkpoint != f.after) {
-							report(DouyinNoticePage{}, ErrDouyinNoticeCursorChanged)
+							report(noticeReadOutcome{err: ErrDouyinNoticeCursorChanged})
 							_ = session.Call(ctx, f.sessionID, method, params, nil)
 							continue
 						}
@@ -177,7 +193,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						if page.HasMore && !seen[next] {
 							page.Next = checkpoint
 							if !f.closed.Load() && checkpoint.Pages-f.after.Pages < f.pages {
-								f.intent.Store(&noticeIntent{frame: admittedIntent.frame, position: next})
+								nextIntent = &noticeIntent{frame: admittedIntent.frame, position: next}
 							}
 						} else if page.HasMore {
 							page.Progress = "cursor_stalled"
@@ -189,16 +205,16 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						err = ErrDouyinNoticeUnavailable
 					}
 					page.PagesRead = checkpoint.Pages
-					report(page, err)
+					report(noticeReadOutcome{page: page, next: nextIntent, err: err})
 					continue
 				}
 			case !failed && !f.closed.Load() && admitted == "" && intent != nil && req.Frame == intent.frame && req.Request.Method == "GET" && exact &&
 				(req.Kind == "XHR" || req.Kind == "Fetch") && position.min == intent.position.min && position.max == intent.position.max &&
 				(intent.position.group == "" || position.group == intent.position.group) && f.intent.CompareAndSwap(intent, nil):
 				if err := f.authorize(); err != nil {
-					report(DouyinNoticePage{}, err)
+					report(noticeReadOutcome{err: err})
 				} else if mark && !f.allowMarkRead {
-					report(DouyinNoticePage{}, ErrDouyinNoticeMarksRead)
+					report(noticeReadOutcome{err: ErrDouyinNoticeMarksRead})
 				} else {
 					admitted = req.ID
 					admittedIntent = noticeIntent{frame: req.Frame, position: position}
@@ -211,7 +227,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 				params = map[string]any{"requestId": req.ID}
 			}
 			if session.Call(ctx, f.sessionID, method, params, nil) != nil {
-				report(DouyinNoticePage{}, ErrDouyinNoticeUnavailable)
+				report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
 			}
 		}
 	}
@@ -321,6 +337,9 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 		return DouyinNoticePage{}, err
 	}
 	control := noticePageState(ctx, session, id, world, target, true)
+	if control.Account != "" && control.Account != account {
+		return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
+	}
 	if control.Account != account {
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
@@ -332,7 +351,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	seenIDs := map[string]bool{}
 	for {
 		wait, stop := context.WithTimeout(ctx, 8*time.Second)
-		result := waitNoticePage(wait, session, id, world, target, &fence, out, authorize)
+		result := waitNoticePage(wait, session, id, world, target, account, &fence, out, authorize)
 		stop()
 		if result.err != nil {
 			if result.err != context.DeadlineExceeded || collected.PagesRead == 0 || ctx.Err() != nil {
@@ -341,6 +360,12 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 			collected.Progress = "next_unavailable"
 			break
 		}
+		// Arm only after this result is available to the caller loop. The
+		// next request needs a new identity check before the page is advanced.
+		if err := checkNoticeAccount(ctx, session, id, world, target, account, authorize); err != nil {
+			return DouyinNoticePage{}, err
+		}
+		fence.intent.Store(result.next)
 		if err := authorize(); err != nil {
 			return DouyinNoticePage{}, err
 		}
@@ -377,13 +402,13 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 			}
 		}
 	}
-	if noticePageState(ctx, session, id, world, target, false).Account != account {
-		return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
+	if err := checkNoticeAccount(ctx, session, id, world, target, account, authorize); err != nil {
+		return DouyinNoticePage{}, err
 	}
-	return collected, authorize()
+	return collected, nil
 }
 
-func waitNoticePage(ctx context.Context, session readerSession, id string, world int64, target string, fence *noticeRequestFence, out <-chan noticeReadOutcome, authorize func() error) noticeReadOutcome {
+func waitNoticePage(ctx context.Context, session readerSession, id string, world int64, target, account string, fence *noticeRequestFence, out <-chan noticeReadOutcome, authorize func() error) noticeReadOutcome {
 	advanced := false
 	for {
 		select {
@@ -395,7 +420,7 @@ func waitNoticePage(ctx context.Context, session readerSession, id string, world
 		}
 		intent := fence.intent.Load()
 		if !advanced && intent != nil && intent.position.group != "" {
-			if err := authorize(); err != nil {
+			if err := checkNoticeAccount(ctx, session, id, world, target, account, authorize); err != nil {
 				return noticeReadOutcome{err: err}
 			}
 			advanced = advanceNoticePage(ctx, session, id, world, target)

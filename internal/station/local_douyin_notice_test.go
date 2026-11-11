@@ -2,6 +2,7 @@ package station
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -10,6 +11,44 @@ import (
 
 	"wechat-bot/internal/stationbrowser"
 )
+
+func TestLocalDouyinNoticeUnknownContinuationCannotReplay(t *testing.T) {
+	f, manager, view := syntheticNoticeFixture(t, true)
+	reads := 0
+	manager.readNotice = func(_ context.Context, _ string, in stationbrowser.DouyinNoticeRequest, authorize func() error) (stationbrowser.DouyinNoticePage, error) {
+		reads++
+		if err := authorize(); err != nil {
+			return stationbrowser.DouyinNoticePage{}, err
+		}
+		if in.After.Pages != 0 {
+			return stationbrowser.DouyinNoticePage{}, errors.New("synthetic unknown response")
+		}
+		return stationbrowser.DouyinNoticePage{Account: in.Account, HasMore: true, PagesRead: 1,
+			Next: stationbrowser.DouyinNoticeCheckpoint{Pages: 1, Digest: [32]byte{1}}}, nil
+	}
+	post := func(action string, continuation, ticket any) (int, map[string]any) {
+		return f.request("POST", localDouyinNoticePath, map[string]any{"action": action, "revision": view["revision"],
+			"allow_mark_read": true, "continuation": continuation, "ticket": ticket}, true)
+	}
+	code, prepared := post("prepare", "", "")
+	if code != 200 {
+		t.Fatal(code, prepared)
+	}
+	code, first := post("read", "", prepared["ticket"])
+	if code != 200 || first["continuation"] == "" {
+		t.Fatal(code, first)
+	}
+	code, prepared = post("prepare", first["continuation"], "")
+	if code != 200 {
+		t.Fatal(code, prepared)
+	}
+	if code, out := post("read", first["continuation"], prepared["ticket"]); code != 503 {
+		t.Fatal(code, out)
+	}
+	if code, out := post("prepare", first["continuation"], ""); code != 409 || reads != 2 {
+		t.Fatal("uncertain continuation issued another ticket", code, out, reads)
+	}
+}
 
 func TestLocalDouyinNoticeRequiresSeparateOwnerConsentAndSingleUseRead(t *testing.T) {
 	f, manager := newLocalDouyinWebFixture(t)

@@ -135,11 +135,6 @@ func (t *localToolSet) checkAppObservations(ctx context.Context) error {
 	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return err
 	}
-	for _, proof := range t.noticeReads {
-		if err := t.checkNoticeProof(ctx, proof); err != nil {
-			return err
-		}
-	}
 	for _, result := range t.appReads {
 		if err := t.observations.Check(ctx, result); err != nil {
 			return err

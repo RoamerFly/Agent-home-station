@@ -139,8 +139,7 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 			return localProcessJSON(t.checkpointView(previous, localWorkspaceGrant{}))
 		}
 	}
-	after, err := m.noticeCursor(scope, in.Continuation)
-	if err != nil {
+	if _, err := m.noticeCursor(scope, in.Continuation, false); err != nil {
 		return "", err
 	}
 	return t.dispatchCheckpointed(ctx, op, localWorkspaceGrant{}, func() (string, string, error) {
@@ -161,10 +160,14 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 			}
 			return authorize()
 		}
+		after, err := m.noticeCursor(scope, in.Continuation, true)
+		if err != nil {
+			return "", "", err
+		}
 		page, err := m.readNotice(readCtx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true, Pages: in.Pages, After: after}, check)
 		if err != nil {
 			if errors.Is(err, stationbrowser.ErrDouyinNoticeAccountChanged) && check() == nil {
-				err = errors.Join(err, m.captureMemory(readCtx, record, douyinMemoryNotices, "", nil))
+				err = errors.Join(err, m.revokeChangedNoticeAccount(readCtx, record))
 			}
 			return "", "", err
 		}
@@ -172,13 +175,13 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 			return "", "", err
 		}
 		if page.Account != record.NoticeAccount {
-			err = m.captureMemory(readCtx, record, douyinMemoryNotices, "", nil)
+			err = m.revokeChangedNoticeAccount(readCtx, record)
 			return "", "", errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err)
 		}
 		if err := m.captureNoticeMemory(readCtx, record, page); err != nil {
 			return "", "", &localInboxToolError{status: 503, message: "通知已读取，可能已标记已读，本机记忆保存未完成"}
 		}
-		next := m.finishNoticeCursor(scope, in.Continuation, after, page, nextToken)
+		next := m.finishNoticeCursor(scope, after, page, nextToken)
 		result := localDouyinNoticeResult(page, next, in.Pages)
 		result["app_id"], result["mark_read_possible"], result["text_scope"] = "douyin", true, "rendered_list_may_include_previous_pages"
 		t.noticeReads = append(t.noticeReads, proof)

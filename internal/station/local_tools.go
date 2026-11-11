@@ -51,7 +51,7 @@ type localToolSet struct {
 func (*localToolSet) AutonomousActions() bool { return true }
 
 func (t *localToolSet) RequestScopedMemory() bool {
-	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0
+	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0
 }
 
 func (h *localChatService) tools(store *companion.Store, in companion.Input) *localToolSet {
@@ -92,7 +92,15 @@ func (t *localToolSet) ValidateGenerationSources(ctx context.Context) error {
 	if err := t.checkWechatMemoryResults(ctx); err != nil {
 		return err
 	}
-	return t.checkDouyinMemoryResults(ctx)
+	if err := t.checkDouyinMemoryResults(ctx); err != nil {
+		return err
+	}
+	for _, proof := range t.noticeReads {
+		if err := t.checkNoticeProof(ctx, proof); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {

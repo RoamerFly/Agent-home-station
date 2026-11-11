@@ -179,7 +179,7 @@ func TestLocalInboxNormalChatReadsContinuesAndDoesNotPreload(t *testing.T) {
 				if !strings.Contains(history, "合成通知正文二") {
 					t.Fatal("continued text absent")
 				}
-				return `{"action":"reply","messages":["已按授权读取通知，未执行回复。"]}`, nil
+				return `{"action":"reply","messages":["合成通知正文二，已按授权读取。"]}`, nil
 			default:
 				if strings.Contains(history, "合成通知正文") {
 					t.Fatal("raw tool text carried into ordinary next turn")
@@ -249,6 +249,46 @@ func TestLocalInboxUnknownReadIsNotRepeatedAfterToolRebuild(t *testing.T) {
 	}
 }
 
+func TestLocalInboxChangedAccountRevokesOnlyNoticeGrant(t *testing.T) {
+	f, m, view := syntheticNoticeFixture(t, true)
+	code, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": true}, true)
+	if code != 200 {
+		t.Fatal(code, view)
+	}
+	reads := 0
+	m.readNotice = func(_ context.Context, _ string, in stationbrowser.DouyinNoticeRequest, check func() error) (stationbrowser.DouyinNoticePage, error) {
+		reads++
+		if err := check(); err != nil {
+			return stationbrowser.DouyinNoticePage{}, err
+		}
+		if reads == 1 {
+			return stationbrowser.DouyinNoticePage{Account: in.Account, PagesRead: 1, HasMore: true,
+				Next: stationbrowser.DouyinNoticeCheckpoint{Pages: 1, Digest: [32]byte{1}}}, nil
+		}
+		return stationbrowser.DouyinNoticePage{}, stationbrowser.ErrDouyinNoticeAccountChanged
+	}
+	tools := noticeToolSet(t, f, "notice-account-switch", true)
+	raw, err := tools.Call(t.Context(), localInboxToolName, inboxArgs(nil))
+	var first map[string]any
+	if err != nil || json.Unmarshal([]byte(raw), &first) != nil || first["continuation"] == "" {
+		t.Fatal(raw, err)
+	}
+	if raw, err = tools.Call(t.Context(), localInboxToolName, inboxArgs(map[string]any{"continuation": first["continuation"]})); err == nil || raw != "" {
+		t.Fatal("account change returned notice text", raw, err)
+	}
+	_, current := f.request("GET", localDouyinWebRoute, nil, false)
+	if current["notice_bound"] != false || current["notice_agent_enabled"] != false || current["works_enabled"] != true || current["state"] != "saved" {
+		t.Fatal("account change kept stale notice binding or changed other features", current)
+	}
+	if tools.checkAppObservations(t.Context()) == nil {
+		t.Fatal("old notice evidence survived account change")
+	}
+	fresh := noticeToolSet(t, f, "notice-account-switch-retry", true)
+	if _, err := fresh.Call(t.Context(), localInboxToolName, inboxArgs(nil)); err == nil || reads != 2 {
+		t.Fatal("another read reached the browser without binding", err, reads)
+	}
+}
+
 func TestLocalInboxCursorCannotCrossRequestOrHTTPAndRevocationDiscardsRead(t *testing.T) {
 	f, m, _ := syntheticNoticeFixture(t, true)
 	reads := 0
@@ -311,7 +351,7 @@ func TestLocalInboxRevocationBeforeReplyPreventsChatAcceptance(t *testing.T) {
 		}}, nil
 	}
 	code, out := localChatSend(f, "notice-revoke-at-reply", "读取互动通知，允许标记已读")
-	if code != 409 || reads != 1 || strings.Contains(localAppObservationJSONString(out), "合成撤权正文") {
+	if code != 409 || out["code"] != "generation_evidence_changed" || reads != 1 || strings.Contains(localAppObservationJSONString(out), "合成撤权正文") {
 		t.Fatalf("revoked reply accepted: %d %v reads=%d", code, out, reads)
 	}
 }
