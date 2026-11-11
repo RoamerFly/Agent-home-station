@@ -104,6 +104,9 @@ func checkWechatDouyinMemoryDirection(t *testing.T, f *localHomeFixture, base, o
 		t.Fatal("summary scope or route", raw, err)
 	}
 	ref := page.Items[0].Reference
+	if len(group.cross.Used) != 1 || !group.cross.Used[0].Douyin || group.cross.Used[0].DouyinScope != directory.Douyin[0].Scope {
+		t.Fatal("Douyin result did not bind the concrete scope")
+	}
 	if raw, err := call(group, map[string]any{"action": "read", "reference": ref}); err != nil || !strings.Contains(raw, "银河末尾证据") {
 		t.Fatal("original read", raw, err)
 	}

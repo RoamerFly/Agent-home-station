@@ -236,7 +236,7 @@ func (w *Worker) deferBusyGeneration(ctx context.Context, m linuxnative.Message)
 	if j := s.jobs[m.ThreadID]; j != nil {
 		// Explicit, verified stop/format changes may interrupt an in-flight voice
 		// download as well as already queued notes. Unrelated chat does not kill it.
-		if (j.input.Sender == "" || j.input.Sender == m.SenderID) && j.resourceKind == "voice" && rejectVoice(m.Body) && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
+		if m.PrivateQuote == "" && (j.input.Sender == "" || j.input.Sender == m.SenderID) && j.resourceKind == "voice" && rejectVoice(m.Body) && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
 			j.cancelled = true
 			j.cancel()
 		}

@@ -38,6 +38,7 @@ type Attachment struct {
 }
 
 type Message struct {
+	PrivateQuote   string          `json:"-"`
 	ResolvedQuote  *Message        `json:"-"`
 	Attachments    []Attachment    `json:"media,omitempty"`
 	ReplyToSelf    bool            `json:"-"`

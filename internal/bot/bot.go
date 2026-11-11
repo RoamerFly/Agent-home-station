@@ -32,6 +32,9 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	// ProtectQuote hides a verified outgoing message whose body belongs to a
+	// private, request-scoped host reply.
+	ProtectQuote func(context.Context, linuxnative.Message) bool
 	// DeliveryCancelled is a durable host fence for an originating turn.
 	DeliveryCancelled func(companion.Input) (bool, error)
 	// WithDeliverySubmit serializes the final native submission with that fence.
@@ -347,11 +350,15 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		noticed = working
 		noticed.Body += quoteContext
 	}
-	w.noticeConversationMessage(noticed, eligible)
+	// A protected quote is a separately authorized request. A running turn
+	// must not consume it as an ordinary follow-up in the same conversation.
+	if message.PrivateQuote == "" {
+		w.noticeConversationMessage(noticed, eligible)
+	}
 	if w.persistErr != nil {
 		return
 	}
-	if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
+	if message.PrivateQuote == "" && w.stopRequestedVoice(ctx, working) {
 		// A plain stop is a local queue operation, never a model turn.  A
 		// replacement such as “不是这首，换成…” is allowed through so the same
 		// message can create its new, separately traced request after the old
@@ -433,6 +440,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			original = working.Body
 		}
 		input.OriginalText = &original
+		input.PrivateQuote = message.PrivateQuote
 		bindInputSource(&input, message, character)
 		input.Source.Sequence = sourceSequence(event)
 		if preferredShare && w.config.ReadPreferredGroupShare != nil {

@@ -37,6 +37,7 @@ type stationWechatCrossDelivery struct {
 	Target   string                           `json:"target_thread"`
 	Created  time.Time                        `json:"created_at"`
 	Proofs   []stationWechatCrossProof        `json:"proofs"`
+	Used     []stationWechatCrossProof        `json:"sources_used,omitempty"`
 	Parts    []stationWechatCrossDeliveryPart `json:"parts"`
 	Original *wechatapp.AttachmentSource      `json:"original_file,omitempty"`
 }
@@ -69,6 +70,11 @@ func readWechatCrossDelivery(root *os.Root, key, account string) (stationWechatC
 		return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 	}
 	forward := strings.HasPrefix(key, "cross-forward-")
+	for _, source := range row.Used {
+		if forward || !slices.Contains(row.Proofs, source) {
+			return stationWechatCrossDelivery{}, apphost.ErrUnavailable
+		}
+	}
 	if forward != (row.Original != nil) || forward && (len(row.Parts) != 1 || len(row.Proofs) != 1 || row.Original.Kind != "file" || row.Original.Account != account || row.Original.Thread != row.Proofs[0].Thread || row.Original.Thread == row.Target || row.Origin != row.Target) {
 		return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 	}
@@ -146,7 +152,7 @@ func (t *stationAttachmentTools) RoutePrivateReply(ctx context.Context, messages
 	key := "cross-reply-" + localCheckpointKey(t.store.SourceInstanceID(), t.trace.Account, t.trace.Thread, t.trace.TraceID, t.cross.Target)[:40]
 	row, err := readWechatCrossDelivery(root, key, t.trace.Account)
 	if errors.Is(err, os.ErrNotExist) {
-		row = stationWechatCrossDelivery{Version: 1, Key: key, Account: t.trace.Account, Origin: t.trace.Thread, Trace: t.trace.TraceID, Target: t.cross.Target, Created: time.Now().UTC(), Proofs: append([]stationWechatCrossProof(nil), t.cross.Proofs...)}
+		row = stationWechatCrossDelivery{Version: 1, Key: key, Account: t.trace.Account, Origin: t.trace.Thread, Trace: t.trace.TraceID, Target: t.cross.Target, Created: time.Now().UTC(), Proofs: slices.Clone(t.cross.Proofs), Used: slices.Clone(t.cross.Used)}
 		for _, message := range messages {
 			text := strings.TrimSpace(message)
 			if text == "" || len(text) > 3000 {

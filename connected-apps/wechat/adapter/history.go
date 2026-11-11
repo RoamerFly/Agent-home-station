@@ -31,6 +31,7 @@ type HistoryAccess struct {
 	Authorized      func(context.Context) bool
 	RecallEpoch     func(context.Context) (string, error)
 	RecallAllowed   func(context.Context, companion.Input) (bool, error)
+	ProtectMessage  func(context.Context, linuxnative.Message) bool
 }
 
 // HistoryCursors holds opaque continuations for a single host turn.
@@ -62,6 +63,9 @@ func (a HistoryAccess) Message(ctx context.Context, id string) (linuxnative.Mess
 	}
 	if _, err := time.Parse(time.RFC3339Nano, m.CreatedAt); err != nil {
 		return m, false, errors.New("wechat_history_time_invalid")
+	}
+	if m.Direction == "outgoing" && a.ProtectMessage != nil && a.ProtectMessage(ctx, m) {
+		return linuxnative.Message{}, false, nil
 	}
 	allowed, err := a.RecallAllowed(ctx, historyRecallInput(m))
 	return m, allowed, err

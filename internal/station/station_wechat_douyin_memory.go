@@ -135,6 +135,11 @@ func (t *stationAttachmentTools) callWechatDouyinMemory(ctx context.Context, in 
 	if in.Action != "sources" && !scopeAllowed {
 		return "", apphost.ErrObservationForbidden
 	}
+	if t.trace.PrivateQuote != "" && scope != "" {
+		if _, err := t.crossProof(ctx, stationWechatCrossProof{Douyin: true, DouyinScope: scope}); err != nil {
+			return "", err
+		}
+	}
 	result, err := bridge.callDouyinMemory(ctx, arguments)
 	if err != nil {
 		return "", err
@@ -151,6 +156,11 @@ func (t *stationAttachmentTools) callWechatDouyinMemory(ctx context.Context, in 
 		sources := []localDouyinMemorySource{}
 		for _, source := range list.Sources {
 			if grants.AppSources[source.Kind] == source.Scope {
+				if t.trace.PrivateQuote != "" {
+					if _, err := t.crossProof(ctx, stationWechatCrossProof{Douyin: true, DouyinScope: source.Scope}); err != nil {
+						continue
+					}
+				}
 				sources = append(sources, source)
 			}
 		}
@@ -166,6 +176,13 @@ func (t *stationAttachmentTools) callWechatDouyinMemory(ctx context.Context, in 
 		stored := proof
 		stored.DouyinKind, stored.DouyinScope, stored.DouyinBinding = sourceProof.Source.Kind, sourceProof.Source.Scope, sourceProof.Source.binding
 		stored.DouyinEpoch, stored.DouyinRevision = sourceProof.Epoch, sourceProof.Revision
+		if t.trace.PrivateQuote != "" {
+			checked, err := t.crossProof(ctx, stationWechatCrossProof{Douyin: true, DouyinScope: stored.DouyinScope})
+			if err != nil || checked.DouyinBinding != stored.DouyinBinding || checked.DouyinEpoch != stored.DouyinEpoch || checked.DouyinRevision != stored.DouyinRevision {
+				return "", apphost.ErrObservationForbidden
+			}
+			stored = checked
+		}
 		if !slices.Contains(t.cross.Proofs, stored) {
 			t.cross.Proofs = append(t.cross.Proofs, stored)
 		}
@@ -178,9 +195,21 @@ func (t *stationAttachmentTools) callWechatDouyinMemory(ctx context.Context, in 
 	}
 	count := 1
 	if in.Action == "search" {
-		count = len(packet["items"].([]any))
+		items, ok := packet["items"].([]any)
+		if !ok {
+			return "", apphost.ErrUnavailable
+		}
+		count = len(items)
 	}
-	return t.finishCrossMemory(ctx, proof, in.Action == "search", count, result)
+	finished, err := t.finishCrossMemory(ctx, proof, in.Action == "search", count, result)
+	if err == nil && count > 0 {
+		for _, stored := range t.cross.Proofs {
+			if stored.Douyin && stored.DouyinScope == scope && scope != "" && !slices.Contains(t.cross.Used, stored) {
+				t.cross.Used = append(t.cross.Used, stored)
+			}
+		}
+	}
+	return finished, err
 }
 
 func (t *stationAttachmentTools) checkWechatDouyinStoredProof(ctx context.Context, owner stationservices.Owner, proof stationWechatCrossProof) error {

@@ -745,12 +745,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}
-	var tools companion.ToolAccess
-	if len(policy.AttachmentGrants) != 0 || len(policy.HistoryGrants) != 0 {
-		tools = attachment
-	}
 	var roundErrorLogged atomic.Bool
 	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
+		ProtectQuote: attachment.protectCrossReply,
 		SurfTask: func(now time.Time) (*bot.SurfTask, error) {
 			return station.claimSurf(ctx, native.Account(), now, activationAllowed,
 				func(ctx context.Context, state stationSurfSchedule) (func(context.Context, string) (companion.ToolAccess, error), error) {
@@ -766,7 +763,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			}
 		},
 		StateDir: station.queueDir(), Groups: policy.groupPolicy(), AllowMediaReplies: len(policy.MediaReplyGrants) != 0,
-		Memory: memory, Model: s.model, Persona: persona, Tools: tools,
+		Memory: memory, Model: s.model, Persona: persona, Tools: attachment,
 		MediaObserver:     stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		ReadGroupShare:    attachment.readGroupShareEvidence,
 		DeliveryCancelled: station.deliveryCancelled, WithDeliverySubmit: station.withDeliverySubmit,

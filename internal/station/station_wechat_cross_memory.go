@@ -17,6 +17,7 @@ import (
 const stationWechatCrossToolName = "wechat_cross_memory"
 
 type stationWechatCrossProof struct {
+	LinkedReceipt                                       string `json:"linked_receipt,omitempty"`
 	Thread, Digest, Instance, Epoch, Event              string
 	EventRevision, GrantRevision                        int
 	Station                                             bool `json:"station,omitempty"`
@@ -42,6 +43,7 @@ type stationWechatCrossTurn struct {
 	Required    bool
 	Target      string
 	Proofs      []stationWechatCrossProof
+	Used        []stationWechatCrossProof
 	Refs        map[string]stationWechatCrossRef
 	Pages       map[string]stationWechatCrossPage
 	Douyin      *localToolSet
@@ -68,12 +70,18 @@ type stationWechatCrossInput struct {
 }
 
 func stationWechatCrossTool() mcptools.Tool {
-	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话、工作站与获准抖音来源。search指定query；查微信时填thread_id，封存档案从archive_sources选择并填dataset=archive，查工作站时填source=station且省略thread_id。查抖音时填source=douyin及source_id，可用work_id过滤。抖音只检索本机已留存资料。默认5条摘要。read凭本轮reference按字节或来源目录分页，封存档案可填source_index读取对应的原始消息。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station","douyin"]},"source_id":{"type":"string"},"work_id":{"type":"string"},"thread_id":{"type":"string"},"dataset":{"type":"string","enum":["archive"]},"source_index":{"type":"integer","minimum":0},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(stationWechatCrossToolName, "仅在本人明确要求时查询获准记忆。sources列同账号会话、工作站与获准抖音来源；通过已核验的私聊引用续办时，只列原回复实际使用的来源。search指定query；查微信时填thread_id，封存档案从archive_sources选择并填dataset=archive，查工作站时填source=station且省略thread_id。查抖音时填source=douyin及source_id，可用work_id过滤。抖音只检索本机已留存资料。默认5条摘要。read凭本轮reference按字节或来源目录分页，封存档案可填source_index读取对应的原始消息。搜索续页只填cursor与可选limit。结果只私下回传本人。", `{"type":"object","properties":{"action":{"type":"string","enum":["sources","search","read"]},"source":{"type":"string","enum":["wechat","station","douyin"]},"source_id":{"type":"string"},"work_id":{"type":"string"},"thread_id":{"type":"string"},"dataset":{"type":"string","enum":["archive"]},"source_index":{"type":"integer","minimum":0},"query":{"type":"string"},"since":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},"reference":{"type":"string"},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"length":{"type":"integer","minimum":1},"source_offset":{"type":"integer","minimum":0},"source_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 // Only configuration metadata is considered for discovery. No source text or
 // cross-conversation query is loaded into an ordinary first model request.
 func (t *stationAttachmentTools) crossAuthorization() string {
+	if t.trace.PrivateQuote != "" {
+		if t.linkedQuoteCandidate() {
+			return "wechat-quote-" + localCheckpointKey(t.trace.Account, t.trace.Thread, t.trace.TraceID, t.trace.PrivateQuote)
+		}
+		return ""
+	}
 	wechat, station, douyin := t.crossDirectionAuthorization(false), t.crossDirectionAuthorization(true), t.crossFileAuthorization(stationWechatToDouyinGrantsFile)
 	if station == "" && douyin == "" {
 		return wechat
@@ -147,6 +155,12 @@ func (t *stationAttachmentTools) crossProof(ctx context.Context, old stationWech
 }
 
 func (t *stationAttachmentTools) crossScopeProof(ctx context.Context, old stationWechatCrossProof, forward bool) (stationWechatCrossProof, error) {
+	if t.trace.PrivateQuote != "" {
+		if forward {
+			return stationWechatCrossProof{}, apphost.ErrObservationForbidden
+		}
+		return t.linkedCrossProof(ctx, old)
+	}
 	deny := func() (stationWechatCrossProof, error) {
 		return stationWechatCrossProof{}, apphost.ErrObservationForbidden
 	}
@@ -290,6 +304,9 @@ func (t *stationAttachmentTools) callCrossMemory(ctx context.Context, raw json.R
 	case "sources":
 		if !noPages || in.Source != "" || in.Dataset != "" || in.Thread != "" || in.Query != "" || in.Since != "" || in.Before != "" || in.Cursor != "" || in.Limit != nil {
 			return "", errors.New("来源目录不接受查询或分页参数")
+		}
+		if t.trace.PrivateQuote != "" {
+			return t.linkedCrossSources(ctx)
 		}
 		w, err := t.crossHost.worker(t.crossConnection, false)
 		if err != nil || w == nil {
@@ -456,6 +473,9 @@ func (t *stationAttachmentTools) finishCrossMemory(ctx context.Context, proof st
 	}
 	if err := t.checkCrossResults(ctx); err != nil {
 		return "", err
+	}
+	if count > 0 && !proof.Douyin && !slices.Contains(t.cross.Used, proof) {
+		t.cross.Used = append(t.cross.Used, proof)
 	}
 	return result, nil
 }

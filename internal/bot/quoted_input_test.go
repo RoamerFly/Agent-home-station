@@ -15,7 +15,10 @@ type quotedTestSource struct {
 	resolution linuxnative.QuoteResolution
 }
 
-type quotedLiteralModel struct{ current map[string]any }
+type quotedLiteralModel struct {
+	current  map[string]any
+	contents []string
+}
 
 func requestActorFromPacket(packet map[string]any) string {
 	for _, key := range []string{"request_actor_id", "message_sender_id", "speaker_id"} {
@@ -29,12 +32,51 @@ func requestActorFromPacket(packet map[string]any) string {
 
 func (m *quotedLiteralModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
 	for _, turn := range turns {
+		m.contents = append(m.contents, turn["content"])
 		var row map[string]any
 		if json.Unmarshal([]byte(turn["content"]), &row) == nil && row["kind"] == "current_message" {
 			m.current = row
 		}
 	}
 	return `{"action":"silent","messages":[]}`, nil
+}
+
+func TestPrivateNativeQuoteBodyNeverEntersModelOrStoredQuote(t *testing.T) {
+	w, _, c, _ := mediaWorker(t)
+	model := &quotedLiteralModel{}
+	engine, err := companion.New(c.Config, c.Store, model, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.model = engine
+	w.config.Channel = "wechat"
+	thread := "synthetic-private-owner"
+	w.allowed[thread] = true
+	m := fixtureMessage("private-followup", thread, "/ai 继续核对", "incoming")
+	m.Type, m.Quote = 49, &linuxnative.QuoteReference{ServerID: "777", Type: 1}
+	original := fixtureMessage("private-receipt", thread, "合成跨来源私聊正文", "outgoing")
+	original.ServerID = "777"
+	w.source = &quotedTestSource{fakeSource: &fakeSource{messages: map[string]linuxnative.Message{m.ID: m}}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: m.ID, ThreadID: thread, State: "resolved", Message: &original}}
+	checks := 0
+	w.config.ProtectQuote = func(_ context.Context, got linuxnative.Message) bool {
+		checks++
+		return got.ServerID == original.ServerID && got.ThreadID == thread
+	}
+	w.handle(t.Context(), fixtureEvent("1", m.ID, thread, "incoming", "wechat"))
+	if w.persistErr != nil || checks != 1 || model.current == nil || strings.Contains(strings.Join(model.contents, "\n"), original.Body) || model.current["quoted_source"] != nil {
+		t.Fatal("protected quote reached the model or current request was lost", checks, model.current, w.persistErr)
+	}
+	scope := c.Store.Context(companion.Input{Channel: "wechat", Account: "test", Thread: thread}, c.Config, time.Now())
+	for _, turn := range scope.Messages {
+		if turn.TraceID != m.ID {
+			continue
+		}
+		if turn.QuotedSource != nil || strings.Contains(turn.Text, original.Body) {
+			t.Fatal("protected quote entered ordinary memory", turn)
+		}
+		return
+	}
+	t.Fatal("current request was not stored")
 }
 
 func TestNativeQuotedTextPreservesOwnLiteralAndSeparateQuotedAuthor(t *testing.T) {

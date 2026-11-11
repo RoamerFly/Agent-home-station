@@ -262,7 +262,9 @@ type stationAttachmentTools struct {
 	localVision        stationLocalVision
 }
 
-func (*stationAttachmentTools) AutonomousActions() bool { return true }
+func (t *stationAttachmentTools) AutonomousActions() bool {
+	return len(t.grants) != 0 || len(t.reads) != 0
+}
 
 func (t *stationAttachmentTools) ForkTools() companion.ToolAccess {
 	copy := *t
@@ -302,6 +304,12 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 		return nil, nil
 	}
 	tools := []mcptools.Tool{}
+	if t.trace.PrivateQuote != "" {
+		if _, err := t.linkedCrossSources(ctx); err == nil {
+			tools = append(tools, stationWechatCrossTool())
+		}
+		return tools, nil
+	}
 	if t.crossAuthorization() != "" {
 		tools = append(tools, stationWechatCrossTool())
 		if _, ok := stationWechatForwardCommand(t.trace); ok && !t.PrivateReplyRequired() && t.crossDirectionAuthorization(false) != "" {
@@ -377,7 +385,7 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	if name == stationWechatCrossToolName {
 		return t.callCrossMemory(ctx, raw)
 	}
-	if t.cross != nil && t.cross.Required {
+	if t.trace.PrivateQuote != "" || t.cross != nil && t.cross.Required {
 		return "", errors.New("跨会话查询结果仅供本轮私聊答复，其他工具请另起请求")
 	}
 	if name == stationWechatForwardToolName {

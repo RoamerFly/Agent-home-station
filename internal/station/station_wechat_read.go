@@ -16,6 +16,7 @@ func (t *stationAttachmentTools) historyAccess() wechatapp.HistoryAccess {
 	return wechatapp.HistoryAccess{
 		Native: t.native, Account: t.trace.Account, Thread: t.trace.Thread, Grant: t.reads[t.trace.Thread],
 		Authorized: t.historyAllowed, RecallEpoch: t.store.RecallEpoch, RecallAllowed: t.store.NativeRecallAllowed,
+		ProtectMessage: t.protectCrossReply,
 	}
 }
 

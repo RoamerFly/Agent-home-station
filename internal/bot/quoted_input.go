@@ -31,6 +31,11 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 	if original.ServerID != m.Quote.ServerID || original.Type != m.Quote.Type || original.ThreadID != m.ThreadID || original.AccountID != w.source.Account() {
 		return "\n[引用身份不匹配；仅处理本条用户新写的文字]"
 	}
+	if original.Direction == "outgoing" && w.config.ProtectQuote != nil && w.config.ProtectQuote(ctx, *original) {
+		m.PrivateQuote = original.ServerID
+		m.ResolvedQuote, m.ReplyToSelf = nil, false
+		return "\n[引用指向需重新核对来源的私聊回复；请按当前文字处理]"
+	}
 	m.ReplyToSelf = original.Direction == "outgoing"
 	m.ResolvedQuote = original
 	text := original.Body
