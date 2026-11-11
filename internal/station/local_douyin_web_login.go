@@ -118,6 +118,7 @@ type localDouyinWebLogin struct {
 	probeNotice      func(context.Context, string, func() error) (string, error)
 	readNotice       func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error)
 	noticeTicket     localDouyinNoticeTicket
+	noticeCursors    map[string]localDouyinNoticeContinuation
 	interact         func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error)
 	sampleVideo      func(context.Context, string, string, time.Duration, func() error) (stationbrowser.PlaybackSample, error)
 	readMedia        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebMedia, error)

@@ -2562,11 +2562,25 @@
     const status = appElement("p", "", "apps-feedback");
     status.setAttribute("role", "status");
     const output = appElement("div", "", "configuration-round-records");
+    let continuation = "";
+    const pageLabel = appElement("label", "每次读取批数 ", "app-scope-note");
+    const pages = document.createElement("select");
+    pages.setAttribute("aria-label", "通知读取批数");
+    for (let value = 1; value <= 5; value++) {
+      const option = document.createElement("option");
+      option.value = String(value); option.textContent = String(value); pages.append(option);
+    }
+    pageLabel.append(pages);
+    const next = memoryButton("继续读取并标记已读", "button compact secondary", () => void run("read", true));
+    next.hidden = true;
     if (ready && !bound) actions.append(memoryButton("绑定当前抖音账号", "button compact secondary", () => void run("bind")));
-    if (ready && bound) actions.append(memoryButton("读取并标记已读", "button compact secondary", () => void run("read")));
+    if (ready && bound) {
+      panel.append(pageLabel, appElement("p", "每批由抖音原生页面加载；续读会重新核对前批，也可能再次标记已读。列表变化时需从首批重读。", "app-scope-note"));
+      actions.append(memoryButton("读取并标记已读", "button compact secondary", () => void run("read")), next);
+    }
     if (bound) actions.append(memoryButton("撤销通知绑定", "button compact quiet", () => void run("revoke")));
     panel.append(actions, status, output);
-    async function run(action) {
+    async function run(action, resume = false) {
       if (!panel.isConnected || appConfiguration !== view || view.section !== "interactions") return;
       view.douyinNoticeAbort?.abort();
       const controller = new AbortController();
@@ -2575,6 +2589,7 @@
         view.douyinNoticePanel === panel && !controller.signal.aborted;
       const buttons = [...actions.querySelectorAll("button")];
       for (const button of buttons) button.disabled = true;
+      pages.disabled = true;
       status.textContent = action === "read" ? "正在核对并读取互动通知…" : action === "bind" ? "正在核对抖音账号…" : "正在撤销通知绑定…";
       const post = (body) => request("/api/local/apps/douyin/web-notice", {
         method: "POST", body: JSON.stringify({ revision: login.revision, ...body }), signal: controller.signal,
@@ -2592,16 +2607,19 @@
           return;
         }
         output.replaceChildren();
-        const prepared = await post({ action: "prepare", allow_mark_read: true });
+        const parameters = { allow_mark_read: true, pages: Number(pages.value), continuation: resume ? continuation : "" };
+        const prepared = await post({ action: "prepare", ...parameters });
         if (!active()) return;
         if (typeof prepared.ticket !== "string" || !prepared.ticket) throw new Error("通知读取许可返回格式无效。");
         readRequested = true;
-        const page = await post({ action: "read", allow_mark_read: true, ticket: prepared.ticket });
+        const page = await post({ action: "read", ...parameters, ticket: prepared.ticket });
         if (!active()) return;
-        if (!Array.isArray(page.items) || typeof page.has_more !== "boolean") throw new Error("互动通知返回格式无效。");
+        if (!Array.isArray(page.items) || typeof page.has_more !== "boolean" || !Number.isSafeInteger(page.pages_read) || page.pages_read < 0 || page.pages_read > parameters.pages || page.effective_pages !== parameters.pages || typeof page.continuation !== "string") throw new Error("互动通知返回格式无效。");
+        continuation = page.continuation;
+        next.hidden = !continuation;
         if (typeof page.rendered_text === "string" && page.rendered_text) {
           const rendered = appElement("article", "", "douyin-read-chunk");
-          rendered.append(appElement("strong", "平台页面可见文字"), appElement("p", page.rendered_text));
+          rendered.append(appElement("strong", "平台页面可见文字（可能包含前批）"), appElement("p", page.rendered_text));
           output.append(rendered);
         } else if (page.items.length) {
           output.append(appElement("p", "本次仅取得通知编号及元数据，页面文字未能核对。", "app-scope-note"));
@@ -2613,14 +2631,16 @@
           if (details.length) card.append(appElement("p", details.join(" · "), "publication-reference"));
           output.append(card);
         }
-        const coverage = page.has_more ? "。平台报告还有后续通知。" : "。";
-        status.textContent = "本次返回 " + page.items.length + " 条通知" + coverage;
+        const coverage = page.has_more ? "平台报告还有后续通知。" : "平台报告已读到末批。";
+        const progress = page.progress === "cursor_stalled" ? "平台游标没有前进，已停止续读。" : page.progress === "next_unavailable" ? "后批未能继续加载，已返回本次成功读取的部分。" : "";
+        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress;
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          continuation = ""; next.hidden = true;
           status.textContent = error.message + (readRequested ? " 若平台已接受读取请求，相关通知可能已经标记已读。" : "");
         }
       } finally {
-        if (active()) for (const button of buttons) button.disabled = false;
+        if (active()) { for (const button of buttons) button.disabled = false; pages.disabled = false; }
       }
     }
     return panel;

@@ -2,10 +2,12 @@ package stationbrowser
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 const DouyinNoticePageURL = "https://www.douyin.com/help"
@@ -15,7 +17,15 @@ var (
 	ErrDouyinNoticeUnavailable    = errors.New("抖音通知列表没有返回可核对的结果")
 	ErrDouyinNoticeAccountChanged = errors.New("抖音通知账号已变更，请重新核对通知授权")
 	ErrDouyinNoticeMarksRead      = errors.New("当前抖音网页读取通知列表会标记已读，需要单独授权")
+	ErrDouyinNoticeCursorChanged  = errors.New("互动通知列表已变化，请从首批重新读取")
 )
+
+const MaxDouyinNoticePages = 5
+
+type DouyinNoticeCheckpoint struct {
+	Pages  int
+	Digest [32]byte
+}
 
 type DouyinNotice struct {
 	ID        string
@@ -32,6 +42,9 @@ type DouyinNoticePage struct {
 	// RenderedText is separate from item metadata. The official page filters
 	// and groups notifications before rendering, so positions cannot be joined.
 	RenderedText string
+	PagesRead    int
+	Next         DouyinNoticeCheckpoint
+	Progress     string
 }
 
 type DouyinNoticeRequest struct {
@@ -39,29 +52,62 @@ type DouyinNoticeRequest struct {
 	// granting this scope. A remembered browser profile alone is insufficient.
 	Account       string
 	AllowMarkRead bool
+	Pages         int
+	After         DouyinNoticeCheckpoint
 }
 
-func noticeListRequest(raw, origin string) (mayMarkRead, exact bool) {
+type noticePosition struct {
+	min, max int64
+	group    string
+}
+
+func noticeListRequest(raw, origin string) (position noticePosition, mayMarkRead, exact bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Scheme+"://"+u.Host != origin || u.EscapedPath() != douyinNoticePath || u.Fragment != "" {
-		return false, false
+		return position, false, false
 	}
 	values, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return false, false
+		return position, false, false
 	}
-	mark, ok := values["is_mark_read"]
-	version := values["is_new_notice"]
-	if !ok || len(mark) != 1 || len(version) != 1 || version[0] != "1" {
-		return false, false
+	one := func(key string) string {
+		if len(values[key]) == 1 {
+			return values[key][0]
+		}
+		return ""
 	}
-	switch mark[0] {
-	case "0":
-		return false, true
-	case "1":
-		return true, true
+	mark := one("is_mark_read")
+	if (mark != "0" && mark != "1") || one("is_new_notice") != "1" || one("count") != "10" {
+		return position, false, false
 	}
-	return false, false
+	for i, key := range []string{"min_time", "max_time"} {
+		value := one(key)
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 0 || strconv.FormatInt(n, 10) != value {
+			return position, false, false
+		}
+		if i == 0 {
+			position.min = n
+		} else {
+			position.max = n
+		}
+	}
+	position.group = one("notice_group")
+	if len(position.group) > 96 {
+		return position, false, false
+	}
+	for _, value := range strings.Split(position.group, ",") {
+		n, err := strconv.ParseUint(value, 10, 31)
+		if err != nil || strconv.FormatUint(n, 10) != value {
+			return position, false, false
+		}
+	}
+	return position, mark == "1", true
+}
+
+func noticeCheckpoint(previous DouyinNoticeCheckpoint, position noticePosition, page DouyinNoticePage) DouyinNoticeCheckpoint {
+	raw, _ := json.Marshal([]any{previous.Digest, position.group, position.min, position.max, page.MinTime, page.MaxTime, page.HasMore, page.Items})
+	return DouyinNoticeCheckpoint{Pages: previous.Pages + 1, Digest: sha256.Sum256(raw)}
 }
 
 func parseDouyinNoticePage(ctx context.Context, raw []byte) (DouyinNoticePage, error) {

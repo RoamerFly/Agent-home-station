@@ -22,6 +22,14 @@ var errLocalDouyinNoticeGrant = errors.New("互动通知授权或网页登录已
 type localDouyinNoticeTicket struct {
 	value, scope string
 	expires      time.Time
+	pages        int
+	continuation string
+}
+
+type localDouyinNoticeContinuation struct {
+	scope      string
+	expires    time.Time
+	checkpoint stationbrowser.DouyinNoticeCheckpoint
 }
 
 type localDouyinNoticeInput struct {
@@ -29,6 +37,8 @@ type localDouyinNoticeInput struct {
 	Revision      uint64 `json:"revision"`
 	Ticket        string `json:"ticket,omitempty"`
 	AllowMarkRead bool   `json:"allow_mark_read,omitempty"`
+	Pages         int    `json:"pages,omitempty"`
+	Continuation  string `json:"continuation,omitempty"`
 }
 
 type localDouyinNoticeItem struct {
@@ -84,7 +94,7 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 		if !websession.Decode(w, r, &input) {
 			return
 		}
-		if (input.Action == "bind" || input.Action == "revoke") && (input.AllowMarkRead || input.Ticket != "") {
+		if (input.Action == "bind" || input.Action == "revoke") && (input.AllowMarkRead || input.Ticket != "" || input.Pages != 0 || input.Continuation != "") {
 			websession.Fail(w, http.StatusBadRequest, "账号绑定和撤权使用独立请求")
 			return
 		}
@@ -94,6 +104,13 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 		}
 		if (input.Action == "prepare" || input.Action == "read") && !input.AllowMarkRead {
 			websession.Fail(w, http.StatusForbidden, "请明确确认这次读取可能标记已读")
+			return
+		}
+		if input.Pages == 0 {
+			input.Pages = 1
+		}
+		if input.Pages < 1 || input.Pages > stationbrowser.MaxDouyinNoticePages || len(input.Continuation) > 128 {
+			websession.Fail(w, http.StatusBadRequest, "每次可读取 1–5 批通知，更多内容请使用续读凭证")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
@@ -163,6 +180,18 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			return
 		}
 		scope := localCheckpointKey(identity.FishID, identity.LocalOwner.ID, session, input.Revision, record.NoticeAccount)
+		m.mu.Lock()
+		for key, value := range m.noticeCursors {
+			if !time.Now().Before(value.expires) {
+				delete(m.noticeCursors, key)
+			}
+		}
+		continuation, found := m.noticeCursors[input.Continuation]
+		m.mu.Unlock()
+		if input.Continuation != "" && (!found || continuation.scope != scope) {
+			websession.Fail(w, http.StatusConflict, "通知续读凭证已失效，请从首批重新读取")
+			return
+		}
 		if input.Action == "prepare" {
 			if input.Ticket != "" {
 				websession.Fail(w, http.StatusBadRequest, "请重新准备本次通知读取")
@@ -174,14 +203,14 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 				return
 			}
 			m.mu.Lock()
-			m.noticeTicket = localDouyinNoticeTicket{value: value, scope: scope, expires: time.Now().Add(time.Minute)}
+			m.noticeTicket = localDouyinNoticeTicket{value: value, scope: scope, expires: time.Now().Add(time.Minute), pages: input.Pages, continuation: input.Continuation}
 			m.mu.Unlock()
 			websession.Respond(w, http.StatusOK, map[string]string{"ticket": value})
 			return
 		}
 		m.mu.Lock()
 		ticket := m.noticeTicket
-		usable := input.Ticket != "" && ticket.value == input.Ticket && ticket.scope == scope && time.Now().Before(ticket.expires)
+		usable := input.Ticket != "" && ticket.value == input.Ticket && ticket.scope == scope && time.Now().Before(ticket.expires) && ticket.pages == input.Pages && ticket.continuation == input.Continuation
 		if usable {
 			m.noticeTicket = localDouyinNoticeTicket{}
 		}
@@ -194,7 +223,12 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			localDouyinNoticeFailure(w, err)
 			return
 		}
-		page, err := m.readNotice(ctx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true}, authorize)
+		nextToken, err := localDouyinWebID()
+		if err != nil {
+			localDouyinNoticeFailure(w, err)
+			return
+		}
+		page, err := m.readNotice(ctx, profile, stationbrowser.DouyinNoticeRequest{Account: record.NoticeAccount, AllowMarkRead: true, Pages: input.Pages, After: continuation.checkpoint}, authorize)
 		if err != nil {
 			localDouyinNoticeFailure(w, err)
 			return
@@ -207,6 +241,29 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			localDouyinNoticeFailure(w, stationbrowser.ErrDouyinNoticeAccountChanged)
 			return
 		}
+		var next string
+		m.mu.Lock()
+		if page.PagesRead > 0 {
+			delete(m.noticeCursors, input.Continuation)
+		}
+		if page.HasMore && page.Next.Pages > continuation.checkpoint.Pages {
+			if m.noticeCursors == nil {
+				m.noticeCursors = make(map[string]localDouyinNoticeContinuation)
+			}
+			// Bound volatile references without persisting any notification text.
+			if len(m.noticeCursors) >= 64 {
+				var oldest string
+				for key, value := range m.noticeCursors {
+					if oldest == "" || value.expires.Before(m.noticeCursors[oldest].expires) {
+						oldest = key
+					}
+				}
+				delete(m.noticeCursors, oldest)
+			}
+			next = nextToken
+			m.noticeCursors[next] = localDouyinNoticeContinuation{scope: scope, expires: time.Now().Add(10 * time.Minute), checkpoint: page.Next}
+		}
+		m.mu.Unlock()
 		items := make([]localDouyinNoticeItem, 0, len(page.Items))
 		for _, row := range page.Items {
 			var created string
@@ -215,13 +272,15 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			}
 			items = append(items, localDouyinNoticeItem{ID: row.ID, Type: row.Type, CreatedAt: created, WorkID: row.WorkID})
 		}
-		websession.Respond(w, http.StatusOK, map[string]any{"items": items, "has_more": page.HasMore, "rendered_text": page.RenderedText})
+		websession.Respond(w, http.StatusOK, map[string]any{"items": items, "has_more": page.HasMore, "rendered_text": page.RenderedText,
+			"continuation": next, "pages_read": page.PagesRead, "effective_pages": input.Pages, "progress": page.Progress})
 	}))
 }
 
 func localDouyinNoticeFailure(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errLocalDouyinNoticeGrant),
+		errors.Is(err, stationbrowser.ErrDouyinNoticeCursorChanged),
 		errors.Is(err, stationbrowser.ErrDouyinNoticeAccountChanged),
 		errors.Is(err, stationbrowser.ErrDouyinLoginActive),
 		errors.Is(err, stationbrowser.ErrDouyinWebLoginRequired):

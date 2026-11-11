@@ -75,8 +75,16 @@ type noticeReadOutcome struct {
 type noticeRequestFence struct {
 	target, origin, sessionID string
 	authorize                 func() error
-	armed                     atomic.Bool
+	intent                    atomic.Pointer[noticeIntent]
+	closed                    atomic.Bool
 	allowMarkRead             bool
+	after                     DouyinNoticeCheckpoint
+	pages                     int
+}
+
+type noticeIntent struct {
+	frame    string
+	position noticePosition
 }
 
 func (f *noticeRequestFence) allowResource(raw, kind string) bool {
@@ -100,11 +108,21 @@ func (f *noticeRequestFence) allowResource(raw, kind string) bool {
 
 func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out chan<- noticeReadOutcome) {
 	var admitted string
-	settled := false
+	var admittedIntent noticeIntent
+	var checkpoint DouyinNoticeCheckpoint
+	seen := map[noticePosition]bool{}
+	failed := false
 	report := func(page DouyinNoticePage, err error) {
-		if !settled {
-			settled = true
-			out <- noticeReadOutcome{page: page, err: err}
+		if failed {
+			return
+		}
+		if err != nil {
+			failed = true
+			f.intent.Store(nil)
+		}
+		select {
+		case out <- noticeReadOutcome{page: page, err: err}:
+		case <-ctx.Done():
 		}
 	}
 	for {
@@ -121,6 +139,7 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 			}
 			var req struct {
 				ID            string `json:"requestId"`
+				Frame         string `json:"frameId"`
 				Kind          string `json:"resourceType"`
 				Status        int    `json:"responseStatusCode"`
 				ResponseError string `json:"responseErrorReason"`
@@ -132,10 +151,12 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 			}
 			method := "Fetch.failRequest"
 			params := map[string]any{"requestId": req.ID, "errorReason": "BlockedByClient"}
-			mark, exact := noticeListRequest(req.Request.URL, f.origin)
+			position, mark, exact := noticeListRequest(req.Request.URL, f.origin)
+			intent := f.intent.Load()
 			switch {
 			case req.Status != 0 || req.ResponseError != "":
-				if exact && req.ID == admitted && !settled {
+				if exact && req.ID == admitted && req.Frame == admittedIntent.frame && !failed {
+					admitted = ""
 					var page DouyinNoticePage
 					err := ErrDouyinNoticeUnavailable
 					if req.Status == 200 {
@@ -145,22 +166,43 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						err = denied
 					}
 					if err == nil {
+						checkpoint = noticeCheckpoint(checkpoint, admittedIntent.position, page)
+						if checkpoint.Pages <= f.after.Pages && (!page.HasMore ||
+							checkpoint.Pages == f.after.Pages && checkpoint != f.after) {
+							report(DouyinNoticePage{}, ErrDouyinNoticeCursorChanged)
+							_ = session.Call(ctx, f.sessionID, method, params, nil)
+							continue
+						}
+						next := noticePosition{min: page.MinTime, max: page.MaxTime, group: admittedIntent.position.group}
+						if page.HasMore && !seen[next] {
+							page.Next = checkpoint
+							if !f.closed.Load() && checkpoint.Pages-f.after.Pages < f.pages {
+								f.intent.Store(&noticeIntent{frame: admittedIntent.frame, position: next})
+							}
+						} else if page.HasMore {
+							page.Progress = "cursor_stalled"
+						}
 						method = "Fetch.continueResponse"
 						params = map[string]any{"requestId": req.ID}
 					}
 					if session.Call(ctx, f.sessionID, method, params, nil) != nil && err == nil {
 						err = ErrDouyinNoticeUnavailable
 					}
+					page.PagesRead = checkpoint.Pages
 					report(page, err)
 					continue
 				}
-			case req.Request.Method == "GET" && exact && (req.Kind == "XHR" || req.Kind == "Fetch") && f.armed.Swap(false) && !settled:
+			case !failed && !f.closed.Load() && admitted == "" && intent != nil && req.Frame == intent.frame && req.Request.Method == "GET" && exact &&
+				(req.Kind == "XHR" || req.Kind == "Fetch") && position.min == intent.position.min && position.max == intent.position.max &&
+				(intent.position.group == "" || position.group == intent.position.group) && f.intent.CompareAndSwap(intent, nil):
 				if err := f.authorize(); err != nil {
 					report(DouyinNoticePage{}, err)
 				} else if mark && !f.allowMarkRead {
 					report(DouyinNoticePage{}, ErrDouyinNoticeMarksRead)
 				} else {
 					admitted = req.ID
+					admittedIntent = noticeIntent{frame: req.Frame, position: position}
+					seen[position] = true
 					method = "Fetch.continueRequest"
 					params = map[string]any{"requestId": req.ID, "interceptResponse": true}
 				}
@@ -195,6 +237,14 @@ func readDouyinNoticeResponse(ctx context.Context, session readerSession, id, re
 }
 
 func readDouyinNoticeSession(ctx context.Context, session readerSession, target string, input *DouyinNoticeRequest, authorize func() error) (DouyinNoticePage, error) {
+	pages := 1
+	if input != nil && input.Pages != 0 {
+		pages = input.Pages
+	}
+	if pages < 1 || pages > MaxDouyinNoticePages || input != nil &&
+		(input.After.Pages < 0 || input.After.Pages > int(^uint(0)>>1)-pages || (input.After.Pages == 0) != (input.After.Digest == [32]byte{})) {
+		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
+	}
 	var created struct{ TargetID string }
 	var attached struct{ SessionID string }
 	if session.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &created) != nil || created.TargetID == "" ||
@@ -220,7 +270,10 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	}
 	u, _ := url.Parse(target)
 	fence := noticeRequestFence{target: target, origin: u.Scheme + "://" + u.Host, sessionID: id, authorize: authorize,
-		allowMarkRead: input != nil && input.AllowMarkRead}
+		allowMarkRead: input != nil && input.AllowMarkRead, pages: pages}
+	if input != nil {
+		fence.after = input.After
+	}
 	fenceCtx, cancel := context.WithCancel(ctx)
 	finished := make(chan struct{})
 	out := make(chan noticeReadOutcome, 1)
@@ -271,42 +324,110 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	if control.Account != account {
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
-	fence.armed.Store(true)
+	fence.intent.Store(&noticeIntent{frame: nav.FrameID})
 	if session.Call(ctx, id, "Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": control.X, "y": control.Y}, nil) != nil {
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
-	select {
-	case <-ctx.Done():
-		return DouyinNoticePage{}, ctx.Err()
-	case result := <-out:
+	collected := DouyinNoticePage{Account: account, HasMore: true}
+	seenIDs := map[string]bool{}
+	for {
+		wait, stop := context.WithTimeout(ctx, 8*time.Second)
+		result := waitNoticePage(wait, session, id, world, target, &fence, out, authorize)
+		stop()
 		if result.err != nil {
-			return DouyinNoticePage{}, result.err
+			if result.err != context.DeadlineExceeded || collected.PagesRead == 0 || ctx.Err() != nil {
+				return DouyinNoticePage{}, result.err
+			}
+			collected.Progress = "next_unavailable"
+			break
 		}
 		if err := authorize(); err != nil {
 			return DouyinNoticePage{}, err
 		}
-		if noticePageState(ctx, session, id, world, target, false).Account != account {
-			return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
-		}
-		if len(result.page.Items) != 0 {
-			textCtx, stop := context.WithTimeout(ctx, 3*time.Second)
-			defer stop()
-			for textCtx.Err() == nil {
-				if err := authorize(); err != nil {
-					return DouyinNoticePage{}, err
-				}
-				result.page.RenderedText = noticeRenderedText(textCtx, session, id, world, target)
-				if result.page.RenderedText != "" || creatorWait(textCtx) != nil {
-					break
-				}
+		for _, item := range result.page.Items {
+			if result.page.PagesRead > input.After.Pages && !seenIDs[item.ID] {
+				collected.Items = append(collected.Items, item)
 			}
-			if noticePageState(ctx, session, id, world, target, false).Account != account {
-				return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
-			}
+			seenIDs[item.ID] = true
 		}
-		result.page.Account = account
-		return result.page, authorize()
+		collected.MinTime, collected.MaxTime = result.page.MinTime, result.page.MaxTime
+		collected.HasMore, collected.Next, collected.Progress = result.page.HasMore, result.page.Next, result.page.Progress
+		collected.PagesRead = max(0, result.page.PagesRead-input.After.Pages)
+		if !collected.HasMore || collected.PagesRead == pages || collected.Progress != "" {
+			if collected.PagesRead == 0 {
+				return DouyinNoticePage{}, ErrDouyinNoticeCursorChanged
+			}
+			break
+		}
 	}
+	// Close the request gate before reading the rendered list. Its text is
+	// presentation evidence, never authority to admit an additional page.
+	fence.closed.Store(true)
+	fence.intent.Store(nil)
+	if len(collected.Items) != 0 {
+		textCtx, stop := context.WithTimeout(ctx, 3*time.Second)
+		defer stop()
+		for textCtx.Err() == nil {
+			if err := authorize(); err != nil {
+				return DouyinNoticePage{}, err
+			}
+			collected.RenderedText = noticeRenderedText(textCtx, session, id, world, target)
+			if collected.RenderedText != "" || creatorWait(textCtx) != nil {
+				break
+			}
+		}
+	}
+	if noticePageState(ctx, session, id, world, target, false).Account != account {
+		return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
+	}
+	return collected, authorize()
+}
+
+func waitNoticePage(ctx context.Context, session readerSession, id string, world int64, target string, fence *noticeRequestFence, out <-chan noticeReadOutcome, authorize func() error) noticeReadOutcome {
+	advanced := false
+	for {
+		select {
+		case result := <-out:
+			return result
+		case <-ctx.Done():
+			return noticeReadOutcome{err: ctx.Err()}
+		default:
+		}
+		intent := fence.intent.Load()
+		if !advanced && intent != nil && intent.position.group != "" {
+			if err := authorize(); err != nil {
+				return noticeReadOutcome{err: err}
+			}
+			advanced = advanceNoticePage(ctx, session, id, world, target)
+		}
+		if err := creatorWait(ctx); err != nil {
+			return noticeReadOutcome{err: err}
+		}
+	}
+}
+
+func advanceNoticePage(ctx context.Context, session readerSession, id string, world int64, target string) bool {
+	arg, _ := json.Marshal(target)
+	const js = `((target) => {
+		if (location.href !== target) return false;
+		const panels = [...document.querySelectorAll('[data-e2e="listDlgTest-container"]')].filter(node => node.getClientRects().length);
+		if (panels.length !== 1) return false;
+		const lists = panels[0].querySelectorAll('.sKMx4DKd');
+		if (lists.length !== 1 || !lists[0].getClientRects().length) return false;
+		const list = lists[0];
+		const more = [...list.querySelectorAll('.RQOLsL3h')].filter(node => node.getClientRects().length && node.textContent.trim() === '点击加载更多');
+		if (more.length === 1) { more[0].click(); return true; }
+		if (!more.length && list.scrollTop + list.clientHeight + 1 < list.scrollHeight) {
+			list.scrollTop = list.scrollHeight;
+			// Background Edge targets may defer their native scroll notification.
+			// Notify the same DOM listener; the request fence still admits one page.
+			list.dispatchEvent(new Event('scroll', {bubbles:true}));
+			return true;
+		}
+		return false;
+	})`
+	var out struct{ Result struct{ Value bool } }
+	return session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": js + "(" + string(arg) + ")", "contextId": world, "returnByValue": true}, &out) == nil && out.Result.Value
 }
 
 func noticeRenderedText(ctx context.Context, session readerSession, id string, world int64, target string) string {

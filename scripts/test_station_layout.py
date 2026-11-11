@@ -193,10 +193,15 @@ def verify_douyin_notice(page, panel, nav):
             route.fulfill(json={"revision": login["revision"], "notice_bound": login["notice_bound"]})
         elif action == "prepare":
             assert data["allow_mark_read"] is True
+            assert data["pages"] == 2
+            assert data["continuation"] == ("synthetic-next" if observed.count("read") else "")
             route.fulfill(json={"ticket": "synthetic-single-use"})
         else:
             assert action == "read" and data["allow_mark_read"] is True and data["ticket"] == "synthetic-single-use"
-            route.fulfill(json={"items": [{"id": "1234", "type": 2, "work_id": "5678"}], "has_more": True,
+            resumed = observed.count("read") == 2
+            assert data["pages"] == 2 and data["continuation"] == ("synthetic-next" if resumed else "")
+            route.fulfill(json={"items": [{"id": "1233" if resumed else "1234", "type": 2, "work_id": "5678"}], "has_more": not resumed,
+                                "pages_read": 1, "effective_pages": 2, "continuation": "" if resumed else "synthetic-next", "progress": "next_unavailable" if not resumed else "",
                                 "rendered_text": "合成用户评论了你的作品 <img src=invalid>"})
 
     page.route(status_path, lambda route: route.fulfill(json=login))
@@ -210,11 +215,18 @@ def verify_douyin_notice(page, panel, nav):
     read = panel.get_by_role("button", name="读取并标记已读", exact=True)
     expect(read).to_be_visible()
     assert observed == ["bind"]
+    panel.get_by_label("通知读取批数", exact=True).select_option("2")
     read.click()
     expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_be_visible()
     expect(panel.get_by_text("合成用户评论了你的作品 <img src=invalid>", exact=True)).to_be_visible()
-    expect(panel.get_by_text("本次返回 1 条通知。平台报告还有后续通知。")).to_be_visible()
+    expect(panel.get_by_text("本次读取 1/2 批，返回 1 条新通知。平台报告还有后续通知。后批未能继续加载，已返回本次成功读取的部分。")).to_be_visible()
     assert observed == ["bind", "prepare", "read"]
+    resume = panel.get_by_role("button", name="继续读取并标记已读", exact=True)
+    resume.click()
+    expect(panel.get_by_text("通知 1233 · 平台类型 2", exact=True)).to_be_visible()
+    expect(panel.get_by_text("本次读取 1/2 批，返回 1 条新通知。平台报告已读到末批。")).to_be_visible()
+    expect(resume).not_to_be_visible()
+    assert observed == ["bind", "prepare", "read", "prepare", "read"]
     panel.get_by_role("button", name="撤销通知绑定", exact=True).click()
     expect(bind).to_be_visible()
     expect(panel.get_by_text("通知 1234 · 平台类型 2", exact=True)).to_have_count(0)
