@@ -109,7 +109,7 @@ var errForwardAmbiguous = errors.New("转发来源不唯一或未找到，请提
 func (t *stationAttachmentTools) forwardOriginalFile(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct{}
 	selection, ok := stationWechatForwardCommand(t.trace)
-	if !ok || !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") || strictLocalMemoryDecode(raw, &args) != nil || t.crossAuthorization() == "" {
+	if !ok || !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") || strictLocalMemoryDecode(raw, &args) != nil || t.crossDirectionAuthorization(false) == "" {
 		return "", apphost.ErrObservationForbidden
 	}
 	worker, err := t.crossHost.worker(t.crossConnection, false)

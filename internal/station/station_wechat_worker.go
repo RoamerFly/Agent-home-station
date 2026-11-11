@@ -50,6 +50,7 @@ type stationWechat struct {
 	localVision            stationLocalVision
 	documents              stationDocumentTools
 	ownerReader            stationservices.OwnerReader
+	stationConversation    func() (*companion.Store, companion.Input, error)
 	contactCursor          cipher.AEAD
 }
 

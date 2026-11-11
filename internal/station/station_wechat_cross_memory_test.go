@@ -734,4 +734,9 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 		t.Fatal("revoked target wrote to native", len(sent), uploads)
 	}
 	mu.Unlock()
+	t.Run("workstation-source", func(t *testing.T) {
+		policy["reply_threads"] = []string{origin, source, ownerID}
+		req("PUT", path+"/policy", policy, 200)
+		checkStationMemoryDirection(t, f, path, origin, source, ownerID, makeTools, config)
+	})
 }

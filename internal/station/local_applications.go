@@ -32,6 +32,7 @@ func (h *localChatService) attachApplications(registry apphost.Registry) (apphos
 		h.home.douyinRoutes(owner, mux, registry, h.ctx)
 	}}}
 	if h.wechat != nil {
+		h.wechat.stationConversation = h.conversation
 		apps = append(apps, h.wechat.attachment(h.home.applicationOwner))
 	} else {
 		registry, apps, err = attachStationWechatArchive(registry, h.home.dataDir, apps)

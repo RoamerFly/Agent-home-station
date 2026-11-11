@@ -304,7 +304,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	tools := []mcptools.Tool{}
 	if t.crossAuthorization() != "" {
 		tools = append(tools, stationWechatCrossTool())
-		if _, ok := stationWechatForwardCommand(t.trace); ok && !t.PrivateReplyRequired() {
+		if _, ok := stationWechatForwardCommand(t.trace); ok && !t.PrivateReplyRequired() && t.crossDirectionAuthorization(false) != "" {
 			tools = append(tools, stationWechatForwardTool())
 		}
 	}
