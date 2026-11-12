@@ -1877,7 +1877,7 @@
             const interactionNote = douyinWebCommentsEnabled(value)
               ? "点赞需要首页及视频页文字读取；回复评论还依赖视频评论读取。两项互动都单独保存。"
               : "点赞需要首页及视频页文字读取；回复评论还需先允许读取视频评论。";
-            if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给媒体理解中配置的视觉服务处理。` : `${value.visual_reason || "请先在项目工具中配置媒体理解，画面分析许可暂不可开启。"} ${interactionNote}`, "publication-authorization-note"));
+            if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给项目工具中已启用的共享视觉能力处理。` : `${value.visual_reason || "请先在项目工具中启用媒体理解；抖音这里无需重复配置。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
       }
@@ -4251,8 +4251,8 @@
       const connectionMap = new Map((registered || []).map((row, index) => [row.id, appRows(connections[index], "items")]));
       const wechatRegistration = registered?.find((app) => app.id === "wechat");
       const wechatConnections = connectionMap.get("wechat") || [];
-      const hasDefaultWechat = wechatConnections.some((item) => item.account_id === "desktop" || item.label === "desktop");
-      if (wechatRegistration?.registration === "station-native" && wechatRegistration.account_setup && !hasDefaultWechat && !current.defaultProvisioning) {
+      const needsDefaultWechat = wechatConnections.length === 0;
+      if (wechatRegistration?.registration === "station-native" && wechatRegistration.account_setup && needsDefaultWechat && !current.defaultProvisioning) {
         current.defaultProvisioning = true;
         try {
           await appSetupPost("/api/apps/wechat/connections", "00000000000000000000000000000001");

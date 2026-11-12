@@ -366,7 +366,7 @@ func (m *localDouyinWebLogin) withVisualReadiness(ctx context.Context, view loca
 		return view
 	}
 	if _, err := m.visual.ready(ctx); err != nil {
-		view.VisualReason = "本机视觉工具尚未就绪，请在项目工具中配置媒体理解。"
+		view.VisualReason = "本机视觉工具尚未就绪，请先在项目工具中启用媒体理解；抖音这里无需重复配置。"
 		return view
 	}
 	view.VisualReady = true
@@ -701,7 +701,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 				return fail(400, "请先允许首页及视频页文字读取，再单独允许画面分析")
 			}
 			if _, err := m.visual.ready(ctx); err != nil {
-				return fail(503, "本机视觉工具尚未就绪，请在项目工具中启用媒体理解并配置视觉服务；许可未保存")
+				return fail(503, "本机视觉工具尚未就绪，请先在项目工具中启用媒体理解；抖音这里无需重复配置，许可未保存")
 			}
 		}
 		if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {

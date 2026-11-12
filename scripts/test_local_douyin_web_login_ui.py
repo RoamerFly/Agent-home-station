@@ -104,7 +104,7 @@ def verify(binary, output):
                                 route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "本机语音识别工具未就绪，请先启用并配置识别模型。"}, ensure_ascii=False))
                                 return
                             if body.get("allow_visual") is True and not visual_ready:
-                                route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "本机视觉工具尚未就绪，请先启用并配置媒体理解。"}, ensure_ascii=False))
+                                route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "本机视觉工具尚未就绪，请先在项目工具中启用媒体理解；抖音这里无需重复配置。"}, ensure_ascii=False))
                                 return
                             if playback_conflict:
                                 playback_conflict = False
@@ -219,7 +219,7 @@ def verify(binary, output):
                     view.pop("audio_enabled", None)
                     view.pop("visual_enabled", None)
                     view["visual_ready"] = False
-                    view["visual_reason"] = "本机视觉工具尚未就绪，请先启用并配置媒体理解。"
+                    view["visual_reason"] = "本机视觉工具尚未就绪，请先在项目工具中启用媒体理解；抖音这里无需重复配置。"
                     page.locator("#app-configuration-close").click()
                     open_configuration(page, "抖音", "内容浏览")
                     playback = page.get_by_label("允许静音观察视频播放", exact=True)
@@ -241,7 +241,7 @@ def verify(binary, output):
                     assert not replies.is_checked() and replies.is_disabled(), "回复评论必须先取得评论读取许可"
                     open_configuration(page, "抖音", "内容浏览")
                     assert visual.is_disabled(), "视觉工具未就绪时不能误启用画面分析"
-                    page.get_by_text("本机视觉工具尚未就绪，请先启用并配置媒体理解。", exact=False).wait_for()
+                    page.get_by_text("本机视觉工具尚未就绪，请先在项目工具中启用媒体理解；抖音这里无需重复配置。", exact=False).wait_for()
                     page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-visual-unavailable-{suffix}.png"))
                     visual_ready = True
                     view["visual_ready"] = True
@@ -253,7 +253,7 @@ def verify(binary, output):
                     visual.check()
                     page.get_by_text("已允许使用本机视觉分析视频画面。", exact=True).wait_for()
                     assert visual.is_checked() and not playback.is_checked() and not audio.is_checked(), "画面分析许可不能开启播放或音轨转写"
-                    page.get_by_text("交给媒体理解中配置的视觉服务处理", exact=False).wait_for()
+                    page.get_by_text("交给项目工具中已启用的共享视觉能力处理", exact=False).wait_for()
                     page.locator("#app-configuration").screenshot(path=str(output / f"douyin-web-login-visual-enabled-{suffix}.png"))
                     visual.uncheck()
                     page.get_by_text("已停止视频画面分析。", exact=True).wait_for()

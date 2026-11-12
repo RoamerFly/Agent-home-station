@@ -492,7 +492,8 @@ def verify(binary, output):
                 page.route(status_pattern, status_route)
                 refresh_application(page)
                 page.get_by_text("账号连接", exact=True).wait_for()
-                page.get_by_text("合成微信账号", exact=True).wait_for()
+                page.locator("#app-configuration-connection").wait_for()
+                assert page.locator("#app-configuration-connection").input_value() == "synthetic-wechat"
                 page.get_by_text("已登录", exact=True).wait_for()
                 assert page.get_by_text("从旧版接入", exact=True).count() == 0, "legacy migration has no daily UI"
                 page.screenshot(path=str(output / "apps-connected-light.png"), full_page=True)
@@ -539,8 +540,7 @@ def verify(binary, output):
                 page.route(operation_pattern, setup_operation)
                 page.route(qr_pattern, setup_qr)
                 refresh_application(page)
-                page.get_by_text("账号未接入", exact=True).wait_for()
-                page.get_by_role("button", name="添加账号").click()
+                page.get_by_text("合成微信账号", exact=True).wait_for()
                 page.get_by_role("button", name="扫码登录").click()
                 page.get_by_text("暂时无法核对账号操作", exact=True).wait_for()
                 page.get_by_role("button", name="扫码登录").click()
@@ -1208,73 +1208,14 @@ def verify(binary, output):
                 page.get_by_text("已启用，按需运行", exact=True).wait_for()
                 page.get_by_role("button", name="停用解析", exact=True).click()
                 page.get_by_text("已停用", exact=True).wait_for()
-                page.get_by_text("视频号解析", exact=True).click()
-                media = {"installed": False, "enabled": False, "runtime_ready": True, "revision": 0}
-
-                def media_settings(route):
-                    if route.request.method == "PUT":
-                        assert route.request.headers.get("x-csrf-token")
-                        body = route.request.post_data_json
-                        if body["action"] == "install":
-                            assert body["grant_media"] is True
-                            media.update(installed=True, revision=1)
-                        elif body["action"] == "configure":
-                            assert body["revision"] == media["revision"]
-                            config = body["configuration"]
-                            if config["values"].get("asr_backend") == "local":
-                                assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision",
-                                                            "asr_endpoint": "https://asr.example/transcriptions", "asr_model": "synthetic-asr", "asr_backend": "local"}
-                                assert config["secrets"] == {}
-                                media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key", "asr_key"]}
-                            else:
-                                assert config["values"] == {"vision_endpoint": "https://vision.example/chat/completions", "vision_model": "synthetic-vision",
-                                                            "asr_endpoint": "https://asr.example/transcriptions", "asr_model": "synthetic-asr", "asr_backend": "remote"}
-                                assert config["secrets"] == {"vision_key": "synthetic-media-browser-key", "asr_key": "synthetic-asr-browser-key"}
-                                media["configuration"] = {"revision": 1, "values": config["values"], "configured_secrets": ["vision_key", "asr_key"]}
-                        else:
-                            assert body["revision"] == media["revision"]
-                            media.update(enabled=body["action"] == "enable", revision=media["revision"] + 1)
-                    if media.get("configuration", {}).get("values", {}).get("asr_backend") == "local":
-                        media["local_asr_ready"] = False
-                    fulfill_json(media)(route)
-
-                page.route(status_pattern + "/media-understanding", media_settings)
-                page.get_by_text("媒体理解", exact=True).click()
-                page.get_by_role("button", name="安装并授权媒体处理和模型调用").click()
-                page.get_by_label("视觉接口地址", exact=True).fill("https://vision.example/chat/completions")
-                page.get_by_label("视觉模型", exact=True).fill("synthetic-vision")
-                page.get_by_label("视觉接口密钥", exact=True).fill("synthetic-media-browser-key")
-                page.get_by_label("语音识别接口地址", exact=True).fill("https://asr.example/transcriptions")
-                page.get_by_label("语音识别模型", exact=True).fill("synthetic-asr")
-                page.get_by_label("语音识别接口密钥", exact=True).fill("synthetic-asr-browser-key")
-                page.get_by_role("button", name="保存媒体设置").click()
-                key_field = page.get_by_label("视觉接口密钥", exact=True).and_(page.get_by_placeholder("已配置，留空保留"))
-                key_field.wait_for()
-                assert key_field.input_value() == ""
-                page.set_viewport_size({"width": 1280, "height": 780})
-                assert_no_horizontal_overflow(page, "media configuration")
-                assert_worker_controls_fit(page)
-                page.screenshot(path=str(output / "apps-media-understanding-desktop-small.png"), full_page=True)
-                page.set_viewport_size({"width": 1280, "height": 800})
-                page.get_by_role("button", name="启用媒体理解", exact=True).click()
-                page.get_by_role("button", name="停用媒体理解", exact=True).click()
-                page.get_by_role("button", name="启用媒体理解", exact=True).wait_for()
-                page.get_by_label("语音识别方式", exact=True).select_option("local")
-                page.get_by_text("使用主人已登记的本地媒体识别；不会改用远程接口。", exact=True).wait_for()
-                assert page.get_by_label("语音识别接口地址", exact=True).is_hidden(), "local ASR must hide only remote ASR fields"
-                assert page.get_by_label("视觉接口地址", exact=True).input_value() == "https://vision.example/chat/completions", "switching ASR must retain visual configuration"
-                with page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/media-understanding")):
-                    page.get_by_role("button", name="保存媒体设置").click()
-                expect(page.get_by_role("button", name="保存媒体设置")).to_be_enabled()
-                assert media["configuration"]["values"]["asr_backend"] == "local"
-                expect(page.get_by_text("请先检查项目工具中的本地媒体识别资源。", exact=True)).to_be_visible()
-                page.set_viewport_size({"width": 1280, "height": 780})
-                assert_no_horizontal_overflow(page, "local ASR resource warning")
-                page.screenshot(path=str(output / "apps-local-asr-unavailable-desktop-small.png"), full_page=True)
-                page.set_viewport_size({"width": 1280, "height": 800})
-                page.get_by_label("语音识别方式", exact=True).select_option("remote")
-                assert page.get_by_label("语音识别接口地址", exact=True).input_value() == "https://asr.example/transcriptions", "switching back must retain remote ASR settings"
-                page.get_by_text("媒体理解", exact=True).click()
+                # Media understanding is a shared Project Tools capability;
+                # application details must not expose its install/configure
+                # form or connection-level model/secret fields.
+                app_body = page.locator("#app-configuration-body")
+                assert app_body.get_by_text("媒体理解", exact=True).count() == 0
+                assert app_body.get_by_role("button", name="启用媒体理解", exact=True).count() == 0
+                assert app_body.get_by_label("视觉接口地址", exact=True).count() == 0
+                assert app_body.get_by_label("语音识别接口地址", exact=True).count() == 0
                 # Reading delivery history and receipt checks must never post a send.
                 receipt_state = {"version": "first", "reads": 0, "checks": 0, "stops": 0, "resumes": 0, "continuation": None,
                                  "recall_queries": [], "recall_posts": []}
