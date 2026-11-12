@@ -92,6 +92,7 @@ namespace WechatAgent.Desktop {
                     try {
                         d.SaveStationNativeEnabled(!d.StationNativeEnabled);
                         wechatStartupItem.Checked = d.LocalStationNative;
+                        if (web != null) PostDesktopControl(web, webGeneration);
                     } catch (Exception error) {
                         MessageBox.Show(this, "未保存微信启动开关。\n" + error.Message, "Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
