@@ -45,12 +45,17 @@ func TestLocalAppConfigurationGenericAndSourceOnly(t *testing.T) {
 		t.Fatal(code, wechat)
 	}
 	hasRounds := false
+	hasRules := false
 	for _, section := range wechat["sections"].([]any) {
 		row := section.(map[string]any)
 		hasRounds = hasRounds || row["id"] == "rounds" && row["title"] == "执行回合"
+		hasRules = hasRules || row["id"] == "rules" && row["title"] == "回复规则"
 	}
 	if !hasRounds {
 		t.Fatal("readable execution process must remain available", wechat)
+	}
+	if !hasRules {
+		t.Fatal("readable reply rules must remain available", wechat)
 	}
 	code, generic := f.request("GET", path+"synthetic-preview/configuration", nil, false)
 	if code != 200 || generic["registered"] != true || len(generic["sections"].([]any)) != 3 {
