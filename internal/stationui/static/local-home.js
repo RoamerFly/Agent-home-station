@@ -2460,7 +2460,7 @@
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
     view.surfAbort?.abort();
-    view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
+    view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -3257,34 +3257,104 @@
     view[refreshField] = () => { if (active()) { if (writing) { refreshPending = true; return; } busy = true; render(); void read(); } };
     void read(); return panel;
   }
+  function appConfigurationRounds(view, connection) {
+    const panel = appElement("section", "", "configuration-rounds");
+    const date = document.createElement("input");
+    date.type = "date";
+    view.roundDates ||= new Map();
+    date.value = view.roundDates.get(connection) || "";
+    const label = appElement("label", "查看日期"); label.append(date);
+    const controls = appElement("div", "", "configuration-round-filters"); controls.append(label);
+    const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
+    const records = appElement("div", "", "configuration-round-records"), groups = new Map();
+    const labels = {
+      message_received: "收到消息", message_queued: "已排队，等待处理", message_processing: "正在处理消息",
+      generation_started: "正在理解需求", character_decision: "已完成需求判断",
+      message_aggregated: "已收到补充消息", generation_followup_consumed: "正在结合补充消息处理",
+      media_understood: "已读懂收到的资料", utterance_plan_queued: "正在准备回复",
+      utterance_plan_revised: "已根据新消息调整回复", generation_revised: "已调整处理计划",
+      message_sent: "微信已接受回复", message_processed: "本轮消息已处理",
+      message_skipped: "本条消息无需回复", generation_paused: "已暂停处理",
+      generation_stopped: "已停止本轮处理", delivery_stopped: "已停止后续发送",
+      agent_task_started: "正在继续之前的任务", agent_task_cancelled: "任务已取消",
+      conversation_wake_scheduled: "已安排稍后继续", conversation_wake_started: "正在继续处理",
+      conversation_wake_stopped: "已取消稍后续办", surf_started: "正在浏览资料",
+      send_failed: "回复暂未发送成功", model_retry_scheduled: "稍后会重试",
+      tool_task_timeout: "处理用时较长，结果仍需确认"
+    };
+    function describe(step) {
+      if (labels[step.event]) return labels[step.event];
+      if (step.category === "error") return "这一步未完成，请查看当前任务状态";
+      if (step.tool) return "工具处理进度已更新";
+      return { received: "收到消息", decision: "正在判断下一步", sent: "发送结果已更新" }[step.category] || "处理进度已更新";
+    }
+    function time(step) {
+      const at = new Date(step.at);
+      return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+    }
+    let next = "", serial = 0;
+    const active = () => appConfiguration === view && view.section === "rounds" && view.connection === connection && panel.isConnected;
+    const more = memoryButton("较早记录", "button compact secondary", () => void load(true)); more.hidden = true;
+    async function load(append = false) {
+      const generation = ++serial, query = new URLSearchParams({ date: date.value });
+      if (append) query.set("before", next);
+      else { groups.clear(); records.replaceChildren(); next = ""; }
+      more.hidden = true; feedback.textContent = "正在读取处理过程…";
+      try {
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
+        if (!active() || serial !== generation) return;
+        if (!Array.isArray(result.steps)) throw new Error("暂时无法读取处理过程，请稍后刷新。");
+        if (!date.value) date.value = result.date;
+        view.roundDates.set(connection, date.value);
+        for (const step of result.steps) {
+          const key = JSON.stringify([step.thread || "", step.message || ""]);
+          let group = groups.get(key);
+          if (!group) {
+            const node = appElement("details", "", "identity-details");
+            node.open = groups.size === 0;
+            group = { summary: appElement("summary", ""), list: appElement("ol", "", "round-timeline"), steps: new Map() };
+            node.append(group.summary, group.list); groups.set(key, group); records.append(node);
+          }
+          group.steps.set(step.sequence, step);
+        }
+        for (const group of groups.values()) {
+          const steps = [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
+          const latest = steps[steps.length - 1];
+          group.summary.textContent = [latest.message ? "对话处理" : "工作站活动", time(latest), describe(latest)].filter(Boolean).join(" · ");
+          group.list.replaceChildren(...steps.map((step) => {
+            const item = appElement("li", "");
+            item.append(appElement("time", time(step)), appElement("span", describe(step))); return item;
+          }));
+        }
+        next = result.next_before || ""; more.hidden = !next;
+        feedback.textContent = !groups.size ? "这一天还没有处理记录。" : result.truncated ? "这里保留了近期的处理记录。" : "";
+      } catch (error) {
+        if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          more.hidden = !next;
+        }
+      }
+    }
+    date.addEventListener("change", () => { view.roundDates.set(connection, date.value); void load(); });
+    panel.append(controls, feedback, records, more); void load(); return panel;
+  }
   function appConfigurationTasks(view, connection) {
     const kinds = { message: "消息处理", reply: "回复计划", file: "文件任务", delivery: "文字投递", media_reply: "媒体后续回复", image: "图片任务", video: "视频任务", voice: "语音任务", continuation: "定时续办" };
     const states = { generating: "处理中", waiting: "等待中", queued: "排队中", accepted: "已接受", stopped: "已停止", needs_review: "待核对", submitting: "正在提交", sending: "正在投递", received: "已接收", done: "已完成" };
     const panel = appElement("section", "", "configuration-rounds");
-    const form = appElement("form", "", "configuration-round-filters");
-    const thread = document.createElement("input");
-    thread.placeholder = "会话 ID";
-    view.taskFilters ||= new Map();
-    thread.value = view.taskFilters.get(connection) || "";
-    const label = appElement("label", "会话");
-    label.append(thread);
-    const submit = appElement("button", "查询任务", "button compact secondary");
-    submit.type = "submit";
-    form.append(label, submit);
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
     const rows = appElement("div", "", "configuration-round-records");
-    let next = "", serial = 0, lastThread = "";
+    let next = "", serial = 0;
     const active = () => appConfiguration === view && view.section === "tasks" && view.connection === connection && panel.isConnected;
-    const more = memoryButton("继续读取", "button compact secondary", () => void load(true));
+    const more = memoryButton("查看更多", "button compact secondary", () => void load(true));
     more.hidden = true;
     async function load(append = false) {
       const generation = ++serial;
-      const selectedThread = thread.value.trim();
-      const query = new URLSearchParams({ thread: selectedThread });
-      if (append && selectedThread === lastThread) query.set("after", next);
+      const query = new URLSearchParams();
+      if (append) query.set("after", next);
       else { rows.replaceChildren(); next = ""; }
-      more.hidden = true; submit.disabled = true;
+      more.hidden = true;
       feedback.textContent = "正在读取任务…";
       try {
         const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/tasks?" + query, { signal: view.controller.signal });
@@ -3292,8 +3362,9 @@
         if (!Array.isArray(result.items)) throw new Error("任务记录格式无效。");
         for (const item of result.items) {
           const row = appElement("details", "", "identity-details");
-          row.append(appElement("summary", (kinds[item.kind] || "媒体任务") + " · " + (states[item.state] || item.state)));
-          row.append(appElement("p", [item.thread, "原消息 " + item.message, item.receipt ? "投递编号 " + item.receipt : ""].filter(Boolean).join(" · "), "app-scope-note"));
+          row.append(appElement("summary", (kinds[item.kind] || "任务") + " · " + (states[item.state] || "状态待确认")));
+          const at = new Date(item.at);
+          if (at.getFullYear() > 1970) row.append(appElement("p", at.toLocaleString("zh-CN", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }), "app-scope-note"));
           const detail = appElement("div", "", "work-records");
           row.append(detail);
           let loaded = false;
@@ -3307,19 +3378,19 @@
               if (!current()) return;
               detail.replaceChildren();
               for (const source of info.documents || []) {
-                const result = appElement("p", "关联消息 " + source.message_id, "app-scope-note");
+                const result = appElement("p", "关联文件", "app-scope-note");
                 const save = appElement("a", "保存原件", "button compact primary task-original-save");
                 save.hidden = true;
-                const acquire = memoryButton("读取关联原件", "button compact secondary", async () => {
+                const acquire = memoryButton("查看文件", "button compact secondary", async () => {
                   if (!current()) return;
                   acquire.disabled = true;
                   save.hidden = true;
-                  result.textContent = "正在核对原消息与附件授权…";
+                  result.textContent = "正在准备文件…";
                   try {
                     const file = await request(base + "/attachment", { method: "POST", body: JSON.stringify({ message_id: source.message_id }), signal: view.controller.signal });
                     if (current()) {
-                      result.textContent = [file.filename, file.bytes + " 字节", file.sha256].filter(Boolean).join(" · ");
-                      acquire.textContent = "重新核对";
+                      result.textContent = file.filename || "文件已准备好";
+                      acquire.textContent = "刷新文件";
                       if (/^wa-[a-f0-9]{64}$/.test(file.asset_id || "")) {
                         save.href = base + "/attachments/" + encodeURIComponent(file.asset_id) + "/content";
                         save.download = file.filename || "attachment";
@@ -3345,92 +3416,20 @@
           });
           rows.append(row);
         }
-        next = result.next_after || ""; lastThread = selectedThread;
+        next = result.next_after || "";
         more.hidden = !next;
-        feedback.textContent = rows.childElementCount ? "" : "该范围暂无工作站任务。";
+        feedback.textContent = rows.childElementCount ? "" : "还没有任务。";
       } catch (error) {
         if (!active() || generation !== serial) return;
         if (appSessionExpired([{ status: "rejected", reason: error }])) return;
         feedback.textContent = error.message;
         more.hidden = !next;
-      } finally {
-        if (active() && generation === serial) submit.disabled = false;
       }
     }
-    form.addEventListener("submit", (event) => { event.preventDefault(); void load(); });
-    thread.addEventListener("input", () => view.taskFilters.set(connection, thread.value));
-    panel.append(form, appElement("p", "查看当前工作站的处理与续办记录。文件的投递结果可在「投递与回执」核对。", "app-scope-note"), feedback, rows, more);
+    panel.append(feedback, rows, more);
     void load();
     return panel;
   }
-  function appConfigurationRounds(view, connection) {
-    const panel = appElement("section", "", "configuration-rounds");
-    const form = appElement("form", "", "configuration-round-filters");
-    const date = document.createElement("input"), thread = document.createElement("input");
-    const status = document.createElement("input"), errors = document.createElement("input");
-    date.type = "date"; thread.placeholder = "会话 ID"; status.placeholder = "状态代码"; errors.type = "checkbox";
-    const filters = view.roundFilters.get(connection) || {};
-    date.value = filters.date || ""; thread.value = filters.thread || ""; status.value = filters.status || ""; errors.checked = filters.errors === true;
-    for (const [label, field] of [["北京时间", date], ["会话", thread], ["状态", status], ["只看异常", errors]]) {
-      const item = appElement("label", label);
-      item.append(field); form.append(item);
-    }
-    const submit = appElement("button", "查询回合", "button compact secondary"); submit.type = "submit";
-    form.append(submit);
-    const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
-    const records = appElement("div", "", "configuration-round-records");
-    const groups = new Map();
-    let next = "", serial = 0, lastFilters = "";
-    const more = memoryButton("继续读取", "button compact secondary", () => void load(true)); more.hidden = true;
-    function appendSteps(steps) {
-      for (const step of steps) {
-        const key = JSON.stringify([step.thread || "", step.message || ""]);
-        let group = groups.get(key);
-        if (!group) {
-          group = appElement("details", "", "identity-details");
-          group.append(appElement("summary", step.message ? [step.thread || "会话", step.message].join(" · ") : "系统事件"),
-            appElement("ul", "", "configuration-round-steps"));
-          groups.set(key, group);
-          records.append(group);
-        }
-        const time = new Date(step.at).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
-        group.lastElementChild.append(appElement("li", [time, step.event, step.status, step.tool, step.receipt].filter(Boolean).join(" · ")));
-      }
-    }
-    async function load(append = false) {
-      const generation = ++serial;
-      const query = new URLSearchParams({ date: date.value, thread: thread.value.trim(), status: status.value.trim(), errors: String(errors.checked) });
-      if (append && query.toString() === lastFilters) query.set("before", next);
-      else { groups.clear(); records.replaceChildren(); next = ""; }
-      more.hidden = true; feedback.textContent = "正在读取执行回合…";
-      try {
-        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
-        if (appConfiguration !== view || !panel.isConnected || generation !== serial) return;
-        if (!Array.isArray(result.steps)) throw new Error("执行回合返回格式无效。");
-        if (!query.get("date") && !date.value) date.value = result.date;
-        query.set("date", result.date); query.delete("before");
-        lastFilters = query.toString();
-        view.roundFilters.set(connection, { date: date.value, thread: thread.value, status: status.value, errors: errors.checked });
-        appendSteps(result.steps);
-        next = result.next_before || "";
-        more.hidden = !next;
-        feedback.textContent = result.truncated ? "当日较早步骤超出本机保留范围。" : groups.size ? "" : "该范围暂无工作站运行记录。";
-      } catch (error) {
-        if (appConfiguration !== view || !panel.isConnected || generation !== serial) return;
-        if (appSessionExpired([{ status: "rejected", reason: error }])) return;
-        feedback.textContent = error.message;
-        more.hidden = !next;
-      }
-    }
-    form.addEventListener("input", () => {
-      view.roundFilters.set(connection, { date: date.value, thread: thread.value, status: status.value, errors: errors.checked });
-    });
-    form.addEventListener("submit", (event) => { event.preventDefault(); void load(); });
-    panel.append(form, appElement("p", "这里显示工作站运行时记录的步骤。平台结果请到「投递与回执」核对。", "app-scope-note"), feedback, records, more);
-    void load();
-    return panel;
-  }
-
   function appMemoryArchiveImport(view, connection) {
     const panel = appElement("section", "", "configuration-rounds configuration-memory-import");
     const form = appElement("form", "", "configuration-surf-form");
@@ -3802,7 +3801,7 @@
       select.id = "app-configuration-connection";
       for (const [index, item] of connections.entries()) select.add(new Option(item.label || "连接 " + (index + 1), item.id));
       select.value = view.connection;
-      select.addEventListener("change", () => { stopAppConfigurationReads(); view.surfAbort?.abort(); view.roundPanel = null; view.archivePanel = null; view.surfPanel = null; view.connection = select.value; renderAppConfiguration(); });
+      select.addEventListener("change", () => { stopAppConfigurationReads(); view.surfAbort?.abort(); view.archivePanel = null; view.surfPanel = null; view.connection = select.value; renderAppConfiguration(); });
       label.append(select); controls.push(label);
     }
     switch (section) {
@@ -3843,10 +3842,8 @@
         break;
       }
       case "rounds":
-        if (selected) {
-          if (view.roundPanel?.connection !== selected.id) view.roundPanel = { connection: selected.id, node: appConfigurationRounds(view, selected.id) };
-          controls.push(view.roundPanel.node);
-        }
+        if (selected) controls.push(appConfigurationRounds(view, selected.id));
+        else controls.push(appElement("p", "连接微信后可查看消息的处理过程。", "app-scope-note"));
         break;
       case "tasks":
         if (selected) controls.push(appConfigurationTasks(view, selected.id));
@@ -3931,7 +3928,7 @@
     const dialog = $("#app-configuration");
     if (!record || dialog.open) return;
     stopAppConfigurationReads();
-    const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", roundFilters: new Map(), roundPanel: null, archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
+    const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
     appConfiguration = view;
     $("#app-dialog-body").replaceChildren();
     $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 详细配置"));

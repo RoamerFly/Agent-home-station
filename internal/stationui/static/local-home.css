@@ -282,6 +282,10 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 #artifact-result { overflow-wrap: anywhere; }
 .work-records { display: grid; gap: 6px; }
 .task-original-save:not([hidden]) { display: inline-flex; align-items: center; text-decoration: none; }
+.round-timeline { margin: 14px 0 6px 7px; padding: 0; list-style: none; }
+.round-timeline li { position: relative; display: flex; gap: 16px; padding: 4px 0 16px 20px; border-left: 1px solid var(--line); font-size: .87rem; line-height: 1.5; }
+.round-timeline li::before { content: ""; position: absolute; left: -4px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.round-timeline time { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .work-record { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .delivery-records .work-records { grid-template-columns: minmax(0, 1fr); }
 .delivery-records .work-record { min-width: 0; }
