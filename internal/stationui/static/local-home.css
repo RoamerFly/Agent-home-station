@@ -281,6 +281,7 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .work-grant-panel input { box-sizing: border-box; width: 100%; }
 #artifact-result { overflow-wrap: anywhere; }
 .work-records { display: grid; gap: 6px; }
+.task-original-save:not([hidden]) { display: inline-flex; align-items: center; text-decoration: none; }
 .work-record { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .delivery-records .work-records { grid-template-columns: minmax(0, 1fr); }
 .delivery-records .work-record { min-width: 0; }

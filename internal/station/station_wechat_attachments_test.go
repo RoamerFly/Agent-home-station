@@ -1,6 +1,8 @@
 package station
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -45,6 +47,7 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	var requestReady atomic.Bool
 	var workReady atomic.Bool
 	var documentReady atomic.Bool
+	var changedDocumentSource atomic.Bool
 	var workAt atomic.Value
 	workAt.Store("")
 	var documentAt atomic.Value
@@ -52,6 +55,30 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	const workContent = "synthetic-work-artifact"
 	workHash := fmt.Sprintf("%x", sha256.Sum256([]byte(workContent)))
 	documentSource := syntheticStationDOCX(t)
+	// Keep a valid DOCX with enough stored padding to exercise multiple
+	// response chunks during task download revocation.
+	originalZip, err := zip.NewReader(bytes.NewReader(documentSource), int64(len(documentSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var padded bytes.Buffer
+	zipped := zip.NewWriter(&padded)
+	for _, part := range originalZip.File {
+		if err := zipped.Copy(part); err != nil {
+			t.Fatal(err)
+		}
+	}
+	padding, err := zipped.CreateHeader(&zip.FileHeader{Name: "synthetic-padding.bin", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := padding.Write(bytes.Repeat([]byte("synthetic-padding"), 140000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipped.Close(); err != nil {
+		t.Fatal(err)
+	}
+	documentSource = padded.Bytes()
 	documentPDF := syntheticStationPDF()
 	documentSourceHash := fmt.Sprintf("%x", sha256.Sum256(documentSource))
 	documentPDFHash := fmt.Sprintf("%x", sha256.Sum256(documentPDF))
@@ -117,7 +144,11 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 		case "GET /v1/accounts/one/messages/document-request/quote":
 			out(linuxnative.QuoteResolution{AccountID: "one", ThreadID: "room@chatroom", MessageID: "document-request", State: "resolved", Message: &linuxnative.Message{ID: "document-source", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1237", Type: 49, Direction: "incoming", Body: "<msg><appmsg><type>6</type><title>source.docx</title></appmsg></msg>", CreatedAt: documentAt.Load().(string)}})
 		case "GET /v1/accounts/one/messages/document-source":
-			out(linuxnative.Message{ID: "document-source", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1237", Type: 49, Direction: "incoming", Body: "<msg><appmsg><type>6</type><title>source.docx</title></appmsg></msg>", CreatedAt: documentAt.Load().(string)})
+			body := "<msg><appmsg><type>6</type><title>source.docx</title></appmsg></msg>"
+			if changedDocumentSource.Load() {
+				body += "synthetic-changed-source"
+			}
+			out(linuxnative.Message{ID: "document-source", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1237", Type: 49, Direction: "incoming", Body: body, CreatedAt: documentAt.Load().(string)})
 		case "GET /v1/accounts/one/messages/request":
 			yes, subtype := true, 57
 			m := linuxnative.Message{ID: "request", AccountID: "one", ThreadID: "room@chatroom", SenderID: "member", ServerID: "1235",
@@ -568,10 +599,46 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	if taskOriginal["sha256"] != documentSourceHash || taskOriginal["filename"] != "source.docx" {
 		t.Fatal("task acquired a different original", taskOriginal)
 	}
+	taskContent := taskPath + "/attachments/" + url.PathEscape(taskOriginal["asset_id"].(string)) + "/content"
+	taskResponse := get(taskContent, 200)
+	taskBytes, err := io.ReadAll(taskResponse.Body)
+	taskResponse.Body.Close()
+	if err != nil || !bytes.Equal(taskBytes, documentSource) || !strings.Contains(taskResponse.Header.Get("Content-Disposition"), "source.docx") {
+		t.Fatal("task download changed the original", err)
+	}
+	get(taskPath+"/attachments/"+url.PathEscape(asset)+"/content", 404)
+	r := httptest.NewRequest("GET", taskContent, nil)
+	r.SetPathValue("connection", connection)
+	r.SetPathValue("task", "media-"+deliveryKey)
+	r.SetPathValue("asset", taskOriginal["asset_id"].(string))
+	worker.mu.Lock()
+	savedAttachmentGrant := worker.policy.AttachmentGrants[thread]
+	worker.mu.Unlock()
+	truncated := &taskDownloadRevocationWriter{ResponseRecorder: httptest.NewRecorder(), revoke: func() {
+		worker.mu.Lock()
+		delete(worker.policy.AttachmentGrants, thread)
+		worker.mu.Unlock()
+	}}
+	handler.chat.wechat.downloadTaskAttachment(truncated, r)
+	if truncated.Code != 200 || truncated.Body.Len() <= 0 || truncated.Body.Len() >= len(documentSource) {
+		t.Fatal("task download continued after revocation", truncated.Code, truncated.Body.Len(), len(documentSource))
+	}
+	worker.mu.Lock()
+	worker.policy.AttachmentGrants[thread] = savedAttachmentGrant
+	worker.mu.Unlock()
+	changed := &taskDownloadRevocationWriter{ResponseRecorder: httptest.NewRecorder(), revoke: func() {
+		changedDocumentSource.Store(true)
+	}}
+	handler.chat.wechat.downloadTaskAttachment(changed, r)
+	if changed.Code != 200 || changed.Body.Len() <= 0 || changed.Body.Len() >= len(documentSource) {
+		t.Fatal("task download continued after source changed", changed.Code, changed.Body.Len(), len(documentSource))
+	}
+	changedDocumentSource.Store(false)
 	if len(submitted) != 0 || uploads.Load() != 5 {
 		t.Fatal("worker duplicated PDF upload or send", uploads.Load(), len(submitted))
 	}
 	policy(200)
+	get(taskContent, 404)
 	req("POST", taskPath+"/attachment", map[string]string{"message_id": "document-source"}, true, 404)
 	get(path+contentRoute, 404)
 	policy(200, thread)
@@ -628,6 +695,21 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 			t.Fatal("revoked transfer left a new attachment entry", entry.Name())
 		}
 	}
+}
+
+type taskDownloadRevocationWriter struct {
+	*httptest.ResponseRecorder
+	revoke func()
+}
+
+func (w *taskDownloadRevocationWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(data)
+	if w.revoke != nil {
+		revoke := w.revoke
+		w.revoke = nil
+		revoke()
+	}
+	return n, err
 }
 
 type stationAttachmentReplyModel struct{ mediaID, workID, documentID string }

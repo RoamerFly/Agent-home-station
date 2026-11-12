@@ -3,6 +3,8 @@ package station
 import (
 	"context"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -14,6 +16,26 @@ import (
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/websession"
 )
+
+func (s *stationWechat) taskAttachmentAccess(ctx context.Context, id string, worker *stationWechatWorker, detail bot.TaskDetail, source *companion.SourceRef) (stationAttachmentAccess, *companion.Store, error) {
+	request := wechatapp.AttachmentRequest{Thread: source.Thread, Message: source.MessageID}
+	access, err := s.ownerAttachmentAccess(ctx, id, worker, request)
+	if err != nil {
+		return access, nil, err
+	}
+	dataset, err := access.native.Identity(ctx)
+	if err != nil || dataset != detail.Dataset {
+		return access, nil, wechatapp.ErrAttachmentDenied
+	}
+	memory, err := companion.NewStore(filepath.Join(worker.dir, "memory"))
+	if err != nil {
+		return access, nil, err
+	}
+	access.ref, access.store = source, memory
+	// Preserve documentAccess's exact quoted originals that predate indexing.
+	access.history = source.EventID == ""
+	return access, memory, nil
+}
 
 func (s *stationWechat) taskDetail(r *http.Request) (*stationWechatWorker, bot.TaskDetail, error) {
 	id, key := r.PathValue("connection"), r.PathValue("task")
@@ -72,24 +94,11 @@ func (s *stationWechat) acquireTaskAttachment(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		request := wechatapp.AttachmentRequest{Thread: source.Thread, Message: source.MessageID}
-		access, err := s.ownerAttachmentAccess(ctx, r.PathValue("connection"), worker, request)
-		if err != nil {
-			break
-		}
-		dataset, err := access.native.Identity(ctx)
-		if err != nil || dataset != detail.Dataset {
-			break
-		}
-		memory, err := companion.NewStore(filepath.Join(worker.dir, "memory"))
+		access, memory, err := s.taskAttachmentAccess(ctx, r.PathValue("connection"), worker, detail, source)
 		if err != nil {
 			break
 		}
 		defer memory.Close()
-		access.ref, access.store = source, memory
-		// A task may retain an exact quoted original that predates indexing.
-		// Match documentAccess: native identity/hash plus the memory recall
-		// fence establishes visibility for this specific source.
-		access.history = source.EventID == ""
 		result, err := wechatapp.AcquireAttachment(ctx, request, access)
 		dataset, datasetErr := access.native.Identity(ctx)
 		if err == nil && datasetErr == nil && dataset == detail.Dataset {
@@ -99,6 +108,53 @@ func (s *stationWechat) acquireTaskAttachment(w http.ResponseWriter, r *http.Req
 		break
 	}
 	websession.Fail(w, 404, "当前授权、任务来源或原件已变化，请重新核对")
+}
+
+func (s *stationWechat) downloadTaskAttachment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	asset := r.PathValue("asset")
+	if !wechatapp.ValidAttachmentAssetID(asset) {
+		http.NotFound(w, r)
+		return
+	}
+	worker, detail, err := s.taskDetail(r)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
+	defer cancel()
+	for _, reference := range detail.Sources {
+		access, memory, err := s.taskAttachmentAccess(ctx, r.PathValue("connection"), worker, detail, reference)
+		if err != nil {
+			continue
+		}
+		defer memory.Close()
+		epoch, epochErr := memory.RecallEpoch(ctx)
+		source, sourceErr := access.source(ctx, reference.Thread, reference.MessageID)
+		if epochErr != nil || sourceErr != nil || source.Dataset != detail.Dataset || source.AssetID() != asset {
+			continue
+		}
+		record, file, err := access.open(ctx, source)
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+		allowed := func() bool { return access.confirmObservationSource(ctx, source, epoch) == nil }
+		if !allowed() {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": source.Filename}))
+		w.Header().Set("Content-Length", strconv.FormatInt(record.Bytes, 10))
+		// Check source, grant and recall revision before each bounded chunk.
+		// A failed check leaves an incomplete response with the original length.
+		_, _ = io.CopyBuffer(attachmentGrantWriter{allow: allowed, out: w}, io.LimitReader(file, record.Bytes), make([]byte, 1<<20))
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (s *stationWechat) readTasks(w http.ResponseWriter, r *http.Request) {

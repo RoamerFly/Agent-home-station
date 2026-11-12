@@ -3308,20 +3308,33 @@
               detail.replaceChildren();
               for (const source of info.documents || []) {
                 const result = appElement("p", "关联消息 " + source.message_id, "app-scope-note");
+                const save = appElement("a", "保存原件", "button compact primary task-original-save");
+                save.hidden = true;
                 const acquire = memoryButton("读取关联原件", "button compact secondary", async () => {
                   if (!current()) return;
                   acquire.disabled = true;
+                  save.hidden = true;
                   result.textContent = "正在核对原消息与附件授权…";
                   try {
                     const file = await request(base + "/attachment", { method: "POST", body: JSON.stringify({ message_id: source.message_id }), signal: view.controller.signal });
-                    if (current()) result.textContent = [file.filename, file.bytes + " 字节", file.sha256].filter(Boolean).join(" · ");
+                    if (current()) {
+                      result.textContent = [file.filename, file.bytes + " 字节", file.sha256].filter(Boolean).join(" · ");
+                      acquire.textContent = "重新核对";
+                      if (/^wa-[a-f0-9]{64}$/.test(file.asset_id || "")) {
+                        save.href = base + "/attachments/" + encodeURIComponent(file.asset_id) + "/content";
+                        save.download = file.filename || "attachment";
+                        save.hidden = false;
+                      }
+                    }
                   } catch (error) {
                     if (current() && !appSessionExpired([{ status: "rejected", reason: error }])) result.textContent = error.message;
                   } finally {
                     if (current()) acquire.disabled = false;
                   }
                 });
-                detail.append(result, acquire);
+                const actions = appElement("div", "", "action-row");
+                actions.append(acquire, save);
+                detail.append(result, actions);
               }
               if (!detail.childElementCount) detail.append(appElement("p", "当前任务没有可读取的关联文件。", "app-scope-note"));
             } catch (error) {
