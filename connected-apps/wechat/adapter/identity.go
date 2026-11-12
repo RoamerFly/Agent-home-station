@@ -10,6 +10,12 @@ import (
 )
 
 const ID = "wechat"
+// DefaultAccountID is the stable first connection for a fresh Windows
+// station. It is prepared automatically before the owner scans a QR code.
+const DefaultAccountID = "desktop"
+// DefaultProvisionRequestID is used only by the station UI's first-use
+// bootstrap. Other request IDs retain the existing additional-account path.
+const DefaultProvisionRequestID = "00000000000000000000000000000001"
 const LegacyInstallationID = "wechat-legacy"
 const StationInstallationID = "wechat-station-native"
 

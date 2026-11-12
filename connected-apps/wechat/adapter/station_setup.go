@@ -15,7 +15,11 @@ func (p *stationNativeProvider) ProvisionConnection(ctx context.Context, request
 	if err := p.verify(ctx); err != nil {
 		return apphost.Connection{}, err
 	}
-	account, err := p.client.ForAccount("account-" + requestID)
+	accountID := "account-" + requestID
+	if requestID == DefaultProvisionRequestID {
+		accountID = DefaultAccountID
+	}
+	account, err := p.client.ForAccount(accountID)
 	if err != nil {
 		return apphost.Connection{}, apphost.ErrUnavailable
 	}

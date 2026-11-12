@@ -347,7 +347,9 @@
     } else if (status.worker_blocker === "import_receipt_path_changed") {
       panel.append(appElement("small", "微信档案搬迁后待核验。请在新目录重新核对原生导入回执，并保留旧站停发记录。"));
     }
-    panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false), stationToolControls(id, true));
+    // Video-channel parsing is a WeChat capability. Media understanding is a
+    // shared Project Tools capability and is configured once there.
+    panel.append(contactDirectoryControls(id), groupDirectoryControls(id), deliveryRecords(id), stationToolControls(id, false));
     if (apps.editWorker !== id) return panel;
     const field = document.createElement("textarea");
     field.rows = 3;
@@ -376,14 +378,6 @@
     const autoImagesCopy = appElement("span");
     autoImagesCopy.append(appElement("strong", "自动读图"), appElement("small", "自动观察获准会话中符合回复条件的新图片。"));
     autoImagesLabel.append(autoImages, autoImagesCopy);
-    const stationImageVision = document.createElement("input");
-    stationImageVision.type = "checkbox";
-    stationImageVision.checked = apps.stationImageVisionDrafts.get(id) ?? (status.configured_policy?.station_image_vision === true);
-    stationImageVision.addEventListener("change", () => apps.stationImageVisionDrafts.set(id, stationImageVision.checked));
-    const stationImageVisionLabel = appElement("label", "", "switch-row");
-    const stationImageVisionCopy = appElement("span");
-    stationImageVisionCopy.append(appElement("strong", "使用工作站视觉服务读图"), appElement("small", "允许将本连接获准读取的微信图片交给「项目工具 → 媒体理解」配置的视觉服务。关闭后使用本连接自己的视觉配置。"));
-    stationImageVisionLabel.append(stationImageVision, stationImageVisionCopy);
     const autoVideos = document.createElement("input");
     autoVideos.type = "checkbox";
     autoVideos.checked = apps.autoVideosDrafts.get(id) ?? (status.configured_policy?.auto_observe_videos === true);
@@ -393,22 +387,6 @@
     const autoVideosCopy = appElement("span");
     autoVideosCopy.append(appElement("strong", "自动读视频"), appElement("small", "自动观察获准会话中符合回复条件的新视频。"));
     autoVideosLabel.append(autoVideos, autoVideosCopy);
-    const stationVideoVision = document.createElement("input");
-    stationVideoVision.type = "checkbox";
-    stationVideoVision.checked = apps.stationVideoVisionDrafts.get(id) ?? (status.configured_policy?.station_video_vision === true);
-    stationVideoVision.addEventListener("change", () => apps.stationVideoVisionDrafts.set(id, stationVideoVision.checked));
-    const stationVideoVisionLabel = appElement("label", "", "switch-row");
-    const stationVideoVisionCopy = appElement("span");
-    stationVideoVisionCopy.append(appElement("strong", "使用工作站视觉服务看视频"), appElement("small", "允许将本连接获准读取的微信视频采样帧交给工作站视觉服务。"));
-    stationVideoVisionLabel.append(stationVideoVision, stationVideoVisionCopy);
-    const stationLocalAudio = document.createElement("input");
-    stationLocalAudio.type = "checkbox";
-    stationLocalAudio.checked = apps.stationLocalAudioDrafts.get(id) ?? (status.configured_policy?.station_local_audio === true);
-    stationLocalAudio.addEventListener("change", () => apps.stationLocalAudioDrafts.set(id, stationLocalAudio.checked));
-    const stationLocalAudioLabel = appElement("label", "", "switch-row");
-    const stationLocalAudioCopy = appElement("span");
-    stationLocalAudioCopy.append(appElement("strong", "使用工作站本机识别转写"), appElement("small", "将本连接获准读取的微信语音和视频音轨交给「项目工具 → 媒体理解」的本机识别。"));
-    stationLocalAudioLabel.append(stationLocalAudio, stationLocalAudioCopy);
     const mediaReplies = document.createElement("textarea");
     mediaReplies.rows = 2;
     mediaReplies.placeholder = "可留空，或填入已允许读取附件的会话 ID";
@@ -545,10 +523,7 @@
     const syncObservationOptions = () => {
       const noAttachmentScope = attachmentThreadIDs().length === 0;
       autoImages.disabled = noAttachmentScope;
-      stationImageVision.disabled = noAttachmentScope;
       autoVideos.disabled = noAttachmentScope;
-      stationVideoVision.disabled = noAttachmentScope;
-      stationLocalAudio.disabled = noAttachmentScope;
     };
     field.addEventListener("input", renderGroupRules);
     attachments.addEventListener("input", renderGroupRules);
@@ -568,11 +543,14 @@
         if (rule.reply_settings !== undefined) payload.reply_settings = rule.reply_settings;
         return payload;
       });
-      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, station_image_vision: attachment_threads.length > 0 && stationImageVision.checked, auto_observe_images: attachment_threads.length > 0 && autoImages.checked, auto_observe_videos: attachment_threads.length > 0 && autoVideos.checked, station_video_vision: attachment_threads.length > 0 && stationVideoVision.checked, station_local_audio: attachment_threads.length > 0 && stationLocalAudio.checked, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
+      // Media providers are configured once in Project Tools. Once a WeChat
+      // attachment scope is authorized, the worker automatically uses the
+      // available shared image/video/audio capabilities.
+      runWorkerAction(id, "PUT", "policy", { reply_threads, history_threads, attachment_threads, station_image_vision: attachment_threads.length > 0, auto_observe_images: attachment_threads.length > 0 && autoImages.checked, auto_observe_videos: attachment_threads.length > 0 && autoVideos.checked, station_video_vision: attachment_threads.length > 0, station_local_audio: attachment_threads.length > 0, media_reply_threads, contact_read: contactRead.checked, group_mute_threads, group_rules });
     });
-    panel.append(appElement("p", "每行一个会话 ID。群聊默认在被提及时回复。"), field,
+    panel.append(appElement("p", "每行一个会话 ID。群聊默认在被提及时回复。图片、视频和语音处理由项目工具统一提供，授权附件读取后自动使用可用能力。"), field,
       appElement("p", "历史消息与群成员须单独授权；大肥鱼仅能读取当前所在会话。"), history,
-      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, stationImageVisionLabel, autoImagesLabel, stationVideoVisionLabel, autoVideosLabel, stationLocalAudioLabel,
+      appElement("p", "附件读取须在回复范围内单独开启，原件保存在宿主私有目录。"), attachments, autoImagesLabel, autoVideosLabel,
       groupRules,
       appElement("p", "附件回复须单独授权，只能把附件发回原会话。撤销附件读取时同时撤销附件回复。"), mediaReplies,
       contactReadLabel,
@@ -1499,7 +1477,8 @@
       detail.append(list);
     }
     row.append(appElement("h5", "账号连接"), detail);
-    if (canSetup && connection !== null) row.append(appSetupButton("添加账号", () => runAppSetup()));
+    // The station prepares the stable `desktop` connection on first
+    // discovery, so QR login does not require a manual account-creation step.
     return row;
   }
   function validDouyinWebLogin(value) {
@@ -1603,7 +1582,7 @@
       return ["抖音网页能力已暂停", note];
     }
     const states = {
-      unconfigured: ["尚未保存网页登录资料", "在独立网页窗口完成普通账号登录后，再回到这里保存。"],
+      unconfigured: ["尚未接入抖音账号", "点击“接入抖音账号”打开独立网页窗口；完成登录后返回保存。"],
       login_open: ["网页登录窗口已打开", "请在新窗口完成登录；保存前不会把它当作已登录。"],
       unconfirmed: ["网页登录资料待核对", "资料已保留，重新打开窗口核对登录后再保存。"],
       saved: ["网页登录资料已保存", "登录状态以网页为准，保存后可用于本软件已支持的抖音功能。"],
@@ -1750,7 +1729,7 @@
         actions.append(toggle);
       }
       if (!value.paused && (!value.attempt_id || value.state === "saved")) {
-        const begin = appElement("button", web.applying === "begin" ? "正在打开…" : value.state === "saved" ? "重新打开登录窗口" : "打开网页登录窗口", "button compact secondary");
+        const begin = appElement("button", web.applying === "begin" ? "正在打开…" : value.state === "saved" ? "重新打开登录窗口" : "接入抖音账号", "button compact primary");
         begin.type = "button"; begin.disabled = busy || !available;
         begin.addEventListener("click", () => { void updateDouyinWebLogin(current, "begin", {}); }); actions.append(begin);
       }
@@ -4270,6 +4249,21 @@
       const connections = await Promise.allSettled((registered || []).map((row) => request(`/api/apps/${encodeURIComponent(row.id)}/connections`)));
       if (current !== apps || appSessionExpired(connections)) return;
       const connectionMap = new Map((registered || []).map((row, index) => [row.id, appRows(connections[index], "items")]));
+      const wechatRegistration = registered?.find((app) => app.id === "wechat");
+      const wechatConnections = connectionMap.get("wechat") || [];
+      const hasDefaultWechat = wechatConnections.some((item) => item.account_id === "desktop" || item.label === "desktop");
+      if (wechatRegistration?.registration === "station-native" && wechatRegistration.account_setup && !hasDefaultWechat && !current.defaultProvisioning) {
+        current.defaultProvisioning = true;
+        try {
+          await appSetupPost("/api/apps/wechat/connections", "00000000000000000000000000000001");
+          const refreshed = await request("/api/apps/wechat/connections");
+          connectionMap.set("wechat", appRows(refreshed, "items"));
+        } catch (error) {
+          if (!appSessionExpired([{ status: "rejected", reason: error }])) appFeedback("默认 desktop 连接暂时无法准备，请稍后刷新。", true);
+        } finally {
+          current.defaultProvisioning = false;
+        }
+      }
       const nativeAccounts = connectionMap.get("wechat") && registered.some((app) => app.id === "wechat" && app.registration === "station-native")
         ? connectionMap.get("wechat") : [];
       const statuses = await Promise.allSettled(nativeAccounts.map((account) => request(`/api/apps/wechat/connections/${encodeURIComponent(account.id)}`)));

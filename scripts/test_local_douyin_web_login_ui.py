@@ -162,7 +162,7 @@ def verify(binary, output):
                     home_tab(page, "apps")
                     page.locator("#apps-list[aria-busy='false']").wait_for()
                     open_configuration(page, "抖音")
-                    page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
+                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     assert page.get_by_text("API 接入（可选）", exact=True).count() == 0
                     assert page.get_by_label("抖音 Client Key", exact=True).count() == 0
                     page.locator("#app-configuration-nav").get_by_role("button", name="资料与版本", exact=True).click()
@@ -178,7 +178,7 @@ def verify(binary, output):
                     assert page.get_by_label("允许读取视频评论", exact=True).count() == 0
                     assert page.get_by_text("账号已验证", exact=True).count() == 0
                     assert page.get_by_text("已取得额外 API 权限", exact=False).count() == 0
-                    page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
+                    page.get_by_role("button", name="接入抖音账号", exact=True).click()
                     page.get_by_text("网页登录窗口已打开", exact=True).wait_for()
                     page.get_by_role("button", name="我已完成登录，保存", exact=True).wait_for()
                     # The next ordinary polling response may only move to an unconfirmed state.
@@ -398,12 +398,12 @@ def verify(binary, output):
                     page.get_by_text("等待主人确认", exact=True).wait_for()
                     # Removing old profile data stays available even after the browser window is gone.
                     page.get_by_role("button", name="移除网页登录资料", exact=True).click()
-                    page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
+                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
 
                     # A new attempt gets a new opaque identifier; cancelling uses that exact identifier.
-                    page.get_by_role("button", name="打开网页登录窗口", exact=True).click()
+                    page.get_by_role("button", name="接入抖音账号", exact=True).click()
                     page.get_by_role("button", name="取消本次登录", exact=True).click()
-                    page.get_by_text("尚未保存网页登录资料", exact=True).wait_for()
+                    page.get_by_text("尚未接入抖音账号", exact=True).wait_for()
                     assert len(requests) == 33, f"unexpected web-login request count: {len(requests)}"
                     assert not dialogs, "网页登录操作不得弹出浏览器原生确认框"
                     assert_no_horizontal_overflow(page, f"{width}-pixel Douyin web login")

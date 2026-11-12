@@ -44,6 +44,7 @@ func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{
 				{"id": "first", "alias": "profile-one", "authenticated": true, "connection": "online", "token": token},
 				{"id": "second", "alias": "profile-two", "authenticated": false, "connection": "offline"},
+				{"id": DefaultAccountID, "alias": DefaultAccountID, "authenticated": false, "connection": "offline"},
 			}})
 			if replaceAfterList.Load() {
 				replaced.Store(true)
@@ -77,7 +78,7 @@ func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 		t.Fatal("native observation granted worker mutation")
 	}
 	connections, err := app.Provider.Connections(t.Context())
-	if err != nil || len(connections) != 2 || connections[0].ID != ConnectionID("first") || connections[1].Label != "profile-two" {
+	if err != nil || len(connections) != 3 || connections[0].ID != ConnectionID("first") || connections[1].Label != "profile-two" || connections[2].AccountID != DefaultAccountID {
 		t.Fatal(connections, err)
 	}
 	for _, tc := range []struct{ id, login, runtime string }{
@@ -95,6 +96,71 @@ func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 	replaceAfterList.Store(true)
 	if items, err := app.Provider.Connections(t.Context()); !errors.Is(err, apphost.ErrUnavailable) || len(items) != 0 {
 		t.Fatal("replacement daemon released stale accounts", items, err)
+	}
+}
+
+func TestStationConnectionsPrepareDefaultDesktop(t *testing.T) {
+	data := t.TempDir()
+	native := filepath.Join(data, "apps", "wechat", "native")
+	if err := os.MkdirAll(native, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const token = "synthetic-default-token"
+	if err := os.WriteFile(filepath.Join(native, "api-token"), []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	created, creates := atomic.Bool{}, atomic.Int32{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		write := func(value any) { _ = json.NewEncoder(w).Encode(value) }
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1/status":
+			write(map[string]any{"pid": 6789, "dataDir": native, "serverId": "default-fixture", "ownershipGeneration": "generation"})
+		case "GET /v1/accounts":
+			items := []map[string]any{{"id": "existing", "alias": "existing", "authenticated": false, "connection": "offline"}}
+			if created.Load() {
+				items = append(items, map[string]any{"id": DefaultAccountID, "alias": DefaultAccountID, "authenticated": false, "connection": "offline"})
+			}
+			write(map[string]any{"items": items})
+		case "GET /v1/accounts/" + DefaultAccountID:
+			if !created.Load() {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			write(map[string]any{"id": DefaultAccountID, "alias": DefaultAccountID})
+		case "POST /v1/accounts":
+			var input map[string]string
+			if json.NewDecoder(r.Body).Decode(&input) != nil || input["id"] != DefaultAccountID {
+				t.Error("default account was not requested")
+			}
+			creates.Add(1)
+			created.Store(true)
+			w.WriteHeader(http.StatusCreated)
+			write(map[string]any{"id": DefaultAccountID, "alias": DefaultAccountID})
+		default:
+			t.Errorf("unexpected native request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	app, err := StationRegistration(t.Context(), server.URL, 6789, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup, ok := app.Provider.(apphost.AccountSetup)
+	if !ok {
+		t.Fatal("station provider lost account setup")
+	}
+	first, err := setup.ProvisionConnection(t.Context(), DefaultProvisionRequestID)
+	if err != nil || first.AccountID != DefaultAccountID {
+		t.Fatal(first, err)
+	}
+	second, err := setup.ProvisionConnection(t.Context(), DefaultProvisionRequestID)
+	if err != nil || second.AccountID != DefaultAccountID || creates.Load() != 1 {
+		t.Fatal(second, err, creates.Load())
 	}
 }
 
