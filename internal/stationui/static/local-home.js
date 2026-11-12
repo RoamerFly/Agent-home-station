@@ -3257,6 +3257,63 @@
     view[refreshField] = () => { if (active()) { if (writing) { refreshPending = true; return; } busy = true; render(); void read(); } };
     void read(); return panel;
   }
+  function appConfigurationTasks(view, connection) {
+    const kinds = { message: "消息处理", reply: "回复计划", file: "文件任务", delivery: "文字投递", media_reply: "媒体后续回复", image: "图片任务", video: "视频任务", voice: "语音任务", continuation: "定时续办" };
+    const states = { generating: "处理中", waiting: "等待中", queued: "排队中", accepted: "已接受", stopped: "已停止", needs_review: "待核对", submitting: "正在提交", sending: "正在投递", received: "已接收", done: "已完成" };
+    const panel = appElement("section", "", "configuration-rounds");
+    const form = appElement("form", "", "configuration-round-filters");
+    const thread = document.createElement("input");
+    thread.placeholder = "会话 ID";
+    view.taskFilters ||= new Map();
+    thread.value = view.taskFilters.get(connection) || "";
+    const label = appElement("label", "会话");
+    label.append(thread);
+    const submit = appElement("button", "查询任务", "button compact secondary");
+    submit.type = "submit";
+    form.append(label, submit);
+    const feedback = appElement("p", "", "apps-feedback");
+    feedback.setAttribute("role", "status");
+    const rows = appElement("div", "", "configuration-round-records");
+    let next = "", serial = 0, lastThread = "";
+    const active = () => appConfiguration === view && view.section === "tasks" && view.connection === connection && panel.isConnected;
+    const more = memoryButton("继续读取", "button compact secondary", () => void load(true));
+    more.hidden = true;
+    async function load(append = false) {
+      const generation = ++serial;
+      const selectedThread = thread.value.trim();
+      const query = new URLSearchParams({ thread: selectedThread });
+      if (append && selectedThread === lastThread) query.set("after", next);
+      else { rows.replaceChildren(); next = ""; }
+      more.hidden = true; submit.disabled = true;
+      feedback.textContent = "正在读取任务…";
+      try {
+        const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/tasks?" + query, { signal: view.controller.signal });
+        if (!active() || generation !== serial) return;
+        if (!Array.isArray(result.items)) throw new Error("任务记录格式无效。");
+        for (const item of result.items) {
+          const row = appElement("details", "", "identity-details");
+          row.append(appElement("summary", (kinds[item.kind] || "媒体任务") + " · " + (states[item.state] || item.state)));
+          row.append(appElement("p", [item.thread, "原消息 " + item.message, item.receipt ? "投递编号 " + item.receipt : ""].filter(Boolean).join(" · "), "app-scope-note"));
+          rows.append(row);
+        }
+        next = result.next_after || ""; lastThread = selectedThread;
+        more.hidden = !next;
+        feedback.textContent = rows.childElementCount ? "" : "该范围暂无工作站任务。";
+      } catch (error) {
+        if (!active() || generation !== serial) return;
+        if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+        feedback.textContent = error.message;
+        more.hidden = !next;
+      } finally {
+        if (active() && generation === serial) submit.disabled = false;
+      }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); void load(); });
+    thread.addEventListener("input", () => view.taskFilters.set(connection, thread.value));
+    panel.append(form, appElement("p", "查看当前工作站的处理与续办记录。文件的投递结果可在「投递与回执」核对。", "app-scope-note"), feedback, rows, more);
+    void load();
+    return panel;
+  }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
     const form = appElement("form", "", "configuration-round-filters");
@@ -3690,7 +3747,7 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "rounds", "surf", "delivery"].includes(section)) {
+    if (connections.length && ["account", "conversations", "rounds", "surf", "delivery", "tasks"].includes(section)) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -3741,6 +3798,10 @@
           if (view.roundPanel?.connection !== selected.id) view.roundPanel = { connection: selected.id, node: appConfigurationRounds(view, selected.id) };
           controls.push(view.roundPanel.node);
         }
+        break;
+      case "tasks":
+        if (selected) controls.push(appConfigurationTasks(view, selected.id));
+        else controls.push(appElement("p", "连接微信后可按账号查看任务与文件处理记录。", "app-scope-note"));
         break;
       case "surf":
         if (selected) {

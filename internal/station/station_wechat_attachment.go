@@ -72,6 +72,7 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/surf-reader", surfReader)
 			mux.HandleFunc("PUT /api/apps/wechat/connections/{connection}/surf-reader", surfReader)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks", owner.Protect(s.readTasks))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/conversations/{thread}/imported-memory", owner.Protect(s.readImportedConversation(owner)))
 		},
 		Restore:   s.restore,

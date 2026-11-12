@@ -83,3 +83,15 @@ func ReadWorkerDelivery(runtimeDir, account, key string) (bot.DeliveryEvidence, 
 	row, found := rows[key]
 	return row, found, err
 }
+
+func ReadWorkerTaskPage(runtimeDir, account, thread, after string, limit int) (bot.TaskEvidencePage, error) {
+	f, err := openWorkerCheckpoint(runtimeDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return bot.TaskEvidencePage{Items: []bot.TaskEvidence{}, Limit: limit}, nil
+	}
+	if err != nil {
+		return bot.TaskEvidencePage{}, err
+	}
+	defer f.Close()
+	return bot.ReadTaskEvidencePageFrom(f, account, thread, after, limit)
+}
