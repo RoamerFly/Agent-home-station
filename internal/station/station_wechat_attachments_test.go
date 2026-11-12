@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -558,10 +559,20 @@ func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	}
 	waitReceipt(deliveryKey, "2419", "synthetic-send-document")
 	req("POST", path+"/lifecycle", map[string]string{"action": "stop"}, true, 200)
+	taskPath := path + "/tasks/" + url.PathEscape("media-"+deliveryKey)
+	detail := req("GET", taskPath, nil, false, 200)
+	if documents, ok := detail["documents"].([]any); !ok || len(documents) == 0 {
+		t.Fatal("document task lost its original source", detail)
+	}
+	taskOriginal := req("POST", taskPath+"/attachment", map[string]string{"message_id": "document-source"}, true, 200)
+	if taskOriginal["sha256"] != documentSourceHash || taskOriginal["filename"] != "source.docx" {
+		t.Fatal("task acquired a different original", taskOriginal)
+	}
 	if len(submitted) != 0 || uploads.Load() != 5 {
 		t.Fatal("worker duplicated PDF upload or send", uploads.Load(), len(submitted))
 	}
 	policy(200)
+	req("POST", taskPath+"/attachment", map[string]string{"message_id": "document-source"}, true, 404)
 	get(path+contentRoute, 404)
 	policy(200, thread)
 	get(path+contentRoute, 404)

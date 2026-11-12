@@ -3294,6 +3294,42 @@
           const row = appElement("details", "", "identity-details");
           row.append(appElement("summary", (kinds[item.kind] || "媒体任务") + " · " + (states[item.state] || item.state)));
           row.append(appElement("p", [item.thread, "原消息 " + item.message, item.receipt ? "投递编号 " + item.receipt : ""].filter(Boolean).join(" · "), "app-scope-note"));
+          const detail = appElement("div", "", "work-records");
+          row.append(detail);
+          let loaded = false;
+          const current = () => active() && generation === serial && row.isConnected;
+          row.addEventListener("toggle", async () => {
+            if (!row.open || loaded || !current()) return;
+            loaded = true; detail.textContent = "正在核对关联资料…";
+            const base = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/tasks/" + encodeURIComponent(item.id);
+            try {
+              const info = await request(base, { signal: view.controller.signal });
+              if (!current()) return;
+              detail.replaceChildren();
+              for (const source of info.documents || []) {
+                const result = appElement("p", "关联消息 " + source.message_id, "app-scope-note");
+                const acquire = memoryButton("读取关联原件", "button compact secondary", async () => {
+                  if (!current()) return;
+                  acquire.disabled = true;
+                  result.textContent = "正在核对原消息与附件授权…";
+                  try {
+                    const file = await request(base + "/attachment", { method: "POST", body: JSON.stringify({ message_id: source.message_id }), signal: view.controller.signal });
+                    if (current()) result.textContent = [file.filename, file.bytes + " 字节", file.sha256].filter(Boolean).join(" · ");
+                  } catch (error) {
+                    if (current() && !appSessionExpired([{ status: "rejected", reason: error }])) result.textContent = error.message;
+                  } finally {
+                    if (current()) acquire.disabled = false;
+                  }
+                });
+                detail.append(result, acquire);
+              }
+              if (!detail.childElementCount) detail.append(appElement("p", "当前任务没有可读取的关联文件。", "app-scope-note"));
+            } catch (error) {
+              if (!current()) return;
+              loaded = false;
+              if (!appSessionExpired([{ status: "rejected", reason: error }])) detail.textContent = error.message;
+            }
+          });
           rows.append(row);
         }
         next = result.next_after || ""; lastThread = selectedThread;

@@ -95,3 +95,12 @@ func ReadWorkerTaskPage(runtimeDir, account, thread, after string, limit int) (b
 	defer f.Close()
 	return bot.ReadTaskEvidencePageFrom(f, account, thread, after, limit)
 }
+
+func ReadWorkerTaskDetail(runtimeDir, account, id string) (bot.TaskDetail, error) {
+	f, err := openWorkerCheckpoint(runtimeDir)
+	if err != nil {
+		return bot.TaskDetail{}, err
+	}
+	defer f.Close()
+	return bot.ReadTaskDetailFrom(f, account, id)
+}
