@@ -7,11 +7,13 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
@@ -129,6 +131,7 @@ func (s *stationWechat) readExecutionRounds(w http.ResponseWriter, r *http.Reque
 	}
 	_, dateErr := time.Parse(wechatDateLayout, date)
 	thread, status := query.Get("thread"), query.Get("status")
+	message := query.Get("message")
 	onlyErrors := query.Get("errors") == "true"
 	before := ^uint64(0)
 	var cursorErr error
@@ -141,7 +144,7 @@ func (s *stationWechat) readExecutionRounds(w http.ResponseWriter, r *http.Reque
 		limit, limitErr = strconv.Atoi(value)
 	}
 	if dateErr != nil || cursorErr != nil || before == 0 || limitErr != nil || limit < 1 || limit > 100 ||
-		len(thread) > 256 || len(status) > 128 || strings.ContainsRune(thread, 0) {
+		len(thread) > 256 || len(status) > 128 || len(message) > 8192 || strings.ContainsRune(thread, 0) {
 		websession.Fail(w, 400, "日期、筛选或分页参数无效。每页支持 1–100 条。")
 		return
 	}
@@ -170,7 +173,7 @@ func (s *stationWechat) readExecutionRounds(w http.ResponseWriter, r *http.Reque
 	next := ""
 	for i := len(day.Steps) - 1; i >= 0; i-- {
 		step := day.Steps[i]
-		if step.Sequence >= before || thread != "" && step.Thread != thread || status != "" && step.Status != status || onlyErrors && step.Category != "error" {
+		if step.Sequence >= before || thread != "" && step.Thread != thread || message != "" && step.Message != message || status != "" && step.Status != status || onlyErrors && step.Category != "error" {
 			continue
 		}
 		if len(steps) == limit {
@@ -179,6 +182,53 @@ func (s *stationWechat) readExecutionRounds(w http.ResponseWriter, r *http.Reque
 		}
 		steps = append(steps, step)
 	}
-	websession.Respond(w, 200, map[string]any{"date": date, "steps": steps, "next_before": next,
+	previews := []map[string]string{}
+	if query.Get("include_messages") == "true" && worker != nil {
+		memoryDir := filepath.Join(worker.dir, "memory")
+		memoryRoot, rootErr := workspacefs.OpenPath(memoryDir)
+		if rootErr == nil {
+			defer memoryRoot.Close()
+			file, fileErr := workspacefs.OpenRegular(memoryRoot, "memory.sqlite")
+			if fileErr == nil {
+				file.Close()
+				memory, memoryErr := companion.NewStore(memoryDir)
+				native, nativeErr := s.WorkerSender(r.Context(), id)
+				if memoryErr == nil {
+					defer memory.Close()
+					if nativeErr == nil && native.Account() == connection.AccountID {
+						seen := map[string]bool{}
+						for _, step := range steps {
+							key := step.Thread + "\x00" + step.Message
+							worker.mu.Lock()
+							grant := worker.policy.HistoryGrants[step.Thread]
+							worker.mu.Unlock()
+							if seen[key] || step.Message == "" || grant.IsZero() {
+								continue
+							}
+							seen[key] = true
+							original, readErr := native.Message(r.Context(), step.Message)
+							if readErr != nil || original.ID != step.Message || original.ThreadID != step.Thread ||
+								original.AccountID != connection.AccountID || original.Direction != "incoming" || original.Type != 1 {
+								continue
+							}
+							in := companion.Input{Channel: "wechat", Account: original.AccountID, Thread: original.ThreadID,
+								Sender: original.SenderID, TraceID: original.ID, MessageTime: original.CreatedAt, OriginalText: &original.Body,
+								Source: &companion.SourceRef{MessageID: original.ID, ServerID: original.ServerID}}
+							if _, visible := memory.SourceForInput(in); !visible {
+								continue
+							}
+							worker.mu.Lock()
+							current := worker.policy.HistoryGrants[step.Thread].Equal(grant)
+							worker.mu.Unlock()
+							if current {
+								previews = append(previews, map[string]string{"thread": step.Thread, "message": step.Message, "text": original.Body})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	websession.Respond(w, 200, map[string]any{"date": date, "steps": steps, "next_before": next, "messages": previews,
 		"truncated": day.Dropped, "effective_limit": limit, "coverage": "station_runtime"})
 }

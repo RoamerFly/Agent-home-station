@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 from test_local_home_ui import (
     app_connection_payload,
     fulfill_json,
@@ -53,9 +53,10 @@ def verify(binary, output):
                         "at": f"2026-11-12T02:00:0{sequence}Z",
                         "thread": "private-thread-id", "message": "private-message-id",
                         "receipt": "private-receipt-id", "status": "private-status-code",
-                        "tool": "private-tool-name",
+                        "tool": "memory_search" if sequence == 2 else "",
                     } for sequence, event, category in reversed(events)]
                     fulfill_json({"date": "2026-11-12", "steps": steps,
+                                  "messages": [{"thread": "private-thread-id", "message": "private-message-id", "text": "帮我整理一下这份文档"}],
                                   "next_before": "", "truncated": False})(route)
 
                 page.route("**/execution-rounds?*", rounds)
@@ -81,14 +82,23 @@ def verify(binary, output):
                 assert not calls, "opening an application eagerly read execution history"
                 open_configuration(page, "微信", "执行回合")
                 body = page.locator("#app-configuration-body")
-                body.get_by_text("正在理解需求", exact=True).wait_for()
-                assert body.locator(".round-timeline li span").all_text_contents() == [
-                    "收到消息", "正在理解需求", "微信已接受回复",
-                ]
+                card = body.locator(".round-message-card")
+                card.get_by_text("帮我整理一下这份文档", exact=True).wait_for()
+                assert "3 个步骤 · 1 次工具调用" in card.inner_text()
                 assert body.locator("input").count() == 1
                 assert body.locator("input").get_attribute("type") == "date"
                 assert "private-" not in body.inner_text()
-                page.screenshot(path=str(output / "readable-rounds.png"), full_page=True)
+                page.screenshot(path=str(output / "round-cards.png"), full_page=True)
+                card.click()
+                dialog = page.get_by_role("dialog", name="回合处理过程", exact=True)
+                dialog.get_by_text("正在理解需求 · 搜索会话记忆", exact=True).wait_for()
+                assert dialog.locator(".round-timeline li span").all_text_contents() == [
+                    "收到消息", "正在理解需求 · 搜索会话记忆", "微信已接受回复",
+                ]
+                assert "private-" not in dialog.inner_text()
+                page.screenshot(path=str(output / "readable-rounds.png"), full_page=True, animations="disabled")
+                dialog.get_by_role("button", name="关闭", exact=True).click()
+                expect(card).to_be_focused()
                 open_configuration(page, "微信", "任务与文档")
                 body.get_by_text("文件任务 · 状态待确认", exact=True).click()
                 body.get_by_role("button", name="查看文件", exact=True).click()
@@ -102,7 +112,7 @@ def verify(binary, output):
         finally:
             stop(process)
         (output / "result.json").write_text(json.dumps({
-            "process_preserved": True, "human_readable_timeline": True,
+            "process_preserved": True, "round_cards_and_dialog": True, "tool_calls_visible": True,
             "technical_fields_hidden": True, "reads": calls, "browser_errors": errors,
         }, ensure_ascii=False, indent=2), encoding="utf8")
 

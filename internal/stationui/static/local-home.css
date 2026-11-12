@@ -286,6 +286,14 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .round-timeline li { position: relative; display: flex; gap: 16px; padding: 4px 0 16px 20px; border-left: 1px solid var(--line); font-size: .87rem; line-height: 1.5; }
 .round-timeline li::before { content: ""; position: absolute; left: -4px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .round-timeline time { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.round-message-card { display: grid; grid-template-columns: 1fr auto; gap: 10px 24px; width: 100%; padding: 20px; margin: 12px 0; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; text-align: left; cursor: pointer; transition: border-color 160ms ease, transform 160ms ease; }
+.round-message-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.round-message-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.round-card-preview { grid-column: 1 / -1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.round-card-time, .round-message-card small { color: var(--muted); font-size: .82rem; }
+.round-card-status { grid-row: 1; grid-column: 2; font-size: .85rem; }
+.round-process-dialog[open] { width: min(1000px, calc(100vw - 64px)); height: auto; min-height: 340px; max-height: calc(100vh - 80px); display: flex; flex-direction: column; }
+.round-message-preview { padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .work-record { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .delivery-records .work-records { grid-template-columns: minmax(0, 1fr); }
 .delivery-records .work-record { min-width: 0; }

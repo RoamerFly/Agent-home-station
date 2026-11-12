@@ -3266,7 +3266,7 @@
     const label = appElement("label", "查看日期"); label.append(date);
     const controls = appElement("div", "", "configuration-round-filters"); controls.append(label);
     const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
-    const records = appElement("div", "", "configuration-round-records"), groups = new Map();
+    const records = appElement("div", "", "configuration-round-records"), groups = new Map(), previews = new Map();
     const labels = {
       message_received: "收到消息", message_queued: "已排队，等待处理", message_processing: "正在处理消息",
       generation_started: "正在理解需求", character_decision: "已完成需求判断",
@@ -3292,13 +3292,82 @@
       const at = new Date(step.at);
       return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
     }
+    const toolNames = {
+      memory_search: "搜索会话记忆", memory_read: "读取相关记忆", web_search: "搜索网页", web_fetch: "读取网页",
+      wechat_history: "查找聊天记录", wechat_search: "搜索聊天记录", wechat_messages: "读取原消息",
+      agent_task: "保存持续任务", agent_tasks: "查看持续任务", agent_clock: "读取时间",
+      server_read: "读取文件", server_write: "保存文件", server_search: "搜索文件", server_exec: "执行处理任务",
+      workspace_read: "读取工作笔记", workspace_write: "保存工作笔记", workspace_search: "搜索工作笔记",
+      video_inspect: "理解视频内容", speech_synthesize: "制作语音", music_generate: "创作音乐",
+      plugin_job_status: "查看工具进度", plugin_job_cancel: "停止工具任务",
+      document_inspect: "读取文档", document_export_pdf: "导出 PDF", agent_owner_report: "向主人私下汇报"
+    };
+    function openRound(group) {
+      view.roundDialog?.close();
+      const opener = group.card;
+      const dialog = appElement("dialog", "", "app-dialog round-process-dialog");
+      view.roundDialog = dialog;
+      dialog.setAttribute("aria-label", "回合处理过程");
+      const header = appElement("header", "", "app-dialog-header");
+      const close = memoryButton("关闭", "button compact quiet", () => dialog.close());
+      header.append(appElement("h2", "回合处理过程"), close);
+      const body = appElement("div", "", "app-dialog-body");
+      const message = appElement("p", "正在读取本轮消息…", "round-message-preview");
+      const progress = appElement("p", "", "apps-feedback"); progress.setAttribute("role", "status");
+      const list = appElement("ol", "", "round-timeline");
+      body.append(message, progress, list); dialog.append(header, body); document.body.append(dialog);
+      const controller = view.controller;
+      const cancel = () => { if (dialog.open) dialog.close(); };
+      controller.signal.addEventListener("abort", cancel, { once: true });
+      dialog.addEventListener("close", () => {
+        controller.signal.removeEventListener("abort", cancel);
+        if (view.roundDialog === dialog) view.roundDialog = null;
+        dialog.remove();
+        if (!view.roundDialog?.open && opener.isConnected) opener.focus({ preventScroll: true });
+      }, { once: true });
+      function render() {
+        const steps = [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
+        list.replaceChildren(...steps.map((step) => {
+          const row = appElement("li", "");
+          const text = step.tool ? describe(step) + " · " + (toolNames[step.tool] || "应用工具") : describe(step);
+          row.append(appElement("time", time(step)), appElement("span", text));
+          return row;
+        }));
+      }
+      dialog.showModal(); render();
+      const latest = [...group.steps.values()][0];
+      if (!latest.message) { message.textContent = "工作站活动"; return; }
+      void (async () => {
+        let before = "";
+        progress.textContent = "正在补齐处理过程…";
+        try {
+          do {
+            const query = new URLSearchParams({ date: date.value, thread: latest.thread, message: latest.message, limit: "100", include_messages: "true" });
+            if (before) query.set("before", before);
+            const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: controller.signal });
+            if (!dialog.open || !active()) return;
+            for (const step of result.steps || []) group.steps.set(step.sequence, step);
+            const original = (result.messages || []).find((item) => item.thread === latest.thread && item.message === latest.message);
+            message.textContent = original?.text || "本轮消息当前不可读取，仍可查看处理过程。";
+            if (!original) {
+              previews.delete(group.key);
+              group.card.querySelector(".round-card-preview").textContent = "消息处理";
+            }
+            render(); before = result.next_before || "";
+          } while (before);
+          progress.textContent = "";
+        } catch (error) {
+          if (dialog.open && active() && !appSessionExpired([{ status: "rejected", reason: error }])) progress.textContent = "部分处理记录暂未读完，请关闭后重试。";
+        }
+      })();
+    }
     let next = "", serial = 0;
     const active = () => appConfiguration === view && view.section === "rounds" && view.connection === connection && panel.isConnected;
     const more = memoryButton("较早记录", "button compact secondary", () => void load(true)); more.hidden = true;
     async function load(append = false) {
-      const generation = ++serial, query = new URLSearchParams({ date: date.value });
+      const generation = ++serial, query = new URLSearchParams({ date: date.value, include_messages: "true" });
       if (append) query.set("before", next);
-      else { groups.clear(); records.replaceChildren(); next = ""; }
+      else { groups.clear(); previews.clear(); records.replaceChildren(); next = ""; }
       more.hidden = true; feedback.textContent = "正在读取处理过程…";
       try {
         const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
@@ -3306,25 +3375,29 @@
         if (!Array.isArray(result.steps)) throw new Error("暂时无法读取处理过程，请稍后刷新。");
         if (!date.value) date.value = result.date;
         view.roundDates.set(connection, date.value);
+        for (const item of result.messages || []) previews.set(JSON.stringify([item.thread, item.message]), item.text);
         for (const step of result.steps) {
           const key = JSON.stringify([step.thread || "", step.message || ""]);
           let group = groups.get(key);
           if (!group) {
-            const node = appElement("details", "", "identity-details");
-            node.open = groups.size === 0;
-            group = { summary: appElement("summary", ""), list: appElement("ol", "", "round-timeline"), steps: new Map() };
-            node.append(group.summary, group.list); groups.set(key, group); records.append(node);
+            const card = appElement("button", "", "round-message-card");
+            card.type = "button"; card.setAttribute("aria-haspopup", "dialog");
+            group = { key, card, steps: new Map() };
+            card.addEventListener("click", () => openRound(group));
+            groups.set(key, group); records.append(card);
           }
           group.steps.set(step.sequence, step);
         }
         for (const group of groups.values()) {
           const steps = [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
           const latest = steps[steps.length - 1];
-          group.summary.textContent = [latest.message ? "对话处理" : "工作站活动", time(latest), describe(latest)].filter(Boolean).join(" · ");
-          group.list.replaceChildren(...steps.map((step) => {
-            const item = appElement("li", "");
-            item.append(appElement("time", time(step)), appElement("span", describe(step))); return item;
-          }));
+          const toolCount = steps.filter((step) => step.tool).length;
+          group.card.replaceChildren(
+            appElement("span", time(latest), "round-card-time"),
+            appElement("strong", previews.get(group.key) || (latest.message ? "消息处理" : "工作站活动"), "round-card-preview"),
+            appElement("span", describe(latest), "round-card-status"),
+            appElement("small", steps.length + " 个步骤" + (toolCount ? " · " + toolCount + " 次工具调用" : ""))
+          );
         }
         next = result.next_before || ""; more.hidden = !next;
         feedback.textContent = !groups.size ? "这一天还没有处理记录。" : result.truncated ? "这里保留了近期的处理记录。" : "";
