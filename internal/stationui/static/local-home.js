@@ -3506,6 +3506,12 @@
                 actions.append(acquire, save);
                 detail.append(result, actions);
               }
+              for (const output of info.outputs || []) {
+                const result = appElement("section", "", "memory-detail-section");
+                result.append(appElement("strong", "生成结果"), appElement("p", output.filename || "已登记成品"));
+                result.append(appElement("p", "结果已按当前任务来源绑定，可在工作站成品工具中继续处理。", "app-scope-note"));
+                detail.append(result);
+              }
               if (!detail.childElementCount) detail.append(appElement("p", "当前任务没有可读取的关联文件。", "app-scope-note"));
             } catch (error) {
               if (!current()) return;

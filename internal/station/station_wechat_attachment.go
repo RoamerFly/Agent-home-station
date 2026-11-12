@@ -76,6 +76,7 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/canvas", owner.Protect(s.canvasRoute))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks", owner.Protect(s.readTasks))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks/{task}", owner.Protect(s.readTaskDetail))
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/tasks/{task}/outputs", owner.Protect(s.bindTaskOutput))
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/tasks/{task}/attachment", owner.Protect(s.acquireTaskAttachment))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks/{task}/attachments/{asset}/content", owner.Protect(s.downloadTaskAttachment))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/conversations/{thread}/imported-memory", owner.Protect(s.readImportedConversation(owner)))

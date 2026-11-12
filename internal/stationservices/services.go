@@ -34,7 +34,9 @@ type Artifact struct {
 	ID, Name, SHA256             string
 	Bytes                        int64
 	InputArtifactID, InputSHA256 string
-	OpenVerified                 func(context.Context, func() bool) (io.ReadCloser, error)
+	// Provenance is host-only metadata for trusted task binding. View omits it.
+	SourceAccount, SourceThread, SourceMessage, Request string
+	OpenVerified                                        func(context.Context, func() bool) (io.ReadCloser, error)
 }
 
 func (a Artifact) View() map[string]any {

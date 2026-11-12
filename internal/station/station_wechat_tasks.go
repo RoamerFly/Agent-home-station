@@ -63,6 +63,11 @@ func (s *stationWechat) readTaskDetail(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 404, "任务不存在或当前连接无法核对")
 		return
 	}
+	connection, err := s.stationWechatNative.Inspect(r.Context(), r.PathValue("connection"))
+	if err != nil || connection.ID != r.PathValue("connection") {
+		websession.Fail(w, 404, "微信连接无法核对")
+		return
+	}
 	sources := []wechatapp.AttachmentRequest{}
 	worker.mu.Lock()
 	for _, source := range detail.Sources {
@@ -71,7 +76,22 @@ func (s *stationWechat) readTaskDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	worker.mu.Unlock()
-	websession.Respond(w, 200, map[string]any{"task": detail.Task, "documents": sources})
+	outputs := []map[string]any{}
+	if bindings, bindingErr := readWechatTaskOutputs(worker); bindingErr == nil {
+		allowed := map[string]bool{}
+		for _, source := range detail.Sources {
+			allowed[source.MessageID] = true
+		}
+		for _, binding := range bindings {
+			if binding.Account != connection.AccountID || binding.Thread != detail.Task.Thread || !allowed[binding.Message] {
+				continue
+			}
+			if artifact, artifactErr := s.artifacts.ReadArtifact(binding.Artifact); artifactErr == nil {
+				outputs = append(outputs, artifact.View())
+			}
+		}
+	}
+	websession.Respond(w, 200, map[string]any{"task": detail.Task, "documents": sources, "outputs": outputs})
 }
 
 func (s *stationWechat) acquireTaskAttachment(w http.ResponseWriter, r *http.Request) {

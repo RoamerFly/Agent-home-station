@@ -105,7 +105,10 @@ func (s *localArtifactStore) ReadArtifact(id string) (stationservices.Artifact, 
 }
 
 func (a localArtifact) applicationArtifact() stationservices.Artifact {
-	ref := stationservices.Artifact{ID: a.ID, Name: a.Name, SHA256: a.SHA256, Bytes: a.Bytes}
+	ref := stationservices.Artifact{ID: a.ID, Name: a.Name, SHA256: a.SHA256, Bytes: a.Bytes, Request: a.Request}
+	if a.Source != nil {
+		ref.SourceAccount, ref.SourceThread, ref.SourceMessage = a.Source.Account, a.Source.Thread, a.Source.MessageID
+	}
 	if a.Parent != nil {
 		ref.InputArtifactID, ref.InputSHA256 = a.Parent.ID, a.Parent.SHA256
 	}
