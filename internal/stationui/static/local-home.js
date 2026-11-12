@@ -3669,6 +3669,35 @@
     return panel;
   }
 
+  function appLegacyConversationDirectory(view, connection) {
+    const panel = appElement("section", "", "configuration-rounds");
+    const list = appElement("div", "", "configuration-round-records");
+    const feedback = appElement("p", "正在读取已授权会话…", "app-scope-note");
+    feedback.setAttribute("role", "status");
+    const active = () => appConfiguration === view && view.section === "conversations" && view.connection === connection && panel.isConnected;
+    const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/memory-grants";
+    panel.append(appElement("h4", "会话目录"), appElement("p", "只显示当前微信连接已允许读取的会话。选择后再读取摘要或原话。", "app-scope-note"), feedback, list);
+    request(path, { signal: view.controller.signal }).then((result) => {
+      if (!active()) return;
+      const available = Array.isArray(result.available_history_threads) ? result.available_history_threads : [];
+      const granted = new Set(Object.keys(result.station_reads || {}));
+      if (!available.length && !granted.size) { feedback.textContent = "还没有授权可读取的会话，请先在账号与授权中选择。"; return; }
+      feedback.textContent = "已授权 " + granted.size + " 个会话；读取内容仍按需进行。";
+      [...new Set([...available, ...granted])].forEach((thread, index) => {
+        const card = appElement("article", "", "memory-detail-section");
+        card.append(appElement("strong", thread.endsWith("@chatroom") ? "群聊会话 " + (index + 1) : "私聊会话 " + (index + 1)));
+        card.append(appElement("p", granted.has(thread) ? "已允许读取历史" : "当前连接可用，但尚未授予历史读取", "app-scope-note"));
+        if (granted.has(thread)) card.append(memoryButton("读取会话档案", "button compact secondary", () => {
+          view.archivePanel?.node?.remove();
+          view.archivePanel = { key: connection + ":" + thread, node: appImportedConversation(view, connection, [thread]) };
+          panel.append(view.archivePanel.node);
+        }));
+        list.append(card);
+      });
+    }).catch((error) => { if (active()) feedback.textContent = error.message; });
+    return panel;
+  }
+
   const douyinReadLabels = {
     page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
     account_works: "本人作品列表", own_video: "本人作品信息", images: "图文图片",
@@ -3928,6 +3957,8 @@
         if (record.id === "wechat" && selected) {
           if (view.memoryImportPanel?.connection !== selected.id) view.memoryImportPanel = { connection: selected.id, node: appMemoryArchiveImport(view, selected.id) };
           controls.push(view.memoryImportPanel.node);
+          if (view.conversationDirectory?.connection !== selected.id) view.conversationDirectory = { connection: selected.id, node: appLegacyConversationDirectory(view, selected.id) };
+          controls.push(view.conversationDirectory.node);
         }
         if (status?.configured_policy && appWorkerLabels[status.worker]) {
           const allowed = status.configured_policy.history_threads || [];
