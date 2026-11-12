@@ -115,21 +115,20 @@
     let title = "接入版本状态未知", note = "刷新后可重新检查。";
     if (listing) {
       const bundledVersion = listing.version || "未知";
-      const workspaceVersion = listing.installed_version || bundledVersion;
+      const workspaceVersion = listing.installed_version || "待核对";
       if (listing.install_state === "installed") {
-        title = "已安装";
-        note = `随包版本 ${bundledVersion}；工作区版本 ${workspaceVersion}。接入版本用于本软件连接应用和更新接入功能，可在家目录的 Connected Apps 中维护。`;
-        if (record.id === "wechat") note += " 本次安装只写入家目录；微信服务状态见「账号与权限」。";
+        title = "源码副本已安装";
+        note = `工作区版本 ${workspaceVersion}。可在家目录的 Connected Apps 中编辑和维护。`;
       } else if (listing.install_state === "conflict") {
         title = "应用目录待整理";
         note = listing.installed_version ? `已有版本 ${listing.installed_version}，请先保留现有修改。` : "家目录已有同名内容，请先保留并整理该目录。";
       } else if (!listing.source_available) {
-        title = "暂无可用版本";
-        note = "当前发行包未提供此应用的接入版本，本地聊天仍可继续使用。";
+        title = "随包源码暂不可用";
+        note = "请检查应用发行目录是否完整并与工作站版本配套。";
       } else if (listing.install_state === "not_installed") {
-        title = "可用版本";
+        title = "可安装源码副本";
         note = state.home?.home_access
-          ? `随包版本 ${bundledVersion} 可用。接入版本用于本软件连接应用和更新接入功能；应用授权单独保存。`
+          ? `随包版本 ${bundledVersion}，安装后可在家目录中编辑。`
           : "请在模型设置中恢复工作空间授权。";
       } else if (listing.install_state === "unavailable") {
         title = "安装状态暂不可读";
@@ -140,10 +139,13 @@
       note = "当前发行包没有此应用的接入版本。";
     }
     detail.append(appElement("strong", title), appElement("p", note));
-    row.append(appElement("h5", "接入版本"), detail);
-    if (title === "可用版本" && state.home?.home_access) {
+    row.append(appElement("h5", "接入源码"), detail);
+    if (listing?.install_state === "installed" && !listing.source_available) {
+      detail.append(appElement("p", "随包源码暂不可用，工作区副本仍保留。", "app-scope-note"));
+    }
+    if (title === "可安装源码副本" && state.home?.home_access) {
       const busy = apps.installing === record.id;
-      const button = appElement("button", busy ? "正在安装…" : "安装接入版本", "button compact primary");
+      const button = appElement("button", busy ? "正在安装…" : "安装源码副本", "button compact primary");
       button.type = "button";
       button.disabled = Boolean(apps.installing) || apps.loading;
       button.addEventListener("click", () => installApp(listing));
@@ -3794,9 +3796,17 @@
             button.click();
           }));
         break;
-      case "source":
-        controls.push(appSourceRow(record, listing));
+      case "source": {
+        const runtime = appElement("div", "", "app-layer");
+        const runtimeDetail = appElement("div", "");
+        runtimeDetail.append(
+          appElement("strong", listing?.version ? `版本 ${listing.version}` : "版本待核对"),
+          appElement("p", "接入功能随工作站版本更新。账号与授权在「账号与授权」中管理。")
+        );
+        runtime.append(appElement("h5", "当前接入功能"), runtimeDetail);
+        controls.push(runtime, appSourceRow(record, listing));
         break;
+      }
     }
     if (!controls.slice(1).some((element) => element && !element.matches("label"))) {
       controls.push(appElement("p", "当前连接没有可展示的配置或资料。", "app-scope-note"));
@@ -3869,7 +3879,7 @@
         controls = [appEvidenceRows(evidence), appConfigurationShortcut("配置应用角色", "overview")];
         break;
       case "source":
-        controls = [appElement("p", listing ? "接入版本 " + (listing.installed_version || listing.version || "待核对") : "接入版本待核对", "app-scope-note"),
+        controls = [appElement("p", listing?.version ? "当前接入版本 " + listing.version : "接入版本待核对", "app-scope-note"),
           appConfigurationShortcut("管理资料与版本", "source")];
         break;
       case "capabilities": {

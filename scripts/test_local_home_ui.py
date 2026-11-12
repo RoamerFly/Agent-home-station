@@ -182,7 +182,7 @@ def verify_missing_source(binary, output):
                 assert page.evaluate("document.activeElement.id") == "apps-tab", "tab keyboard navigation"
                 page.locator("#apps-list[aria-busy='false']").wait_for()
                 page.get_by_text("暂无可用版本", exact=True).wait_for()
-                assert page.get_by_role("button", name="安装接入版本").count() == 0
+                assert page.get_by_role("button", name="安装源码副本").count() == 0
                 page.screenshot(path=str(output / "apps-no-source-light.png"), full_page=True)
                 browser.close()
         finally:
@@ -465,13 +465,13 @@ def verify(binary, output):
                 if source_available:
                     assert "有可用版本" in source_state, source_state
                     open_configuration(page, section="资料与版本")
-                    page.get_by_role("button", name="安装接入版本").click()
-                    page.get_by_text("已安装", exact=True).wait_for()
+                    page.get_by_role("button", name="安装源码副本").click()
+                    page.get_by_text("源码副本已安装", exact=True).wait_for()
                     page.locator("#apps-feedback").get_by_text(re.compile("接入版本已.*家目录")).wait_for()
                     assert (home / "Connected Apps" / "wechat" / "app.json").is_file(), "installed application integration version"
                 else:
                     assert "暂无可用版本" in source_state, source_state
-                    assert page.get_by_role("button", name="安装接入版本").count() == 0
+                    assert page.get_by_role("button", name="安装源码副本").count() == 0
 
                 close_application(page)
                 page.get_by_role("button", name="管理微信", exact=True).get_by_text("未运行", exact=True).wait_for()
