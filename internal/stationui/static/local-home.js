@@ -8,6 +8,7 @@
   let memory = newMemoryView();
   let projectTools = newProjectToolsView();
   let liveSafety = newLiveSafety();
+  let desktopControl = { available: false, enabled: false, busy: false };
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
   const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
@@ -92,6 +93,26 @@
     const feedback = $("#apps-feedback");
     feedback.textContent = text;
     feedback.classList.toggle("is-warn", warn);
+  }
+  function wechatDesktopServiceRow() {
+    const row = appElement("section", "", "app-layer");
+    row.append(appElement("h5", "微信服务"));
+    if (!desktopControl.available) {
+      row.append(appElement("p", "当前桌面包没有提供可切换的微信原生服务。", "app-scope-note"));
+      return row;
+    }
+    const state = desktopControl.busy ? "正在切换…" : desktopControl.enabled ? "已启用" : "已关闭";
+    const detail = appElement("div", "", "app-action-row");
+    detail.append(appElement("p", `${state}。切换后工作站会短暂重启，账号和资料继续保留。`, "app-scope-note"));
+    const button = memoryButton(desktopControl.enabled ? "关闭微信服务" : "启用微信服务", "button compact secondary", () => {
+      if (desktopControl.busy || !window.chrome?.webview) return;
+      desktopControl = { ...desktopControl, busy: true };
+      renderAppConfiguration();
+      window.chrome.webview.postMessage({ type: "wechat-service-toggle", enabled: !desktopControl.enabled });
+    });
+    button.disabled = desktopControl.busy;
+    detail.append(button); row.append(detail);
+    return row;
   }
   function projectToolsFeedback(text, warn = false) {
     const feedback = $("#project-tools-feedback");
@@ -1578,8 +1599,8 @@
   function douyinWebLoginSummary(value) {
     if (value?.detached) return ["抖音已撤下", "登录资料、接入版本和历史任务仍保留。重新登记后，可按需恢复网页能力。"];
     if (value?.paused) {
-      const note = value.state === "unconfigured" ? "恢复后可以重新登录和设置授权。" : "登录资料和原有授权已保留。恢复后可重新读取、互动和发布。";
-      return ["抖音网页能力已暂停", note];
+      const note = value.state === "unconfigured" ? "开启后可以接入账号并设置授权。" : "登录资料和原有授权已保留。开启后可重新读取、互动和发布。";
+      return ["抖音应用已关闭", note];
     }
     const states = {
       unconfigured: ["尚未接入抖音账号", "点击“接入抖音账号”打开独立网页窗口；完成登录后返回保存。"],
@@ -1628,7 +1649,7 @@
       web.value = updated;
       web.loaded = true;
       let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : ["begin_creator", "begin_creator_works"].includes(action) ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
-      if (action === "pause" || action === "resume") feedback = updated.paused ? "已暂停抖音网页能力。" : "已恢复抖音网页能力。";
+      if (action === "pause" || action === "resume") feedback = updated.paused ? "已关闭抖音应用。" : "已开启抖音应用。";
       if (action === "detach" || action === "attach") {
         feedback = updated.detached ? "已撤下抖音。" : "已重新登记抖音，网页能力仍暂停。";
         await loadApps();
@@ -1723,7 +1744,7 @@
     } else if (value) {
       if (value.paused || (value.state === "saved" && !value.attempt_id)) {
         const action = value.paused ? "resume" : "pause";
-        const toggle = appElement("button", value.paused ? "恢复抖音网页能力" : "暂停抖音网页能力", "button compact secondary");
+        const toggle = appElement("button", value.paused ? "开启抖音应用" : "关闭抖音应用", "button compact secondary");
         toggle.type = "button"; toggle.disabled = busy;
         toggle.addEventListener("click", () => { void updateDouyinWebLogin(current, action); });
         actions.append(toggle);
@@ -3923,6 +3944,7 @@
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
+        if (record.id === "wechat") controls.push(wechatDesktopServiceRow());
         controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : appConnectionRow(record, view.connection));
         if (record.id === "wechat" && selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
           if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
@@ -6607,5 +6629,18 @@
     }
   });
   $("#live-safety-stop").addEventListener("click", stopActiveLive);
+  if (window.chrome?.webview) {
+    window.chrome.webview.addEventListener("message", (event) => {
+      const value = event.data || {};
+      if (value.type !== "desktop-control-state") return;
+      desktopControl = {
+        available: value.wechat_service_available === true,
+        enabled: value.wechat_service_enabled === true,
+        busy: value.busy === true,
+      };
+      if (appConfiguration?.record?.id === "wechat") renderAppConfiguration();
+      else if (activeView === "apps") renderApps(false);
+    });
+  }
   loadSession();
 })();

@@ -282,16 +282,25 @@ namespace WechatAgent.Desktop {
                     if (!CurrentPage(view, generation)) return;
                     if(!e.IsSuccess){Error(new InvalidOperationException("管理页加载失败，请重试启动。"));return;}
                     view.Visible = true; view.BringToFront(); placeholder.Visible = false;
+                    PostDesktopControl(view, generation);
                 };
                 view.CoreWebView2.Navigate(deployment.Url + "/");
             } catch { if (CurrentPage(view, generation)) { ClosePage(); throw; } }
         }
-        void HandleWebMessage(WebView2 view, int generation, CoreWebView2WebMessageReceivedEventArgs message) {
+        async void HandleWebMessage(WebView2 view, int generation, CoreWebView2WebMessageReceivedEventArgs message) {
             if (!CurrentPage(view, generation) || !deployment.LocalStation || !ManagementPage(message.Source)) return;
             Dictionary<string, object> input;
             try { input = Deployment.Json.Deserialize<Dictionary<string, object>>(message.WebMessageAsJson); }
             catch (Exception) { return; }
-            if (input == null || Deployment.Text(input, "type") != "douyin-auth-open") return;
+            if (input == null) return;
+            if (Deployment.Text(input, "type") == "wechat-service-toggle") {
+                object rawEnabled;
+                if (!input.TryGetValue("enabled", out rawEnabled) || !(rawEnabled is bool) ||
+                    !deployment.LocalStation || String.IsNullOrEmpty(deployment.StationNativeUrl)) return;
+                await SetWechatServiceEnabled((bool)rawEnabled);
+                return;
+            }
+            if (Deployment.Text(input, "type") != "douyin-auth-open") return;
             var authorizationURL = Deployment.Text(input, "url");
             var expiresAt = Deployment.Text(input, "expires_at");
             DouyinAuthorizationAttempt attempt;
@@ -311,6 +320,27 @@ namespace WechatAgent.Desktop {
             if (!CurrentPage(view, generation) || view.CoreWebView2 == null || !ManagementPage(view.Source == null ? "" : view.Source.ToString())) return;
             try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = type, state = state, callback_url = callback, error = error })); }
             catch (InvalidOperationException) { }
+        }
+        void PostDesktopControl(WebView2 view, int generation) {
+            if (!CurrentPage(view, generation) || view.CoreWebView2 == null) return;
+            try {
+                view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new {
+                    type = "desktop-control-state",
+                    wechat_service_available = deployment.LocalStation && !String.IsNullOrEmpty(deployment.StationNativeUrl),
+                    wechat_service_enabled = deployment.LocalStationNative,
+                    busy = busy
+                }));
+            } catch (InvalidOperationException) { }
+        }
+        async Task SetWechatServiceEnabled(bool enabled) {
+            if (busy || closeQueued || allowExit || !deployment.LocalStation || String.IsNullOrEmpty(deployment.StationNativeUrl)) return;
+            try {
+                deployment.SaveStationNativeEnabled(enabled);
+                await StopServices(false);
+                if (!exitRequested && !allowExit) await StartServices();
+            } catch (Exception error) {
+                if (!IsDisposed && !Disposing) Error(error);
+            }
         }
         void CloseDouyinAuthorization() {
             var dialog = douyinAuthorization; douyinAuthorization = null;

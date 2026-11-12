@@ -447,7 +447,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
 	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !noticeRevocation && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
-		return fail(409, "抖音网页能力已暂停，请先恢复后再操作")
+		return fail(409, "抖音应用已关闭，请先开启后再操作")
 	}
 	original := record
 	save := func() error {

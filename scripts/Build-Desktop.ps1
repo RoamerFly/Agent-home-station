@@ -408,7 +408,7 @@ if($Portable){
       -not (Get-Item -LiteralPath (Join-Path $OutputDirectory 'data') -Force -ErrorAction SilentlyContinue)){
     New-Item -ItemType Directory -Force -Path $secrets | Out-Null
     # This is a public default for a fresh WeChat edition, with no account or private paths.
-    $json=([ordered]@{backend='local-station';wechat_native_url='http://127.0.0.1:6174'} | ConvertTo-Json)
+    $json=([ordered]@{backend='local-station';wechat_native_url='http://127.0.0.1:6174';wechat_native_enabled=$true} | ConvertTo-Json)
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try{$file.Write($bytes,0,$bytes.Length);$file.Flush($true)}finally{$file.Dispose()}

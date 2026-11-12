@@ -211,6 +211,9 @@ h3 { margin: 0; font-size: 1.16rem; letter-spacing: -.035em; }
 .app-layer p { margin: 4px 0 0; color: var(--muted); font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; }
 .app-layer strong { font-size: .9rem; overflow-wrap: anywhere; }
 .app-layer .button { align-self: center; }
+.app-action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.app-action-row p { margin: 0; max-width: 62ch; }
+.app-action-row .button { flex: 0 0 auto; }
 .publication-detail { min-width: 0; }
 .memory-source { display: flex; align-items: center; gap: 7px; max-width: 100%; min-width: 0; color: var(--muted); font-size: .82rem; }
 .memory-source select { min-width: 0; max-width: min(40rem, 65vw); padding: 7px; }
@@ -671,6 +674,10 @@ body.is-home-ready {
 .app-capability .station-label { color: #ece3ff; background: #473e6d; }
 .app-scope-note { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: .84rem; }
 
+@media (max-width: 720px) {
+  .app-action-row { align-items: flex-start; flex-direction: column; }
+  .app-action-row .button { align-self: flex-start; }
+}
 @media (max-width: 1100px) {
   .chat-layout { grid-template-columns: minmax(0, 1fr); }
   .chat-aside { display: none; }
