@@ -3268,7 +3268,7 @@
           appConfiguration !== view || view.section !== "flow" || view.connection !== connection ||
           event.data?.type !== "ahs:wechat-section" || event.data.connection !== connection) return;
       const section = event.data.section;
-      const local = { overview: "overview", wechat: "account", chat: "conversations", rules: "conversations", catalog: "conversations",
+      const local = { overview: "overview", wechat: "account", chat: "conversations", rules: "rules", catalog: "conversations",
         agent: "tasks", companion: "account", memory: "conversations", permissions: "account", whale: "account",
         tools: "delivery", logs: "rounds", surf: "surf" }[section];
       if (local) { selectAppConfiguration(view, local); return; }
@@ -3923,7 +3923,7 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && ["account", "conversations", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -3969,6 +3969,14 @@
           } else view.archivePanel = null;
           controls.push(appWorkerControls(selected.id, status));
         }
+        break;
+      }
+      case "rules": {
+        if (selected) {
+          const status = apps.accountStatuses.get(selected.id);
+          controls.push(appElement("p", "按会话设置是否回复、是否读取历史和是否处理图片/视频。公共媒体理解继续由工作站提供。", "app-scope-note"));
+          controls.push(status ? appWorkerControls(selected.id, status) : appElement("p", "正在读取当前微信连接状态…", "app-scope-note"));
+        } else controls.push(appElement("p", "连接微信后可设置回复范围。", "app-scope-note"));
         break;
       }
       case "flow":
