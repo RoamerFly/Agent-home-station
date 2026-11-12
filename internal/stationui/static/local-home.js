@@ -3268,8 +3268,8 @@
           appConfiguration !== view || view.section !== "flow" || view.connection !== connection ||
           event.data?.type !== "ahs:wechat-section" || event.data.connection !== connection) return;
       const section = event.data.section;
-      const local = { overview: "overview", wechat: "account", rules: "conversations", catalog: "conversations",
-        agent: "tasks", companion: "account", memory: "conversations", permissions: "account",
+      const local = { overview: "overview", wechat: "account", chat: "conversations", rules: "conversations", catalog: "conversations",
+        agent: "tasks", companion: "account", memory: "conversations", permissions: "account", whale: "account",
         tools: "delivery", logs: "rounds", surf: "surf" }[section];
       if (local) { selectAppConfiguration(view, local); return; }
       const tab = { provider: "settings-tab", plugins: "project-tools-tab", mcp: "project-tools-tab", mobile: "project-tools-tab" }[section];
