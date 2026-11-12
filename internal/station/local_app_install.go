@@ -160,17 +160,8 @@ func (h *localHomeService) verifyAppSource(id string) (appcatalog.Contract, stri
 	if h.appCatalog == "" {
 		return contract, "", errors.New("本机未提供应用发行源")
 	}
-	if _, err := pluginhost.VerifyDescriptor(directory, "app.json"); err != nil {
-		return contract, "", errors.New("应用发行源未通过完整性校验")
-	}
-	root, err := workspacefs.OpenPath(directory)
-	if err != nil {
+	if err := appcatalog.VerifySource(directory, contract); err != nil {
 		return contract, "", err
-	}
-	defer root.Close()
-	digest, err := appDescriptorDigest(root)
-	if err != nil || digest != contract.Digest {
-		return contract, "", errors.New("应用发行源与当前主程序版本不匹配")
 	}
 	return contract, directory, nil
 }

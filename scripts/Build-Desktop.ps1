@@ -253,11 +253,12 @@ if((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUn
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
 }
 # Adding application source does not connect an account or enable its runtime.
-$appPackages=@()
-if((-not $LocalStation) -or $WithWeChatApp){$appPackages+=@('--package','wechat')}
-if($WithBilibiliApp){$appPackages+=@('--package','bilibili')}
-if($WithDouyinApp){$appPackages+=@('--package','douyin')}
-if($appPackages.Count){
+$appIDs=@()
+if((-not $LocalStation) -or $WithWeChatApp){$appIDs+='wechat'}
+if($WithBilibiliApp){$appIDs+='bilibili'}
+if($WithDouyinApp){$appIDs+='douyin'}
+if($appIDs.Count){
+ $appPackages=@(foreach($appID in $appIDs){'--package';$appID})
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json @appPackages
  if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}
 }
@@ -295,6 +296,10 @@ if($LocalStation){
   & go build -trimpath -o $station './cmd/agent-home-station'
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
  } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
+ if($appIDs.Count){
+  & $station verify-app-catalog @appIDs
+  if($LASTEXITCODE -ne 0){throw 'Connected Apps do not match the built LocalStation server.'}
+ }
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
  if($WithStationSpeech){Stage-LocalStationSpeechRunner -PackageDirectory $OutputDirectory}
 }

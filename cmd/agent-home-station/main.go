@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	appcatalog "wechat-bot/connected-apps"
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/station"
@@ -88,6 +89,9 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	path, err := os.Executable()
 	if err != nil {
 		return errors.New("cannot determine executable location")
+	}
+	if len(args) > 0 && args[0] == "verify-app-catalog" {
+		return verifyAppCatalog(filepath.Dir(path), args[1:], output)
 	}
 	cfg, err := parseConfig(args, path)
 	if err != nil {
@@ -210,6 +214,23 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 		return errors.Join(err, closeErr)
 	}
 	return closeErr
+}
+
+func verifyAppCatalog(directory string, ids []string, output io.Writer) error {
+	contracts, err := appcatalog.VerifyBundled(filepath.Join(directory, "connected-apps"), ids)
+	if err != nil {
+		return err
+	}
+	type appVersion struct {
+		ID      string `json:"id"`
+		Version string `json:"version"`
+		Digest  string `json:"digest"`
+	}
+	apps := make([]appVersion, 0, len(contracts))
+	for _, contract := range contracts {
+		apps = append(apps, appVersion{ID: contract.Package.ID, Version: contract.Package.Version, Digest: contract.Digest})
+	}
+	return json.NewEncoder(output).Encode(apps)
 }
 
 func parseConfig(args []string, executable string) (config, error) {
