@@ -3257,6 +3257,32 @@
     view[refreshField] = () => { if (active()) { if (writing) { refreshPending = true; return; } busy = true; render(); void read(); } };
     void read(); return panel;
   }
+  function appConfigurationFlow(view, connection) {
+    const frame = document.createElement("iframe");
+    frame.className = "wechat-workbench-frame";
+    frame.title = "微信流程与状态";
+    frame.src = "/apps/wechat/workbench?" + new URLSearchParams({ connection });
+    view.flowCleanup?.();
+    const receive = (event) => {
+      if (event.origin !== location.origin || event.source !== frame.contentWindow || !frame.isConnected ||
+          appConfiguration !== view || view.section !== "flow" || view.connection !== connection ||
+          event.data?.type !== "ahs:wechat-section" || event.data.connection !== connection) return;
+      const section = event.data.section;
+      const local = { overview: "overview", wechat: "account", rules: "conversations", catalog: "conversations",
+        agent: "tasks", companion: "account", memory: "conversations", permissions: "account",
+        tools: "delivery", logs: "rounds", surf: "surf" }[section];
+      if (local) { selectAppConfiguration(view, local); return; }
+      const tab = { provider: "settings-tab", plugins: "project-tools-tab", mcp: "project-tools-tab", mobile: "project-tools-tab" }[section];
+      if (tab) {
+        $("#app-configuration").close(); $("#app-dialog").close(); $("#" + tab).click();
+      }
+    };
+    window.addEventListener("message", receive);
+    const cleanup = () => window.removeEventListener("message", receive);
+    view.flowCleanup = cleanup;
+    view.controller.signal.addEventListener("abort", cleanup, { once: true });
+    return frame;
+  }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
     const date = document.createElement("input");
@@ -3868,7 +3894,7 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && ["account", "conversations", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -3914,6 +3940,10 @@
         }
         break;
       }
+      case "flow":
+        if (selected) controls.push(appConfigurationFlow(view, selected.id));
+        else controls.push(appElement("p", "添加微信连接后，可查看流程和已保存的画布。", "app-scope-note"));
+        break;
       case "rounds":
         if (selected) controls.push(appConfigurationRounds(view, selected.id));
         else controls.push(appElement("p", "连接微信后可查看消息的处理过程。", "app-scope-note"));

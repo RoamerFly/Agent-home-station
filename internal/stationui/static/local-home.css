@@ -757,3 +757,4 @@ body.is-home-ready {
 .chat-memory-link { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--glass, rgb(20 44 68 / 28%)); font-size: 0.85rem; }
 .chat-memory-link[hidden] { display: none; }
 .chat-link-action { margin-inline-start: auto; white-space: nowrap; }
+.wechat-workbench-frame { display:block; width:100%; height:max(560px,calc(100vh - 270px)); border:1px solid var(--line); border-radius:16px; background:var(--surface); }

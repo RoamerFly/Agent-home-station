@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>微信流程与状态</title>
+<link rel="stylesheet" href="/assets/wechat/bridge.css">
+<link rel="stylesheet" href="/assets/wechat/workbench.css">
+<script defer src="/assets/wechat/bridge.js"></script>
+<script defer src="/assets/wechat/flow-model.js"></script>
+<script defer src="/assets/wechat/rounds.js"></script>
+<script defer src="/assets/wechat/dialogs.js"></script>
+<script defer src="/assets/wechat/workbench.js"></script>
+<script defer src="/assets/wechat/start.js"></script>
+</head><body><svg aria-hidden="true" class="icon-sprite" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<symbol id="icon-dashboard" viewbox="0 0 24 24">
+<rect height="7" rx="1.5" width="7" x="3" y="3">
+</rect>
+<rect height="7" rx="1.5" width="7" x="14" y="3">
+</rect>
+<rect height="7" rx="1.5" width="7" x="3" y="14">
+</rect>
+<rect height="7" rx="1.5" width="7" x="14" y="14">
+</rect>
+</symbol>
+<symbol id="icon-account" viewbox="0 0 24 24">
+<rect height="16" rx="3" width="18" x="3" y="4">
+</rect>
+<circle cx="9" cy="10" r="2">
+</circle>
+<path d="M6 16c1-3 5-3 6 0M15 9h3m-3 5h3">
+</path>
+</symbol>
+<symbol id="icon-chat" viewbox="0 0 24 24">
+<path d="M20 16a3 3 0 0 1-3 3H9l-5 3v-6a7 7 0 0 1-2-5V9a6 6 0 0 1 6-6h8a6 6 0 0 1 6 6v3a6 6 0 0 1-2 4Z">
+</path>
+<path d="M7 10h10M7 14h6">
+</path>
+</symbol>
+<symbol id="icon-whale" viewbox="0 0 24 24">
+<path d="M3 10c0 6 4 10 10 10 5 0 8-4 8-8-3 2-5 2-7 0 0-4-4-7-8-6-2 0-3 2-3 4Z">
+</path>
+<path d="M17 5c0 3 2 4 4 3m-4-3c-2-2-2-3-1-4M7 9h.01">
+</path>
+</symbol>
+<symbol id="icon-tools" viewbox="0 0 24 24">
+<path d="M14 4a6 6 0 0 0-7 7l-5 5 4 4 5-5a6 6 0 0 0 7-7l-4 4-3-3 4-4Z">
+</path>
+</symbol>
+<symbol id="icon-memory" viewbox="0 0 24 24">
+<rect height="18" rx="3" width="16" x="4" y="3">
+</rect>
+<path d="M8 3v18M12 8h4m-4 4h4m-4 4h2">
+</path>
+</symbol>
+<symbol id="icon-logs" viewbox="0 0 24 24">
+<path d="M5 3h10l4 4v14H5Z">
+</path>
+<path d="M14 3v5h5M8 12h8m-8 4h6">
+</path>
+</symbol>
+<symbol id="icon-sun" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="4">
+</circle>
+<path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1">
+</path>
+</symbol>
+<symbol id="icon-moon" viewbox="0 0 24 24">
+<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z">
+</path>
+</symbol>
+</defs>
+</svg><main class="content">
+<div id="notice" hidden role="status"></div><div id="unsaved-bar" hidden></div>
+<section aria-label="流程设计工作台" class="page active-page" id="workbench">
+<div class="flow-toolbar">
+<label class="sr-only" for="flow-name">画布名称</label>
+<input id="flow-name" class="flow-name" maxlength="40" value="消息与行动流程">
+<span class="flow-save-state" id="flow-save-state" role="status">正在载入</span>
+<label class="sr-only" for="flow-layout">流程排版</label>
+<select id="flow-layout">
+<option value="chart">流程图排版</option>
+<option value="tree">树形排版</option>
+<option value="free">自由布局</option>
+</select>
+<label class="sr-only" for="flow-trace">查看执行回合</label>
+<select id="flow-trace">
+<option value="">流程设计</option>
+</select>
+<button class="quiet" hidden id="flow-trace-open" type="button">回合详情</button>
+<button class="secondary" id="flow-add" type="button" aria-expanded="false" aria-controls="flow-library">添加节点</button>
+<button class="primary" id="flow-save" type="button" disabled>保存画布</button>
+<details class="flow-more" id="flow-more">
+<summary>更多</summary>
+<div class="flow-menu">
+<button id="flow-arrange" type="button">自动整理布局</button>
+<button id="flow-import-button" type="button">导入画布 JSON</button>
+<button id="flow-export" type="button">导出画布 JSON</button>
+<button id="flow-reset" type="button">恢复默认流程</button>
+</div>
+</details>
+<input hidden id="flow-import" type="file" accept="application/json,.json">
+</div>
+<div class="flow-conflict" id="flow-conflict" hidden role="alert">
+<span id="flow-conflict-text"></span>
+<button class="secondary" id="flow-conflict-export" type="button">导出当前草稿</button>
+<button class="secondary" id="flow-reload" type="button">载入服务器版本</button>
+</div>
+<div class="flow-workspace" id="flow-workspace">
+<div class="flow-viewport" id="flow-viewport" role="region" aria-label="流程画布，可平移缩放；节点也可通过属性中的坐标移动" tabindex="0">
+<div class="flow-world" id="flow-world">
+<svg class="flow-edges" id="flow-edges" aria-label="流程连线">
+</svg>
+<div id="flow-nodes"></div>
+</div>
+<div class="flow-empty" id="flow-empty" hidden>
+<strong>从一个节点开始</strong>
+<p>添加现有能力，或用便签规划新的想法。</p>
+<button class="secondary" id="flow-empty-add" type="button">添加节点</button>
+</div>
+</div>
+<aside class="flow-library" id="flow-library" hidden aria-label="节点库">
+<header>
+<h2>节点库</h2>
+<button class="quiet" id="flow-library-close" type="button">关闭</button>
+</header>
+<label class="sr-only" for="flow-library-search">搜索节点</label>
+<input id="flow-library-search" type="search" placeholder="搜索能力或规划节点">
+<div class="flow-library-filter" id="flow-library-filter" role="group" aria-label="节点类型"></div>
+<div class="flow-library-items" id="flow-library-items"></div>
+</aside>
+<dialog class="flow-inspector" id="flow-inspector" hidden aria-labelledby="flow-inspector-title">
+<header>
+<div>
+<p class="flow-inspector-kicker" id="flow-inspector-subtitle"></p>
+<h2 id="flow-inspector-title">节点属性</h2>
+</div>
+<label class="sr-only" for="flow-dialog-node-select">切换节点</label>
+<select id="flow-dialog-node-select">
+<option value="">切换节点…</option>
+</select>
+<button class="quiet" id="flow-inspector-close" type="button">关闭</button>
+</header>
+<nav id="flow-inspector-tabs" aria-label="属性面板分组">
+</nav>
+<div class="flow-dialog-conflict" id="flow-dialog-conflict" hidden>
+<span>画布已在其他页面更新，草稿已保留。</span>
+<button class="secondary" id="flow-dialog-export" type="button">导出当前草稿</button>
+<button class="secondary" id="flow-dialog-reload" type="button">载入服务器版本</button>
+</div>
+<div class="flow-property-body" id="flow-properties"></div>
+<div class="flow-config" id="flow-config" hidden>
+<label class="sr-only" for="flow-config-page">选择关联设置</label>
+<select id="flow-config-page">
+</select>
+<div class="flow-inspector-body" id="flow-inspector-body"></div>
+</div>
+<div class="flow-property-body" id="flow-evidence" hidden></div>
+<footer class="flow-inspector-actions">
+<div id="flow-dialog-node-actions">
+<button class="secondary" id="flow-duplicate" type="button">复制节点</button>
+<button class="quiet danger-text" id="flow-delete" type="button">移除节点</button>
+</div>
+<span id="flow-dialog-status" role="status"></span>
+<button class="primary" id="flow-dialog-save" type="button" disabled>保存画布</button>
+</footer>
+</dialog>
+<div class="flow-controls" aria-label="画布工具">
+<div class="flow-control-group">
+<button class="quiet" id="flow-undo" type="button" aria-label="撤销" title="撤销 Ctrl+Z">↶</button>
+<button class="quiet" id="flow-redo" type="button" aria-label="重做" title="重做 Ctrl+Shift+Z">↷</button>
+</div>
+<div class="flow-control-group">
+<button class="quiet" id="flow-view-canvas" type="button" aria-pressed="true">画布</button>
+<button class="quiet" id="flow-view-list" type="button" aria-pressed="false">清单</button>
+</div>
+<label class="sr-only" for="flow-jump">定位节点</label>
+<select id="flow-jump">
+<option value="">定位节点…</option>
+</select>
+<div class="flow-control-group flow-zoom-controls">
+<button class="quiet" id="flow-zoom-out" type="button" aria-label="缩小画布">−</button>
+<span id="flow-zoom" aria-live="polite">100%</span>
+<button class="quiet" id="flow-zoom-in" type="button" aria-label="放大画布">＋</button>
+<button class="quiet" id="flow-fit" type="button">适应</button>
+</div>
+</div>
+<button class="flow-minimap" id="flow-minimap" type="button" aria-label="缩略图：点击定位画布">
+<svg id="flow-minimap-svg" viewbox="0 0 170 100" aria-hidden="true">
+</svg>
+</button>
+<div class="flow-design-label">流程设计</div>
+</div>
+<footer class="flow-footer">
+<span id="flow-count"></span>
+<span id="flow-coverage"></span>
+<span class="flow-notice" id="flow-notice" role="status">节点关联现有设置，自定义节点用于规划。</span>
+</footer>
+</section></main></body></html>

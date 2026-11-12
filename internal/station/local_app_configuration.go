@@ -32,7 +32,7 @@ func applicationConfigurationRoutes(owner *websession.Store, mux *http.ServeMux,
 		switch id {
 		case "wechat":
 			if registered && entry.Registration == "station-native" {
-				sections = append(sections, appConfigurationSection{"rounds", "执行回合"})
+				sections = append(sections, appConfigurationSection{"flow", "流程与状态"}, appConfigurationSection{"rounds", "执行回合"})
 			}
 			sections = append(sections, appConfigurationSection{"conversations", "会话与记忆"}, appConfigurationSection{"surf", "网上冲浪"}, appConfigurationSection{"delivery", "投递与回执"})
 			sections = append(sections, appConfigurationSection{"tasks", "任务与文档"})

@@ -28,15 +28,17 @@ const (
 var wechatJournalZone = time.FixedZone("CST", 8*60*60)
 
 type wechatRoundStep struct {
-	Sequence uint64    `json:"sequence"`
-	At       time.Time `json:"at"`
-	Thread   string    `json:"thread,omitempty"`
-	Message  string    `json:"message,omitempty"`
-	Event    string    `json:"event"`
-	Category string    `json:"category"`
-	Status   string    `json:"status"`
-	Tool     string    `json:"tool,omitempty"`
-	Receipt  string    `json:"receipt,omitempty"`
+	Sequence       uint64    `json:"sequence"`
+	At             time.Time `json:"at"`
+	Thread         string    `json:"thread,omitempty"`
+	Message        string    `json:"message,omitempty"`
+	RelatedMessage string    `json:"related_message,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
+	Event          string    `json:"event"`
+	Category       string    `json:"category"`
+	Status         string    `json:"status"`
+	Tool           string    `json:"tool,omitempty"`
+	Receipt        string    `json:"receipt,omitempty"`
 }
 
 type wechatRoundDay struct {
@@ -86,6 +88,14 @@ func (w *stationWechatWorker) recordRound(id, account string, at time.Time, entr
 	}
 	step := wechatRoundStep{Sequence: 1, At: at.UTC(), Thread: entry.ThreadID, Message: entry.MessageID,
 		Event: entry.Event, Category: entry.Category, Status: entry.Status, Tool: entry.Tool, Receipt: entry.SendID}
+	if len(entry.RelatedMessageID) <= 512 {
+		step.RelatedMessage = entry.RelatedMessageID
+	}
+	// Keep normalized reason codes for the old round projection, never error
+	// text, prompt fragments or a model-generated explanation.
+	if len(entry.Reason) <= 160 && strings.IndexFunc(entry.Reason, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') }) == -1 {
+		step.Reason = entry.Reason
+	}
 	if n := len(day.Steps); n != 0 {
 		step.Sequence = day.Steps[n-1].Sequence + 1
 		if n == wechatRoundLimit {

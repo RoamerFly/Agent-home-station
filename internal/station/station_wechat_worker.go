@@ -93,6 +93,7 @@ func (policy stationWechatPolicy) groupPolicy() wechatapp.GroupPolicy {
 const stationWechatPolicyLimit = 128 << 10
 
 type stationWechatWorker struct {
+	canvasMu         sync.Mutex
 	connectionID     string
 	roundMu          sync.Mutex
 	mu               sync.Mutex

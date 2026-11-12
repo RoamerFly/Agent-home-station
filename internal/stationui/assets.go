@@ -8,6 +8,7 @@ package stationui
 import (
 	"embed"
 	"net/http"
+	"wechat-bot/internal/wechatui"
 )
 
 //go:embed static/*
@@ -32,6 +33,7 @@ const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 
 // Register mounts the station's public shell. It intentionally includes only
 // static assets; all state-changing station endpoints remain in the host.
 func Register(mux *http.ServeMux) {
+	wechatui.Register(mux)
 	for route := range routes {
 		mux.HandleFunc("GET "+route, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != route || !serve(w, route) {
