@@ -698,7 +698,7 @@ func validInteractionRetryTime(code, timestamp string) bool {
 	if timestamp == "" {
 		return true
 	}
-	if code != "reply_cooldown" && code != "platform_rate_limited" {
+	if code != "reply_cooldown" && code != "platform_rate_limited" && code != "receipt_not_found" {
 		return false
 	}
 	t, err := time.Parse(time.RFC3339Nano, timestamp)

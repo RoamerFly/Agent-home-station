@@ -263,6 +263,10 @@ func (p *localDouyinWebInteraction) QueryInteraction(ctx context.Context, in app
 		return apphost.InteractionReceipt{}, apphost.ErrInteractionDenied
 	}
 	if in.Draft.Kind == "reply_comment" && c.RemoteID == "" {
+		// A submitted reply without a verified remote id is still unknown. Do
+		// not ask the browser to guess which platform receipt it should query;
+		// the durable follow-up worker will retain the task and back off until
+		// a verified id is recorded.
 		receipt := apphost.InteractionReceipt{Reference: in.Reference, State: "unknown", Code: "receipt_not_found"}
 		if until, err := p.replyPacing(a, time.Now(), douyinReplyCheck); err != nil && !until.IsZero() {
 			receipt.NextAttemptAt = until.Format(time.RFC3339Nano)

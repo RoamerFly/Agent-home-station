@@ -179,7 +179,19 @@ func newWorkflowFixture(t *testing.T) *workflowFixture {
 }
 func (x *workflowFixture) start(t *testing.T) mobile.Task {
 	t.Helper()
-	task, err := x.service.Start(mobile.Source{Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", Admin: true, MessageID: "synthetic-request"}, "synthetic", "Inspect synthetic screen")
+	source := mobile.Source{Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", Admin: true, MessageID: "synthetic-request"}
+	var task mobile.Task
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		task, err = x.service.Start(source, "synthetic", "Inspect synthetic screen")
+		if err == nil {
+			break
+		}
+		if err.Error() != "device_workflow_needs_review" || attempt == 2 {
+			t.Fatal(err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +215,43 @@ func (x *workflowFixture) tick(t *testing.T) {
 			t.Fatal("workflow tick did not settle")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// prepareNextAction advances the deterministic fixture until the host has
+// persisted exactly one native effect. It stops before dispatching that effect
+// so callers can install an in-flight action gate without relying on a fixed
+// number of ticks (which is flaky when the isolated Python runtime starts
+// slowly under the full package suite).
+func (x *workflowFixture) prepareNextAction(t *testing.T, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		x.tick(t)
+		snapshot, _, err := x.service.load(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, ok := snapshot.tasks[taskID]
+		if !ok {
+			t.Fatalf("workflow task disappeared: %s", taskID)
+		}
+		var metadata struct {
+			Effect *mobileWorkflowEffect `json:"effect"`
+		}
+		if json.Unmarshal(snapshot.records[taskID].State, &metadata) != nil {
+			t.Fatalf("workflow state became invalid: %#v", snapshot.records[taskID])
+		}
+		if task.State == "running" && metadata.Effect != nil && metadata.Effect.Capability == "device.act" && snapshot.records[taskID].Fact == nil {
+			return
+		}
+		if task.State == "needs_review" || task.State == "failed" || task.State == "stopped" {
+			t.Fatalf("workflow stopped before action preparation: %#v", task)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("workflow action was not prepared: %#v state=%#v", task, snapshot.records[taskID])
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 func TestMobileWorkflowInstalledQueueUsesPythonTransitionsAndActualHostFacts(t *testing.T) {
@@ -246,9 +295,7 @@ func TestMobileWorkflowInstalledQueueUsesPythonTransitionsAndActualHostFacts(t *
 func TestMobileWorkflowCancellationKeepsLateActionStopped(t *testing.T) {
 	x := newWorkflowFixture(t)
 	task := x.start(t)
-	for i := 0; i < 7; i++ {
-		x.tick(t)
-	}
+	x.prepareNextAction(t, task.ID)
 	x.entered, x.block = make(chan struct{}), make(chan struct{})
 	x.service.tick()
 	select {

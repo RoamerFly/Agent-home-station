@@ -153,7 +153,7 @@ func TestSurfActionFollowupWaitsReopensAndResumesOriginal(t *testing.T) {
 	}
 }
 
-func TestSurfActionFollowupUnknownIsLookupOnlyAfterReconstruction(t *testing.T) {
+func TestSurfActionFollowupUnknownKeepsMissingRemoteIDUnqueriedAfterReconstruction(t *testing.T) {
 	x, m, scope, w := surfFollowupFixture(t)
 	job := surfFollowupTask(t, x, scope, "surf-unknown-auto")
 	var clicks, queries atomic.Int32
@@ -178,16 +178,16 @@ func TestSurfActionFollowupUnknownIsLookupOnlyAfterReconstruction(t *testing.T) 
 	now := time.Now().UTC()
 	w.tick(t.Context(), now)
 	_, _, rows := surfFollowupState(t, x)
-	if clicks.Load() != 1 || queries.Load() != 1 || !rows[job].Next.After(now) {
+	if clicks.Load() != 1 || queries.Load() != 0 || !rows[job].Next.After(now) {
 		t.Fatal("unknown task not reconciled safely", clicks.Load(), queries.Load(), rows)
 	}
 	w.tick(t.Context(), now.Add(time.Second))
-	if queries.Load() != 1 {
-		t.Fatal("unknown lookup ignored durable backoff")
+	if queries.Load() != 0 {
+		t.Fatal("unknown lookup bypassed durable backoff")
 	}
 	newWorker := newLocalSurfActionWorker(x.f.handler.chat)
 	newWorker.tick(t.Context(), rows[job].Next.Add(time.Second))
-	if clicks.Load() != 1 || queries.Load() != 2 {
+	if clicks.Load() != 1 || queries.Load() != 0 {
 		t.Fatal("reconstruction repeated external effect", clicks.Load(), queries.Load())
 	}
 }

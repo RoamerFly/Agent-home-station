@@ -266,9 +266,7 @@ func TestMobileFishBindingUnlinkDuringAdvanceStopsLaterTransitions(t *testing.T)
 		t.Fatal(err)
 	}
 	task := x.start(t)
-	for i := 0; i < 7; i++ {
-		x.tick(t)
-	}
+	x.prepareNextAction(t, task.ID)
 	x.entered, x.block = make(chan struct{}), make(chan struct{})
 	x.service.tick()
 	select {
