@@ -29,6 +29,7 @@ import (
 	"wechat-bot/internal/station"
 	"wechat-bot/internal/stationauth"
 	"wechat-bot/internal/stationruntime"
+	"wechat-bot/internal/websession"
 )
 
 const defaultListen = "127.0.0.1:8082"
@@ -173,7 +174,9 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 		return err
 	}
 	server := &http.Server{
-		Handler:           handler,
+		// Reject foreign Host headers before any session or CSRF logic runs, so
+		// a rebound DNS name cannot reach the loopback service.
+		Handler:           websession.GuardHost(handler, ""),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      5 * time.Minute,

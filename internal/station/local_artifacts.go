@@ -395,7 +395,8 @@ func (s *localArtifactStore) routes(owner *websession.Store, mux *http.ServeMux)
 		defer cancel()
 		a, err := s.publish(ctx, in, nil)
 		if err != nil {
-			websession.Fail(w, 400, err.Error())
+			logFailure("登记成品", err)
+			websession.Fail(w, 400, failureMessage(err, "无法登记成品，请重新选择文件后重试"))
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")

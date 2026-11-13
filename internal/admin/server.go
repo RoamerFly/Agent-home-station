@@ -144,7 +144,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		name := r.URL.Path
-		if stationui.ServeLegacy(w, name) {
+		if stationui.ServeLegacy(w, r, name) {
 			return
 		}
 		switch name {

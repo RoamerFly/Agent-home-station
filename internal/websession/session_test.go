@@ -8,6 +8,32 @@ import (
 	"time"
 )
 
+func TestGuardHostRejectsForeignHostNames(t *testing.T) {
+	handler := GuardHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), "")
+	cases := []struct {
+		host string
+		want int
+	}{
+		{"127.0.0.1:8082", http.StatusNoContent},
+		{"localhost:8082", http.StatusNoContent},
+		{"[::1]:8082", http.StatusNoContent},
+		{"evil.example.test", http.StatusForbidden},
+		{"127.0.0.1.evil.example.test:8082", http.StatusForbidden},
+		{"", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		request := httptest.NewRequest(http.MethodGet, "/api/local/home", nil)
+		request.Host = tc.host
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, request)
+		if res.Code != tc.want {
+			t.Fatalf("host %q returned %d, want %d", tc.host, res.Code, tc.want)
+		}
+	}
+}
+
 func TestExpiredSessionCannotAuthorizeFollowupOrProtectedRoute(t *testing.T) {
 	const origin = "https://owner.example.test"
 	store, err := New("synthetic-password", origin, "fixture_session")

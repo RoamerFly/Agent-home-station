@@ -15,6 +15,11 @@ import (
 
 const maxPasswordFile = 1024
 
+// legacyDefaultPassword is the fixed bootstrap value written by earlier
+// builds. It is rotated on sight: a published default cannot stay valid on a
+// loopback service that any local user (or a rebound DNS name) can reach.
+const legacyDefaultPassword = "admin"
+
 // Password uses the established station filenames and precedence. Existing
 // files are read in place, and an environment override is never persisted.
 func Password(dir, explicit string) (string, error) {
@@ -34,9 +39,20 @@ func Password(dir, explicit string) (string, error) {
 		return explicit, nil
 	}
 	if password, found, err := readPassword(root, "admin-token"); found || err != nil {
+		if err == nil && password == legacyDefaultPassword {
+			// Keep the legacy file untouched for older readers and write the
+			// rotating value to the higher-precedence managed credential.
+			if rotated, rotateErr := writeCredential(root, "admin-password"); rotateErr == nil {
+				return rotated, nil
+			}
+			return password, nil
+		}
 		return password, err
 	}
-	return bootstrapPassword(root)
+	if rotated, err := writeCredential(root, "admin-token"); err == nil {
+		return rotated, nil
+	}
+	return "", errors.New("无法保存本机主人初始凭据")
 }
 
 func readPassword(root *os.Root, name string) (string, bool, error) {
@@ -68,9 +84,14 @@ func readPassword(root *os.Root, name string) (string, bool, error) {
 	return password, true, nil
 }
 
-func bootstrapPassword(root *os.Root) (string, error) {
-	const password = "admin"
+// writeCredential creates name with a fresh random password. The temporary
+// file and rename keep concurrent first starts from observing a partial file.
+func writeCredential(root *os.Root, name string) (string, error) {
 	unavailable := errors.New("无法保存本机主人初始凭据")
+	password := rand.Text() + rand.Text()
+	if !websession.ValidPassword(password) {
+		return "", unavailable
+	}
 	temp := ".owner-" + rand.Text()
 	file, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -85,10 +106,10 @@ func bootstrapPassword(root *os.Root) (string, error) {
 	}
 	// Another startup may already have created the credential while this
 	// temporary file was prepared. Prefer the value already on disk.
-	if existing, found, err := readPassword(root, "admin-token"); found || err != nil {
+	if existing, found, err := readPassword(root, name); found || err != nil {
 		return existing, err
 	}
-	if err := root.Rename(temp, "admin-token"); err != nil {
+	if err := root.Rename(temp, name); err != nil {
 		return "", unavailable
 	}
 	return password, nil

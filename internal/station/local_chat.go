@@ -33,6 +33,7 @@ type localChatService struct {
 	closed       bool
 	stopping     atomic.Bool
 	closeOnce    sync.Once
+	closeDone    chan struct{}
 	closeErr     error
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -70,6 +71,7 @@ type localChatService struct {
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
+		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
 			home: home, options: stationruntime.PackagedToolOptions(),
@@ -146,59 +148,69 @@ func (h *localChatService) closeLiveAsync() {
 }
 
 func (h *localChatService) CloseContext(ctx context.Context) error {
-	h.BeginShutdown()
 	if h == nil {
 		return nil
 	}
-	done := make(chan struct{})
-	go func() {
-		h.closeOnce.Do(func() {
-			// An active chat owns turn. Its context was cancelled above, so this
-			// wait cannot keep a desktop stop blocked on a provider timeout.
-			h.turn.Lock()
-			defer h.turn.Unlock()
-			h.mu.Lock()
-			h.closed = true
-			processes, store, liveStopDone := h.processes, h.store, h.liveStopDone
-			h.mu.Unlock()
-			// beginShutdown starts this before waiting for turn. The shared wait
-			// avoids racing two StopLive calls against the same durable session.
-			if liveStopDone != nil {
-				// Do not let an outer desktop timeout close SQLite while the
-				// bounded live stop is still persisting its final state. The outer
-				// CloseContext caller regains control through its own select below;
-				// this background closer remains responsible for ordering.
-				<-liveStopDone
-				h.mu.Lock()
-				h.closeErr = errors.Join(h.closeErr, h.liveStopErr)
-				h.mu.Unlock()
-			}
-			// Jobs owns cancellation and waits for the isolated child result before
-			// its durable record is closed. Do not replay any interrupted request.
-			if processes != nil {
-				h.closeErr = errors.Join(h.closeErr, processes.Close())
-			}
-			if h.projectTools != nil {
-				if h.surfActions != nil && h.surfActions.started.Load() {
-					<-h.surfActions.done
-				}
-				h.closeErr = errors.Join(h.closeErr, h.projectTools.close())
-			}
-			if store != nil {
-				if h.followups != nil && h.followups.started.Load() {
-					<-h.followups.done
-				}
-				h.closeErr = errors.Join(h.closeErr, store.Close())
-			}
-		})
-		close(done)
-	}()
+	h.BeginShutdown()
+	// Teardown runs once in its own goroutine so every caller observes the same
+	// completion signal instead of racing a second sync.Once evaluation.
+	h.closeOnce.Do(func() { go h.closeOwnedResources() })
 	select {
-	case <-done:
-		return h.closeErr
+	case <-h.closeDone:
+		h.mu.Lock()
+		err := h.closeErr
+		h.mu.Unlock()
+		return err
 	case <-ctx.Done():
 		return fmt.Errorf("本机服务停止超过等待时限: %w", ctx.Err())
 	}
+}
+
+// closeOwnedResources performs the one-time teardown and records every cause
+// under the service mutex. A caller that times out leaves this running; a later
+// caller waits on closeDone instead of assuming the work already finished.
+func (h *localChatService) closeOwnedResources() {
+	defer close(h.closeDone)
+	// An active chat owns turn. Its context was cancelled above, so this wait
+	// cannot keep a desktop stop blocked on a provider timeout.
+	h.turn.Lock()
+	defer h.turn.Unlock()
+	h.mu.Lock()
+	h.closed = true
+	processes, store, liveStopDone := h.processes, h.store, h.liveStopDone
+	h.mu.Unlock()
+	var failures []error
+	// beginShutdown starts this before waiting for turn. The shared wait avoids
+	// racing two StopLive calls against the same durable session.
+	if liveStopDone != nil {
+		// Do not let an outer desktop timeout close SQLite while the bounded
+		// live stop is still persisting its final state. The outer caller
+		// regains control through its own select; this closer keeps ordering.
+		<-liveStopDone
+		h.mu.Lock()
+		failures = append(failures, h.liveStopErr)
+		h.mu.Unlock()
+	}
+	// Jobs owns cancellation and waits for the isolated child result before its
+	// durable record is closed. Do not replay any interrupted request.
+	if processes != nil {
+		failures = append(failures, processes.Close())
+	}
+	if h.projectTools != nil {
+		if h.surfActions != nil && h.surfActions.started.Load() {
+			<-h.surfActions.done
+		}
+		failures = append(failures, h.projectTools.close())
+	}
+	if store != nil {
+		if h.followups != nil && h.followups.started.Load() {
+			<-h.followups.done
+		}
+		failures = append(failures, store.Close())
+	}
+	h.mu.Lock()
+	h.closeErr = errors.Join(append([]error{h.closeErr}, failures...)...)
+	h.mu.Unlock()
 }
 
 func (h *localChatService) conversation() (*companion.Store, companion.Input, error) {

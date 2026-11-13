@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,6 +209,34 @@ func (w *LoginWindow) watchExit() {
 
 // Active reports whether the owned login browser has not started closing.
 func (w *LoginWindow) Active() bool { return w != nil && w.active.Load() }
+
+// SignedIn reports whether the owned profile already carries a Douyin session
+// cookie. Only the presence of the cookie name is inspected: the value is never
+// returned, logged or copied out of the browser process.
+func (w *LoginWindow) SignedIn(ctx context.Context) (bool, error) {
+	if w == nil || w.session == nil || !w.active.Load() {
+		return false, ErrBrowserUnavailable
+	}
+	var result struct {
+		Cookies []struct {
+			Name   string `json:"name"`
+			Domain string `json:"domain"`
+		} `json:"cookies"`
+	}
+	if err := w.session.Call(ctx, "", "Storage.getCookies", map[string]any{}, &result); err != nil {
+		return false, loginCallError(err)
+	}
+	for _, cookie := range result.Cookies {
+		if !strings.HasSuffix(strings.TrimPrefix(cookie.Domain, "."), "douyin.com") {
+			continue
+		}
+		switch cookie.Name {
+		case "sessionid", "sessionid_ss", "sid_tt":
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 // Close requests Browser.close and waits for the actual browser process exit.
 // If that cannot be confirmed before ctx expires it closes the owned Job tree

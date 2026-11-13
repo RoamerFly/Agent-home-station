@@ -176,7 +176,8 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 			value = result
 		}
 		if err != nil {
-			websession.Fail(w, observationHTTPStatus(err), err.Error())
+			logFailure("应用观察", err)
+			websession.Fail(w, observationHTTPStatus(err), failureMessage(err, "浏览器读取暂不可用，请确认 Microsoft Edge 可用后重试"))
 			return
 		}
 		current, err := h.home.identity.Read()

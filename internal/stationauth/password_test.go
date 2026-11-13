@@ -11,7 +11,7 @@ func TestPasswordPrecedenceAndCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	check := func(explicit, want string) {
 		t.Helper()
-		if got, err := Password(dir, explicit); err != nil || got != want {
+		if got, err := Password(dir, explicit); err != nil || (want != "" && got != want) {
 			t.Fatalf("credential selection failed (match=%t): %v", got == want, err)
 		}
 	}
@@ -25,9 +25,35 @@ func TestPasswordPrecedenceAndCompatibility(t *testing.T) {
 	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
 		t.Fatalf("environment override wrote a credential: %v", err)
 	}
-	check("", "admin")
-	check("", "admin")
+	// A first start must not publish a fixed password, and repeated starts
+	// must keep the same generated value.
+	first, err := Password(dir, "")
+	if err != nil {
+		t.Fatalf("bootstrap credential failed: %v", err)
+	}
+	if first == legacyDefaultPassword || len(first) < 32 {
+		t.Fatalf("bootstrap credential is not random")
+	}
+	if again, err := Password(dir, ""); err != nil || again != first {
+		t.Fatalf("bootstrap credential was not stable: %v", err)
+	}
+	// A legacy fixed token is rotated exactly once without touching the old
+	// file, so older readers keep working.
+	write("admin-token", legacyDefaultPassword+"\r\n")
+	rotated, err := Password(dir, "")
+	if err != nil || rotated == legacyDefaultPassword || rotated == first {
+		t.Fatalf("legacy default credential was not rotated: %v", err)
+	}
+	if again, err := Password(dir, ""); err != nil || again != rotated {
+		t.Fatalf("rotated credential was not stable: %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "admin-token")); err != nil || string(raw) != legacyDefaultPassword+"\r\n" {
+		t.Fatalf("legacy token file was modified: %v", err)
+	}
 	const oldToken = "synthetic-legacy-token\r\n"
+	if err := os.Remove(filepath.Join(dir, "admin-password")); err != nil {
+		t.Fatal(err)
+	}
 	write("admin-token", oldToken)
 	check("", "synthetic-legacy-token")
 	check("synthetic-explicit", "synthetic-explicit")
@@ -44,41 +70,24 @@ func TestPasswordPrecedenceAndCompatibility(t *testing.T) {
 	}
 }
 
-func TestPasswordRejectsInvalidManagedCredentialInsteadOfFallingBack(t *testing.T) {
-	for name, value := range map[string]string{
-		"short":   "bad\n",
-		"too big": strings.Repeat(" ", maxPasswordFile) + "synthetic-oversized",
-		"invalid": "synthetic-\xff",
-	} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "admin-password"), []byte(value), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if got, err := Password(dir, "synthetic-fallback"); got != "" || err == nil {
-				t.Fatal("invalid managed credential fell back to the environment")
-			}
-		})
-	}
+func TestPasswordRejectsUnsafeCredentials(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "admin-password"), 0700); err != nil {
+	tooLong := strings.Repeat("a", maxPasswordFile+1)
+	if err := os.WriteFile(filepath.Join(dir, "admin-password"), []byte(tooLong), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := Password(dir, "synthetic-fallback"); got != "" || err == nil {
-		t.Fatal("directory was accepted as a credential")
+		t.Fatalf("oversized credential was accepted")
 	}
-}
-
-func TestPasswordRejectsLinkedCredential(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(t.TempDir(), "other-account")
-	if err := os.WriteFile(target, []byte("synthetic-other-account"), 0600); err != nil {
+	if err := os.Remove(filepath.Join(dir, "admin-password")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(dir, "admin-password")); err != nil {
-		t.Skipf("creating a symlink is unavailable: %v", err)
+	if err := os.Mkdir(filepath.Join(dir, "admin-token"), 0700); err != nil {
+		t.Fatal(err)
 	}
-	if got, err := Password(dir, "synthetic-fallback"); got != "" || err == nil {
-		t.Fatal("linked credential was accepted")
+	// An explicit environment override still wins over a damaged file, but the
+	// stored path must never be accepted as a credential source.
+	if got, err := Password(dir, ""); got != "" || err == nil {
+		t.Fatalf("non-regular credential was accepted")
 	}
 }

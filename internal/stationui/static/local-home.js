@@ -60,7 +60,7 @@
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
-    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), link: null, poll: 0 };
+    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, retry: 0, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), link: null, poll: 0 };
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
@@ -71,7 +71,8 @@
       wechatMemoryDrafts: new Map(),
       wechatCrossMemoryDrafts: new Map(),
       wechatArchiveDrafts: new Map(),
-      douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0 },
+      douyinWebLogin: { value: null, loaded: false, loading: false, applying: "", error: "", poll: 0, generation: 0, autoAttempt: "" },
+      power: { value: null, loaded: false, loading: false, applying: false, error: "" },
       douyinLiveClient: { path: "", manual: false, result: null, busy: false, error: "", generation: 0, controller: null },
       bilibiliPublic: null, bilibiliDraft: null, bilibiliSaving: false, bilibiliError: "", bilibiliAuthorization: null, bilibiliAuthorizationError: "", bilibiliAuthorizationSaving: false,
       bilibiliOAuth: { saving: false, authorizeURL: "", expiresAt: "" },
@@ -96,23 +97,79 @@
   }
   function wechatDesktopServiceRow() {
     const row = appElement("section", "", "app-layer");
-    row.append(appElement("h5", "微信服务"));
-    if (!desktopControl.available) {
-      row.append(appElement("p", "当前桌面包没有提供可切换的微信原生服务。", "app-scope-note"));
-      return row;
-    }
-    const state = desktopControl.busy ? "正在切换…" : desktopControl.enabled ? "已启用" : "已关闭";
+    row.append(appElement("h5", "微信应用"));
+    const power = apps.power;
+    const value = power.value;
+    if (power.error) row.append(appElement("p", power.error, "app-scope-note"));
+    const on = value ? value.enabled === true : desktopControl.enabled;
+    const state = power.applying ? "正在切换…" : on ? "已开启" : "已关闭";
     const detail = appElement("div", "", "app-action-row");
-    detail.append(appElement("p", `${state}。切换后工作站会短暂重启，账号和资料继续保留。`, "app-scope-note"));
-    const button = memoryButton(desktopControl.enabled ? "关闭微信服务" : "启用微信服务", "button compact secondary", () => {
-      if (desktopControl.busy || !window.chrome?.webview) return;
-      desktopControl = { ...desktopControl, busy: true };
-      renderAppConfiguration();
-      window.chrome.webview.postMessage({ type: "wechat-service-toggle", enabled: !desktopControl.enabled });
+    const summary = value && value.connections
+      ? `${value.connections} 个已启用连接${value.paused ? `，${value.paused} 个已暂停` : ""}。`
+      : "尚未接入微信账号。";
+    detail.append(appElement("p", `${state}。${summary}关闭后不再领取消息和执行任务，账号、登录与记忆继续保留，不需要重启工作站。`, "app-scope-note"));
+    const button = memoryButton(on ? "关闭微信应用" : "开启微信应用", "button compact secondary", () => {
+      if (power.applying) return;
+      void setWechatPower(!on);
     });
-    button.disabled = desktopControl.busy;
-    detail.append(button); row.append(detail);
+    button.disabled = power.applying || power.loading;
+    detail.append(button);
+    row.append(detail);
+    if (desktopControl.available) {
+      // The native process is a launch-level choice: toggling it restarts the
+      // workstation, so it stays out of the everyday switch.
+      const advanced = appElement("details", "", "identity-details");
+      advanced.append(appElement("summary", "高级：微信原生服务"));
+      advanced.append(appElement("p", `当前${desktopControl.enabled ? "已随工作站启动" : "未随工作站启动"}。切换后工作站会重启，账号和资料继续保留；日常开合请使用上方的「微信应用」开关。`, "app-scope-note"));
+      const native = memoryButton(desktopControl.enabled ? "停止原生服务" : "启动原生服务", "button compact secondary", () => {
+        if (desktopControl.busy || !window.chrome?.webview) return;
+        desktopControl = { ...desktopControl, busy: true };
+        renderAppConfiguration();
+        window.chrome.webview.postMessage({ type: "wechat-service-toggle", enabled: !desktopControl.enabled });
+      });
+      native.disabled = desktopControl.busy;
+      advanced.append(native);
+      row.append(advanced);
+    }
     return row;
+  }
+  async function loadWechatPower() {
+    const power = apps.power;
+    if (power.loading) return;
+    power.loading = true;
+    try {
+      const value = await request("/api/local/apps/wechat/power");
+      if (typeof value?.enabled !== "boolean") throw new Error("微信应用状态返回格式无效，请刷新后重试。");
+      power.value = value;
+      power.loaded = true;
+      power.error = "";
+    } catch (error) {
+      if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+      power.loaded = true;
+      power.error = error.message || "微信应用状态暂不可读。";
+    } finally {
+      power.loading = false;
+      renderAppConfiguration();
+    }
+  }
+  async function setWechatPower(enabled) {
+    const power = apps.power;
+    power.applying = true;
+    power.error = "";
+    renderAppConfiguration();
+    try {
+      const value = await request("/api/local/apps/wechat/power", { method: "POST", body: JSON.stringify({ enabled }) });
+      if (typeof value?.enabled !== "boolean") throw new Error("微信应用状态返回格式无效，请刷新后重试。");
+      power.value = value;
+      power.loaded = true;
+      appFeedback(enabled ? "已开启微信应用。" : "已关闭微信应用，账号与记忆保留。");
+    } catch (error) {
+      if (appSessionExpired([{ status: "rejected", reason: error }])) return;
+      power.error = error.message || "微信应用状态未能保存，请稍后重试。";
+    } finally {
+      power.applying = false;
+      renderAppConfiguration();
+    }
   }
   function projectToolsFeedback(text, warn = false) {
     const feedback = $("#project-tools-feedback");
@@ -211,7 +268,7 @@
   function scheduleAppLogin(current, delay = 2200) {
     window.clearTimeout(current.loginTimer);
     const id = current.selectedLogin, entry = current.logins.get(id);
-    if (current !== apps || activeView !== "apps" || !pendingAppLogin(entry?.op)) return;
+    if (current !== apps || activeView !== "apps" || document.hidden || !pendingAppLogin(entry?.op)) return;
     current.loginTimer = window.setTimeout(() => pollAppLogin(current, id, entry), delay);
   }
   async function pollAppLogin(current, id, entry) {
@@ -1564,7 +1621,7 @@
   }
   function scheduleDouyinWebLoginPoll(current) {
     const web = current?.douyinWebLogin;
-    if (!web || !shouldPollDouyinWebLogin(current, web.value) || web.poll) return;
+    if (!web || document.hidden || !shouldPollDouyinWebLogin(current, web.value) || web.poll) return;
     const generation = web.generation;
     web.poll = window.setTimeout(() => {
       web.poll = 0;
@@ -1584,6 +1641,17 @@
       web.value = value;
       web.loaded = true;
       web.error = "";
+      // The owner already signed in inside the owned browser. Close it and
+      // save the profile without another click; the attempt id keeps this
+      // from repeating.
+      if (value.signed_in && value.attempt_id && value.attempt_id !== web.autoAttempt && !web.applying) {
+        web.autoAttempt = value.attempt_id;
+        // updateDouyinWebLogin advances the generation, so clear the loading
+        // flag before handing over or the poll would stay blocked.
+        web.loading = false;
+        void updateDouyinWebLogin(current, "confirm", { automatic: true });
+        return;
+      }
     } catch (error) {
       if (current !== apps || web.generation !== generation || appSessionExpired([{ status: "rejected", reason: error }])) return;
       web.error = error.message || "网页登录状态暂不可读。";
@@ -1608,6 +1676,7 @@
       unconfirmed: ["网页登录资料待核对", "资料已保留，重新打开窗口核对登录后再保存。"],
       saved: ["网页登录资料已保存", "登录状态以网页为准，保存后可用于本软件已支持的抖音功能。"],
     };
+    if (value?.signed_in && value.attempt_id && value.state === "login_open") return ["已检测到登录", "正在关闭登录窗口并保存资料，请稍候。"];
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
   }
@@ -1648,7 +1717,7 @@
       if (!validDouyinWebLogin(updated)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
       web.value = updated;
       web.loaded = true;
-      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? "网页登录资料已保存。" : ["begin_creator", "begin_creator_works"].includes(action) ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
+      let feedback = action === "clear" ? "已移除本机网页登录资料。" : action === "cancel" ? "已取消本次网页登录。" : action === "confirm" ? (options.automatic ? "已检测到登录完成，窗口已自动关闭并保存。" : "网页登录资料已保存。") : ["begin_creator", "begin_creator_works"].includes(action) ? "已打开创作者中心登录窗口。" : "已打开网页登录窗口。";
       if (action === "pause" || action === "resume") feedback = updated.paused ? "已关闭抖音应用。" : "已开启抖音应用。";
       if (action === "detach" || action === "attach") {
         feedback = updated.detached ? "已撤下抖音。" : "已重新登记抖音，网页能力仍暂停。";
@@ -3944,7 +4013,10 @@
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
-        if (record.id === "wechat") controls.push(wechatDesktopServiceRow());
+        if (record.id === "wechat") {
+          if (!apps.power.loaded && !apps.power.loading && apps.registered?.some((row) => row.id === "wechat")) void loadWechatPower();
+          controls.push(wechatDesktopServiceRow());
+        }
         controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : appConnectionRow(record, view.connection));
         if (record.id === "wechat" && selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
           if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
@@ -5818,7 +5890,7 @@
   function scheduleOBSPreviewFrame() {
     const preview = projectTools.obsPreview;
     window.clearTimeout(preview.timer);
-    if (activeView !== "project-tools" || !preview.active || !preview.enabled || preview.polling || preview.stopping) return;
+    if (activeView !== "project-tools" || document.hidden || !preview.active || !preview.enabled || preview.polling || preview.stopping) return;
     preview.timer = window.setTimeout(() => void requestOBSPreview("frame", true), 1500);
   }
   async function loadOBSPreview(current = projectTools) {
@@ -6423,11 +6495,14 @@
       if (replace) current.memoryLinks.clear();
       for (const id of data.memory_link_requests || []) current.memoryLinks.add(id);
       state.chat.busy = Boolean(data.busy);
+      current.retry = 0;
       current.backgroundPending = data.background_pending === true;
       const settled = new Set(state.chat.items.filter((item) => item.role === "assistant" && item.request_id).map((item) => item.request_id));
       for (const requestID of settled) { state.chat.pending.delete(requestID); state.chat.failed.delete(requestID); }
     } catch (error) {
       if (current !== state.chat || appSessionExpired([{ status: "rejected", reason: error }])) return;
+      // Back off instead of retrying a failing local service every 1.6s.
+      current.retry = Math.min((current.retry || 1600) * 2, 8000);
       if (error.status !== 404) showMessage(error.message, "warn");
     } finally {
       if (current === state.chat) {
@@ -6441,7 +6516,7 @@
     const current = state.chat;
     window.clearTimeout(current.poll); current.poll = 0;
     if (!state.home?.initialized || activeView !== "chat" || document.hidden || !(current.busy || current.pending.size || current.backgroundPending)) return;
-    current.poll = window.setTimeout(() => { if (current === state.chat) void loadChat(true); }, 1600);
+    current.poll = window.setTimeout(() => { if (current === state.chat) void loadChat(true); }, current.retry || 1600);
   }
   function newRequestID() { return window.crypto && typeof window.crypto.randomUUID === "function" ? window.crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
   async function sendMessage(raw, requestID = newRequestID()) {
@@ -6626,6 +6701,28 @@
     else {
       void refreshLiveSafety();
       if (activeView === "chat" && state.home?.initialized) void loadChat(true);
+      // Timers paused while hidden are re-armed once the window is visible.
+      if (activeView === "apps") {
+        scheduleAppLogin(apps);
+        scheduleDouyinWebLoginPoll(apps);
+      }
+      if (activeView === "project-tools") scheduleOBSPreviewFrame();
+    }
+  });
+  $("#open-logs-button").addEventListener("click", async () => {
+    const feedback = $("#logs-state");
+    if (window.chrome?.webview) {
+      feedback.textContent = "正在打开日志文件夹…";
+      window.chrome.webview.postMessage({ type: "open-logs" });
+      return;
+    }
+    try {
+      const runtime = await request("/api/local/runtime");
+      feedback.textContent = runtime?.data_directory
+        ? `请在文件管理器中打开：${runtime.data_directory} 下的 logs 文件夹。`
+        : "日志位于本机数据目录下的 logs 文件夹。";
+    } catch {
+      feedback.textContent = "日志位于本机数据目录下的 logs 文件夹。";
     }
   });
   $("#live-safety-stop").addEventListener("click", stopActiveLive);

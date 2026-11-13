@@ -17,4 +17,5 @@ type LoginWindow struct{}
 func DouyinLoginProfileLockPath(string) (string, error)             { return "", errCDPUnavailable }
 func OpenDouyinLogin(context.Context, string) (*LoginWindow, error) { return nil, errCDPUnavailable }
 func (*LoginWindow) Active() bool                                   { return false }
+func (*LoginWindow) SignedIn(context.Context) (bool, error)         { return false, errCDPUnavailable }
 func (*LoginWindow) Close(context.Context) error                    { return nil }

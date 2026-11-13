@@ -191,18 +191,21 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 	}
 	homePath, err := h.directory(record)
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("应用接入目录", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "应用接入目录不可用"))
 		return
 	}
 	home, err := workspacefs.EnsurePath(homePath)
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("应用家目录", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "应用家目录不可用"))
 		return
 	}
 	defer home.Close()
 	parent, err := workspacefs.EnsureDirectory(home, "Connected Apps")
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("应用源码目录", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "家目录中的应用源码目录不可用"))
 		return
 	}
 	defer parent.Close()
@@ -211,12 +214,14 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 			"state": "source_only", "connected": false, "directory": filepath.Join(homePath, "Connected Apps", id)})
 	}
 	if exists, err := packagecheckout.ExistingDirectory(parent, id); err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("应用目录检查", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "应用目录状态暂不可读"))
 		return
 	} else if exists {
 		existing, err := parent.OpenRoot(id)
 		if err != nil {
-			websession.Fail(w, http.StatusConflict, err.Error())
+			logFailure("应用目录打开", err)
+			websession.Fail(w, http.StatusConflict, failureMessage(err, "应用目录暂不可读"))
 			return
 		}
 		digest, err := appDescriptorDigest(existing)
@@ -230,13 +235,15 @@ func (h *localHomeService) installAppSource(w http.ResponseWriter, r *http.Reque
 	}
 	source, err := os.OpenRoot(sourcePath)
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("随包应用源码", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "随包应用源码不可用"))
 		return
 	}
 	defer source.Close()
 	stageName, stage, err := packagecheckout.NewStage(parent)
 	if err != nil {
-		websession.Fail(w, http.StatusConflict, err.Error())
+		logFailure("应用安装暂存", err)
+		websession.Fail(w, http.StatusConflict, failureMessage(err, "无法创建安装暂存目录"))
 		return
 	}
 	defer func() {

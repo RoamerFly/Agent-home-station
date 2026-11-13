@@ -74,6 +74,11 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/canvas", owner.Protect(s.canvasRoute))
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/canvas", owner.Protect(s.canvasRoute))
+			// One app-level switch: pausing the application never restarts the
+			// workstation or the native process.
+			power := owner.Protect(s.appPowerRoute)
+			mux.HandleFunc("GET /api/local/apps/wechat/power", power)
+			mux.HandleFunc("POST /api/local/apps/wechat/power", power)
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks", owner.Protect(s.readTasks))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/tasks/{task}", owner.Protect(s.readTaskDetail))
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/tasks/{task}/outputs", owner.Protect(s.bindTaskOutput))

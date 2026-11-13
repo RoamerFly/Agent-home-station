@@ -555,7 +555,7 @@ body.is-home-ready {
   height: 29px;
   border-radius: 50%;
   border: 1px solid var(--line);
-  background: #254b71 url("/assets/whale-girl-cutout.png") center top / 88% auto no-repeat;
+  background: #254b71 url("/assets/whale-girl-cutout.webp") center top / 88% auto no-repeat;
 }
 .is-home-ready .chat-bubble.is-user::before {
   left: calc(100% + 7px);

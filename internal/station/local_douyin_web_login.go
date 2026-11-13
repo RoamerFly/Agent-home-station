@@ -51,6 +51,10 @@ type localDouyinWebView struct {
 	VisualReason    string   `json:"visual_reason,omitempty"`
 	PublishEnabled  bool     `json:"publish_enabled"`
 	MemoryScopes    []string `json:"memory_scopes,omitempty"`
+	// SignedIn is a probe, not an authorization: the owner still confirms the
+	// saved profile, it only lets the page close the window the moment the
+	// platform session actually exists.
+	SignedIn bool `json:"signed_in,omitempty"`
 }
 
 type localDouyinWebInput struct {
@@ -176,6 +180,7 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 			websession.Fail(w, status, err.Error())
 			return
 		}
+		view = m.withSignedIn(r.Context(), view)
 		view = m.withVisualReadiness(r.Context(), view)
 		websession.Respond(w, http.StatusOK, view)
 	})
@@ -352,6 +357,31 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	v.RepliesEnabled = v.CommentsEnabled && record.RepliesEnabled
 	v.PublishEnabled = !record.Paused && record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
+}
+
+// douyinLoginSignals is implemented by the production login window. Test
+// doubles only need Active/Close, so the probe stays optional.
+type douyinLoginSignals interface {
+	SignedIn(context.Context) (bool, error)
+}
+
+// withSignedIn asks the owned browser whether the platform session already
+// exists. The window is closed automatically by the page, so a successful
+// sign-in does not need a manual confirmation click.
+func (m *localDouyinWebLogin) withSignedIn(ctx context.Context, view localDouyinWebView) localDouyinWebView {
+	if !view.Active || m.window == nil {
+		return view
+	}
+	probe, ok := m.window.(douyinLoginSignals)
+	if !ok {
+		return view
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if signed, err := probe.SignedIn(probeCtx); err == nil && signed {
+		view.SignedIn = true
+	}
+	return view
 }
 
 // withVisualReadiness is deliberately only used while preparing the owner UI

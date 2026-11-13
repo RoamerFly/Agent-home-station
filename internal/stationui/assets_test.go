@@ -10,7 +10,7 @@ import (
 func TestStandaloneAllowsOnlyStationAssets(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
-	for _, path := range []string{"/", "/assets/local-home.js", "/assets/local-home.css", "/assets/whale-girl-cutout.png", "/assets/night-sea.webp", "/assets/tide-atlas.webp"} {
+	for _, path := range []string{"/", "/assets/local-home.js", "/assets/local-home.css", "/assets/whale-girl-cutout.webp", "/assets/whale-girl-cutout.png", "/assets/night-sea.webp", "/assets/tide-atlas.webp"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		res := httptest.NewRecorder()
 		mux.ServeHTTP(res, req)
@@ -33,10 +33,11 @@ func TestStandaloneAllowsOnlyStationAssets(t *testing.T) {
 
 func TestLegacyAliasIsStillAvailable(t *testing.T) {
 	res := httptest.NewRecorder()
-	if ServeLegacy(res, "/") || res.Body.Len() != 0 {
+	req := httptest.NewRequest(http.MethodGet, "/local-home", nil)
+	if ServeLegacy(res, req, "/") || res.Body.Len() != 0 {
 		t.Fatal("station shell claimed the legacy management homepage")
 	}
-	if !ServeLegacy(res, "/local-home") || res.Code != http.StatusOK || res.Body.Len() == 0 {
+	if !ServeLegacy(res, req, "/local-home") || res.Code != http.StatusOK || res.Body.Len() == 0 {
 		t.Fatalf("legacy alias was not served: status=%d bytes=%d", res.Code, res.Body.Len())
 	}
 }

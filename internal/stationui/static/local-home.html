@@ -15,7 +15,7 @@
         <div class="sea-wash"></div>
         <div class="orbit orbit-one"></div>
         <div class="orbit orbit-two"></div>
-        <img class="fish" src="/assets/whale-girl-cutout.png" alt="">
+        <img class="fish" src="/assets/whale-girl-cutout.webp" alt="">
         <p class="visual-caption" aria-hidden="true">DAFEIYU / HOME</p>
         <div class="rail-brand" hidden>大肥鱼的家</div>
         <nav id="local-tabs" hidden class="local-tabs" aria-label="本地功能">
@@ -107,7 +107,7 @@
                 </div>
                 <aside class="chat-aside" aria-label="角色与近期记忆">
                   <div class="chat-character">
-                    <img src="/assets/whale-girl-cutout.png" alt="">
+                    <img src="/assets/whale-girl-cutout.webp" alt="">
                     <strong>大肥鱼</strong>
                   </div>
                   <section class="recent-memory" aria-labelledby="recent-memory-title">
@@ -270,6 +270,14 @@
                   <div class="detail-block"><span>专属目录</span><code id="home-directory">正在读取…</code></div>
                   <div class="detail-pair"><div><span>大肥鱼</span><strong id="fish-id">—</strong></div><div><span>主人</span><strong id="owner-id">—</strong></div></div>
                 </div>
+              </details>
+              <details class="identity-details" id="diagnostics-details">
+                <summary>排查与日志</summary>
+                <p class="app-scope-note">技术记录只保存在本机，用于排查失败。日常使用不需要查看。</p>
+                <div class="settings-actions">
+                  <button id="open-logs-button" class="button compact secondary" type="button">打开日志文件夹</button>
+                </div>
+                <p id="logs-state" class="app-scope-note"></p>
               </details>
               <div class="settings-actions home-controls">
                 <button id="back-to-chat-button" class="button quiet" type="button">返回聊天</button>

@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,6 +72,45 @@ func (s *Store) sameOrigin(r *http.Request) bool {
 		want = scheme + "://" + r.Host
 	}
 	return r.Header.Get("Origin") == want
+}
+
+// allowedHost rejects requests whose Host header does not belong to this
+// service. Without it, a rebound DNS name pointed at 127.0.0.1 would satisfy
+// sameOrigin because the expected origin is derived from the request itself.
+func allowedHost(r *http.Request, origin string) bool {
+	if origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" {
+			return false
+		}
+		return strings.EqualFold(r.Host, u.Host)
+	}
+	return loopbackHost(r.Host)
+}
+
+func loopbackHost(host string) bool {
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// GuardHost rejects requests that reach the listener under a foreign Host
+// header. The desktop and the local browser both use a loopback name, so any
+// other value is either a misconfiguration or a rebound DNS name.
+func GuardHost(next http.Handler, origin string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowedHost(r, origin) {
+			Fail(w, http.StatusForbidden, "拒绝来自非本机地址的请求")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Store) cookie(w http.ResponseWriter, r *http.Request, value string, age int) {

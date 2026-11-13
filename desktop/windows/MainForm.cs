@@ -301,6 +301,15 @@ namespace WechatAgent.Desktop {
                 await SetWechatServiceEnabled((bool)rawEnabled);
                 return;
             }
+            if (Deployment.Text(input, "type") == "open-logs") {
+                // Diagnostics stay local: the page only asks the host to reveal
+                // the folder, it never receives log contents.
+                var logs = Path.Combine(deployment.Root, "logs");
+                Directory.CreateDirectory(logs);
+                try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + logs + "\"") { UseShellExecute = true }); }
+                catch (Exception) { }
+                return;
+            }
             if (Deployment.Text(input, "type") != "douyin-auth-open") return;
             var authorizationURL = Deployment.Text(input, "url");
             var expiresAt = Deployment.Text(input, "expires_at");

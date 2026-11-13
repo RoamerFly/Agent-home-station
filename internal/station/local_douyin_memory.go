@@ -159,8 +159,15 @@ func openLocalDouyinMemory(ctx context.Context, home *localHomeService, create b
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	// Match the main store's durability settings; a bare busy_timeout left this
+	// database in rollback-journal mode with no reader/writer concurrency. The
+	// journal mode is only settable while this host owns a writable database.
 	if _, err = db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err == nil && create {
-		_, err = db.ExecContext(ctx, localDouyinMemorySchema)
+		if _, err = db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err == nil {
+			if _, err = db.ExecContext(ctx, "PRAGMA synchronous=NORMAL"); err == nil {
+				_, err = db.ExecContext(ctx, localDouyinMemorySchema)
+			}
+		}
 	}
 	if err != nil {
 		db.Close()

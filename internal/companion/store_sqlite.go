@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -296,23 +297,25 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 	return s, nil
 }
 
+// memoryTimeBatch bounds one write transaction during the v1 backfill. The
+// migration previously held SQLite's only connection for the whole table, so a
+// large database stalled every other read until the rewrite finished.
+const memoryTimeBatch = 500
+
 func upgradeMemoryTimes(db *sql.DB) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	// Schema changes are idempotent: a crash in the middle of the backfill must
+	// not leave the table refusing to open with "duplicate column name".
 	for _, q := range []string{"ALTER TABLE memories ADD COLUMN statement_at TEXT NOT NULL DEFAULT ''", "ALTER TABLE memories ADD COLUMN event_at TEXT NOT NULL DEFAULT ''", "ALTER TABLE memories ADD COLUMN event_year INTEGER NOT NULL DEFAULT 0"} {
-		if _, err = tx.Exec(q); err != nil {
+		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
 		}
 	}
-	rows, err := tx.Query("SELECT id,at FROM events")
+	type stampRow struct{ id, at string }
+	var stamps []stampRow
+	rows, err := db.Query("SELECT id,at FROM events")
 	if err != nil {
 		return err
 	}
-	type stampRow struct{ id, at string }
-	stamps := []stampRow{}
 	for rows.Next() {
 		var r stampRow
 		if err = rows.Scan(&r.id, &r.at); err != nil {
@@ -328,24 +331,15 @@ func upgradeMemoryTimes(db *sql.DB) error {
 	if rowErr != nil {
 		return rowErr
 	}
-	for _, r := range stamps {
-		stamp, e := time.Parse(time.RFC3339Nano, r.at)
-		if e != nil {
-			return e
-		}
-		if _, err = tx.Exec("UPDATE events SET at=? WHERE id=?", memoryTime(stamp), r.id); err != nil {
-			return err
-		}
-	}
-	rows, err = tx.Query("SELECT id,payload FROM memories")
-	if err != nil {
-		return err
-	}
 	type entryRow struct {
 		id string
 		m  MemoryEntry
 	}
-	entries := []entryRow{}
+	var entries []entryRow
+	rows, err = db.Query("SELECT id,payload FROM memories")
+	if err != nil {
+		return err
+	}
 	for rows.Next() {
 		var r entryRow
 		var raw []byte
@@ -365,20 +359,47 @@ func upgradeMemoryTimes(db *sql.DB) error {
 	if rowErr != nil {
 		return rowErr
 	}
-	for _, r := range entries {
-		statement := r.m.LastMention
-		if statement.IsZero() {
-			statement = r.m.Created
+	if err = inMemoryTimeBatches(db, len(stamps), func(tx *sql.Tx, i int) error {
+		stamp, e := time.Parse(time.RFC3339Nano, stamps[i].at)
+		if e != nil {
+			return e
 		}
-		if _, err = tx.Exec("UPDATE memories SET statement_at=?,updated=? WHERE id=?", memoryTime(statement), memoryTime(r.m.Updated), r.id); err != nil {
+		_, e = tx.Exec("UPDATE events SET at=? WHERE id=?", memoryTime(stamp), stamps[i].id)
+		return e
+	}); err != nil {
+		return err
+	}
+	if err = inMemoryTimeBatches(db, len(entries), func(tx *sql.Tx, i int) error {
+		statement := entries[i].m.LastMention
+		if statement.IsZero() {
+			statement = entries[i].m.Created
+		}
+		_, e := tx.Exec("UPDATE memories SET statement_at=?,updated=? WHERE id=?", memoryTime(statement), memoryTime(entries[i].m.Updated), entries[i].id)
+		return e
+	}); err != nil {
+		return err
+	}
+	_, err = db.Exec("UPDATE meta SET value='2' WHERE key='schema'")
+	return err
+}
+
+func inMemoryTimeBatches(db *sql.DB, count int, apply func(*sql.Tx, int) error) error {
+	for start := 0; start < count; start += memoryTimeBatch {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		for i := start; i < min(start+memoryTimeBatch, count); i++ {
+			if err := apply(tx, i); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
-	_, err = tx.Exec("UPDATE meta SET value='2' WHERE key='schema'")
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) Close() error {
