@@ -66,11 +66,14 @@ type localChatService struct {
 	modelFactory func() (companion.LanguageModel, error)
 	followups    *localTaskFollowupWorker
 	surfActions  *localSurfActionWorker
+	// grants holds the owner's general-capability consents. It is read on every
+	// turn so a withdrawal applies to the next message without a restart.
+	grants *localToolGrantsStore
 }
 
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), ctx: ctx, cancel: cancel,
+	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
@@ -247,6 +250,7 @@ func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/local/chat", s.Protect(h.send))
 	mux.HandleFunc("GET /api/local/model", s.Protect(h.modelView))
 	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))
+	h.toolGrantsRoutes(s, mux)
 	h.appObservationRoutes(s, mux)
 	h.publicationRoutes(s, mux)
 	h.interactionRoutes(s, mux)

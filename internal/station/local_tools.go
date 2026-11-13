@@ -44,6 +44,12 @@ type localToolSet struct {
 	publications          *localChatService
 	requestTime           time.Time
 	continuationGuard     func(context.Context) error
+	// catalog is the application index injected with the workspace note. It
+	// carries names and switch state only; no application content is loaded.
+	catalog map[string]any
+	// grants are the owner's general-capability consents for this turn. Groups
+	// the owner withdrew never reach the tool surface.
+	grants localToolGrants
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -70,14 +76,20 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 	tools := &localToolSet{
 		memory: newLocalMemoryTools(store, in), files: newLocalFileTools(access), process: process,
 		access: access, processError: err, python: python, traceID: in.TraceID,
-		store: store,
+		store: store, grants: h.grants.View(),
 	}
 	if in.Channel == "local" && in.Mode == "direct" && in.Directed && in.Thread == in.Sender && !in.Preview && !in.Surf && !in.ReportOnly {
-		tools.wechat = h.wechat
+		// A switched-off application is not at home: its memory, contacts and
+		// group tools are not attached at all. The catalog still lists it as
+		// off so the companion remembers that the home has it.
+		if h.wechat != nil && !h.wechat.appPower().off() {
+			tools.wechat = h.wechat
+		}
 		tools.observations = h.observations
 		tools.publications = h
 		tools.projectTools = h.projectTools
 		tools.requestTime, _ = time.Parse(time.RFC3339Nano, in.MessageTime)
+		tools.catalog = h.homeCatalog()
 		if in.OriginalText != nil {
 			tools.douyinMemoryRequested = strings.Contains(*in.OriginalText, "抖音") || strings.Contains(strings.ToLower(*in.OriginalText), "douyin")
 		}
@@ -135,15 +147,23 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if t.access.home.artifacts != nil && t.run != nil {
 		all = append(all, mcptools.NewTool(localArtifactPublishTool, "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，宿主自动计算并返回实际 SHA-256；已知哈希时可选 expected_sha256 核对指定版本，无需仅为登记另起进程算哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path"],"additionalProperties":false}`))
 	}
-	all = append(all, t.localDocumentTools(ctx)...)
-	all = append(all, t.localAudioTools(ctx)...)
-	all = append(all, t.localRVCTools(ctx)...)
-	all = append(all, t.localComfyTools(ctx)...)
-	all = append(all, t.localYuETools(ctx)...)
-	all = append(all, t.localTTSTools(ctx)...)
+	// Execution and generation only appear after the owner hands them over.
+	if t.grants.Documents {
+		all = append(all, t.localDocumentTools(ctx)...)
+	}
+	if t.grants.Media {
+		all = append(all, t.localAudioTools(ctx)...)
+		all = append(all, t.localRVCTools(ctx)...)
+		all = append(all, t.localComfyTools(ctx)...)
+		all = append(all, t.localYuETools(ctx)...)
+		all = append(all, t.localTTSTools(ctx)...)
+	}
 	var failures error
-	accesses := []companion.ToolAccess{t.memory, t.files}
-	if t.process != nil {
+	accesses := []companion.ToolAccess{t.memory}
+	if t.grants.Files {
+		accesses = append(accesses, t.files)
+	}
+	if t.grants.Process && t.process != nil {
 		accesses = append(accesses, t.process)
 	}
 	for _, access := range accesses {
@@ -299,6 +319,11 @@ func (t *localToolSet) AgentContext(ctx context.Context) string {
 				data["media_executables"] = programs
 			}
 		}
+	}
+	if t.catalog != nil {
+		// Names and switch state only. Application content still requires an
+		// on-demand app_memory lookup inside its own authorized scope.
+		data["home_apps"] = t.catalog
 	}
 	if t.run != nil && t.inspectOnly && t.run.CheckSource(ctx) == nil {
 		const preview = 8

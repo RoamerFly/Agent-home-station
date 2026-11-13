@@ -179,6 +179,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			break
 		}
 	}
+	// The list handed in here is already the granted surface: groups the owner
+	// withdrew never reach this point. Names outside it stay unreachable.
 	for _, tool := range tools {
 		allowed[tool.Name] = true
 	}
@@ -791,6 +793,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 						}
 						for _, t := range discovered {
 							activeTools = exposeTool(activeTools, t)
+							allowed[t.Name] = true
 						}
 						b, _ := json.Marshal(resultPage)
 						result = string(b)

@@ -199,6 +199,12 @@ func (s *stationWechat) memoryGrant(id, account, thread, fish, owner string) (st
 	defer worker.ownerMu.Unlock()
 	view, err := readStationMemoryGrants(worker, account)
 	stamp := view.StationReads[thread]
+	// A switched-off application keeps its records but not its voice: the owner
+	// turned it off, so it must not answer questions about that application's
+	// history until it is switched back on.
+	if worker.policy.Enabled && worker.policy.Paused {
+		return view, time.Time{}, apphost.ErrObservationForbidden
+	}
 	if err != nil || view.Fish != fish || view.Owner != owner || stamp.IsZero() || !stamp.Equal(worker.policy.HistoryGrants[thread]) {
 		return view, time.Time{}, apphost.ErrObservationForbidden
 	}

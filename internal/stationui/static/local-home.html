@@ -245,9 +245,8 @@
                   </label>
                   <label>思考强度
                     <select id="model-reasoning" name="reasoning_effort">
-                      <option value="low">低</option>
-                      <option value="medium">中</option>
                       <option value="high">高</option>
+                      <option value="max" selected>最高</option>
                     </select>
                   </label>
                 </div>
@@ -262,6 +261,12 @@
                   <input id="model-clear-key" name="clear_key" type="checkbox">
                   <span><strong>清除已保存的密钥</strong><small>保存后才会生效。</small></span>
                 </label>
+                </fieldset>
+                <fieldset class="settings-group">
+                  <legend>能力授权</legend>
+                  <p>通用工具默认不开启。你勾选的能力才会进入她这一轮的可用工具，取消后下一句话即失效；应用接入与记忆读取另有各自的授权。</p>
+                  <div id="tool-grants" class="tool-grants" aria-busy="false"></div>
+                  <p id="tool-grants-feedback" class="app-scope-note" role="status"></p>
                 </fieldset>
               </form>
               <details id="home-details" class="identity-details">

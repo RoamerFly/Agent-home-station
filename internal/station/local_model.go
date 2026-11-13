@@ -60,7 +60,9 @@ func defaultLocalModelSettings() LocalModelSettings {
 		Model:           "deepseek-flash",
 		MaxTokens:       4096,
 		ThinkingEnabled: true,
-		ReasoningEffort: "low",
+		// "medium" is not a provider value: it silently degraded to "low", so the
+		// default is now the strongest supported setting.
+		ReasoningEffort: "max",
 		Persona:         companion.FriendlyPersona,
 	}
 }

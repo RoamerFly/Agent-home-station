@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const $ = (selector) => document.querySelector(selector);
-  const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView() };
+  const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView(), toolGrants: null };
   const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
@@ -57,6 +57,7 @@
     if (view === "project-tools") loadProjectTools();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
+    if (view === "settings") void loadToolGrants();
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
@@ -1548,7 +1549,9 @@
         if (apps.selectedLogin === account.id && entry?.op && (status?.login !== "authenticated" || entry.op.state === "succeeded")) {
           item.append(renderAppLogin(account.id, entry.op));
         }
-        if (canSetup && status && appWorkerLabels[status.worker]) item.append(appWorkerControls(account.id, status));
+        // Agent start/pause, contact and group switches live in the application
+        // configuration only. Repeating them on every account card buried the
+        // page in controls that the owner had no reason to touch here.
         if (archiveOnly) item.append(deliveryRecords(account.id, true));
         list.append(item);
       }
@@ -2452,13 +2455,18 @@
       const head = appElement("header", "", "app-record-head");
       const source = catalog.get(record.id);
       const version = source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本";
-      head.append(appMark(record.id, label), appElement("h4", label), appElement("span", version, "app-card-status"));
+      // Three states the owner can act on: running, switched off, not connected.
+      // The label is text, not colour alone, so it survives a greyscale screen.
+      const connection = evidence.connected === false ? "not_connected" : evidence.service === "已运行" ? "on" : "off";
+      const connectionLabel = { on: "运行中", off: "已关闭", not_connected: "未接入" }[connection];
+      card.dataset.connection = connection;
+      head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
       open.type = "button"; open.setAttribute("aria-label", "管理" + label);
       open.setAttribute("aria-controls", "app-dialog"); open.setAttribute("aria-expanded", String(apps.openID === record.id));
       open.dataset.app = record.id;
       const foot = appElement("span", "管理应用  ›", "app-card-footer");
-      open.append(head, appEvidenceRows(evidence), foot); card.append(open);
+      open.append(head, appEvidenceRows(evidence), appElement("p", version, "app-card-version"), foot); card.append(open);
       open.addEventListener("click", () => {
         if (apps.openID && apps.openID !== record.id) {
           clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
@@ -5371,7 +5379,7 @@
   }
   function normalizeLocalVision(configuration) {
     const value = configuration || {};
-    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["low", "high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "low" };
+    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "max" };
   }
   function validLocalVision(view) {
     return view && Number.isSafeInteger(view.revision) && view.revision >= 0 && view.configuration && typeof view.configuration === "object" && typeof view.key_configured === "boolean" && typeof view.ready === "boolean";
@@ -5453,7 +5461,7 @@
       ["接口类型", "backend", { select: [["openai-compatible", "OpenAI 兼容"], ["deepseek", "DeepSeek"]] }],
       ["视觉模型", "model", {}], ["接口地址", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
       ["输出上限", "max_tokens", { type: "number", min: 1, inputMode: "numeric" }],
-      ["思考强度", "reasoning_effort", { select: [["low", "低"], ["high", "高"], ["max", "最高"]] }]
+      ["思考强度", "reasoning_effort", { select: [["high", "高"], ["max", "最高"]] }]
     ];
     for (const [label, key, options] of fields) {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: busy || key === "reasoning_effort" && !draft.thinking });
@@ -6364,6 +6372,53 @@
       await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
+  // General capabilities are the owner's to hand over. The list is explicit so
+  // a withdrawal is one click, not a hidden setting.
+  const TOOL_GRANT_ITEMS = [
+    { key: "files", label: "家目录文件", note: "在专属目录里读取、保存并整理自己的文件。" },
+    { key: "process", label: "启动本机程序", note: "运行隔离进程；每次启动仍按你当时的请求绑定。" },
+    { key: "documents", label: "文档工具", note: "生成与导出文档，需要本机已备好文档运行时。" },
+    { key: "media", label: "音频与生成", note: "音频、RVC、Comfy、YuE、TTS 等本机生成能力。" },
+  ];
+  function renderToolGrants() {
+    const host = $("#tool-grants"); if (!host) return;
+    host.replaceChildren();
+    if (!state.toolGrants) { host.append(appElement("p", "正在读取授权…", "app-scope-note")); return; }
+    for (const item of TOOL_GRANT_ITEMS) {
+      const row = appElement("label", "", "switch-row");
+      const input = document.createElement("input");
+      input.type = "checkbox"; input.checked = Boolean(state.toolGrants[item.key]);
+      input.addEventListener("change", () => saveToolGrant(item.key, input.checked, input));
+      const span = appElement("span", "");
+      span.append(appElement("strong", item.label), appElement("small", item.note));
+      row.append(input, span);
+      host.append(row);
+    }
+    host.setAttribute("aria-busy", "false");
+  }
+  async function loadToolGrants() {
+    const host = $("#tool-grants"); if (!host) return;
+    host.setAttribute("aria-busy", "true");
+    try { state.toolGrants = await request("/api/local/tool-grants"); renderToolGrants(); }
+    catch (error) {
+      state.toolGrants = null;
+      host.replaceChildren(appElement("p", error.message || "能力授权暂不可读。", "app-scope-note"));
+    }
+  }
+  async function saveToolGrant(key, value, input) {
+    const feedback = $("#tool-grants-feedback");
+    input.disabled = true;
+    try {
+      state.toolGrants = await request("/api/local/tool-grants", { method: "PUT", body: JSON.stringify({ ...state.toolGrants, [key]: value }) });
+      renderToolGrants();
+      feedback.textContent = value ? "已授权，从下一句话开始生效。" : "已收回，下一句话起不再提供这项能力。";
+      showMessage(feedback.textContent, "success");
+    } catch (error) {
+      input.checked = !value; input.disabled = false;
+      feedback.textContent = error.message || "授权未能保存。";
+      showMessage(feedback.textContent, "error");
+    }
+  }
   function setModelForm(model) {
     const source = model || {};
     $("#model-revision").value = String(source.revision || 0);
@@ -6372,7 +6427,8 @@
     $("#model-name").value = source.model || "deepseek-flash";
     $("#model-max-tokens").value = String(source.max_tokens || 4096);
     $("#model-thinking").checked = source.thinking_enabled !== false;
-    $("#model-reasoning").value = source.reasoning_effort || "low";
+    $("#model-reasoning").value = ["high", "max"].includes(source.reasoning_effort) ? source.reasoning_effort : "max";
+    $("#model-reasoning").disabled = !$("#model-thinking").checked;
     $("#model-persona").value = source.persona || "";
     $("#model-api-key").value = ""; $("#model-api-key").placeholder = source.key_configured ? "已保存；留空不改" : "填写后保存";
     $("#model-clear-key").checked = false;
@@ -6693,7 +6749,8 @@
   });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
-  $("#model-form").addEventListener("submit", saveModel); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
+  $("#model-form").addEventListener("submit", saveModel);
+  $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#chat-memory-link-cancel").addEventListener("click", () => { state.chat.link = null; renderChat(); $("#chat-input").focus(); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
   document.addEventListener("visibilitychange", () => {

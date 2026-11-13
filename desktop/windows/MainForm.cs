@@ -46,7 +46,7 @@ namespace WechatAgent.Desktop {
         internal MainForm(Deployment d, EventWaitHandle activation, ServiceController services, bool startOnShown) {
             deployment = d; activate = activation; controller = services;
             closeSettings = new CloseSettings(d.Workspace, d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory));
-            Text = "Agent-home-station"; Size = new Size(1440, 980); MinimumSize = new Size(920, 640);
+            Text = "Agent-home-station"; Size = new Size(1440, 980); MinimumSize = new Size(880, 600);
             WindowState = FormWindowState.Maximized;
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
