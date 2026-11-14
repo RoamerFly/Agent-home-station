@@ -231,10 +231,30 @@ func creatorPublicationChat(t *testing.T, lost, revoke, actualProcess bool) (*lo
 	if actualProcess {
 		text = "制作一段带测试音的合成视频，以仅自己可见发布，并保留原任务回执"
 	}
-	if code, out := localChatSend(f, "creator-video-chat", text); code != 200 || out["status"] != "completed" || job == "" {
+	// The idle followup scanner briefly owns the same admission mutex even
+	// when no continuation is due. Wait for actual turn admission, and retry
+	// only that pre-generation conflict with the identical request identity.
+	// All model/upload/submission counts below still detect duplicate effects.
+	sendWhenIdle := func() (int, map[string]any) {
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if !f.handler.chat.busy.Load() && f.handler.chat.turn.TryLock() {
+				f.handler.chat.turn.Unlock()
+				code, out := localChatSend(f, "creator-video-chat", text)
+				if code != 409 || out["error"] != "当前对话正在生成，请等待后查看记录；不会重复提交" || time.Now().After(deadline) {
+					return code, out
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("synthetic publication chat did not become idle")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if code, out := sendWhenIdle(); code != 200 || out["status"] != "completed" || job == "" {
 		t.Fatalf("normal publication chat: %d %v", code, out)
 	}
-	if code, _ := localChatSend(f, "creator-video-chat", text); code != 200 || calls != 5 {
+	if code, _ := sendWhenIdle(); code != 200 || calls != 5 {
 		t.Fatal("request replay invoked model or upload")
 	}
 	return f, s, job, artifact

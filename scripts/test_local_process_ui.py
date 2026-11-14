@@ -84,21 +84,24 @@ def verify(binary, output):
                 body = page.locator("#app-configuration-body")
                 card = body.locator(".round-message-card")
                 card.get_by_text("帮我整理一下这份文档", exact=True).wait_for()
-                assert "3 个步骤 · 1 次工具调用" in card.inner_text()
+                expect(card.locator(".round-timeline li")).to_have_count(3)
+                expect(card.locator(".round-tool-name")).to_contain_text("memory_search")
+                assert " 次工具调用" not in card.inner_text()
                 assert body.locator("input").count() == 1
                 assert body.locator("input").get_attribute("type") == "date"
                 assert "private-" not in body.inner_text()
                 page.screenshot(path=str(output / "round-cards.png"), full_page=True)
-                card.click()
+                opener = card.get_by_role("button", name="单独查看", exact=True)
+                opener.click()
                 dialog = page.get_by_role("dialog", name="回合处理过程", exact=True)
-                dialog.get_by_text("正在理解需求 · 搜索会话记忆", exact=True).wait_for()
-                assert dialog.locator(".round-timeline li span").all_text_contents() == [
-                    "收到消息", "正在理解需求 · 搜索会话记忆", "微信已接受回复",
-                ]
+                expect(dialog.locator(".round-timeline li")).to_have_count(3)
+                expect(dialog.locator(".round-tool-name")).to_contain_text("memory_search")
+                for label in ("收到消息", "正在理解需求", "微信已接受回复"):
+                    expect(dialog).to_contain_text(label)
                 assert "private-" not in dialog.inner_text()
                 page.screenshot(path=str(output / "readable-rounds.png"), full_page=True, animations="disabled")
                 dialog.get_by_role("button", name="关闭", exact=True).click()
-                expect(card).to_be_focused()
+                expect(opener).to_be_focused()
                 open_configuration(page, "微信", "任务与文档")
                 body.get_by_text("文件任务 · 状态待确认", exact=True).click()
                 body.get_by_role("button", name="查看文件", exact=True).click()

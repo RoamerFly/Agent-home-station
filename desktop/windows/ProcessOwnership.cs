@@ -40,7 +40,11 @@ namespace WechatAgent.Desktop {
         internal async Task StopWeb() { await process.StandardInput.WriteLineAsync("stop"); await process.StandardInput.FlushAsync(); await WaitStopped(); }
         internal void StopUnadmitted() { if (!process.HasExited) process.Kill(); }
         internal async Task WaitStopped() {
-            var deadline = DateTime.UtcNow.AddSeconds(30);
+            // Hosted Windows runners can be compiling or draining the local
+            // station while its stdin stop request is already accepted. Keep
+            // waiting for a graceful exit instead of treating that normal
+            // drain as a failed install or killing in-flight work.
+            var deadline = DateTime.UtcNow.AddSeconds(90);
             while (!process.HasExited) {
                 if (DateTime.UtcNow > deadline) throw new InvalidOperationException("服务尚未完成安全退出；没有强制结束在途任务。");
                 await Task.Delay(100);
