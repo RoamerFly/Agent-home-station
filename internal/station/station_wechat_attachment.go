@@ -74,6 +74,13 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/execution-rounds", owner.Protect(s.readExecutionRounds))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/canvas", owner.Protect(s.canvasRoute))
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/canvas", owner.Protect(s.canvasRoute))
+			// The legacy admin exposed manual sends globally.  The workstation
+			// version is deliberately connection scoped so the selected account,
+			// policy grants and native receipt remain bound to one WeChat login.
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/manual-sends", owner.Protect(s.manualSendState))
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/manual-sends", owner.Protect(s.manualSend))
+			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/manual-sends/upload", owner.Protect(s.manualSendUpload))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/manual-sends/{operation}", owner.Protect(s.manualSendLookup))
 			// One app-level switch: pausing the application never restarts the
 			// workstation or the native process.
 			power := owner.Protect(s.appPowerRoute)

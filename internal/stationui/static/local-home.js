@@ -27,10 +27,15 @@
   async function request(url, options = {}) {
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
-    if (options.body) headers.set("Content-Type", "application/json");
+    const fetchOptions = { ...options };
+    if (options.formData) {
+      fetchOptions.body = options.formData;
+      delete fetchOptions.formData;
+      headers.delete("Content-Type");
+    } else if (options.body) headers.set("Content-Type", "application/json");
     if (state.csrf && options.method && options.method !== "GET") headers.set("X-CSRF-Token", state.csrf);
     let response;
-    try { response = await fetch(url, { ...options, headers, credentials: "same-origin" }); }
+    try { response = await fetch(url, { ...fetchOptions, headers, credentials: "same-origin" }); }
     catch (_) { const error = new Error("无法连接本机服务。"); error.status = 0; throw error; }
     let body = null;
     try { body = await response.json(); } catch (_) { /* Do not render non-JSON error bodies. */ }
@@ -4302,6 +4307,119 @@
     section.append(heading);
     return section;
   }
+  function appManualSendPanel(view, id) {
+    const section = legacyWechatSection("手动发送", "沿用旧版三步发送工作区：只使用当前微信连接已授权的会话，上传与发送分开确认，结果不明确时只查询原操作编号。", "legacy-tools-page");
+    const model = { loaded: false, loading: false, busy: false, sendStarted: false, config: null, kind: "text", file: null, upload: null, key: "", result: null };
+    const workspace = appElement("div", "", "legacy-tools-workspace");
+    const compose = appElement("article", "", "legacy-tools-compose");
+    const side = appElement("aside", "", "legacy-tools-side");
+    const progress = appElement("div", "等待读取当前连接的授权会话。", "legacy-tools-progress");
+    const result = appElement("div", "", "legacy-tools-result");
+    const recipient = document.createElement("select");
+    recipient.setAttribute("aria-label", "已授权接收方");
+    const text = document.createElement("textarea");
+    text.rows = 5; text.maxLength = 4096; text.placeholder = "文字消息内容";
+    text.setAttribute("aria-label", "文字内容");
+    const file = document.createElement("input");
+    file.type = "file"; file.setAttribute("aria-label", "选择附件");
+    const fileNote = appElement("p", "请选择符合当前类型和大小限制的附件。", "app-scope-note");
+    const uploadButton = appElement("button", "上传附件（不发送）", "button compact secondary");
+    uploadButton.type = "button";
+    const uploadStatus = appElement("p", "", "app-scope-note");
+    const review = appElement("dl", "", "legacy-tools-review");
+    const sendButton = appElement("button", "确认发送一次", "button compact primary");
+    sendButton.type = "button";
+    const lookupButton = appElement("button", "查询本次发送状态", "button compact secondary");
+    lookupButton.type = "button";
+    const newButton = appElement("button", "新建发送", "button compact quiet");
+    newButton.type = "button";
+    const kindBox = appElement("div", "", "legacy-tools-kind");
+    const uploadArea = appElement("div", "", "legacy-tools-upload");
+    const steps = [
+      ["1", "选择类型与会话", appElement("div", "", "legacy-tools-step-body")],
+      ["2", "填写或上传", appElement("div", "", "legacy-tools-step-body")],
+      ["3", "核对并手动发送", appElement("div", "", "legacy-tools-step-body")],
+    ];
+    for (const [number, title, body] of steps) {
+      const step = appElement("div", "", "legacy-tools-step");
+      step.append(appElement("span", number, "legacy-tools-step-number"), appElement("h5", title), body);
+      compose.append(step);
+    }
+    steps[0][2].append(kindBox, appElement("label", "已授权接收方", "field-label"), recipient);
+    steps[1][2].append(appElement("label", "文字内容", "field-label"), text, uploadArea);
+    uploadArea.append(appElement("label", "选择附件", "field-label"), file, fileNote, uploadButton, uploadStatus);
+    steps[2][2].append(review, sendButton, appElement("p", "发送不会调用模型，也不会自动重试。", "app-scope-note"));
+    const progressCard = appElement("article", "", "legacy-tools-card");
+    progressCard.append(appElement("h5", "发送进度"), progress);
+    const lookupCard = appElement("article", "", "legacy-tools-card");
+    lookupCard.append(appElement("h5", "结果不明确？"), appElement("p", "如果发送请求网络中断，请保留本次操作编号并查询状态；不要再次点击发送。", "app-scope-note"), lookupButton, newButton, result);
+    side.append(progressCard, lookupCard);
+    workspace.append(compose, side);
+    section.append(workspace);
+
+    const endpoint = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/manual-sends";
+    const render = () => {
+      const available = new Set(model.config?.kinds || ["text"]);
+      kindBox.replaceChildren();
+      for (const kind of ["text", "image", "file", "video", "voice"]) {
+        if (!available.has(kind) && kind !== "text") continue;
+        const button = appElement("button", ({ text: "文字", image: "图片", file: "文件", video: "视频", voice: "语音" })[kind], "button compact " + (model.kind === kind ? "secondary is-selected" : "quiet"));
+        button.type = "button"; button.disabled = model.busy || model.sendStarted;
+        button.setAttribute("aria-pressed", String(model.kind === kind));
+        button.addEventListener("click", () => { model.kind = kind; model.file = null; model.upload = null; file.value = ""; uploadStatus.textContent = ""; render(); });
+        kindBox.append(button);
+      }
+      recipient.replaceChildren(new Option(model.config?.recipients?.length ? "请选择已授权接收方" : "当前没有已授权接收方", ""), ...(model.config?.recipients || []).map((value) => new Option(value, value)));
+      recipient.value = model.recipient || "";
+      recipient.disabled = model.busy || model.sendStarted || !model.config?.recipients?.length;
+      text.hidden = model.kind !== "text"; text.disabled = model.busy || model.sendStarted || model.kind !== "text";
+      uploadArea.hidden = model.kind === "text"; file.disabled = model.busy || model.sendStarted || model.kind === "text";
+      uploadButton.disabled = model.busy || model.sendStarted || model.kind === "text" || !model.file || Boolean(model.upload);
+      const rows = [["类型", ({ text: "文字", image: "图片", file: "文件", video: "视频", voice: "语音" })[model.kind] || model.kind], ["接收方", model.recipient || "尚未选择"]];
+      if (model.kind === "text") rows.push(["内容", text.value.trim() || "尚未填写"]);
+      else rows.push(["附件", model.upload?.filename || model.file?.name || "尚未上传（上传不会发送）"]);
+      review.replaceChildren(...rows.flatMap(([label, value]) => [appElement("dt", label), appElement("dd", value)]));
+      const valid = Boolean(model.recipient) && (model.kind === "text" ? Boolean(text.value.trim()) : Boolean(model.upload)) && !model.busy && !model.sendStarted;
+      sendButton.disabled = !valid;
+      lookupButton.disabled = model.busy || !model.key || !model.result || (model.result.state !== "unknown" && model.result.operation?.state !== "unknown");
+      newButton.disabled = model.busy || !model.result;
+    };
+    const load = async () => {
+      model.loading = true; progress.textContent = "正在读取已授权会话与服务能力…";
+      try { model.config = await request(endpoint); model.loaded = true; progress.textContent = model.config.recipients?.length ? "选择内容后，上传与发送都需要你手动确认。" : "当前连接没有已授权回复会话，请先在“能力权限”中设置。"; }
+      catch (error) { progress.textContent = error.message; }
+      finally { model.loading = false; render(); }
+    };
+    recipient.addEventListener("change", () => { model.recipient = recipient.value; model.result = null; render(); });
+    text.addEventListener("input", () => { if (!model.sendStarted) { model.result = null; render(); } });
+    file.addEventListener("change", () => { if (model.sendStarted) return; model.file = file.files?.[0] || null; model.upload = null; uploadStatus.textContent = ""; model.result = null; render(); });
+    uploadButton.addEventListener("click", async () => {
+      if (!model.file || model.busy) return;
+      model.busy = true; render(); uploadStatus.textContent = "正在上传附件；上传完成后仍不会发送。";
+      try { const form = new FormData(); form.append("kind", model.kind); form.append("file", model.file, model.file.name); model.upload = await request(endpoint + "/upload", { method: "POST", formData: form }); uploadStatus.textContent = "已上传：" + (model.upload.filename || model.file.name) + "。请在右侧核对后手动发送。"; progress.textContent = "附件已上传，尚未发送。"; }
+      catch (error) { uploadStatus.textContent = error.message; }
+      finally { model.busy = false; render(); }
+    });
+    sendButton.addEventListener("click", async () => {
+      if (sendButton.disabled) return;
+      model.busy = true; model.sendStarted = true; model.key = model.key || crypto.randomUUID().replace(/[^a-zA-Z0-9_-]/g, ""); progress.textContent = "正在提交一次微信发送请求，请勿重复点击。"; render();
+      try {
+        model.result = await request(endpoint, { method: "POST", body: JSON.stringify({ thread_id: model.recipient, kind: model.kind, text: model.kind === "text" ? text.value.trim() : "", source_id: model.upload?.id || "", request_key: model.key }) });
+        progress.textContent = model.result.state === "unknown" ? "网络结果不明确，请查询本次操作状态；不会自动重发。" : "本次发送请求已提交，结果以原生回执为准。";
+      } catch (error) { model.result = { state: "unknown", reason: error.message }; progress.textContent = "网络结果不明确，请查询本次操作状态；不会自动重发。"; }
+      finally { model.busy = false; render(); result.textContent = model.result?.reason || model.result?.operation?.state || "已记录本次操作。"; }
+    });
+    lookupButton.addEventListener("click", async () => {
+      if (!model.key || model.busy) return;
+      model.busy = true; render();
+      try { model.result = await request(endpoint + "/" + encodeURIComponent(model.key)); result.textContent = model.result?.reason || model.result?.operation?.state || "已读取原生状态。"; progress.textContent = "状态已查询，不会自动重发。"; }
+      catch (error) { result.textContent = error.message; }
+      finally { model.busy = false; render(); }
+    });
+    newButton.addEventListener("click", () => { model.result = null; model.sendStarted = false; model.key = ""; model.upload = null; model.file = null; model.recipient = ""; recipient.value = ""; file.value = ""; text.value = ""; uploadStatus.textContent = ""; progress.textContent = "已新建发送草稿，请重新核对内容。"; render(); });
+    void load();
+    return section;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -4325,7 +4443,7 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && ["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -4380,6 +4498,38 @@
           } else view.archivePanel = null;
           controls.push(appWorkerControls(selected.id, status));
         }
+        break;
+      }
+      case "tools": {
+        if (selected) {
+          if (view.manualSendPanel?.connection !== selected.id) view.manualSendPanel = { connection: selected.id, node: appManualSendPanel(view, selected.id) };
+          controls.push(view.manualSendPanel.node);
+        } else controls.push(appElement("p", "连接微信后可按授权范围手动发送。", "app-scope-note"));
+        break;
+      }
+      case "permissions": {
+        if (selected) {
+          const status = apps.accountStatuses.get(selected.id);
+          const page = legacyWechatSection("能力权限", "旧版微信 Bot 的权限页按当前连接重新分组：读取能力默认可按授权范围使用，自主观察、媒体回复和主动 Agent 行为单独关闭。", "legacy-permissions-page");
+          page.append(status ? appWorkerControls(selected.id, status) : appElement("p", "正在读取当前微信连接状态…", "app-scope-note"));
+          controls.push(page);
+        } else controls.push(appElement("p", "连接微信后可设置能力权限。", "app-scope-note"));
+        break;
+      }
+      case "actions": {
+        if (selected) {
+          const page = legacyWechatSection("账号动作", "沿用旧版准备→核对→确认一次的操作语义。群通知、群名称和我的群昵称都按当前连接的原生回执核对。", "legacy-actions-page");
+          page.append(groupDirectoryControls(selected.id));
+          controls.push(page);
+        } else controls.push(appElement("p", "连接微信后可准备账号动作。", "app-scope-note"));
+        break;
+      }
+      case "directory": {
+        if (selected) {
+          const page = legacyWechatSection("通讯录", "只读取当前微信连接获准的联系人、群聊和成员目录；进入具体群聊后再准备管理动作。", "legacy-directory-page");
+          page.append(contactDirectoryControls(selected.id), groupDirectoryControls(selected.id));
+          controls.push(page);
+        } else controls.push(appElement("p", "连接微信后可读取通讯录。", "app-scope-note"));
         break;
       }
       case "rules": {

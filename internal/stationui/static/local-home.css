@@ -1620,6 +1620,35 @@ body.local-home-page { background:var(--bg); color:var(--text); }
 .is-home-ready .wechat-legacy-skin .legacy-delivery-page .delivery-records { margin:0; padding:0; border:0; background:transparent; }
 .is-home-ready .wechat-legacy-skin .legacy-delivery-page .delivery-records > summary { margin-bottom:12px; color:var(--ink); font-weight:700; }
 .is-home-ready .wechat-legacy-skin .legacy-delivery-page .work-record { padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--surface-raised); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-page { display:grid; gap:20px; max-width:1180px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-workspace { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; align-items:start; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-compose,
+.is-home-ready .wechat-legacy-skin .legacy-tools-card { padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--surface); box-shadow:var(--shadow); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-compose { display:grid; gap:0; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step { display:grid; grid-template-columns:32px minmax(0,1fr); gap:12px; padding:0 0 22px; margin:0 0 22px; border-bottom:1px solid var(--line); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step:last-child { margin-bottom:0; padding-bottom:0; border-bottom:0; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step-number { display:grid; place-items:center; width:30px; height:30px; border-radius:50%; color:#fff; background:var(--accent); font-weight:700; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step h5 { grid-column:2; margin:2px 0 10px; color:var(--ink); font-size:16px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step-body { grid-column:2; display:grid; gap:10px; min-width:0; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-step-body > :is(textarea,select,input[type=file]) { width:100%; box-sizing:border-box; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-kind { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:4px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-kind .is-selected { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-upload { display:grid; gap:8px; padding:14px; border:1px dashed var(--line); border-radius:12px; background:var(--surface-raised); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-upload[hidden] { display:none; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-review { display:grid; grid-template-columns:96px minmax(0,1fr); gap:8px 12px; margin:0 0 14px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-review dt { color:var(--muted); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-review dd { margin:0; overflow-wrap:anywhere; color:var(--ink); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-side { display:grid; gap:18px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-card { display:grid; gap:10px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-card h5 { margin:0; color:var(--ink); font-size:16px; }
+.is-home-ready .wechat-legacy-skin .legacy-tools-progress { min-height:46px; padding:12px; border-radius:10px; background:var(--surface-raised); color:var(--ink); }
+.is-home-ready .wechat-legacy-skin .legacy-tools-result { padding:10px 0 0; color:var(--muted); overflow-wrap:anywhere; }
+.is-home-ready .wechat-legacy-skin .legacy-permissions-page .app-worker,
+.is-home-ready .wechat-legacy-skin .legacy-actions-page > .work-records,
+.is-home-ready .wechat-legacy-skin .legacy-directory-page > .work-records { margin:0; padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--surface); box-shadow:var(--shadow); }
+@media (max-width: 900px) {
+  .is-home-ready .wechat-legacy-skin .legacy-tools-workspace { grid-template-columns:1fr; }
+}
 .is-home-ready .local-tab:hover:not(.is-active),
 .is-home-ready .local-tab:focus-visible { color: var(--rail-text); background: color-mix(in srgb, var(--rail-raised) 72%, transparent); }
 .is-home-ready .rail-footer .station-label { border-color: var(--rail-border); color: var(--rail-text); background: var(--rail-raised); }
