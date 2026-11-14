@@ -30,26 +30,32 @@ const (
 var wechatJournalZone = time.FixedZone("CST", 8*60*60)
 
 type wechatRoundStep struct {
-	Sequence            uint64    `json:"sequence"`
-	At                  time.Time `json:"at"`
-	Thread              string    `json:"thread,omitempty"`
-	Message             string    `json:"message,omitempty"`
-	RelatedMessage      string    `json:"related_message,omitempty"`
-	Reason              string    `json:"reason,omitempty"`
-	Event               string    `json:"event"`
-	Category            string    `json:"category"`
-	Status              string    `json:"status"`
-	Tool                string    `json:"tool,omitempty"`
-	Receipt             string    `json:"receipt,omitempty"`
-	CallID              string    `json:"call_id,omitempty"`
-	ToolStage           string    `json:"tool_stage,omitempty"`
-	ToolCode            string    `json:"tool_code,omitempty"`
-	ToolAttempt         int       `json:"tool_attempt,omitempty"`
-	ToolRequests        int       `json:"tool_requests,omitempty"`
-	ToolRetries         int       `json:"tool_retries,omitempty"`
-	ToolHTTPStatus      int       `json:"tool_http_status,omitempty"`
-	DurationMS          int64     `json:"duration_ms,omitempty"`
-	ToolTrackingVersion int       `json:"tool_tracking_version,omitempty"`
+	Sequence uint64    `json:"sequence"`
+	At       time.Time `json:"at"`
+	Thread   string    `json:"thread,omitempty"`
+	Message  string    `json:"message,omitempty"`
+	// Content, Sender and MessageTime are populated only for imported legacy
+	// activity records. Live journals intentionally keep these fields empty so
+	// the normal recording path does not persist message bodies.
+	Content             string `json:"content,omitempty"`
+	Sender              string `json:"sender,omitempty"`
+	MessageTime         string `json:"message_time,omitempty"`
+	RelatedMessage      string `json:"related_message,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Event               string `json:"event"`
+	Category            string `json:"category"`
+	Status              string `json:"status"`
+	Tool                string `json:"tool,omitempty"`
+	Receipt             string `json:"receipt,omitempty"`
+	CallID              string `json:"call_id,omitempty"`
+	ToolStage           string `json:"tool_stage,omitempty"`
+	ToolCode            string `json:"tool_code,omitempty"`
+	ToolAttempt         int    `json:"tool_attempt,omitempty"`
+	ToolRequests        int    `json:"tool_requests,omitempty"`
+	ToolRetries         int    `json:"tool_retries,omitempty"`
+	ToolHTTPStatus      int    `json:"tool_http_status,omitempty"`
+	DurationMS          int64  `json:"duration_ms,omitempty"`
+	ToolTrackingVersion int    `json:"tool_tracking_version,omitempty"`
 }
 
 type wechatRoundMessage struct {

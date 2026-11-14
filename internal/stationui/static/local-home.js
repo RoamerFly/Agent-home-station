@@ -3543,6 +3543,8 @@
     function messageText(group) {
       if (group.preview?.state === "available" || (!group.preview?.state && typeof group.preview?.text === "string")) return group.preview.text;
       if (!group.message) return "工作站活动";
+      const imported = ordered(group).find((step) => step.event === "message_received" && typeof step.content === "string" && step.content.trim());
+      if (imported) return imported.content;
       return messageStates[group.preview?.state] || (group.loading ? "正在核对收到的消息…" : "原消息暂不可用，以下仍可查看已保存的处理过程。");
     }
     function readable(parent, value, title = "查看完整内容") {
