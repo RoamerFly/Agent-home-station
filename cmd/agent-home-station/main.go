@@ -203,13 +203,25 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	// Cancel model/tool work before HTTP graceful shutdown. Otherwise a request
 	// that is already running can consume the entire HTTP timeout while the
 	// desktop waits to exit.
+	fmt.Fprintln(output, "Agent Home Station 正在准备安全退出")
 	handler.BeginShutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		fmt.Fprintf(output, "Agent Home Station HTTP 安全退出未完成：%v\n", shutdownErr)
+	} else {
+		fmt.Fprintln(output, "Agent Home Station HTTP 已安全退出")
+	}
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	fmt.Fprintln(output, "Agent Home Station 正在关闭本地资源")
 	closeErr := handler.CloseContext(closeCtx)
 	closeCancel()
+	if closeErr != nil {
+		fmt.Fprintf(output, "Agent Home Station 本地资源关闭未完成：%v\n", closeErr)
+	} else {
+		fmt.Fprintln(output, "Agent Home Station 本地资源已关闭")
+	}
 	if shutdownErr != nil {
 		return errors.Join(shutdownErr, closeErr)
 	}
