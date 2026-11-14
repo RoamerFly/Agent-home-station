@@ -3531,6 +3531,25 @@
       body.setAttribute("tabindex", "0");
       details.append(body); parent.append(details);
     }
+    function reviewDetails(step) {
+      const failure = step.review_failure || step.reviewFailure;
+      if (!failure || typeof failure !== "object") return [];
+      const states = { initial_check_failed: "首次复核未完成", final_check_failed: "最终复核未完成", repair_check_failed: "修复后的复核未完成", review_rejected: "复核发现草稿与依据不符", final_check_rejected: "最终复核发现草稿与依据不符", repair_no_supported_reply: "修复后仍没有有依据的回复", evidence_changed: "复核前依据已变化", preflight_proof_invalid: "回复证明校验失败", preflight_context_invalid: "回复上下文校验失败", preflight_binding_invalid: "来源绑定校验失败", allowed_binding_invalid: "发送前绑定校验失败" };
+      const parts = [];
+      if (failure.review_state) parts.push("复核结果：" + (states[failure.review_state] || failure.review_state));
+      if (failure.code) parts.push("复核代码：" + failure.code);
+      if (failure.stage) parts.push("发生阶段：" + failure.stage);
+      if (failure.detail) parts.push("说明：" + failure.detail);
+      const request = failure.request && typeof failure.request === "object" ? failure.request : {};
+      const attempts = request.attempts ?? request.Attempts ?? step.model_attempts;
+      const max = request.max_attempts ?? request.MaxAttempts ?? step.model_max_attempts;
+      const http = request.http_status ?? request.HTTPStatus ?? step.model_http_status;
+      const format = request.format_attempt ?? request.FormatAttempt ?? step.model_format_attempt;
+      if (attempts) parts.push("请求：" + attempts + (max ? "/" + max : "") + " 次");
+      if (http) parts.push("HTTP " + http);
+      if (format) parts.push("格式校验轮次 " + format + " 次");
+      return parts;
+    }
     function sentEntries(group) {
       return ordered(group).filter((step) => step.category === "sent" && typeof step.content === "string" && step.content.trim());
     }
@@ -3606,12 +3625,14 @@
           if (!step.call_id && !step.tool_stage && !step.tool_code && !step.duration_ms) content.append(appElement("p", "旧记录未保存调用标识和耗时。", "round-step-meta"));
         }
         if (step.reason && !step.tool) content.append(appElement("p", reasons[step.reason] || step.reason, "round-step-meta"));
+        for (const detail of reviewDetails(step)) content.append(appElement("p", detail, "round-step-meta review-detail"));
         if (step.effect) content.append(appElement("p", "产生影响：" + step.effect, "round-step-meta"));
         if (step.query) content.append(appElement("p", step.query, "round-step-query"));
         if (step.sender) content.append(appElement("p", "发送者：" + step.sender, "round-step-meta"));
         if (step.message_time) content.append(appElement("p", "原消息时间：" + time({ at: step.message_time }), "round-step-meta"));
         if (step.retry_at) content.append(appElement("p", (step.event === "conversation_wake_scheduled" ? "下次评估：" : "下次核对：") + time({ at: step.retry_at }), "round-step-meta"));
         if (step.decision_note) content.append(appElement("p", step.decision_note, "round-step-meta"));
+        if (step.event === "plugin_output_ready" && step.media_count) content.append(appElement("p", "已准备 " + step.media_count + " 个附件，尚未发送微信。", "round-step-meta"));
         if (step.target_url) {
           try {
             const target = new URL(step.target_url);
