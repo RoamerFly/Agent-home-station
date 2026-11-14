@@ -26,6 +26,9 @@ func modelEventRecord(thread, message, event string, d deepseek.Diagnostics) Rec
 }
 
 func (w *Worker) modelContext(ctx context.Context, thread, message string) context.Context {
+	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
+		w.activity(toolDiagnosticRecord(thread, message, d))
+	})
 	ctx = companion.WithDecisionObserver(ctx, func(d companion.DecisionDiagnostic) {
 		event, status := "model_decision_repair", "retrying"
 		if d.Code == "decision_format_recovered" {
@@ -36,6 +39,17 @@ func (w *Worker) modelContext(ctx context.Context, thread, message string) conte
 	return deepseek.WithRequestObserver(ctx, func(event string, d deepseek.Diagnostics) {
 		w.activity(modelEventRecord(thread, message, event, d))
 	})
+}
+
+func toolDiagnosticRecord(thread, message string, d companion.ToolDiagnostic) Record {
+	category := "tool"
+	if d.Event == "tool_failed" {
+		category = "error"
+	}
+	return Record{ThreadID: thread, MessageID: message, Event: d.Event, Category: category, Status: d.Status,
+		CallID: d.CallID, Tool: d.Tool, ToolAttempt: d.Attempt, ToolRetries: d.Retries,
+		ToolRequests: d.Requests, ToolHTTPStatus: d.HTTPStatus, ToolStage: d.Stage,
+		ToolCode: d.Code, DurationMS: d.DurationMS, Origin: "tool"}
 }
 
 func (w *Worker) modelFailed(thread, message string, err error) {
