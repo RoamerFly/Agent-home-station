@@ -9,6 +9,8 @@
   let projectTools = newProjectToolsView();
   let liveSafety = newLiveSafety();
   let desktopControl = { available: false, enabled: false, busy: false };
+  let directoryPickerSequence = 0;
+  const pendingDirectoryPickers = new Map();
   const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
   const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
@@ -5663,8 +5665,27 @@
       if (options.inputMode) input.inputMode = options.inputMode;
     }
     input.disabled = Boolean(options.disabled);
-    const labelNode = document.createElement("label"); labelNode.htmlFor = input.id; labelNode.textContent = label; labelNode.append(input);
+    const labelNode = document.createElement("label"); labelNode.htmlFor = input.id; labelNode.textContent = label;
+    if (options.pickDirectory) {
+      const row = appElement("div", "", "comfy-deployment-path-row");
+      const picker = appElement("button", "选择目录", "button compact secondary directory-picker");
+      picker.type = "button"; picker.disabled = Boolean(options.disabled);
+      picker.addEventListener("click", () => requestProjectDirectory(options.toolID, key, input));
+      row.append(input, picker); labelNode.append(row);
+      return { label: labelNode, input, picker };
+    }
+    labelNode.append(input);
     return { label: labelNode, input };
+  }
+  function requestProjectDirectory(toolID, field, input) {
+    if (!window.chrome?.webview) {
+      projectToolsFeedback("请在桌面版工作站中选择项目目录；浏览器模式可继续手填路径。", true);
+      return;
+    }
+    const requestID = `project-directory-${Date.now()}-${++directoryPickerSequence}`;
+    pendingDirectoryPickers.set(requestID, { input, value: input.value, toolID, field });
+    input.disabled = true;
+    window.chrome.webview.postMessage({ type: "pick-project-directory", request_id: requestID, tool_id: toolID, field, initial_path: input.value });
   }
   function renderDeployment(tool) {
     const current = projectTools, id = tool.id, spec = deploymentDescriptor(id), deployment = current[spec.state];
@@ -5690,9 +5711,9 @@
     const form = document.createElement("form"); form.className = "comfy-deployment-form"; form.noValidate = true;
     const primary = appElement("div", "", "comfy-deployment-primary");
     const fields = [
-      [`${spec.name} 安装目录`, "runtime", { placeholder: `例如 E:\\Tools\\${spec.name}` }],
-      ["模型目录", "models", { placeholder: `例如 E:\\Models\\${spec.name}` }],
-      ["工作流目录", "workflows", { placeholder: "包含 registry.json 的目录" }],
+      [`${spec.name} 安装目录`, "runtime", { placeholder: `例如 E:\\Tools\\${spec.name}`, pickDirectory: true, toolID: id }],
+      ["模型目录", "models", { placeholder: `例如 E:\\Models\\${spec.name}`, pickDirectory: true, toolID: id }],
+      ["工作流目录", "workflows", { placeholder: "包含 registry.json 的目录", pickDirectory: true, toolID: id }],
       [id === "yue" ? "审核清单（选填，留空由宿主生成）" : "审核清单", "manifest", { placeholder: id === "yue" ? "已有清单可填写；留空自动生成" : "相对安装目录或宿主私有绝对路径" }]
     ];
     if (id === "yue") fields.push(["FFmpeg 程序", "ffmpeg", { placeholder: "已审核的 ffmpeg.exe 绝对路径" }]);
@@ -6857,6 +6878,19 @@
   if (window.chrome?.webview) {
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
+      if (value.type === "project-directory-picker-result") {
+        const pending = pendingDirectoryPickers.get(String(value.request_id || ""));
+        if (!pending) return;
+        pendingDirectoryPickers.delete(String(value.request_id || ""));
+        pending.input.disabled = false;
+        if (value.cancelled !== true && typeof value.path === "string" && value.path.trim()) {
+          pending.input.value = value.path.trim();
+          pending.input.dispatchEvent(new Event("input", { bubbles: true }));
+        } else if (typeof value.error === "string" && value.error.trim()) {
+          projectToolsFeedback(value.error.trim(), true);
+        }
+        return;
+      }
       if (value.type !== "desktop-control-state") return;
       desktopControl = {
         available: value.wechat_service_available === true,

@@ -510,6 +510,8 @@ p.publication-authorization-note,
    单行那列的 input 拉高；二是文案超长该改文案，不该给整行加常驻空白。 */
 .comfy-deployment-form label { display: grid; gap: var(--s-1); min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .comfy-deployment-form input:not([type="checkbox"]), .comfy-deployment-form select { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--s-2) var(--s-3); font-size: var(--fs-body); }
+.comfy-deployment-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: var(--s-1); min-width: 0; }
+.comfy-deployment-path-row .directory-picker { align-self: stretch; white-space: nowrap; }
 .comfy-deployment-form .project-tool-approval { display: inline-flex; align-items: center; gap: var(--s-1); width: auto; }
 .comfy-deployment-form .project-tool-approval input[type="checkbox"] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; padding: 0; }
 .comfy-deployment-advanced { border-top: 1px dashed var(--border); }

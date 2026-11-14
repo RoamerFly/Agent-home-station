@@ -310,6 +310,10 @@ namespace WechatAgent.Desktop {
                 catch (Exception) { }
                 return;
             }
+            if (Deployment.Text(input, "type") == "pick-project-directory") {
+                PickProjectDirectory(view, generation, input);
+                return;
+            }
             if (Deployment.Text(input, "type") != "douyin-auth-open") return;
             var authorizationURL = Deployment.Text(input, "url");
             var expiresAt = Deployment.Text(input, "expires_at");
@@ -325,6 +329,37 @@ namespace WechatAgent.Desktop {
             douyinAuthorization = dialog;
             dialog.FormClosed += delegate { if (douyinAuthorization == dialog) douyinAuthorization = null; };
             dialog.Show(this);
+        }
+        void PickProjectDirectory(WebView2 view, int generation, Dictionary<string, object> input) {
+            string requestID = Deployment.Text(input, "request_id");
+            string toolID = Deployment.Text(input, "tool_id");
+            string field = Deployment.Text(input, "field");
+            if (String.IsNullOrWhiteSpace(requestID) || String.IsNullOrWhiteSpace(toolID) ||
+                (toolID != "comfyui" && toolID != "yue") ||
+                (field != "runtime" && field != "models" && field != "workflows")) {
+                return;
+            }
+            string initialPath = Deployment.Text(input, "initial_path");
+            try {
+                using (var dialog = new FolderBrowserDialog()) {
+                    dialog.Description = "选择" + (field == "runtime" ? "运行环境" : field == "models" ? "模型" : "工作流") + "目录";
+                    dialog.ShowNewFolderButton = false;
+                    if (Directory.Exists(initialPath)) dialog.SelectedPath = initialPath;
+                    DialogResult result = dialog.ShowDialog(this);
+                    PostProjectDirectoryResult(view, generation, requestID, field, result == DialogResult.OK ? dialog.SelectedPath : "", result != DialogResult.OK);
+                }
+            } catch (Exception error) {
+                PostProjectDirectoryResult(view, generation, requestID, field, "", true, error.Message);
+            }
+        }
+        void PostProjectDirectoryResult(WebView2 view, int generation, string requestID, string field, string path, bool cancelled, string error = "") {
+            if (!CurrentPage(view, generation) || view.CoreWebView2 == null || !ManagementPage(view.Source == null ? "" : view.Source.ToString())) return;
+            try {
+                view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new {
+                    type = "project-directory-picker-result", request_id = requestID, field = field,
+                    path = path ?? "", cancelled = cancelled, error = error ?? ""
+                }));
+            } catch (InvalidOperationException) { }
         }
         void PostDouyinAuthorization(WebView2 view, int generation, string type, string state, string callback, string error) {
             if (!CurrentPage(view, generation) || view.CoreWebView2 == null || !ManagementPage(view.Source == null ? "" : view.Source.ToString())) return;
