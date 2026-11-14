@@ -50,6 +50,9 @@ func (s *stationWechat) localMemorySources(ctx context.Context, fish, owner stri
 				}
 			}
 		}
+		if extra, extraErr := s.unverifiedMemorySources(ctx, connection.ID, fish, owner); extraErr == nil {
+			sources = append(sources, extra...)
+		}
 	}
 	slices.SortFunc(sources, func(a, b localWechatMemorySource) int {
 		return strings.Compare(a.Connection+"\x00"+a.Thread+"\x00"+a.Dataset, b.Connection+"\x00"+b.Thread+"\x00"+b.Dataset)

@@ -4012,6 +4012,50 @@
     return panel;
   }
 
+  function appUnverifiedMemoryPanel(view, connection) {
+    const panel = appElement("section", "", "configuration-rounds configuration-unverified-memory");
+    const heading = appElement("div", "", "configuration-round-heading");
+    heading.append(appElement("h4", "未验证旧档案"), appElement("p", "旧版微信记忆已接入当前唯一大肥鱼账号和微信连接；这些内容可供 Agent 回复参考，但来源版本未完成核验，请把它当作旧档案使用。", "app-scope-note"));
+    const feedback = appElement("p", "正在读取旧档案目录…", "apps-feedback");
+    const rows = appElement("div", "", "configuration-memory-records");
+    const detail = appElement("div", "", "configuration-memory-records");
+    const query = document.createElement("input"); query.placeholder = "在选中的旧会话中搜索"; query.setAttribute("aria-label", "搜索未验证旧档案");
+    const search = memoryButton("搜索旧档案", "button compact secondary", () => void loadDetail());
+    const kind = document.createElement("select"); kind.append(new Option("记忆", "memories"), new Option("原话", "events"));
+    const form = appElement("form", "", "configuration-round-filters");
+    form.append(appElement("label", "会话", "field-label"));
+    const thread = document.createElement("select"); thread.setAttribute("aria-label", "旧档案会话");
+    const kindLabel = appElement("label", "类别", "field-label"); kindLabel.append(kind); form.append(thread, kindLabel, query, search);
+    panel.append(heading, feedback, form, rows, detail);
+    const active = () => appConfiguration === view && view.section === "conversations" && view.connection === connection && panel.isConnected;
+    async function loadDetail() {
+      if (!thread.value) return;
+      detail.replaceChildren(); feedback.textContent = "正在读取未验证旧档案…";
+      try {
+        const value = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/unverified-memory/" + encodeURIComponent(thread.value) + "?kind=" + encodeURIComponent(kind.value) + "&q=" + encodeURIComponent(query.value.trim()) + "&limit=30");
+        if (!active()) return;
+        for (const item of value.items || []) {
+          const card = appElement("article", "", "memory-detail-section configuration-archive-card");
+          card.append(appElement("strong", item.kind || item.role || "旧档案记录"), appElement("p", item.text || item.summary || "（无可显示正文）"), appElement("small", "未验证旧档案 · 可作为回复参考 · 不代表当前已核实事实"));
+          detail.append(card);
+        }
+        feedback.textContent = value.items?.length ? "已读取 " + value.items.length + " 条未验证旧档案。" : "当前搜索没有匹配的旧档案。";
+      } catch (error) { if (active()) feedback.textContent = error.message; }
+    }
+    async function load() {
+      try {
+        const value = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/unverified-memory");
+        if (!active()) return;
+        rows.replaceChildren(); thread.replaceChildren(...(value.items || []).map((item) => new Option(item.thread_id + " · 原话 " + item.event_count + " · 记忆 " + item.memory_count, item.thread_id)));
+        if (thread.options.length) { thread.value = thread.options[0].value; await loadDetail(); }
+        else feedback.textContent = "当前连接没有可读取的未验证旧档案。";
+      } catch (error) { if (active()) feedback.textContent = error.message; }
+    }
+    form.addEventListener("submit", (event) => { event.preventDefault(); void loadDetail(); });
+    void load();
+    return panel;
+  }
+
   function appImportedConversation(view, connection, allowed) {
     const panel = appElement("section", "", "configuration-rounds");
     const form = appElement("form", "", "configuration-round-filters");
@@ -4485,6 +4529,8 @@
           page.append(view.memoryImportPanel.node);
           if (view.conversationDirectory?.connection !== selected.id) view.conversationDirectory = { connection: selected.id, node: appLegacyConversationDirectory(view, selected.id) };
           page.append(view.conversationDirectory.node);
+          if (view.unverifiedArchivePanel?.connection !== selected.id) view.unverifiedArchivePanel = { connection: selected.id, node: appUnverifiedMemoryPanel(view, selected.id) };
+          page.append(view.unverifiedArchivePanel.node);
           if (status?.configured_policy && appWorkerLabels[status.worker]) page.append(appWorkerControls(selected.id, status));
           controls.push(page);
           break;

@@ -81,6 +81,8 @@ func (s *stationWechat) attachment(identity stationservices.OwnerReader) station
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/manual-sends", owner.Protect(s.manualSend))
 			mux.HandleFunc("POST /api/apps/wechat/connections/{connection}/manual-sends/upload", owner.Protect(s.manualSendUpload))
 			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/manual-sends/{operation}", owner.Protect(s.manualSendLookup))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/unverified-memory", owner.Protect(s.unverifiedMemoryRoute))
+			mux.HandleFunc("GET /api/apps/wechat/connections/{connection}/unverified-memory/{thread}", owner.Protect(s.unverifiedMemoryRoute))
 			// One app-level switch: pausing the application never restarts the
 			// workstation or the native process.
 			power := owner.Protect(s.appPowerRoute)
