@@ -1559,6 +1559,46 @@ body.is-home-ready {
 .is-home-ready .wechat-legacy-skin .round-readable summary { padding:var(--s-1) var(--s-2); cursor:pointer; color:var(--accent); font-size:var(--fs-caption); }
 .is-home-ready .wechat-legacy-skin .round-readable-body { max-height:260px; margin:0; padding:var(--s-2); overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text); border-top:1px solid var(--border); background:var(--surface-raised); font-size:var(--fs-caption); font-family:var(--font-sans); line-height:1.6; }
 .is-home-ready .wechat-legacy-skin .round-url { display:block; color:var(--accent); font-size:var(--fs-caption); overflow-wrap:anywhere; }
+
+/* 4e230477 legacy Whale Console light migration.
+   Keep the station shell and API boundaries, but restore the old console's
+   pale blue canvas, narrow navigation, square controls and restrained cards. */
+:root {
+  color-scheme: light;
+  --bg:#f4f7fc; --bg-sunken:#edf3fc; --surface:#fff; --surface-raised:#f8faff;
+  --border:#d9e2ef; --border-strong:#b9c8da; --text:#18283f; --text-muted:#52647c;
+  --text-faint:#71839a; --accent:#245fd6; --accent-hover:#1d50bd; --accent-soft:#eaf1ff;
+  --on-accent:#fff; --success:#147d58; --success-soft:#e6f4ed; --warning:#966000;
+  --warning-soft:#fff4db; --danger:#b82d40; --danger-soft:#fbe9ed;
+  --font-sans:"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+  --r-sm:9px; --r-md:12px; --r-lg:16px; --r-pill:999px;
+  --shadow-1:0 1px 3px rgb(24 48 83 / 4%); --shadow-2:0 10px 30px rgb(24 48 83 / 6%);
+  --shadow:var(--shadow-2); --glass:var(--surface); --glass-rim:none;
+  --ink:var(--text); --muted:var(--text-muted); --line:var(--border);
+  --panel:var(--surface); --input:var(--surface-raised); --canvas:var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme:light; }
+}
+body.local-home-page { background:var(--bg); color:var(--text); }
+.is-home-ready .wechat-legacy-skin {
+  --bg:#f4f7fc; --bg-sunken:#edf3fc; --surface:#fff; --surface-raised:#f8faff;
+  --border:#d9e2ef; --border-strong:#b9c8da; --text:#18283f; --text-muted:#52647c;
+  --accent:#245fd6; --accent-hover:#1d50bd; --accent-soft:#eaf1ff; --success:#147d58;
+  --success-soft:#e6f4ed; --warning:#966000; --warning-soft:#fff4db; --danger:#b82d40;
+  --danger-soft:#fbe9ed; color-scheme:light; color:var(--text); background:var(--surface);
+}
+.is-home-ready .wechat-legacy-skin .app-dialog-header,
+.is-home-ready .wechat-legacy-skin #app-configuration-nav,
+.is-home-ready .wechat-legacy-skin #app-configuration-body { background:var(--surface); color:var(--text); }
+.is-home-ready .wechat-legacy-skin #app-configuration-nav { background:var(--bg-sunken); }
+.is-home-ready .wechat-legacy-skin #app-configuration-nav .local-tab { color:var(--text-muted); }
+.is-home-ready .wechat-legacy-skin #app-configuration-nav .local-tab.is-active,
+.is-home-ready .wechat-legacy-skin #app-configuration-nav .local-tab:hover { color:var(--accent); background:var(--accent-soft); }
+.is-home-ready .wechat-legacy-skin .round-readable-body { background:var(--surface-raised); color:var(--text); }
+.is-home-ready .wechat-legacy-skin .round-output,
+.is-home-ready .wechat-legacy-skin .round-readable { background:var(--surface-raised); border-color:var(--border); }
+.is-home-ready .wechat-legacy-skin .round-output-status { color:var(--success); }
 .is-home-ready .local-tab:hover:not(.is-active),
 .is-home-ready .local-tab:focus-visible { color: var(--rail-text); background: color-mix(in srgb, var(--rail-raised) 72%, transparent); }
 .is-home-ready .rail-footer .station-label { border-color: var(--rail-border); color: var(--rail-text); background: var(--rail-raised); }
