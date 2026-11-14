@@ -1599,6 +1599,27 @@ body.local-home-page { background:var(--bg); color:var(--text); }
 .is-home-ready .wechat-legacy-skin .round-output,
 .is-home-ready .wechat-legacy-skin .round-readable { background:var(--surface-raised); border-color:var(--border); }
 .is-home-ready .wechat-legacy-skin .round-output-status { color:var(--success); }
+.is-home-ready .wechat-legacy-skin .legacy-wechat-section { display:grid; gap:20px; max-width:1180px; }
+.is-home-ready .wechat-legacy-skin .legacy-page-heading { display:flex; align-items:baseline; justify-content:space-between; gap:18px; padding-bottom:14px; border-bottom:1px solid var(--line); }
+.is-home-ready .wechat-legacy-skin .legacy-page-heading h4 { margin:0; color:var(--ink); font-size:19px; }
+.is-home-ready .wechat-legacy-skin .legacy-page-heading p { margin:0; }
+.is-home-ready .wechat-legacy-skin .legacy-wechat-section > .app-layer,
+.is-home-ready .wechat-legacy-skin .legacy-wechat-section > .app-worker,
+.is-home-ready .wechat-legacy-skin .legacy-wechat-section > .identity-details,
+.is-home-ready .wechat-legacy-skin .legacy-wechat-section > .configuration-rounds { margin:0; padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--surface); box-shadow:var(--shadow); }
+.is-home-ready .wechat-legacy-skin .legacy-account-page .app-connection-layer { display:grid; gap:16px; }
+.is-home-ready .wechat-legacy-skin .legacy-account-page .app-connection-layer > h5 { margin:0; color:var(--ink); font-size:16px; }
+.is-home-ready .wechat-legacy-skin .legacy-account-page .app-accounts { display:grid; gap:8px; margin:14px 0 0; padding:0; list-style:none; }
+.is-home-ready .wechat-legacy-skin .legacy-account-page .app-accounts > li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--surface-raised); }
+.is-home-ready .wechat-legacy-skin .legacy-conversation-page .configuration-rounds,
+.is-home-ready .wechat-legacy-skin .legacy-conversation-page .configuration-memory-import { margin:0; }
+.is-home-ready .wechat-legacy-skin .legacy-rules-page .app-worker { display:grid; gap:18px; }
+.is-home-ready .wechat-legacy-skin .legacy-rules-page .app-worker-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding-bottom:14px; border-bottom:1px solid var(--line); }
+.is-home-ready .wechat-legacy-skin .legacy-rules-page .app-worker-actions small { margin-right:auto; color:var(--muted); }
+.is-home-ready .wechat-legacy-skin .legacy-rules-page .group-rule-row { padding:12px 0; border-top:1px solid var(--line); }
+.is-home-ready .wechat-legacy-skin .legacy-delivery-page .delivery-records { margin:0; padding:0; border:0; background:transparent; }
+.is-home-ready .wechat-legacy-skin .legacy-delivery-page .delivery-records > summary { margin-bottom:12px; color:var(--ink); font-weight:700; }
+.is-home-ready .wechat-legacy-skin .legacy-delivery-page .work-record { padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--surface-raised); }
 .is-home-ready .local-tab:hover:not(.is-active),
 .is-home-ready .local-tab:focus-visible { color: var(--rail-text); background: color-mix(in srgb, var(--rail-raised) 72%, transparent); }
 .is-home-ready .rail-footer .station-label { border-color: var(--rail-border); color: var(--rail-text); background: var(--rail-raised); }

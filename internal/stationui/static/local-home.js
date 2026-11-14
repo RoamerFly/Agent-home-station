@@ -4295,6 +4295,13 @@
     }
     return panel;
   }
+  function legacyWechatSection(title, description, className = "") {
+    const section = appElement("section", "", "legacy-wechat-section " + className);
+    const heading = appElement("header", "", "legacy-page-heading");
+    heading.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
+    section.append(heading);
+    return section;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -4335,29 +4342,34 @@
       case "account":
         if (record.id === "wechat") {
           if (!apps.power.loaded && !apps.power.loading && apps.registered?.some((row) => row.id === "wechat")) void loadWechatPower();
-          controls.push(wechatDesktopServiceRow());
-        }
-        controls.push(record.id === "douyin" ? douyinWebLoginRow(apps, listing, section) : appConnectionRow(record, view.connection));
-        if (record.id === "wechat" && selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
-          if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
-          controls.push(view.ownerPanel.node);
-          if (view.memoryGrantPanel?.connection !== selected.id) view.memoryGrantPanel = { connection: selected.id, node: appWechatMemoryGrants(view, selected.id) };
-          controls.push(view.memoryGrantPanel.node);
-          if (view.crossMemoryPanel?.connection !== selected.id) view.crossMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id) };
-          controls.push(view.crossMemoryPanel.node);
-          if (view.stationMemoryPanel?.connection !== selected.id) view.stationMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, true) };
-          controls.push(view.stationMemoryPanel.node);
-          if (view.douyinMemoryPanel?.connection !== selected.id) view.douyinMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, "douyin") };
-          controls.push(view.douyinMemoryPanel.node);
-        }
+          const page = legacyWechatSection("账号与授权", "沿用旧版微信 Bot 的账号卡、扫码登录和授权核对入口。", "legacy-account-page");
+          page.append(wechatDesktopServiceRow(), appConnectionRow(record, view.connection));
+          if (selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
+            if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
+            page.append(view.ownerPanel.node);
+            if (view.memoryGrantPanel?.connection !== selected.id) view.memoryGrantPanel = { connection: selected.id, node: appWechatMemoryGrants(view, selected.id) };
+            page.append(view.memoryGrantPanel.node);
+            if (view.crossMemoryPanel?.connection !== selected.id) view.crossMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id) };
+            page.append(view.crossMemoryPanel.node);
+            if (view.stationMemoryPanel?.connection !== selected.id) view.stationMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, true) };
+            page.append(view.stationMemoryPanel.node);
+            if (view.douyinMemoryPanel?.connection !== selected.id) view.douyinMemoryPanel = { connection: selected.id, node: appWechatCrossMemoryGrants(view, selected.id, "douyin") };
+            page.append(view.douyinMemoryPanel.node);
+          }
+          controls.push(page);
+        } else controls.push(douyinWebLoginRow(apps, listing, section), appConnectionRow(record, view.connection));
         break;
       case "conversations": {
         const status = selected && apps.accountStatuses.get(selected.id);
         if (record.id === "wechat" && selected) {
+          const page = legacyWechatSection("会话与记忆", "旧版微信控制台的会话目录、记忆接续和读取范围在当前连接内显示。", "legacy-conversation-page");
           if (view.memoryImportPanel?.connection !== selected.id) view.memoryImportPanel = { connection: selected.id, node: appMemoryArchiveImport(view, selected.id) };
-          controls.push(view.memoryImportPanel.node);
+          page.append(view.memoryImportPanel.node);
           if (view.conversationDirectory?.connection !== selected.id) view.conversationDirectory = { connection: selected.id, node: appLegacyConversationDirectory(view, selected.id) };
-          controls.push(view.conversationDirectory.node);
+          page.append(view.conversationDirectory.node);
+          if (status?.configured_policy && appWorkerLabels[status.worker]) page.append(appWorkerControls(selected.id, status));
+          controls.push(page);
+          break;
         }
         if (status?.configured_policy && appWorkerLabels[status.worker]) {
           const allowed = status.configured_policy.history_threads || [];
@@ -4373,8 +4385,9 @@
       case "rules": {
         if (selected) {
           const status = apps.accountStatuses.get(selected.id);
-          controls.push(appElement("p", "按会话设置是否回复、是否读取历史和是否处理图片/视频。公共媒体理解继续由工作站提供。", "app-scope-note"));
-          controls.push(status ? appWorkerControls(selected.id, status) : appElement("p", "正在读取当前微信连接状态…", "app-scope-note"));
+          const page = legacyWechatSection("回复规则", "按旧版两栏规则页的语义管理私聊、群聊、历史读取、附件和 Agent 状态。", "legacy-rules-page");
+          page.append(status ? appWorkerControls(selected.id, status) : appElement("p", "正在读取当前微信连接状态…", "app-scope-note"));
+          controls.push(page);
         } else controls.push(appElement("p", "连接微信后可设置回复范围。", "app-scope-note"));
         break;
       }
@@ -4401,7 +4414,11 @@
         }
         break;
       case "delivery":
-        if (selected) controls.push(deliveryRecords(selected.id, wechatServiceState() !== "ready"));
+        if (selected) {
+          const page = legacyWechatSection("投递与回执", "沿用旧版投递结果卡、回执核对、暂停后续投递和撤回核对入口。", "legacy-delivery-page");
+          page.append(deliveryRecords(selected.id, wechatServiceState() !== "ready"));
+          controls.push(page);
+        }
         break;
       case "browse":
         if (record.id === "douyin") {
