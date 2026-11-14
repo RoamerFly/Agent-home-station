@@ -86,6 +86,7 @@ def verify_glass_views(page, output):
 
     home_tab(page, "apps")
     expect(page.locator("#apps-list .app-record")).to_have_count(2)
+    expect(page.locator("#apps-list .app-power-control")).to_have_count(2)
     page.locator("#apps-search").fill("抖音")
     expect(page.locator("#apps-list .app-record")).to_have_count(1)
     page.locator("#apps-search").clear()

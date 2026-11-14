@@ -298,6 +298,14 @@ code { display: block; overflow-wrap: anywhere; color: var(--text); font-family:
 .app-card-version { margin: 0; padding: 0 var(--s-4) var(--s-3); color: var(--text-muted); font-size: var(--fs-caption); }
 .app-card-summary { margin: 0; padding: 0 var(--s-4) var(--s-4); color: var(--text-muted); font-size: var(--fs-body); line-height: var(--lh-body); }
 .app-card-footer { display: flex; justify-content: space-between; gap: var(--s-3); padding: var(--s-2) var(--s-4); border-top: 1px solid var(--border); color: var(--accent-deep); font-size: var(--fs-caption); }
+.app-power-control { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-2) var(--s-4); border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-caption); cursor: pointer; }
+.app-power-control input { appearance: none; flex: 0 0 auto; width: 36px; height: 20px; margin: 0; border: 1px solid var(--border-strong); border-radius: var(--r-pill); background: var(--bg-sunken); cursor: pointer; transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease); }
+.app-power-control input::before { content: ""; display: block; width: 14px; height: 14px; margin: 2px; border-radius: 50%; background: var(--text-muted); transition: transform var(--dur-1) var(--ease), background-color var(--dur-1) var(--ease); }
+.app-power-control input:checked { border-color: var(--accent); background: var(--accent); }
+.app-power-control input:checked::before { transform: translateX(16px); background: var(--surface); }
+.app-power-control input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app-power-control input:disabled { opacity: .55; cursor: wait; }
+.app-power-label { overflow-wrap: anywhere; }
 .app-dialog { width: min(1440px, calc(100vw - 48px)); height: calc(100dvh - 48px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--border); border-radius: var(--r-lg); color: var(--text); background: var(--surface); box-shadow: var(--shadow-2); overflow: clip; }
 .app-dialog[open] { display: flex; flex-direction: column; }
 .app-dialog::backdrop { background: var(--overlay); }

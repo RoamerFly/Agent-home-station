@@ -2389,7 +2389,10 @@
   function douyinAppState(value) {
     if (!value || value.detached) return "not_connected";
     if (value.paused) return "off";
-    if (value.state === "saved") return value.available ? "on" : "off";
+    // The application switch is separate from whether the owned browser is
+    // currently available. A saved, unpaused app stays on while its browser
+    // is idle or being recovered; otherwise the card falsely says it is off.
+    if (value.state === "saved") return "on";
     return "off";
   }
   function appEvidence(id) {
@@ -2425,7 +2428,7 @@
       const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
       const state = douyinAppState(value);
       return {
-        service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "不可用",
+        service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "网页通道待恢复",
         account: !value ? unknown : value.state === "saved" ? "登录资料已保存" : ["login_open", "unconfirmed"].includes(value.state) ? "待确认" : "待登录",
         grant: !value ? unknown : paused ? "已暂停" : actions.some(Boolean) ? (read && actions.filter(Boolean).length === 1 ? "浏览范围已授权" : "按能力授权") : "未授权",
         state,
@@ -2457,6 +2460,32 @@
     }
     return rows;
   }
+  function appPowerSwitch(record) {
+    if (!record || !["wechat", "douyin"].includes(record.id)) return null;
+    const control = appElement("label", "", "app-power-control");
+    const input = document.createElement("input");
+    input.type = "checkbox"; input.setAttribute("role", "switch");
+    input.setAttribute("aria-label", (record.name || record.id) + "应用开关");
+    let enabled = null, busy = false, note = "读取中…";
+    if (record.id === "wechat") {
+      enabled = apps.power.loaded && typeof apps.power.value?.enabled === "boolean" ? apps.power.value.enabled : null;
+      busy = apps.power.loading || apps.power.applying;
+      note = enabled === null ? "读取中…" : enabled ? "已开启" : "已暂停";
+    } else {
+      const value = apps.douyinWebLogin.value;
+      enabled = apps.douyinWebLogin.loaded && value?.state === "saved" && !value.detached ? value.paused !== true : null;
+      busy = apps.douyinWebLogin.loading || Boolean(apps.douyinWebLogin.applying);
+      note = enabled === null ? (value?.detached ? "已撤下" : "读取中…") : enabled ? "已开启" : "已暂停";
+    }
+    input.checked = enabled === true;
+    input.disabled = enabled === null || busy;
+    input.addEventListener("change", () => {
+      if (record.id === "wechat") void setWechatPower(input.checked);
+      else void updateDouyinWebLogin(apps, input.checked ? "resume" : "pause");
+    });
+    control.append(input, appElement("span", "应用开关 · " + note, "app-power-label"));
+    return control;
+  }
   function renderApps(renderDetail = true) {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
@@ -2479,7 +2508,7 @@
       const version = source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本";
       // Three states the owner can act on: connected, switched off, never connected.
       // The label is text, not colour alone, so it survives a greyscale screen.
-      const connectionLabel = { on: "已接入", off: "已停用", not_connected: "未接入" }[evidence.state];
+      const connectionLabel = { on: "已开启", off: "已暂停", not_connected: "未接入" }[evidence.state];
       card.dataset.connection = evidence.state;
       head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
@@ -2488,6 +2517,8 @@
       open.dataset.app = record.id;
       const foot = appElement("span", "管理应用  ›", "app-card-footer");
       open.append(head, appEvidenceRows(evidence), appElement("p", version, "app-card-version"), foot); card.append(open);
+      const power = appPowerSwitch(record);
+      if (power) card.append(power);
       open.addEventListener("click", () => {
         if (apps.openID && apps.openID !== record.id) {
           clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
