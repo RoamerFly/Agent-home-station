@@ -51,7 +51,10 @@
   --fs-display:24px; --lh-display:34px;
   /* 第 6 级：仅限登录页 h1 的仪式感标题，不进入通用刻度 */
   --fs-hero:clamp(28px, 3vw, 40px); --lh-hero:1.18;
-  --fw-regular:400; --fw-medium:500; --fw-strong:600;
+  /* 字重只允许两级：目标平台 Microsoft YaHei UI 只有 Regular(400)/Bold(700)
+     两个真实字面，按 CSS Fonts L4 匹配规则 desired 500 命中 400、600 命中 700，
+     中间档在用户端并不存在，不承载语义。新增 500/600 视为回归。 */
+  --fw-regular:400; --fw-strong:700;
 
   /* 别名：把旧变量接到新令牌，避免逐条改 */
   --ink:var(--text); --muted:var(--text-muted); --paper:var(--surface);
@@ -73,6 +76,8 @@
     --photo-wash:linear-gradient(160deg, rgb(60 48 32 / 30%), rgb(20 16 11 / 82%) 74%);
     --shadow-1:0 1px 2px rgba(0,0,0,.4); --shadow-2:0 8px 28px -14px rgba(0,0,0,.6);
   }
+  /* h2 带 -.02em，暗底亮字会把 22px 的字怀压到趋闭合；h3 已有 .is-home-ready 覆盖，h2 一直漏着。 */
+  .is-home-ready h2 { letter-spacing: 0; }
 }
 
 * { box-sizing: border-box; }
@@ -190,21 +195,27 @@ h1 { max-width: 24em; margin: var(--s-4) 0 var(--s-3); font-size: var(--fs-hero)
 .access-card, .home-status { margin-top: var(--s-6); }
 .access-card { display: grid; gap: var(--s-4); padding: var(--s-5); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
 h2 { margin: var(--s-1) 0 var(--s-2); font-size: var(--fs-heading); font-weight: var(--fw-strong); line-height: var(--lh-heading); letter-spacing: -.02em; }
+/* <strong> 的 UA 默认字重是 bolder，这里显式化到 700：全文件不再有「靠 UA 默认」
+   的字重，I 组的 font-weight 断言才真正覆盖到这些位置。特异性只有 (0,0,1)，
+   .project-tool-permissions strong / .switch-row strong 这类 class 规则照常覆盖成 400。 */
+strong { font-weight: var(--fw-strong); }
 .access-card p:not(.section-kicker) { margin: 0; color: var(--text-muted); line-height: var(--lh-body); }
 .login-form { display: grid; gap: var(--s-2); }
-label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .input-row { display: flex; gap: var(--s-2); }
 input, textarea, select { min-width: 0; flex: 1; min-height: 32px; padding: var(--s-2) var(--s-3); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); outline: none; background: var(--surface-raised); font-size: var(--fs-body); }
 textarea { resize: vertical; line-height: var(--lh-body); }
-input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* 排除 checkbox：--accent-soft 光环对 --bg 只有 1.02-1.19:1，复用到 16px checkbox 上
+   等于鼠标聚焦时完全不可见；checkbox 由 .is-home-ready :focus-visible 负责。 */
+:is(input:not([type=checkbox]), textarea, select):focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .home-status { display: grid; gap: var(--s-5); }
 .status-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-4); }
-.access-chip { flex: 0 0 auto; padding: var(--s-1) var(--s-3); border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.access-chip { flex: 0 0 auto; padding: var(--s-1) var(--s-3); border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .access-chip.is-live { color: var(--success); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); background: var(--success-soft); }
 .details-grid { display: grid; gap: var(--s-4); }
 .detail-block, .detail-pair { padding: var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
-.detail-block span, .detail-pair span { display: block; margin-bottom: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.detail-block span, .detail-pair span { display: block; margin-bottom: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 code { display: block; overflow-wrap: anywhere; color: var(--text); font-family: "Cascadia Code", Consolas, monospace; font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .detail-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); }
 .detail-pair div { min-width: 0; }
@@ -231,14 +242,22 @@ code { display: block; overflow-wrap: anywhere; color: var(--text); font-family:
 .local-tabs:has(.live-safety:not([hidden])) { flex-wrap: wrap; }
 .local-tabs > .live-safety { flex: 0 0 100%; }
 .app-dialog-feedback > .live-safety { margin: var(--s-2) var(--s-4); }
-.live-safety button:not(:disabled) { font-weight: var(--fw-medium); }
+.live-safety button:not(:disabled) { font-weight: var(--fw-regular); }
 .local-tabs { display: flex; align-items: center; gap: var(--s-1); padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
 .local-tab-list { display: flex; flex-wrap: wrap; gap: var(--s-1); min-width: 0; }
-.local-tab, .text-action { border: 0; background: transparent; color: var(--text-muted); font-size: var(--fs-body); font-weight: var(--fw-medium); }
-.local-tab { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); }
+/* 去掉字重后，激活 tab 的 --accent-soft 相对相邻 --bg-sunken 只有 1.02:1 / 1.42:1，远低于 3:1，
+   所以激活信号改用 3px 左边框（--accent 对 --bg-sunken 亮 4.87:1 / 暗 6.86:1）。
+   基态不画边、只在激活态画边：基态留透明边框会在高对比模式下被系统接管成可见色，
+   反而让所有 tab 都长出边，而激活底色同时被系统抹掉。两种分支下「只有激活项有边」都成立。
+   激活态的 3px 由 padding 抵掉，文字 x 两态一致，不抖动；用 border 而不是 box-shadow: inset。 */
+.local-tab { border: 0; background: transparent; color: var(--text-muted); font-size: var(--fs-body); font-weight: var(--fw-regular); padding-inline-start: var(--s-3); }
+.local-tab.is-active { border-inline-start: 3px solid var(--accent); padding-inline-start: calc(var(--s-3) - 3px); }
+.text-action { border: 0; background: transparent; color: var(--text-muted); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+/* 不要合并回 padding 简写：简写会覆盖上面 .local-tab 与 .local-tab.is-active 的 padding-inline-start，补偿失效。 */
+.local-tab { padding-block: var(--s-2); padding-inline-end: var(--s-3); border-radius: var(--r-sm); }
 .local-tab.is-active { color: var(--accent-deep); background: var(--accent-soft); }
 .text-action { padding: var(--s-1) var(--s-2); border-radius: var(--r-sm); font-size: var(--fs-caption); }
-.text-action:hover, .text-action:focus-visible { color: var(--accent-deep); background: var(--accent-soft); outline: none; }
+.text-action:hover, .text-action:focus-visible { color: var(--accent-deep); background: var(--accent-soft); }
 .local-tabs .text-action { margin-left: auto; }
 .chat-view, .settings-view, .apps-view, .project-tools-view { display: grid; align-content: start; gap: var(--s-4); min-width: 0; min-height: 0; }
 .settings-view, .apps-view, .project-tools-view { overflow-y: auto; overflow-x: hidden; padding: 0 var(--s-3) var(--s-3) 0; scrollbar-gutter: stable; overscroll-behavior: contain; }
@@ -247,10 +266,15 @@ code { display: block; overflow-wrap: anywhere; color: var(--text); font-family:
 .settings-heading-row { align-items: center; position: sticky; top: 0; z-index: 2; padding: var(--s-2) 0; background: var(--surface); }
 /* 设置页脱壳：fieldset 保留 <legend> 分组语义（读屏把它读成组名），但不再画卡片。
    块之间只有 border-top，块内只有行 —— 这是三方签字的验收标准。 */
-.settings-group { display: grid; gap: var(--s-3); min-width: 0; margin: 0; padding: var(--s-4) 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; }
+/* --border 对 --bg 只有亮 1.24:1，脱壳后分组边界几乎看不见，改用 --border-strong；
+   组间空白提到 --s-5 一起承担分组。legend 不加 position: sticky —— Chromium 里
+   legend 是 fieldset 的特殊渲染盒，sticky 不生效。 */
+.settings-group { display: grid; gap: var(--s-3); min-width: 0; margin: 0; padding: var(--s-5) 0; border: 0; border-top: 1px solid var(--border-strong); border-radius: 0; background: transparent; }
 .settings-group legend { padding: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); }
 .settings-group > label { display: grid; gap: var(--s-1); }
-.settings-group > p { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+/* 组说明沿用 .stage-note 的竖线形态：脱壳后组说明与字段名同为 12px + --text-muted，
+   不加容器信号会被误读成第一个开关的标签。 */
+.settings-group > p { margin: 0 0 var(--s-1); padding-left: var(--s-3); border-left: 2px solid var(--border-strong); color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .app-persona-form { display: grid; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
 .app-persona-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
 .app-persona-form textarea { width: 100%; min-height: 74px; }
@@ -303,7 +327,7 @@ h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); line-
 .app-mark { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--accent-deep); font-weight: var(--fw-strong); background: var(--surface); }
 .app-layer { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: start; gap: var(--s-2) var(--s-3); padding: var(--s-3) 0; }
 .app-layer + .app-layer { border-top: 1px solid var(--border); }
-.app-layer h5 { margin: 0; padding-top: 2px; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.app-layer h5 { margin: 0; padding-top: 2px; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .app-layer p { margin: var(--s-1) 0 0; color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .app-layer strong { font-size: var(--fs-body); overflow-wrap: anywhere; }
 .app-layer .button { align-self: center; }
@@ -325,7 +349,7 @@ h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); line-
 .app-layer.douyin-live-client { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .douyin-live-client .settings-field { display: grid; gap: var(--s-1); margin-top: var(--s-3); }
 .douyin-live-client input { box-sizing: border-box; width: 100%; }
-.douyin-web-read-scope-label { display: inline-flex; align-items: center; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.douyin-web-read-scope-label { display: inline-flex; align-items: center; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .douyin-web-read-scope { min-width: 10.5rem; max-width: 100%; min-height: 32px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 0 var(--s-2); color: var(--text); background: var(--surface-raised); }
 .douyin-web-media-label { display: inline-flex; align-items: center; gap: var(--s-1); min-height: 32px; max-width: 100%; color: var(--text); font-size: var(--fs-caption); cursor: pointer; }
 .douyin-web-media-label input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
@@ -344,10 +368,10 @@ h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); line-
 .publication-tasks > .publication-feedback:empty { margin: 0; }
 .publication-tasks > .publication-empty { margin-top: var(--s-2); }
 .publication-authorization { margin-top: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; }
-.publication-authorization > summary { padding: var(--s-2) var(--s-3); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-strong); cursor: pointer; }
+.publication-authorization > summary { padding: var(--s-2) var(--s-3); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); cursor: pointer; }
 .publication-authorization-form { display: grid; gap: var(--s-1); padding: 0 var(--s-3) var(--s-3); border-top: 1px solid var(--border); }
 .publication-authorization-form input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; min-width: 0; }
-.publication-authorization-form > label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.publication-authorization-form > label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 /* 维护提示：该 class 在 local-home.js 有 9 个调用点（1777/1788/1876/1893/1894/1902/
    1973/4504/4610），其中只有 3 处在 .publication-authorization-form 内。三条选择器
    并联覆盖全部 9 处；若将来删除上面任一父容器，必须同步调整这里，否则静默失效。 */
@@ -355,14 +379,14 @@ p.publication-authorization-note,
 .app-layer .publication-authorization-note,
 .publication-authorization-form .publication-authorization-note { margin-top: 0; }
 .publication-oauth { margin-top: var(--s-3); border-left: 3px solid var(--accent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
-.publication-oauth > summary { padding: var(--s-2) var(--s-3); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-strong); cursor: pointer; }
+.publication-oauth > summary { padding: var(--s-2) var(--s-3); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); cursor: pointer; }
 .publication-oauth-form { display: grid; gap: var(--s-1); padding: 0 var(--s-3) var(--s-3); border-top: 1px solid var(--border); }
 .publication-oauth-form input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; min-width: 0; }
-.publication-oauth-form > label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.publication-oauth-form > label { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .publication-oauth-callback { display: grid; gap: var(--s-1); padding-top: var(--s-2); border-top: 1px dashed var(--border); }
 .publication-oauth-callback > .button { justify-self: start; }
 .publication-reconciliation { display: grid; gap: var(--s-1); margin-top: var(--s-2); border-left: 3px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; }
-.publication-reconciliation > summary { padding: var(--s-1) var(--s-2); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-strong); cursor: pointer; }
+.publication-reconciliation > summary { padding: var(--s-1) var(--s-2); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); cursor: pointer; }
 .publication-reconciliation-body { display: grid; gap: var(--s-1); padding: 0 var(--s-2) var(--s-2); border-top: 1px solid var(--border); }
 .publication-reconciliation-body > p { margin: 0; }
 .publication-reconciliation-body input { box-sizing: border-box; min-width: 9rem; max-width: 14rem; }
@@ -440,12 +464,19 @@ p.publication-authorization-note,
 .project-tool-head p, .project-tool-detail > p { margin: var(--s-1) 0 0; color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .project-tool-detail { display: grid; gap: var(--s-3); padding: var(--s-3) var(--s-4); }
 .project-tool-permissions { display: grid; gap: var(--s-1); padding: var(--s-2) var(--s-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; }
-.project-tool-permissions strong { font-size: var(--fs-caption); }
+/* 400 是刻意的，不是漏改：这行 strong 是 2-4 字短标签（「换声任务」「PDF 导出」），
+   下一条 span 是 20-40 字成句散文，层级靠长度对比 + --text/--text-muted 明度差（2.26:1）
+   加盒子边框 + 4px gap 已经足，原来那层 700 是 UA 默认带来的冗余，12px 粗体在项目工具页是噪音。
+   不要再把 700 加回来。若将来实测觉得标签粘住段落，杠杆只有两个，都要整盒一起调、单独立一轮：
+   ① 这处 gap 从 --s-1 拉到 --s-2（8px，走留白通道，不要写 6px 这种不在刻度上的数）；
+   ② 本行升 --fs-body 15px 而 span 留 12px muted。
+   不要用「左侧 2px 竖线」——那是 .stage-note 的旁注语汇，套在标题上属语汇碰撞，且盒内会成双层框。 */
+.project-tool-permissions strong { font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .project-tool-permissions span { color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .project-tool-voice-list, .project-tool-workflow-list { display: flex; flex-wrap: wrap; gap: var(--s-1); max-height: 8rem; overflow: auto; }
-.project-tool-voice, .project-tool-workflow { display: inline-flex; align-items: center; min-height: 24px; padding: 2px var(--s-2); border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-medium); background: var(--surface); }
+.project-tool-voice, .project-tool-workflow { display: inline-flex; align-items: center; min-height: 24px; padding: 2px var(--s-2); border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); background: var(--surface); }
 .project-tool-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
-.project-tool-approval { display: inline-flex; align-items: center; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); cursor: pointer; }
+.project-tool-approval { display: inline-flex; align-items: center; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); cursor: pointer; }
 .project-tool-approval input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .local-vision-settings { display: grid; gap: var(--s-2); }
 .local-vision-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-3); }
@@ -453,7 +484,7 @@ p.publication-authorization-note,
 .local-vision-heading span, .local-vision-note, .local-vision-error { margin: 0; color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); overflow-wrap: anywhere; }
 .local-vision-error { color: var(--danger); }
 .local-vision-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2) var(--s-3); min-width: 0; }
-.local-vision-form > label { display: grid; gap: var(--s-1); min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.local-vision-form > label { display: grid; gap: var(--s-1); min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .local-vision-form input:not([type="checkbox"]), .local-vision-form select { width: 100%; min-width: 0; box-sizing: border-box; padding: var(--s-2) var(--s-3); font-size: var(--fs-body); }
 .local-vision-switches { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-4); padding-block: var(--s-1); }
 .comfy-deployment { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
@@ -464,27 +495,33 @@ p.publication-authorization-note,
 .comfy-deployment-readonly { padding: var(--s-2) var(--s-3); border-left: 3px solid var(--warning); border-radius: var(--r-sm); background: transparent; color: var(--text); }
 .comfy-deployment-form { display: grid; gap: var(--s-2); min-width: 0; }
 .comfy-deployment-primary, .comfy-deployment-secondary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); min-width: 0; }
-.comfy-deployment-form label { display: grid; gap: var(--s-1); min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+/* 这两处 label 的单行由列最小宽保证，不要用 min-height 去兜折行：
+   一是 .comfy-deployment-primary/.secondary 是默认 align-items:stretch，加 min-height 会把
+   单行那列的 input 拉高；二是文案超长该改文案，不该给整行加常驻空白。 */
+.comfy-deployment-form label { display: grid; gap: var(--s-1); min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .comfy-deployment-form input:not([type="checkbox"]), .comfy-deployment-form select { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--s-2) var(--s-3); font-size: var(--fs-body); }
 .comfy-deployment-form .project-tool-approval { display: inline-flex; align-items: center; gap: var(--s-1); width: auto; }
 .comfy-deployment-form .project-tool-approval input[type="checkbox"] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; padding: 0; }
 .comfy-deployment-advanced { border-top: 1px dashed var(--border); }
-.comfy-deployment-advanced summary { padding: var(--s-2) 0 0; color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-medium); cursor: pointer; }
+.comfy-deployment-advanced summary { padding: var(--s-2) 0 0; color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); cursor: pointer; }
 .comfy-deployment-advanced[open] summary { margin-bottom: var(--s-2); }
 .comfy-deployment-actions { padding-top: 0; border-top: 0; }
 .obs-preview-panel { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
 .obs-preview-panel > strong { font-size: var(--fs-title); }
 .obs-preview-note, .obs-preview-meta { color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .obs-preview-error { margin: 0; color: var(--warning); font-size: var(--fs-caption); line-height: var(--lh-caption); }
+/* 列最小宽就是这个栅格的约束：col1 ≥ 8rem ≈ 8 个汉字（"OBS 回环端口"），col2 ≥ 12rem
+   ≈ 16 个汉字（"OBS WebSocket 密码"）。文案超长请改短文案，不要加 min-height ——
+   align-items:end 已保证各列 input 底边对齐，加 min-height 只会让单行 label 的 input 被拉高。 */
 .obs-preview-config { display: grid; grid-template-columns: minmax(8rem, .8fr) minmax(12rem, 1.2fr) auto; align-items: end; gap: var(--s-2); }
-.obs-preview-config label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.obs-preview-config label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .obs-preview-config input { box-sizing: border-box; width: 100%; min-width: 0; }
 .obs-preview-image { display: block; width: min(100%, 38rem); aspect-ratio: 16 / 9; border: 1px solid var(--border); border-radius: var(--r-sm); object-fit: contain; background: var(--bg-sunken); }
 .obs-preview-status { display: grid; gap: var(--s-1); overflow-wrap: anywhere; }
 .obs-preview-inputs { margin: 0; padding-inline-start: 1.2rem; }
 .artifact-downloads { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-top: var(--s-2); }
-.artifact-download { color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-strong); text-decoration: none; }
-.artifact-download:hover, .artifact-download:focus-visible { text-decoration: underline; outline: none; }
+.artifact-download { color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-decoration: underline; text-underline-offset: .2em; }
+.artifact-download:hover, .artifact-download:focus-visible { text-decoration: underline; }
 
 .model-setup-note { display: grid; gap: var(--s-1); padding: var(--s-3) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
 .model-setup-note strong { font-size: var(--fs-title); }
@@ -496,8 +533,8 @@ p.publication-authorization-note,
 .chat-bubble { display: grid; justify-self: start; max-width: min(86%, 34rem); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md) var(--r-md) var(--r-md) var(--r-sm); background: var(--surface-raised); }
 .chat-bubble.is-user { justify-self: end; border-color: var(--border); border-radius: var(--r-md) var(--r-md) var(--r-sm) var(--r-md); background: var(--accent-soft); }
 .chat-bubble.is-pending { opacity: .72; }
-.bubble-meta { display: flex; justify-content: space-between; gap: var(--s-4); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-strong); }
-.bubble-meta time { color: var(--text-muted); font-weight: var(--fw-regular); }
+.bubble-meta { display: flex; justify-content: space-between; gap: var(--s-4); color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
+.bubble-meta time { color: var(--text-muted); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
 .bubble-text { margin: var(--s-1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-body); line-height: var(--lh-body); }
 .bubble-failure { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin-top: var(--s-2); padding-top: var(--s-2); border-top: 1px solid var(--border); color: var(--warning); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .load-older { justify-self: center; }
@@ -508,7 +545,7 @@ p.publication-authorization-note,
 .chat-progress { min-height: 1.3em; color: var(--text-muted); font-size: var(--fs-caption); }
 .composer .button { min-height: 32px; padding: 0 var(--s-3); }
 .model-form { display: grid; gap: var(--s-4); }
-.model-form > label, .field-grid > label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.model-form > label, .field-grid > label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
 /* 行基座：.row 与 .switch-row 共用一条，避免两份声明各自分化。
    两者脱壳后视觉完全一致 —— 只有 border-top，没有底色/圆角/外框。 */
@@ -516,21 +553,21 @@ p.publication-authorization-note,
 :is(.row, .switch-row):first-child { border-top: 0; }
 .switch-row input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
 .switch-row span { display: grid; gap: 2px; }
-.switch-row strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.switch-row strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .switch-row small { color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: var(--lh-caption); }
 .switch-row.destructive strong { color: var(--danger); }
 .settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 .identity-details { padding-top: var(--s-1); border-top: 1px solid var(--border); }
-.identity-details summary { padding: var(--s-3) 0; cursor: pointer; color: var(--text-muted); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.identity-details summary { padding: var(--s-3) 0; cursor: pointer; color: var(--accent-deep); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .identity-details .details-grid { padding-bottom: var(--s-1); }
 .legacy-receipt-list, .legacy-receipt-row { display: grid; gap: var(--s-1); min-width: 0; overflow-wrap: anywhere; }
 .legacy-receipt-list:empty { display: none; }
 .legacy-receipt-row { padding: var(--s-2) 0; border-top: 1px solid var(--border); }
 .legacy-receipt-list .button { justify-self: start; }
 .group-rule-advanced { margin-top: 0; border-top: 1px solid var(--border); }
-.group-rule-advanced summary { padding: var(--s-2) 0; cursor: pointer; color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.group-rule-advanced summary { padding: var(--s-2) 0; cursor: pointer; color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .group-rule-advanced .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); padding: var(--s-1) 0 var(--s-2); }
-.group-rule-advanced .details-grid > label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.group-rule-advanced .details-grid > label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .group-rule-advanced .details-grid > textarea, .group-rule-advanced .details-grid > label:nth-child(3) { grid-column: 1 / -1; }
 .group-rule-advanced .switch-row { padding: var(--s-2) 0; font-size: var(--fs-caption); }
 .home-controls { padding-top: var(--s-1); }
@@ -574,7 +611,7 @@ body.is-home-ready {
 }
 .is-home-ready .home-visual :is(.sea, .sea-wash, .orbit, .visual-caption) { display: none; }
 .is-home-ready .home-visual .fish { position: static; order: 1; width: 100%; height: clamp(92px, 21dvh, 190px); max-height: none; flex: none; margin: var(--s-2) 0 var(--s-3); }
-.rail-brand { text-align: center; font-weight: var(--fw-medium); letter-spacing: .05em; }
+.rail-brand { text-align: center; font-weight: var(--fw-strong); white-space: nowrap; letter-spacing: .05em; }
 .is-home-ready .local-tabs { order: 2; flex: 1; flex-direction: column; align-items: stretch; min-width: 0; padding: 0; gap: var(--s-2); border: 0; }
 .is-home-ready .local-tabs:has(.live-safety:not([hidden])) { flex-wrap: nowrap; }
 .is-home-ready .local-tabs > .live-safety { flex: none; }
@@ -751,6 +788,7 @@ body.is-home-ready {
 #app-dialog .app-detail-kicker { margin: 0 0 var(--s-2); color: var(--text-muted); }
 #app-dialog .app-dialog-tabs { flex-wrap: wrap; gap: var(--s-1); padding: 0 var(--s-3) var(--s-2); }
 #app-dialog .app-dialog-tabs .local-tab { padding-inline: var(--s-2); font-size: var(--fs-caption); }
+#app-dialog .app-dialog-tabs .local-tab.is-active { padding-inline-start: calc(var(--s-2) - 3px); }
 #app-dialog .app-dialog-body { padding: var(--s-3); }
 #app-dialog .app-layer { background-color: transparent; }
 .app-capabilities { display: grid; gap: var(--s-1); }
@@ -839,7 +877,7 @@ body.is-home-ready {
 .configuration-owner-binding h4, .configuration-owner-binding p { margin: 0; }
 .configuration-owner-form, .configuration-owner-form > label:first-child { display: grid; gap: var(--s-2); min-width: 0; }
 .configuration-cross-scope { min-width: 0; margin: 0; padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); }
-.configuration-cross-scope legend { padding: 0 var(--s-1); font-weight: var(--fw-medium); }
+.configuration-cross-scope legend { padding: 0 var(--s-1); font-weight: var(--fw-strong); }
 .configuration-cross-scope .configuration-owner-confirm { margin: var(--s-2) 0; overflow-wrap: anywhere; }
 .configuration-owner-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .configuration-owner-confirm { display: flex; align-items: center; gap: var(--s-2); }
