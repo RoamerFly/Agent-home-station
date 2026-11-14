@@ -29,7 +29,7 @@ func TestActivityKeepsSentContentAndReceiptStatus(t *testing.T) {
 	worker.config.Record = func(r Record) { records = append(records, r) }
 	worker.handle(context.Background(), fixtureEvent("1", message.ID, message.ThreadID, "outgoing", "sync"))
 	last := records[len(records)-1]
-	if last.Category != "sent" || last.Status != "accepted" || last.Content != "[AI] 回复正文" {
+	if last.Category != "sent" || last.Status != "accepted" || last.Content != "回复正文" {
 		t.Fatal("missing sent text/receipt", last)
 	}
 }

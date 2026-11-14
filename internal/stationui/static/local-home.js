@@ -3500,8 +3500,10 @@
         }));
       }
       dialog.showModal(); render();
-      const latest = [...group.steps.values()][0];
-      if (!latest.message) { message.textContent = "工作站活动"; return; }
+      const latest = [...group.steps.values()].sort((a, b) => b.sequence - a.sequence)[0];
+      let previewText = previews.get(group.key) || "";
+      if (previewText) message.textContent = previewText;
+      if (!latest?.message) { message.textContent = previewText || "工作站活动"; return; }
       void (async () => {
         let before = "";
         progress.textContent = "正在补齐处理过程…";
@@ -3512,11 +3514,18 @@
             const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: controller.signal });
             if (!dialog.open || !active()) return;
             for (const step of result.steps || []) group.steps.set(step.sequence, step);
-            const original = (result.messages || []).find((item) => item.thread === latest.thread && item.message === latest.message);
-            message.textContent = original?.text || "本轮消息当前不可读取，仍可查看处理过程。";
+            const originals = Array.isArray(result.messages) ? result.messages : [];
+            const original = originals.find((item) => item.thread === latest.thread && item.message === latest.message) ||
+              (originals.length === 1 ? originals[0] : null);
+            if (original?.text) {
+              message.textContent = original.text;
+              previewText = original.text;
+              previews.set(group.key, original.text);
+            } else if (!previewText) {
+              message.textContent = "本轮已收到消息，原文按当前历史读取权限隐藏。";
+            }
             if (!original) {
-              previews.delete(group.key);
-              group.card.querySelector(".round-card-preview").textContent = "消息处理";
+              group.card.querySelector(".round-card-preview").textContent = previewText || "消息处理";
             }
             render(); before = result.next_before || "";
           } while (before);

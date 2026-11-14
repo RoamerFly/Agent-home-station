@@ -301,9 +301,6 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			continue
 		}
 		text := strings.TrimSpace(p.Messages[p.Index])
-		if c.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
-			text = "[AI] " + text
-		}
 		in := p.Input
 		if p.Index < len(p.ReplyContexts) {
 			rc := p.ReplyContexts[p.Index]

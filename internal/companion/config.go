@@ -40,6 +40,8 @@ type Config struct {
 	// MaxBubbles is retained only to read and round-trip legacy configuration.
 	// Message boundaries are model-selected; this value is not a quota.
 	MaxBubbles           int    `json:"max_bubbles,omitempty"`
+	// ShowAILabel remains in the persisted shape for compatibility. Outbound
+	// messages never add an artificial label.
 	ShowAILabel          bool   `json:"show_ai_label"`
 	MaxRepliesPerHour    int    `json:"max_replies_per_hour"`
 	QuietStart           string `json:"quiet_start"`
@@ -70,7 +72,7 @@ func (c Config) ProactiveRule(thread string) ProactiveRule {
 }
 
 func Defaults() Config {
-	return Config{Name: "deepseek蓝色大肥鱼", Persona: FriendlyPersona, Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: FriendlyStyle, Relationship: FriendlyRelationship, Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, ShowAILabel: true, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
+	return Config{Name: "deepseek蓝色大肥鱼", Persona: FriendlyPersona, Appearance: "Q版鲸鱼娘：蓝色长卷发与蓝色眼睛，海军蓝和白色荷叶边裙装、鲸鳍形头饰、蓝色蝴蝶结、鲸鱼尾巴，围裙上有小鲸鱼图案。", Style: FriendlyStyle, Relationship: FriendlyRelationship, Permissions: Permissions{ReplyText: true, SendImage: true, SendVoice: true, SendVideo: true, SendFile: true}, MemoryMessages: 500, MemoryDays: 30, ReplyMinMS: 800, ReplyMaxMS: 2200, ShowAILabel: false, MaxRepliesPerHour: 30, QuietStart: "23:00", QuietEnd: "08:00", Timezone: "Asia/Shanghai", ProactiveIdleMinutes: 60, ProactiveMaxPerDay: 2, ProactiveThreads: []string{}}
 }
 
 // Normalize upgrades old configs without activating any new permission.

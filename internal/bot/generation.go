@@ -909,9 +909,6 @@ func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler,
 	case <-time.After(w.replyDelay(c)):
 	}
 	body := text
-	if c.Config.ShowAILabel && !strings.HasPrefix(body, "[AI]") {
-		body = "[AI] " + body
-	}
 	sent := false
 	pending := false
 	err = s.call(ctx, func() error {

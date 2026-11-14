@@ -254,7 +254,7 @@ func TestLocalSendAndUnapprovedConversationAreNeverRead(t *testing.T) {
 	}
 }
 
-func TestOutputPreservesUTF8BodyAndLoopPreventionPrefix(t *testing.T) {
+func TestOutputPreservesUTF8BodyWithoutArtificialPrefix(t *testing.T) {
 	s := &fakeSource{messages: map[string]linuxnative.Message{"one": fixtureMessage("one", "filehelper", "/ai hello", "outgoing")}}
 	m := &fakeModel{answer: strings.Repeat("中文", 400)}
 	sender := &fakeSender{}
@@ -264,8 +264,8 @@ func TestOutputPreservesUTF8BodyAndLoopPreventionPrefix(t *testing.T) {
 		t.Fatal("missing send")
 	}
 	text := sender.requests[0].Text
-	if !utf8.ValidString(text) || text != "[AI] "+m.answer {
-		t.Fatal("output was changed or lost its loop prevention prefix")
+	if !utf8.ValidString(text) || text != m.answer {
+		t.Fatal("output was changed or gained an artificial prefix")
 	}
 }
 

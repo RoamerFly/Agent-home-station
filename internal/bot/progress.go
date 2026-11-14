@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/sending"
@@ -27,9 +26,6 @@ func (w *Worker) toolProgress(character *companion.Engine, input companion.Input
 		case <-time.After(w.replyDelay(character)):
 		}
 		body := text
-		if character.Config.ShowAILabel && !strings.HasPrefix(body, "[AI]") {
-			body = "[AI] " + body
-		}
 		sendCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		_, err := w.sendText(sendCtx, input, -1, body)
 		cancel()

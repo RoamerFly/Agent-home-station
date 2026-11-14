@@ -510,7 +510,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.modelFailed(message.ThreadID, message.ID, err)
 		return
 	}
-	text := "[AI] " + strings.TrimSpace(answer)
+	text := strings.TrimSpace(answer)
 	if !utf8.ValidString(text) || strings.TrimSpace(answer) == "" {
 		w.config.Log("model_output_invalid")
 		return
@@ -849,9 +849,6 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		text := strings.TrimSpace(body)
 		if input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
 			return
-		}
-		if character.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
-			text = "[AI] " + text
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		_, err := w.sendText(sendCtx, input, bubble, text)

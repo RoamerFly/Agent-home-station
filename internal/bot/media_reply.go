@@ -132,9 +132,6 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 			in.QuoteServerID = r.Quote.ServerID
 		}
 		text := strings.TrimSpace(r.Messages[r.Index])
-		if c.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
-			text = "[AI] " + text
-		}
 		if w.beforeSubmit(ctx) != nil {
 			return
 		}
