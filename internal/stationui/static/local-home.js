@@ -2377,6 +2377,21 @@
     svg.append(path); mark.append(svg);
     return mark;
   }
+  // 三态取自「主人的授权」而不是「进程是否在跑」：
+  // on = 有凭据且当前可用，off = 曾接入当前不可用，not_connected = 从未接入。
+  function wechatAppState(service, accountCount, authenticatedCount, power) {
+    const connections = Number.isInteger(power?.connections) ? power.connections : accountCount;
+    const paused = Number.isInteger(power?.paused) ? power.paused : 0;
+    if (authenticatedCount === 0) return "not_connected";
+    if (connections > 0 && paused >= connections) return "off";
+    return service === "ready" ? "on" : "off";
+  }
+  function douyinAppState(value) {
+    if (!value || value.detached) return "not_connected";
+    if (value.paused) return "off";
+    if (value.state === "saved") return value.available ? "on" : "off";
+    return "off";
+  }
   function appEvidence(id) {
     const unknown = "待核对";
     if (id === "wechat") {
@@ -2388,11 +2403,13 @@
       const histories = policies.some((policy) => policy.history_threads?.length);
       const replies = policies.some((policy) => policy.reply_threads?.length);
       const known = service === "ready" && policies.length === accounts.length;
+      const state = wechatAppState(service, accounts.length, authenticated.length, apps.power.value);
       return {
         service: { ready: "已运行", archive: "仅可查看归档", offline: "未运行", unavailable: "不可用" }[service] || unknown,
         account: authenticated.length ? authenticated.length + " 个已登录" : service === "ready" && statuses.every(Boolean) ? (accounts.length ? "待登录" : "待添加") : unknown,
         grant: histories || replies ? "按会话授权" : known ? "待授权" : unknown,
-        connected: authenticated.length > 0,
+        state,
+        connected: state !== "not_connected",
         capabilities: [
           ["聊天记录", histories ? "有会话授权" : known ? "未授权" : unknown, "原话读取仍按账号和会话核对。"],
           ["记忆接续", unknown, "可在账号资料中核对各会话的旧档案接续状态。"],
@@ -2406,11 +2423,13 @@
       const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
       const actions = [read, value?.works_enabled === true, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
       const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
+      const state = douyinAppState(value);
       return {
         service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "不可用",
         account: !value ? unknown : value.state === "saved" ? "登录资料已保存" : ["login_open", "unconfirmed"].includes(value.state) ? "待确认" : "待登录",
         grant: !value ? unknown : paused ? "已暂停" : actions.some(Boolean) ? (read && actions.filter(Boolean).length === 1 ? "浏览范围已授权" : "按能力授权") : "未授权",
-        connected: !paused && value?.state === "saved",
+        state,
+        connected: state !== "not_connected",
         capabilities: [
           ["内容浏览", auth(read), "依据本机保存的浏览范围，实际可读性以网页为准。"],
           ["作品发布", auth(publish), "作品提交及发布结果按各任务单独核对。"],
@@ -2420,11 +2439,14 @@
     }
     const registered = apps.registered?.some((item) => item.id === id);
     const authorization = id === "bilibili" ? apps.bilibiliAuthorization : null;
+    let state = registered ? "on" : "not_connected";
+    if (authorization && authorization.state !== "ready") state = "off";
     return {
       service: registered ? "已登记" : apps.registered ? "待登记" : unknown,
       account: authorization?.state === "ready" ? "授权资料可用" : unknown,
       grant: authorization ? publicationAuthorizationSummary(authorization)[0] : unknown,
-      connected: authorization?.state === "ready",
+      state,
+      connected: state !== "not_connected",
       capabilities: id === "bilibili" ? [["作品发布", authorization ? publicationAuthorizationSummary(authorization)[0] : unknown, "发布结果按任务核对。"]] : [],
     };
   }
@@ -2450,16 +2472,15 @@
     for (const record of ordered) {
       const label = record.name || record.id, evidence = appEvidence(record.id);
       if (!(label + " " + record.id).toLowerCase().includes(search)) continue;
-      if (filter && (filter === "connected") !== Boolean(evidence.connected)) continue;
+      if (filter && (filter === "connected") !== (evidence.state !== "not_connected")) continue;
       const card = appElement("article", "", "app-record");
       const head = appElement("header", "", "app-record-head");
       const source = catalog.get(record.id);
       const version = source?.install_state === "installed" ? "接入版本已安装" : source?.source_available ? "有可用版本" : "暂无可用版本";
-      // Three states the owner can act on: running, switched off, not connected.
+      // Three states the owner can act on: connected, switched off, never connected.
       // The label is text, not colour alone, so it survives a greyscale screen.
-      const connection = evidence.connected === false ? "not_connected" : evidence.service === "已运行" ? "on" : "off";
-      const connectionLabel = { on: "运行中", off: "已关闭", not_connected: "未接入" }[connection];
-      card.dataset.connection = connection;
+      const connectionLabel = { on: "已接入", off: "已停用", not_connected: "未接入" }[evidence.state];
+      card.dataset.connection = evidence.state;
       head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
       open.type = "button"; open.setAttribute("aria-label", "管理" + label);
@@ -4393,6 +4414,17 @@
         const details = entry.status === "fulfilled" ? entry.value.connection : null;
         return [account.id, details?.id === account.id ? details : null];
       }));
+      // 应用开关在站端，不在连接上。随目录一起读，卡片才能说出「已停用」。
+      if (wechatRegistration?.registration === "station-native") {
+        const power = await Promise.allSettled([request("/api/local/apps/wechat/power")]);
+        if (current !== apps || appSessionExpired(power)) return;
+        const value = power[0].status === "fulfilled" ? power[0].value : null;
+        current.power.value = typeof value?.enabled === "boolean" ? value : null;
+        current.power.loaded = true;
+      } else {
+        current.power.value = null;
+        current.power.loaded = false;
+      }
       if (bilibili?.status === "fulfilled") {
         const value = bilibili.value;
         current.bilibiliPublic = value;
