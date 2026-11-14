@@ -5513,10 +5513,10 @@ index 7a647dd..402d47d 100644
  }
 diff --git a/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
 new file mode 100644
-index 0000000..048d114
+index 0000000..1dde290
 --- /dev/null
 +++ b/packages/native-client-rust/crates/wechat-store/tests/windows_bootstrap.rs
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,128 @@
 +#![cfg(windows)]
 +use wechat_store::Store;
 +
@@ -5581,7 +5581,18 @@ index 0000000..048d114
 +        )
 +        .unwrap();
 +    let key = source.join("accounts/synthetic/keys.json");
-+    std::fs::write(&key, b"synthetic key file").unwrap();
++    {
++        use std::io::Write;
++        let mut file = wechat_platform::OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .mode(0o600)
++            .open(&key)
++            .unwrap();
++        file.write_all(b"synthetic key file").unwrap();
++        file.sync_all().unwrap();
++    }
++    assert!(wechat_platform::private_path(&key).unwrap());
 +    store.set_keys_file("synthetic", &key).unwrap();
 +    let server = store.server_id.clone();
 +    drop(store);
