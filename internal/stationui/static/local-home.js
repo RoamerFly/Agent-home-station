@@ -1780,6 +1780,10 @@
     const publishActions = appElement("div", "", "publication-actions");
     const readActions = appElement("div", "", "publication-actions");
     const interactionActions = appElement("div", "", "publication-actions");
+    actions.classList.add("permission-account-group");
+    publishActions.classList.add("permission-autonomous-group");
+    readActions.classList.add("permission-readonly-group");
+    interactionActions.classList.add("permission-autonomous-group");
     const busy = Boolean(web.loading || web.applying);
     const available = value?.available !== false;
     if (section === "account" && value?.state === "saved" && !value.detached) {
@@ -2483,7 +2487,9 @@
       if (record.id === "wechat") void setWechatPower(input.checked);
       else void updateDouyinWebLogin(apps, input.checked ? "resume" : "pause");
     });
-    control.append(input, appElement("span", "应用开关 · " + note + (enabled === true ? "（自主功能另行授权）" : ""), "app-power-label"));
+    const track = appElement("span", "", "app-power-track");
+    track.append(appElement("span", "", "app-power-thumb"));
+    control.append(input, track, appElement("span", "应用开关 · " + note + (enabled === true ? "（自主功能另行授权）" : ""), "app-power-label"));
     return control;
   }
   function renderApps(renderDetail = true) {

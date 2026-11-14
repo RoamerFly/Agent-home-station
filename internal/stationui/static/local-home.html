@@ -80,6 +80,31 @@
                 <button id="open-settings-button" class="button compact secondary" type="button" hidden>设置模型</button>
               </div>
               <div class="chat-layout">
+                <aside class="chat-conversations" aria-label="聊天会话">
+                  <div class="chat-conversations-heading">
+                    <strong>聊天</strong>
+                    <button class="button compact quiet" type="button" aria-label="新建聊天">＋</button>
+                  </div>
+                  <label class="chat-search">
+                    <span class="sr-only">搜索会话</span>
+                    <input type="search" placeholder="搜索会话" autocomplete="off">
+                  </label>
+                  <div class="chat-conversation-list">
+                    <div class="chat-conversation is-active">
+                      <strong>日常闲聊</strong><small>今天的工作进展如何？</small><time>20:47</time>
+                    </div>
+                    <div class="chat-conversation">
+                      <strong>项目讨论</strong><small>接口方案已更新。</small><time>昨天</time>
+                    </div>
+                    <div class="chat-conversation">
+                      <strong>学习笔记</strong><small>整理了一份速查清单。</small><time>周二</time>
+                    </div>
+                    <div class="chat-conversation">
+                      <strong>灵感收集</strong><small>有个不错的想法，记录一下。</small><time>周一</time>
+                    </div>
+                  </div>
+                  <div class="button secondary chat-new-conversation" aria-hidden="true">＋ 新建聊天</div>
+                </aside>
                 <div class="chat-glass">
                   <div id="model-setup-note" class="model-setup-note" hidden>
                     <strong>先设置聊天模型</strong>

@@ -60,6 +60,7 @@ def verify_glass_views(page, output):
         {"id": "synthetic-fish", "role": "assistant", "text": "我把那段经历留在记忆宫殿里了。", "time": "2026-11-07T12:01:00Z"},
     ]}))
     home_tab(page, "chat")
+    expect(page.locator(".chat-conversations .chat-conversation")).to_have_count(4)
     expect(page.locator(".chat-bubble")).to_have_count(2)
     expect(page.locator("#recent-memory-items")).to_contain_text("海边日记")
     page.screenshot(path=str(output/"01-chat.png"))
@@ -87,6 +88,12 @@ def verify_glass_views(page, output):
     home_tab(page, "apps")
     expect(page.locator("#apps-list .app-record")).to_have_count(2)
     expect(page.locator("#apps-list .app-power-control")).to_have_count(2)
+    expect(page.locator("#apps-list .app-power-track")).to_have_count(2)
+    expect(page.locator("#apps-list .app-power-thumb")).to_have_count(2)
+    card_bounds = page.locator("#apps-list .app-record").evaluate_all(
+        "nodes => nodes.map(node => node.getBoundingClientRect()).map(rect => ({top: rect.top, bottom: rect.bottom}))"
+    )
+    assert all(card_bounds[index + 1]["top"] >= card_bounds[index]["bottom"] - 1 for index in range(len(card_bounds) - 1)), card_bounds
     page.locator("#apps-search").fill("抖音")
     expect(page.locator("#apps-list .app-record")).to_have_count(1)
     page.locator("#apps-search").clear()
