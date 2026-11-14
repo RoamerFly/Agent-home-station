@@ -107,7 +107,7 @@
     const detail = appElement("div", "", "app-action-row");
     const summary = value && value.connections
       ? `${value.connections} 个已启用连接${value.paused ? `，${value.paused} 个已暂停` : ""}。`
-      : "尚未接入微信账号。";
+      : on ? "微信应用已开启，账号正在准备。" : "微信应用已关闭，账号与登录资料保留。";
     detail.append(appElement("p", `${state}。${summary}关闭后不再领取消息和执行任务，账号、登录与记忆继续保留，不需要重启工作站。`, "app-scope-note"));
     const button = memoryButton(on ? "关闭微信应用" : "开启微信应用", "button compact secondary", () => {
       if (power.applying) return;
@@ -1525,8 +1525,8 @@
       detail.append(appElement("strong", "账号状态暂不可读"), appElement("p", "可刷新后重查。"));
     } else if (!connection?.length) {
       const nativeReady = apps.registered.some((app) => app.id === record.id && app.registration === "station-native");
-      detail.append(appElement("strong", "账号未接入"),
-        appElement("p", nativeReady ? "原生服务已就绪，暂无已登记账号。" : "账号接入后会显示在这里。"));
+      detail.append(appElement("strong", "账号正在准备"),
+        appElement("p", nativeReady ? "微信应用已开启，登录账号会自动显示在这里。" : "应用开启后，登录账号会自动显示在这里。"));
     } else {
       detail.append(appElement("strong", archiveOnly ? `可查看 ${connection.length} 个账号的投递归档` : `已有 ${connection.length} 个账号连接`));
       if (archiveOnly) detail.append(appElement("p", "微信原生服务未启动，登录状态待重新连接后核对。"));
@@ -2406,14 +2406,14 @@
       const state = wechatAppState(service, accounts.length, authenticated.length, apps.power.value);
       return {
         service: { ready: "已运行", archive: "仅可查看归档", offline: "未运行", unavailable: "不可用" }[service] || unknown,
-        account: authenticated.length ? authenticated.length + " 个已登录" : service === "ready" && statuses.every(Boolean) ? (accounts.length ? "待登录" : "待添加") : unknown,
+        account: authenticated.length ? authenticated.length + " 个已登录" : service === "ready" && statuses.every(Boolean) ? (accounts.length ? "需要登录" : "还没登录微信") : unknown,
         grant: histories || replies ? "按会话授权" : known ? "待授权" : unknown,
         state,
         connected: state !== "not_connected",
         capabilities: [
-          ["聊天记录", histories ? "有会话授权" : known ? "未授权" : unknown, "原话读取仍按账号和会话核对。"],
+          ["会话读取", histories ? "已按会话开启" : known ? "可在此确认" : unknown, "历史内容仍按账号和会话核对。"],
           ["记忆接续", unknown, "可在账号资料中核对各会话的旧档案接续状态。"],
-          ["消息发送", replies ? "有回复范围" : known ? "未授权" : unknown, "每次发送仍由原有授权及运行条件判定。"],
+          ["消息发送", replies ? "已按会话开启" : known ? "可在此确认" : unknown, "每次发送仍由本人身份和会话范围判定。"],
         ],
       };
     }
@@ -3105,11 +3105,11 @@
   }
   function appWechatOwnerBinding(view, connection) {
     const panel = appElement("section", "", "configuration-owner-binding");
-    const status = appElement("p", "正在读取微信本人绑定…", "app-scope-note");
+    const status = appElement("p", "正在读取微信身份确认…", "app-scope-note");
     const feedback = appElement("p", "", "app-scope-note");
     status.setAttribute("role", "status"); feedback.setAttribute("role", "status");
     const form = appElement("form", "", "configuration-owner-form");
-    const field = appElement("label", "本人发来的普通文字消息编号");
+    const field = appElement("label", "核对用消息编号");
     const message = document.createElement("input"); message.type = "text"; message.maxLength = 8192;
     const draft = apps.wechatOwnerDrafts.get(connection) || { message: "", preview: null, key: "", confirmed: false };
     apps.wechatOwnerDrafts.set(connection, draft);
@@ -3119,22 +3119,24 @@
     const confirm = appElement("label", "", "configuration-owner-confirm");
     const checked = document.createElement("input"); checked.type = "checkbox"; checked.checked = draft.confirmed;
     confirm.append(checked, document.createTextNode("确认核对到的发送者就是我本人"));
-    const preview = memoryButton("预览本人身份", "button compact secondary", () => write("preview"));
-    const bind = memoryButton("绑定本人", "button compact primary", () => write("bind"));
-    const check = memoryButton("核验消息发送者", "button compact secondary", () => write("check"));
-    const revoke = memoryButton("解除本人绑定", "button compact secondary", () => write("revoke"));
+    const preview = memoryButton("开始核对", "button compact secondary", () => write("preview"));
+    const bind = memoryButton("确认是我本人", "button compact primary", () => write("bind"));
+    const check = memoryButton("重新核验", "button compact secondary", () => write("check"));
+    const revoke = memoryButton("移除本人确认", "button compact secondary", () => write("revoke"));
     const controls = appElement("div", "", "configuration-owner-actions");
     controls.append(preview, bind, check, revoke);
-    form.append(evidence, confirm, controls);
+    const details = appElement("details", "", "identity-details");
+    details.append(appElement("summary", "核对详情"), field, evidence, confirm, controls);
+    form.append(details);
     form.addEventListener("submit", (event) => { event.preventDefault(); if (!preview.disabled) void write("preview"); });
-    panel.append(appElement("h4", "微信本人身份"), status,
-      appElement("p", "用当前账号收到的一条本人文字消息核对原生发送者。跨会话读取与投递需分别授权。", "app-scope-note"), form, feedback);
+    panel.append(appElement("h4", "确认你的微信身份"), status,
+      appElement("p", "收到一条你自己发来的文字后，填入消息编号确认；确认后才能使用跨会话查询和发送。", "app-scope-note"), form, feedback);
     const path = "/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/owner-binding";
     const active = () => appConfiguration === view && view.section === "account" && view.connection === connection && panel.isConnected && !view.controller.signal.aborted;
     let value = null, busy = true;
     function render() {
       const binding = value?.binding;
-      status.textContent = binding ? "已保存本人发送者 " + binding.sender_id + " · 版本 " + value.revision : "尚未绑定微信本人";
+      status.textContent = binding ? "已确认是你本人" : "还没确认是你本人";
       evidence.textContent = draft.preview ? "原生发送者 " + draft.preview.sender_id + " · 会话 " + draft.preview.thread_id : "";
       confirm.hidden = !draft.preview;
       checked.checked = draft.confirmed;
@@ -3173,10 +3175,10 @@
         if (!active()) return;
         if (action === "preview") {
           draft.preview = result; draft.confirmed = false; draft.key = "";
-        } else if (action === "check") feedback.textContent = result.is_bound_owner ? "此消息的原生发送者与已绑定本人一致。" : "此消息的原生发送者与已绑定本人不一致。";
+        } else if (action === "check") feedback.textContent = result.is_bound_owner ? "此消息来自你本人。" : "此消息不是你本人发来的。";
         else {
           value = result; draft.preview = null; draft.confirmed = false; draft.key = "";
-          feedback.textContent = action === "bind" ? "微信本人绑定已保存。" : "微信本人绑定已解除。";
+          feedback.textContent = action === "bind" ? "微信身份已确认。" : "微信身份确认已移除。";
           view.crossMemoryRefresh?.();
           view.stationMemoryRefresh?.();
           view.douyinMemoryRefresh?.();
@@ -3286,8 +3288,8 @@
     }
     function render() {
       if (!value || !draft) return;
-      status.textContent = !value.owner_bound ? "请先绑定微信本人。" :
-        draft.ownerRevision !== value.current_owner_revision ? "本人绑定已变化。请载入最新范围，再核对并保存。" :
+      status.textContent = !value.owner_bound ? "请先确认你的微信身份。" :
+        draft.ownerRevision !== value.current_owner_revision ? "本人确认已变化。请载入最新范围，再核对并保存。" :
           Object.keys(stationSource ? value.origins || {} : value.sources || {}).length && !value.scopes_current ? "已存范围的本人或会话授权已变化。请重新核对并保存。" :
           !value.private_reply_authorized ? "本人私聊尚无回复授权。群内查询将保持受阻。" : "本人私聊已获回复授权。";
       const form = appElement("form", "", "configuration-owner-form");

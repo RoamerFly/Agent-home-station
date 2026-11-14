@@ -194,11 +194,18 @@ namespace WechatAgent.Desktop {
         internal string Identity { get { using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(Workspace.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant()))).Replace("-", "").Substring(0, 16); } }
         internal static string FindWorkspace(string[] args) {
             if (args.Length == 2 && args[0] == "--workspace") return Path.GetFullPath(args[1]);
-            if (args.Length != 0) throw new ArgumentException("参数：--workspace <项目目录>");
-            if (File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return AppDomain.CurrentDomain.BaseDirectory;
-            for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
-                if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
-            throw new InvalidOperationException("找不到本机部署。请使用桌面快捷方式，或传入 --workspace 项目目录。");
+            // The normal desktop action is a double-click with no arguments.
+            // Some older shortcuts kept a bare --workspace switch after the
+            // workspace became self-detecting; treat that switch as the same
+            // default action instead of showing a command-line error.
+            if (args.Length == 0 || args.Length == 1 && args[0] == "--workspace") {
+                var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
+                for (var dir = new DirectoryInfo(baseDirectory); dir != null; dir = dir.Parent)
+                    if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
+                throw new InvalidOperationException("找不到本机部署。请把程序放在完整工作站目录后直接双击。若使用自定义目录，再传入 --workspace 项目目录。");
+            }
+            throw new ArgumentException("启动参数应为空；自定义目录时才使用 --workspace 项目目录。");
         }
     }
 

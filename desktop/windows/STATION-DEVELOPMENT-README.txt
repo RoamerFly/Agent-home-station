@@ -1,8 +1,8 @@
 Agent-home-station Windows 开发包
 
-这个目录用于源码更新期间的本机开发验证。运行
-
-  AgentHomeStation.exe --workspace <本目录>
+这个目录用于源码更新期间的本机开发验证。直接双击 AgentHomeStation.exe 即可运行，
+程序会从自身所在的完整目录自动识别工作区。只有把资料放在自定义目录时，才需要
+额外传入 --workspace <项目目录>。
 
 或使用仓库脚本：
 

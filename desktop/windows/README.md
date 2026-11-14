@@ -50,7 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-Desktop.ps
 
 产物在 `dist/windows-desktop/WechatAgent.exe`。它是 Windows x64 GUI 可执行文件，内嵌 SDK 程序集及加载器，无需从 PowerShell、BAT 或 Python 启动。运行时直接调用隐藏的 `wsl.exe` 和现有 systemd 单元；Python 3 仅用于 WSL 内的只读在途任务检查，已有本机部署已具备此依赖。
 
-放在项目子目录中可自动找到项目根，也支持：
+双击完整程序目录中的 EXE 会自动找到项目根，不需要填写参数。自定义工作区时才使用：
 
 ```text
 WechatAgent.exe --workspace "E:\项目目录"
