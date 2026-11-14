@@ -861,6 +861,19 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 				return fail(503, "服务已停止，尚未确认登录保存")
 			}
 			record.ConfirmedAt = time.Now().UTC().Format(time.RFC3339)
+			// Enabling the app defaults to the read-only surface. Autonomous or
+			// externally visible actions remain explicit: playback, likes, replies,
+			// publishing and notification reads stay disabled until selected.
+			record.ReadEnabled = true
+			record.ReadScope = "home_and_videos"
+			record.WorksEnabled = true
+			record.CommentsEnabled = true
+			record.PlaybackEnabled = false
+			record.AudioEnabled = false
+			record.VisualEnabled = false
+			record.LikesEnabled = false
+			record.RepliesEnabled = false
+			record.PublishEnabled = false
 		}
 		if save() != nil {
 			return fail(503, "登录窗口已关闭，但状态未保存；请重新读取后核对")

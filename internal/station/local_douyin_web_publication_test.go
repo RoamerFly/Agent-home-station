@@ -22,7 +22,7 @@ func webPublicationFixture(t *testing.T) (*localHomeFixture, *localDouyinWebPubl
 	initializeDouyinWeb(t, f)
 	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
 	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
-	if code, out := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": view["revision"], "allow_publish": true}, true); code != 200 || out["read_enabled"] != false {
+	if code, out := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": view["revision"], "allow_publish": true}, true); code != 200 || out["read_enabled"] != true {
 		t.Fatalf("independent grant: %d %#v", code, out)
 	}
 	p := &localDouyinWebPublication{home: f.handler.home, installation: "built-in-douyin"}

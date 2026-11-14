@@ -92,10 +92,10 @@ func TestLocalDouyinWebCommentsPermissionNeedsVideoScopeAndRevokes(t *testing.T)
 	initializeDouyinWeb(t, f)
 	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
 	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
-	if view["comments_enabled"] != false {
-		t.Fatalf("comments must default to disabled: %v", view)
+	if view["read_enabled"] != true || view["read_scope"] != "home_and_videos" || view["works_enabled"] != true || view["comments_enabled"] != true || view["likes_enabled"] != false || view["replies_enabled"] != false || view["publish_enabled"] != false {
+		t.Fatalf("read-only permissions must default on while autonomous actions stay off: %v", view)
 	}
-	code, rejected := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "allow_comments": true}, true)
+	code, rejected := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home", "allow_comments": true}, true)
 	if code != 400 || rejected["error"] == nil {
 		t.Fatalf("comments without video scope: %d %v", code, rejected)
 	}

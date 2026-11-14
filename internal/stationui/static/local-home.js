@@ -2483,7 +2483,7 @@
       if (record.id === "wechat") void setWechatPower(input.checked);
       else void updateDouyinWebLogin(apps, input.checked ? "resume" : "pause");
     });
-    control.append(input, appElement("span", "应用开关 · " + note, "app-power-label"));
+    control.append(input, appElement("span", "应用开关 · " + note + (enabled === true ? "（自主功能另行授权）" : ""), "app-power-label"));
     return control;
   }
   function renderApps(renderDetail = true) {

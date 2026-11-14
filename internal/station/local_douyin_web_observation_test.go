@@ -25,12 +25,16 @@ func enableSyntheticDouyinWebRead(t *testing.T, f *localHomeFixture) map[string]
 	if code != 200 {
 		t.Fatalf("confirm: %d %v", code, view)
 	}
-	if view["read_enabled"] != false {
-		t.Fatal("login granted webpage access")
+	// Keep this helper's historical home-only fixture explicit. Production
+	// confirmation now enables the safe read-only surface by default; tests
+	// that exercise scope expansion must still start from home-only.
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home", "allow_comments": false}, true)
+	if code != 200 || view["read_enabled"] != true || view["read_scope"] != "home" || view["comments_enabled"] != false {
+		t.Fatalf("restore home-only fixture: %d %v", code, view)
 	}
-	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true}, true)
-	if code != 200 || view["read_enabled"] != true {
-		t.Fatalf("opt in: %d %v", code, view)
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": false}, true)
+	if code != 200 || view["works_enabled"] != false {
+		t.Fatalf("restore works fixture: %d %v", code, view)
 	}
 	return view
 }
