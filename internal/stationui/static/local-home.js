@@ -6370,7 +6370,7 @@
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
       if (tool.id === "obs-preview") { current.obsPreview.enabled = updated?.enabled === true; if (action === "disable") clearOBSPreview(); }
       if (tool.id === "obs-preview" && (action === "install" || action === "upgrade")) await loadOBSPreview(current);
-      const statuses = { install: "已安装", enable: "已启用", upgrade: "已更新", disable: "已停用" };
+      const statuses = { install: "已安装", enable: "已启用", upgrade: "已更新", disable: "已停用", start: "已启动", stop: "已停止", restart: "已重启" };
       projectToolsFeedback((tool.name || tool.id) + statuses[action] + "。");
     } catch (error) {
       if (current === projectTools) projectToolsFeedback(error.message, true);
