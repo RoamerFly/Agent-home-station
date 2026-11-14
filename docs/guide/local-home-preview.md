@@ -713,6 +713,8 @@ $digest = ($preview | ConvertFrom-Json).digest
 
 使用 `Build-Desktop.ps1 -LocalStation -WithStationSpeech` 构建带「本机语音」项目工具的 Windows 预览。该选项准备隐藏执行所需的受管 Python CLI，并提供可登记的 `runtimes/windows-station-speech/gpt_sovits.py`。主人另行准备 GPT-SoVITS 项目、推理用 Python 及其依赖、基础模型、解码组件和获准的说话声线。把部署登记 `station-speech.json` 放在站点 `-data` 私有目录。资源路径使用绝对路径，运行环境与私有声线文件放在站点数据和大肥鱼家目录之外。
 
+使用 `Build-Development-Desktop.ps1` 会同时带上 `audio-cpp` 项目工具卡。首次使用时，在项目工具页登记现有的 `station-audio-cpp.json`；宿主只复制登记文件并核对回环地址、程序、server config、Kokoro/SenseVoice 模型和 SHA-256，不复制模型。启用后聊天可以直接生成本机 WAV 并识别已登记音频，服务由工作站按需启动、停止和重启恢复。
+
 下面是登记示例，使用实际路径和每个文件的 64 位小写 SHA-256。`media` 目录须含 `ffmpeg.exe` 与 `ffprobe.exe`，`nltk_data` 指向准备好的本地语料目录。有独立 Python 依赖目录时，可用 `packages` 登记其绝对路径。当前运行器使用 GPT-SoVITS v2 声线。
 
 ```json

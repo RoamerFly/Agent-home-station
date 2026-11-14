@@ -31,7 +31,7 @@ if ($DataDirectory) {
 }
 
 $build = Join-Path $PSScriptRoot 'Build-Desktop.ps1'
-& $build -OutputDirectory $OutputDirectory -LocalStation -WithWeChatRuntime -WithWeChatApp -WithDouyinApp -WeChatRuntimeDirectory $WeChatRuntimeDirectory -Test:$Test
+& $build -OutputDirectory $OutputDirectory -LocalStation -WithWeChatRuntime -WithWeChatApp -WithDouyinApp -WithAudioCpp -WeChatRuntimeDirectory $WeChatRuntimeDirectory -Test:$Test
 if ($LASTEXITCODE -ne 0) { throw '开发包构建失败。' }
 
 $secrets = Join-Path $OutputDirectory 'secrets'
