@@ -3472,6 +3472,23 @@
       stopped: "已停止", cancelled: "已取消", canceled: "已取消", paused: "已暂停",
       unknown: "结果待确认", needs_review: "待核对", silent: "无需回复", skipped: "已跳过"
     };
+    const reasons = {
+      operation_reported_privately: "处理失败，已另行通知管理员", conversation_not_allowed: "会话不在回复范围内", non_text_message: "不是当前可处理的消息类型",
+      ai_label_loop_prevention: "跳过带有 AI 标记的消息，避免循环", social_permission_denied: "未授权群聊观察或自主接话", not_a_verified_mention: "没有识别到真正的 @ 本账号",
+      group_prefix_not_matched_or_empty: "群聊触发前缀不匹配或正文为空", private_prefix_not_matched_or_empty: "私信触发前缀不匹配或正文为空", empty_prompt: "去掉 @ 后正文为空",
+      model_chose_silence: "角色选择保持安静", grounding_check_failed: "回复复核未完成，草稿未发送", grounding_check_rejected: "回复复核未通过，草稿未发送",
+      grounding_context_invalidated: "复核前依据已变化，草稿已作废", grounding_check_stopped_unverified_reply: "回复复核未完成，草稿未发送",
+      invalid_model_decision: "模型返回的决策格式无效，未发送", invalid_tool_arguments: "工具参数格式无效", tool_unavailable_or_budget_exhausted: "工具不可用或调用次数已用尽",
+      hourly_reply_budget: "回复预算已用尽", quiet_hours: "处于安静时段", proactive_permission_denied: "主动问候权限未开启", text_reply_permission_denied: "发送权限不足",
+      media_unavailable_or_permission_denied: "生成媒体不可用或没有发送权限", source_identity_conflict_or_unavailable: "消息来源身份冲突，未生成回复", auth_required: "微信登录需要重新验证",
+      submission_outcome_unknown: "原生发送未取得可验证回执，结果待确认", receipt_wait_timeout: "等待发送回执超时，结果待确认", receipt_lookup_failed: "读取发送回执失败，结果待确认",
+      send_outcome_unknown: "发送结果不确定，未自动重发", wechat_rejected: "微信拒绝了本次消息", service_rejected: "微信服务拒绝了本次消息", wechat_not_ready: "微信登录或发送连接未就绪",
+      transport_unavailable: "原生发送连接不可用，结果待确认", delivery_reconciliation_pending: "已安排延迟核对回执与同步记录", delivery_random_backoff: "发送结果未确认，已安排随机退避核对与补发",
+      delivery_pacing: "等待会话内消息发送间隔", media_processing_failed: "附件在发送前处理失败，未自动重发", unsupported_media: "附件格式不受支持，未自动重发",
+      incoming_media_download_failed: "收到的附件下载失败", media_understanding_disabled: "此类媒体理解已关闭", memory_record_unavailable: "当前范围内没有可读取的记录",
+      persistent_task_continuation: "恢复已保存任务，结合最新上下文继续判断", durable_operation_no_replay: "操作已记录，重复调用不会重新执行",
+      tool_budget_exhausted: "本轮工具调用预算已用尽", tool_unavailable_or_budget_exhausted: "工具不可用或本轮预算已用尽"
+    };
     const toolNames = {
       memory_search: "搜索会话记忆", memory_read: "读取相关记忆", web_search: "搜索网页", web_fetch: "读取网页",
       wechat_history: "查找聊天记录", wechat_search: "搜索聊天记录", wechat_messages: "读取原消息",
