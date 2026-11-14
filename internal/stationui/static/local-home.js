@@ -3689,7 +3689,7 @@
     }
     function openRound(group) {
       view.roundDialog?.close();
-      const dialog = appElement("dialog", "", "app-dialog round-process-dialog");
+      const dialog = appElement("dialog", "", "app-dialog round-process-dialog wechat-legacy-skin");
       view.roundDialog = dialog; dialog.roundGroup = group;
       dialog.setAttribute("aria-label", "回合处理过程");
       const header = appElement("header", "", "app-dialog-header");

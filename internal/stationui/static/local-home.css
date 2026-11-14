@@ -1480,7 +1480,7 @@ body.is-home-ready {
 /* 微信应用沿用旧版微信 Bot 控制台的深海蓝卡片与权限开关。
    工作站外层仍使用暖纸主题，只有“进入应用”后的微信配置采用这套旧视觉，
    这样账号、规则、回合和投递分区看起来仍属于同一个微信 Bot。 */
-.is-home-ready .app-configuration.wechat-legacy-skin {
+.is-home-ready .wechat-legacy-skin {
   --bg:#091423; --bg-sunken:#0d1b2c; --surface:#111f32; --surface-raised:#172a44;
   --border:#2c405a; --border-strong:#45627f; --text:#edf4ff; --text-muted:#a7bad2;
   --accent:#76a6ff; --accent-hover:#9dbdff; --accent-soft:#1b3256;
