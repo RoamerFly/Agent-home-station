@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
@@ -90,9 +91,11 @@ func (h *localChatService) tools(store *companion.Store, in companion.Input) *lo
 		tools.projectTools = h.projectTools
 		tools.requestTime, _ = time.Parse(time.RFC3339Nano, in.MessageTime)
 		tools.catalog = h.homeCatalog()
-		if in.OriginalText != nil {
-			tools.douyinMemoryRequested = strings.Contains(*in.OriginalText, "抖音") || strings.Contains(strings.ToLower(*in.OriginalText), "douyin")
-		}
+		// Discoverability follows the home, not the wording. An attached
+		// application stays queryable even when the owner says "短视频那边",
+		// which no keyword list can cover; the tool itself still checks the
+		// registration, the switch state and the owner's grants on every call.
+		tools.douyinMemoryRequested = h.homeHasApp(douyinapp.ID)
 	}
 	return tools
 }

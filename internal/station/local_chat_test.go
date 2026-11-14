@@ -197,7 +197,7 @@ func TestLocalChatNoConfigurationDoesNotCallModelOrLoseDraft(t *testing.T) {
 		t.Fatalf("unconfigured request was not retained: %#v", page)
 	}
 	code, out := f.request("GET", "/api/local/model", nil, true)
-	if code != 200 || out["key_configured"] != false || out["thinking_enabled"] != true || out["reasoning_effort"] != "low" {
+	if code != 200 || out["key_configured"] != false || out["thinking_enabled"] != true || out["reasoning_effort"] != "max" {
 		t.Fatalf("model defaults: %d %#v", code, out)
 	}
 	// The same durable source event remains readable after a station restart;

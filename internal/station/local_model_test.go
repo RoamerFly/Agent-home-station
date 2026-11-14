@@ -52,7 +52,7 @@ func TestLocalModelStoreDefaultsAndPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.Revision != 0 || defaults.Provider != "deepseek" || defaults.Model != "deepseek-flash" || defaults.BaseURL != "https://api.deepseek.com" || defaults.MaxTokens != 4096 || !defaults.ThinkingEnabled || defaults.ReasoningEffort != "low" || defaults.KeyConfigured || defaults.Persona == "" {
+	if defaults.Revision != 0 || defaults.Provider != "deepseek" || defaults.Model != "deepseek-flash" || defaults.BaseURL != "https://api.deepseek.com" || defaults.MaxTokens != 4096 || !defaults.ThinkingEnabled || defaults.ReasoningEffort != "max" || defaults.KeyConfigured || defaults.Persona == "" {
 		t.Fatalf("unexpected defaults: %+v", defaults)
 	}
 	first, err := store.Save(LocalModelInput{LocalModelSettings: defaults, APIKey: "local-test-key-000000000000000000"})

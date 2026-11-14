@@ -40,6 +40,18 @@ func (h *localChatService) homeCatalog() map[string]any {
 	}
 }
 
+// homeHasApp reports whether the application is part of this home at all,
+// whatever its switch state. The catalog announces such an application, so its
+// memory lookup has to stay reachable even when the owner never types its name:
+// "短视频那边" is a question about the application, not about a keyword.
+func (h *localChatService) homeHasApp(id string) bool {
+	if h == nil {
+		return false
+	}
+	_, ok := h.applications.Lookup(id)
+	return ok
+}
+
 // homeAppHint is one short phrase per known application. Unknown applications
 // simply carry no hint instead of an invented description.
 func homeAppHint(id string) string {

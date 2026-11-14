@@ -141,8 +141,21 @@ func TestStationDouyinMemoryCapturesOnlyAuthorizedSources(t *testing.T) {
 	if len(available) != 3 || workReads != 1 || commentReads != 0 || noticeReads != 0 {
 		t.Fatal("source discovery touched upstream", available, workReads, commentReads, noticeReads)
 	}
-	if _, err := call(newTools("implicit-douyin", "查询银河记忆"), map[string]any{"action": "search", "source_id": available[douyinMemoryWorks], "query": "银河"}); !errors.Is(err, apphost.ErrObservationForbidden) {
-		t.Fatal("implicit external source request passed", err)
+	// Discoverability follows the home, not the wording: the catalog already
+	// told the companion that Douyin lives here, so "短视频那边" has to reach
+	// the same tool as "抖音". The read itself stays fenced by the owner's
+	// grants and by the source scope, both asserted below.
+	namelessTools := newTools("nameless-douyin", "短视频那边最近怎么样")
+	namelessListed, listErr := namelessTools.List(t.Context())
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	reachable := false
+	for _, tool := range namelessListed {
+		reachable = reachable || tool.Name == localWechatMemoryTool
+	}
+	if !reachable {
+		t.Fatal("granted application memory was not discoverable without its name in the message")
 	}
 	code, works := read("account_works", douyinapp.WebWorksContentID)
 	if code != 200 {

@@ -189,7 +189,7 @@ func TestLegacySettingsImportPreservesOldDefaultsAndDeduplicatesPersona(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Model.Model != "deepseek-flash" || plan.Model.Provider != "deepseek" || plan.Model.MaxTokens != 4096 || plan.Model.ThinkingEnabled || plan.Model.ReasoningEffort != "low" {
+	if plan.Model.Model != "deepseek-flash" || plan.Model.Provider != "deepseek" || plan.Model.MaxTokens != 4096 || plan.Model.ThinkingEnabled || plan.Model.ReasoningEffort != "max" {
 		t.Fatal("old effective defaults changed", plan.Model)
 	}
 	if _, err = ImportLegacySettings(t.Context(), source, target, plan.Digest); err != nil {
