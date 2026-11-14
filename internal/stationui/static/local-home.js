@@ -4532,6 +4532,26 @@
         } else controls.push(appElement("p", "连接微信后可读取通讯录。", "app-scope-note"));
         break;
       }
+      case "provider": {
+        const page = legacyWechatSection("服务商与模型", "沿用旧版服务商、模型和角色入口；实际密钥只在工作站设置中保存，微信应用这里只显示当前接入状态。", "legacy-provider-page");
+        page.append(appPersonaRow(record), appCapabilityRows(evidence, true), appElement("p", "模型与服务商的密钥不会复制到微信连接配置，修改后所有应用按工作站设置生效。", "app-scope-note"));
+        controls.push(page);
+        break;
+      }
+      case "voices": {
+        const page = legacyWechatSection("语音工具", "旧版语音工具入口已保留在微信应用中；语音生成与识别仍由项目工具中的 audio.cpp 等已登记服务提供。", "legacy-voices-page");
+        const card = appElement("div", "", "app-layer");
+        card.append(appElement("h5", "本机语音服务"), appElement("p", "启用后的 TTS、ASR 和语音处理工具按工作站登记状态提供，微信这里只选择使用范围，不重复登记后端。", "app-scope-note"), memoryButton("打开项目工具", "button compact secondary", () => { setActiveView("project-tools"); if ($("#app-configuration").open) $("#app-configuration").close(); }));
+        page.append(card); controls.push(page);
+        break;
+      }
+      case "settings": {
+        const page = legacyWechatSection("本地设置", "旧版设置页的存储、归档和管理员入口由当前工作站统一管理；微信应用只保留连接级授权和回执，不另存一份私有资料。", "legacy-settings-page");
+        const card = appElement("div", "", "app-layer");
+        card.append(appElement("h5", "工作站设置"), appElement("p", "登录口令、数据目录、归档保留和工具登记请在工作站设置页修改。现有微信账号、记忆和运行记录会继续保留。", "app-scope-note"), memoryButton("打开工作站设置", "button compact secondary", () => { setActiveView("settings"); if ($("#app-configuration").open) $("#app-configuration").close(); }));
+        page.append(card); controls.push(page);
+        break;
+      }
       case "rules": {
         if (selected) {
           const status = apps.accountStatuses.get(selected.id);
