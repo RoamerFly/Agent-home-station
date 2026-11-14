@@ -429,7 +429,7 @@ namespace WechatAgent.Desktop {
             deployment.Url = FreeLocalUrl();
             var emptyRuntime = Path.Combine(workspace, "empty-runtime");
             Directory.CreateDirectory(emptyRuntime);
-            new CloseSettings(workspace).Save("exit");
+            new CloseSettings(workspace, true).Save("exit");
             using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset))
             using (var form = new MainForm(deployment, activation, new ServiceController(deployment), false)) {
                 var retry = (Button)typeof(MainForm).GetField("retry", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
@@ -465,7 +465,7 @@ namespace WechatAgent.Desktop {
                 admin_url = url, wechat_native_url = nativeUrl, wechat_native_enabled = false
             }));
             var d = Deployment.Load(workspace);
-            new CloseSettings(workspace).Save("exit");
+            new CloseSettings(workspace, true).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 form.Show();
