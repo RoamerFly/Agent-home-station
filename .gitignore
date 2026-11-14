@@ -5,6 +5,8 @@ secrets/
 dist/
 tmp/
 temp/
+# Local development packages contain executables, runtimes and protected data.
+dev/
 *.session.json
 *.session
 *.sqlite
