@@ -2176,7 +2176,7 @@
       $("#memory-source-label").hidden = false;
       button.textContent = "刷新微信来源";
       if (!value.sources.length) {
-        current.error = "当前没有获准微信来源，请在微信详细配置中授权工作站查询范围。";
+        current.error = "当前没有获准微信来源，请在微信进入应用后的账号与授权中授权工作站查询范围。";
         renderMemoryPage();
       }
     } catch (error) {
@@ -2962,7 +2962,7 @@
     const form = appElement("form", "", "configuration-surf-form");
     const feedback = appElement("p", "", "app-scope-note"); feedback.setAttribute("role", "status");
     node.append(appElement("h4", "应用浏览与互动"), status,
-      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用的「详细配置 → 互动任务」核对。", "app-scope-note"), form, feedback);
+      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用的「进入应用 → 互动任务」核对。", "app-scope-note"), form, feedback);
     const key = connection + ":apps";
     let saved, busy = false, serial = 0;
     async function refresh() {
@@ -3363,7 +3363,7 @@
             (available.some((source) => source.kind === kind) ? "" : " · 当前来源已撤销")));
           group.append(label);
         }
-        if (!available.length) group.append(appElement("p", "请在抖音详细配置中核对本机记忆留存与读取授权。", "app-scope-note"));
+        if (!available.length) group.append(appElement("p", "请在抖音进入应用中核对本机记忆留存与读取授权。", "app-scope-note"));
         form.append(group);
       }
       const save = appElement("button", "保存微信" + rangeLabel, "button compact primary"); save.type = "submit"; save.disabled = busy;
@@ -3523,6 +3523,42 @@
       if (!group.message) return "工作站活动";
       return messageStates[group.preview?.state] || (group.loading ? "正在核对收到的消息…" : "原消息暂不可用，以下仍可查看已保存的处理过程。");
     }
+    function readable(parent, value, title = "查看完整内容") {
+      if (typeof value !== "string" || !value.trim()) return;
+      const details = appElement("details", "", "round-readable");
+      details.append(appElement("summary", title));
+      const body = appElement("pre", value, "round-readable-body");
+      body.setAttribute("tabindex", "0");
+      details.append(body); parent.append(details);
+    }
+    function sentEntries(group) {
+      return ordered(group).filter((step) => step.category === "sent" && typeof step.content === "string" && step.content.trim());
+    }
+    function sentLabel(step) {
+      const accepted = ["accepted", "observed", "sent"].includes(step.status);
+      return accepted ? "微信已接受" : statuses[step.status] || "发送结果待确认";
+    }
+    function roundSummary(group) {
+      const steps = ordered(group), first = steps[0], last = steps[steps.length - 1];
+      const started = first?.at ? Date.parse(first.at) : NaN, ended = last?.at ? Date.parse(last.at) : NaN;
+      const duration = Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0;
+      const tools = steps.filter((step) => step.tool).length;
+      return [steps.length + " 步", tools ? tools + " 次工具调用" : "", duration >= 1000 ? (duration / 1000).toFixed(duration < 10000 ? 1 : 0) + " 秒" : ""].filter(Boolean).join(" · ");
+    }
+    function renderSent(group) {
+      const output = appElement("section", "", "round-output");
+      const entries = sentEntries(group);
+      if (!entries.length) return output;
+      output.append(appElement("h5", "发送结果", "round-output-title"));
+      for (const entry of entries) {
+        const item = appElement("article", "", "round-output-item");
+        item.append(appElement("span", sentLabel(entry), "round-output-status"));
+        readable(item, entry.content, "查看完整发送内容");
+        if (entry.reason) item.append(appElement("p", reasons[entry.reason] || entry.reason, "round-step-meta"));
+        output.append(item);
+      }
+      return output;
+    }
     function applyPreview(group, messages) {
       // A response is a fresh authorization/source check. Never retain text
       // when this exact message is absent or no longer visible in that check.
@@ -3569,6 +3605,23 @@
           if (facts.length) content.append(appElement("p", facts.join(" · "), "round-step-meta"));
           if (!step.call_id && !step.tool_stage && !step.tool_code && !step.duration_ms) content.append(appElement("p", "旧记录未保存调用标识和耗时。", "round-step-meta"));
         }
+        if (step.reason && !step.tool) content.append(appElement("p", reasons[step.reason] || step.reason, "round-step-meta"));
+        if (step.effect) content.append(appElement("p", "产生影响：" + step.effect, "round-step-meta"));
+        if (step.query) content.append(appElement("p", step.query, "round-step-query"));
+        if (step.sender) content.append(appElement("p", "发送者：" + step.sender, "round-step-meta"));
+        if (step.message_time) content.append(appElement("p", "原消息时间：" + time({ at: step.message_time }), "round-step-meta"));
+        if (step.retry_at) content.append(appElement("p", (step.event === "conversation_wake_scheduled" ? "下次评估：" : "下次核对：") + time({ at: step.retry_at }), "round-step-meta"));
+        if (step.decision_note) content.append(appElement("p", step.decision_note, "round-step-meta"));
+        if (step.target_url) {
+          try {
+            const target = new URL(step.target_url);
+            if (["http:", "https:"].includes(target.protocol)) {
+              const link = appElement("a", target.hostname + target.pathname, "round-url");
+              link.href = target.href; link.target = "_blank"; link.rel = "noreferrer noopener"; content.append(link);
+            }
+          } catch (_) { /* 原始地址无效时保留其他过程信息。 */ }
+        }
+        if (step.content && step.content !== step.tool && step.content !== describe(step)) readable(content, step.content, step.tool ? "查看工具输出" : "查看完整执行内容");
         row.dataset.state = step.category === "error" || ["tool_failed", "tool_blocked"].includes(step.event) ? "error" : step.event === "tool_completed" ? "completed" : "progress";
         row.append(at, content); list.append(row);
       }
@@ -3579,6 +3632,7 @@
       const dialog = view.roundDialog;
       dialog.querySelector(".round-message-preview").textContent = messageText(group);
       dialog.querySelector(".round-history-note").textContent = historyNote(group);
+      dialog.querySelector(".round-dialog-output").replaceChildren(renderSent(group));
       dialog.querySelector(".round-dialog-process").replaceChildren(timeline(group));
       dialog.querySelector(".round-card-feedback").textContent = processFeedback(group);
     }
@@ -3586,9 +3640,10 @@
       const steps = ordered(group), first = steps[0], latest = steps[steps.length - 1];
       group.card.dataset.complete = String(group.complete); group.card.setAttribute("aria-busy", String(group.loading));
       group.time.textContent = time(first); if (first?.at) group.time.dateTime = first.at;
-      group.status.textContent = describe(latest || {});
+      group.status.textContent = [describe(latest || {}), roundSummary(group)].filter(Boolean).join(" · ");
       group.messageNode.textContent = messageText(group);
       group.history.textContent = historyNote(group);
+      group.output.replaceChildren(renderSent(group));
       group.process.replaceChildren(timeline(group));
       group.feedback.textContent = processFeedback(group);
       group.retry.hidden = !group.error; group.retry.disabled = group.loading;
@@ -3603,7 +3658,7 @@
       header.append(appElement("h2", "回合处理过程"), memoryButton("关闭", "button compact quiet", () => dialog.close()));
       const body = appElement("div", "", "app-dialog-body");
       const note = appElement("p", "", "round-card-feedback"); note.setAttribute("role", "status");
-      body.append(appElement("p", "", "round-message-preview"), appElement("p", "", "round-history-note"), note, appElement("div", "", "round-dialog-process"));
+      body.append(appElement("p", "", "round-message-preview"), appElement("p", "", "round-history-note"), appElement("div", "", "round-dialog-output"), note, appElement("div", "", "round-dialog-process"));
       dialog.append(header, body); document.body.append(dialog);
       const cancel = () => { if (dialog.open) dialog.close(); };
       view.controller.signal.addEventListener("abort", cancel, { once: true });
@@ -3624,14 +3679,15 @@
         header.append(appElement("h4", step.message ? "收到的消息" : "工作站活动"), at, state);
         const message = appElement("p", "", "round-card-preview");
         const history = appElement("p", "", "round-history-note");
+        const output = appElement("div", "", "round-card-output");
         const process = appElement("div", "", "round-card-process");
         const progress = appElement("p", "", "round-card-feedback"); progress.setAttribute("role", "status");
         const actions = appElement("div", "", "round-card-actions");
-        group = { key, thread: step.thread || "", message: step.message || "", card, time: at, status: state, messageNode: message, history, process, feedback: progress, steps: new Map(), preview: null, complete: false, loading: false, error: "" };
+        group = { key, thread: step.thread || "", message: step.message || "", card, time: at, status: state, messageNode: message, history, output, process, feedback: progress, steps: new Map(), preview: null, complete: false, loading: false, error: "" };
         group.open = memoryButton("单独查看", "button compact secondary", () => openRound(group));
         group.retry = memoryButton("重试读取本轮过程", "button compact secondary", () => void completeRound(group, serial)); group.retry.hidden = true;
         actions.append(group.retry, group.open);
-        card.append(header, message, appElement("h5", "处理过程", "round-process-heading"), history, process, progress, actions);
+        card.append(header, appElement("h5", "收到的消息", "round-message-heading"), message, appElement("h5", "发送结果", "round-process-heading"), output, appElement("h5", "处理过程", "round-process-heading"), history, process, progress, actions);
         groups.set(key, group); records.append(card);
       }
       group.steps.set(step.sequence, step);
@@ -4366,8 +4422,9 @@
     stopAppConfigurationReads();
     const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
     appConfiguration = view;
+    dialog.classList.toggle("wechat-legacy-skin", id === "wechat");
     $("#app-dialog-body").replaceChildren();
-    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 详细配置"));
+    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 进入应用"));
     dialog.showModal();
     renderAppConfiguration();
     $("#app-configuration-title").focus({ preventScroll: true });
@@ -4426,7 +4483,7 @@
           appConfigurationShortcut("管理资料与版本", "source")];
         break;
       case "capabilities": {
-        controls = [appCapabilityRows(evidence), appConfigurationShortcut("查看能力与详细配置", "overview")];
+        controls = [appCapabilityRows(evidence), appConfigurationShortcut("进入应用配置", "overview")];
         break;
       }
       default:
@@ -7017,6 +7074,7 @@
     appConfiguration?.douyinNoticeAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
+    $("#app-configuration").classList.remove("wechat-legacy-skin");
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();
     renderLiveSafety();
