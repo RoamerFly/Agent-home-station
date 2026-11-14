@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,6 +21,14 @@ namespace WechatAgent.Desktop {
         internal int NativePID { get { return wechat == null ? 0 : wechat.PID; } }
         internal bool NativeAvailable { get { return wechat != null && wechat.Available; } }
 
+        void Stage(string name, int errorCode = 0) {
+            try {
+                var path = Path.Combine(d.Root, "logs", "startup-stage.log");
+                var suffix = errorCode == 0 ? "" : " code=0x" + errorCode.ToString("X8");
+                File.AppendAllText(path, DateTime.UtcNow.ToString("o") + "\t" + name + suffix + Environment.NewLine, new UTF8Encoding(false));
+            } catch { }
+        }
+
         internal void CheckAlive() {
             if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/station/logs/station.log；没有改动微信或旧数据。");
         }
@@ -36,14 +45,19 @@ namespace WechatAgent.Desktop {
             // errors. They must still stop the launch instead of degrading.
             if (startNative) WechatStationRuntime.ValidateLayout(d);
             WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
-            WindowsRuntime.FreePort(d.Url);
-            job = new ProcessJob();
+            Stage("logs-ready");
+            try { Stage("free-port.begin"); WindowsRuntime.FreePort(d.Url); Stage("free-port.ok"); }
+            catch { Stage("free-port.failed"); throw; }
+            try { Stage("process-job.begin"); job = new ProcessJob(); Stage("process-job.ok"); }
+            catch { Stage("process-job.failed", ProcessJob.LastConstructionErrorCode); throw; }
             stationAdmitted = false;
             Exception startFailure = null;
             try {
                 if (startNative) {
+                    Stage("wechat.start.begin");
                     wechat = new WechatStationRuntime(d);
                     await wechat.Start(cancel);
+                    Stage("wechat.start.ok");
                 }
                 cancel.ThrowIfCancellationRequested();
                 var args = new List<string> { "--desktop", "--data", d.Root, "--workspace", d.StationWorkspace, "--listen", new Uri(d.Url).Authority };
@@ -57,16 +71,22 @@ namespace WechatAgent.Desktop {
                     WindowsRuntime.NoLinks(media);
                     programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
                 }
+                Stage("server.start.begin");
                 server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
+                Stage("server.start.ok");
                 stationAdmitted = true;
+                Stage("server.admitted");
             } catch (Exception error) {
                 startFailure = error;
+                Stage("server.start.failed", job == null ? 0 : job.LastWin32Error);
             }
             if (startFailure != null) {
+                Stage("startup.cleanup.begin");
                 if (server != null) { server.Dispose(); server = null; }
                 Exception cleanupFailure = null;
                 if (job != null) { job.Dispose(); job = null; }
                 try { await StopWechat(false, true); } catch (Exception error) { cleanupFailure = error; }
+                Stage(cleanupFailure == null ? "startup.cleanup.ok" : "startup.cleanup.failed");
                 if (cleanupFailure != null) throw new InvalidOperationException("本机成长站启动失败，且已拥有的微信原生进程未能正常关闭。", new AggregateException(startFailure, cleanupFailure));
                 throw startFailure;
             }

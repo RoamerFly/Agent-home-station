@@ -51,7 +51,9 @@ namespace WechatAgent.Desktop {
     }
 
     internal sealed class ProcessJob : IDisposable {
+        internal static int LastConstructionErrorCode { get; private set; }
         readonly SafeFileHandle handle;
+        internal int LastWin32Error { get; private set; }
         [StructLayout(LayoutKind.Sequential)] struct BasicLimits { public long ProcessTime, JobTime; public uint Flags; public UIntPtr MinWorking, MaxWorking; public uint ActiveLimit; public UIntPtr Affinity; public uint Priority, Scheduling; }
         [StructLayout(LayoutKind.Sequential)] struct IOCounters { public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes; }
         [StructLayout(LayoutKind.Sequential)] struct Limits { public BasicLimits Basic; public IOCounters IO; public UIntPtr ProcessMemory, JobMemory, PeakProcess, PeakJob; }
@@ -61,9 +63,21 @@ namespace WechatAgent.Desktop {
         internal ProcessJob() {
             handle = CreateJobObject(IntPtr.Zero, null);
             var limits = new Limits(); limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE
-            if (handle.IsInvalid || !SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf(typeof(Limits)))) { handle.Dispose(); throw new InvalidOperationException("无法建立本实例的进程隔离，未启动服务。"); }
+            if (handle.IsInvalid) {
+                LastConstructionErrorCode = Marshal.GetLastWin32Error();
+                handle.Dispose(); throw new InvalidOperationException("无法建立本实例的进程隔离，未启动服务。");
+            }
+            if (!SetInformationJobObject(handle, 9, ref limits, (uint)Marshal.SizeOf(typeof(Limits)))) {
+                LastConstructionErrorCode = Marshal.GetLastWin32Error();
+                handle.Dispose(); throw new InvalidOperationException("无法建立本实例的进程隔离，未启动服务。");
+            }
         }
-        internal void Assign(Process process) { if (!AssignProcessToJobObject(handle, process.Handle)) throw new InvalidOperationException("无法确认子进程归属，已拒绝启动。"); }
+        internal void Assign(Process process) {
+            if (!AssignProcessToJobObject(handle, process.Handle)) {
+                LastWin32Error = Marshal.GetLastWin32Error();
+                throw new InvalidOperationException("无法确认子进程归属，已拒绝启动。");
+            }
+        }
         public void Dispose() { handle.Dispose(); }
     }
 }
