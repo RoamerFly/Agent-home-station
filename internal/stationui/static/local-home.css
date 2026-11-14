@@ -1543,6 +1543,15 @@ body.is-home-ready {
 .is-home-ready .wechat-legacy-skin .round-output-item { display:grid; gap:var(--s-1); padding-top:var(--s-2); border-top:1px solid var(--border); }
 .is-home-ready .wechat-legacy-skin .round-output-item:first-of-type { padding-top:0; border-top:0; }
 .is-home-ready .wechat-legacy-skin .round-output-status { color:var(--success); font-size:var(--fs-caption); font-weight:var(--fw-strong); }
+.is-home-ready .wechat-legacy-skin .round-message-card { cursor:pointer; transition:border-color var(--dur-1) var(--ease), background-color var(--dur-1) var(--ease); }
+.is-home-ready .wechat-legacy-skin .round-message-card:hover,
+.is-home-ready .wechat-legacy-skin .round-message-card:focus-visible { border-color:var(--accent); background:var(--accent-soft); outline:none; }
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-card-output,
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-process-heading,
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-history-note,
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-card-process,
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-card-feedback { display:none; }
+.is-home-ready .wechat-legacy-skin .round-message-card > .round-card-actions { margin-top:var(--s-3); }
 .is-home-ready .wechat-legacy-skin .round-step-meta,
 .is-home-ready .wechat-legacy-skin .round-step-query,
 .is-home-ready .wechat-legacy-skin .round-history-note { margin:var(--s-1) 0 0; color:var(--text-muted); font-size:var(--fs-caption); line-height:1.6; overflow-wrap:anywhere; }

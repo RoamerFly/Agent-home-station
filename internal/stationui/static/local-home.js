@@ -3708,6 +3708,17 @@
         group.open = memoryButton("单独查看", "button compact secondary", () => openRound(group));
         group.retry = memoryButton("重试读取本轮过程", "button compact secondary", () => void completeRound(group, serial)); group.retry.hidden = true;
         actions.append(group.retry, group.open);
+        card.tabIndex = 0;
+        card.setAttribute("aria-label", "查看此执行回合的完整过程");
+        card.addEventListener("click", (event) => {
+          if (event.target.closest("button, a, details, input, select, textarea")) return;
+          openRound(group);
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (event.target !== card) return;
+          event.preventDefault(); openRound(group);
+        });
         card.append(header, appElement("h5", "收到的消息", "round-message-heading"), message, appElement("h5", "发送结果", "round-process-heading"), output, appElement("h5", "处理过程", "round-process-heading"), history, process, progress, actions);
         groups.set(key, group); records.append(card);
       }
