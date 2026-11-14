@@ -292,9 +292,7 @@ if($LocalStation){
  Push-Location $workspace
  try {
   $env:GOOS='windows'; $env:GOARCH='amd64'
-  $dependencies=@(& go list -deps ./cmd/agent-home-station)
-  if($LASTEXITCODE -ne 0){throw 'LocalStation Windows dependency check failed.'}
-  if($dependencies -match '^wechat-bot/internal/(adbserver|devicebroker)$'){throw 'LocalStation server includes retired device execution dependencies.'}
+  & (Join-Path $workspace 'scripts\Test-WindowsDeviceRetirement.ps1') -SourceDirectory $workspace -Target Station -Test:$Test
   & go build -trimpath -o $station './cmd/agent-home-station'
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
  } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}

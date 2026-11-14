@@ -17,6 +17,7 @@ type Record struct {
 	RetryAt                                                                                                         string
 	ToolCacheHit                                                                                                    bool
 	ToolRequests, ToolRetries, ToolHTTPStatus                                                                       int
+	ToolAttempt                                                                                                     int
 	ToolCode, ToolStage                                                                                             string
 	ModelHTTPStatus, ModelAttempts, ModelMaxAttempts, ModelContentBytes, ModelFormatAttempt, ModelMaxFormatAttempts int
 	ModelStage                                                                                                      string

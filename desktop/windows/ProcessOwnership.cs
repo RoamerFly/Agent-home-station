@@ -37,10 +37,25 @@ namespace WechatAgent.Desktop {
             try { child.Start(); started = true; job.Assign(child); return new OwnedProcess(child, log); }
             catch { if (started && !child.HasExited) child.Kill(); child.Dispose(); log.Dispose(); throw; }
         }
-        internal async Task StopWeb() { await process.StandardInput.WriteLineAsync("stop"); await process.StandardInput.FlushAsync(); await WaitStopped(); }
+        internal async Task StopWeb() {
+            // The Go child treats both the explicit command and EOF as an
+            // authenticated desktop stop. Closing the private pipe after the
+            // command makes the stop deterministic on hosted Windows runners
+            // where a redirected stdin writer can otherwise remain open while
+            // the child is already draining its HTTP server.
+            try {
+                await process.StandardInput.WriteLineAsync("stop");
+                await process.StandardInput.FlushAsync();
+            } finally { process.StandardInput.Close(); }
+            await WaitStopped();
+        }
         internal void StopUnadmitted() { if (!process.HasExited) process.Kill(); }
         internal async Task WaitStopped() {
-            var deadline = DateTime.UtcNow.AddSeconds(30);
+            // Hosted Windows runners can be compiling or draining the local
+            // station while its stdin stop request is already accepted. Keep
+            // waiting for a graceful exit instead of treating that normal
+            // drain as a failed install or killing in-flight work.
+            var deadline = DateTime.UtcNow.AddSeconds(90);
             while (!process.HasExited) {
                 if (DateTime.UtcNow > deadline) throw new InvalidOperationException("服务尚未完成安全退出；没有强制结束在途任务。");
                 await Task.Delay(100);

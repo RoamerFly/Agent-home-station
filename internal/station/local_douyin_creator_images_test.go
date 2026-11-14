@@ -17,6 +17,9 @@ func TestLocalDouyinCreatorImagesRequiresCurrentOwnedWork(t *testing.T) {
 	initializeDouyinWeb(t, f)
 	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
 	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	if view["read_enabled"] != true || view["works_enabled"] != true || view["comments_enabled"] != true {
+		t.Fatalf("login confirmation must retain read-only defaults: %v", view)
+	}
 	owner, visibility := "synthetic-owner", "公开"
 	reads, downloads, visions := 0, 0, 0
 	reordered := false
@@ -79,6 +82,9 @@ func TestLocalDouyinCreatorImagesRequiresCurrentOwnedWork(t *testing.T) {
 			view = next
 		}
 	}
+	// Exercise explicit revocation/re-enabling without assuming an old login
+	// default in which all read-only capabilities were disabled.
+	permit("set_works", "allow_works", false, 200)
 	permit("set_images", "allow_images", true, 409)
 	permit("set_works", "allow_works", true, 200)
 	if view["images_ready"] != true || view["images_enabled"] != false {

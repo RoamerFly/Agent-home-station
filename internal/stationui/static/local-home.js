@@ -3431,32 +3431,47 @@
     const label = appElement("label", "查看日期"); label.append(date);
     const controls = appElement("div", "", "configuration-round-filters"); controls.append(label);
     const feedback = appElement("p", "", "apps-feedback"); feedback.setAttribute("role", "status");
-    const records = appElement("div", "", "configuration-round-records"), groups = new Map(), previews = new Map();
+    const records = appElement("div", "", "configuration-round-records"), groups = new Map();
     const labels = {
       message_received: "收到消息", message_queued: "已排队，等待处理", message_processing: "正在处理消息",
       generation_started: "正在理解需求", character_decision: "已完成需求判断",
       message_aggregated: "已收到补充消息", generation_followup_consumed: "正在结合补充消息处理",
-      media_understood: "已读懂收到的资料", utterance_plan_queued: "正在准备回复",
-      utterance_plan_revised: "已根据新消息调整回复", generation_revised: "已调整处理计划",
-      message_sent: "微信已接受回复", message_processed: "本轮消息已处理",
+      generation_followup_settled: "补充消息已处理", media_understood: "已读懂收到的资料",
+      utterance_plan_queued: "正在准备回复", utterance_plan_revised: "已根据新消息调整回复",
+      utterance_plan_paused: "回复计划已暂停", utterance_plan_stopped: "已停止回复计划",
+      utterance_review_failed: "本次回复核对未完成", generation_revised: "已调整处理计划",
+      generation_review_retained: "已核对并保留当前处理计划", message_sent: "微信已接受回复",
+      message_progress: "微信已接受进度消息", message_processed: "本轮消息已处理",
       message_skipped: "本条消息无需回复", generation_paused: "已暂停处理",
-      generation_stopped: "已停止本轮处理", delivery_stopped: "已停止后续发送",
-      agent_task_started: "正在继续之前的任务", agent_task_cancelled: "任务已取消",
-      conversation_wake_scheduled: "已安排稍后继续", conversation_wake_started: "正在继续处理",
-      conversation_wake_stopped: "已取消稍后续办", surf_started: "正在浏览资料",
-      send_failed: "回复暂未发送成功", model_retry_scheduled: "稍后会重试",
-      tool_task_timeout: "处理用时较长，结果仍需确认"
+      generation_stopped: "已停止本轮处理", delivery_stopped: "已停止后续发送", delivery_retry: "正在重试发送",
+      delivery_waiting: "正在等待发送结果", agent_task_started: "正在继续之前的任务",
+      agent_task_cancelled: "任务已取消", conversation_wake_scheduled: "已安排稍后继续",
+      conversation_wake_started: "正在继续处理", conversation_wake_stopped: "已取消稍后续办",
+      conversation_wake_deferred: "已延后继续处理", conversation_wake_rescheduled: "已重新安排继续处理",
+      background_turn_yield_requested: "收到新问题，正在保存当前任务", background_turn_yielded: "任务已保存，优先处理新问题",
+      surf_started: "正在浏览资料", surf_review: "已核对浏览结果", send_failed: "回复暂未发送成功",
+      model_retry_scheduled: "已安排重试模型请求", model_failed: "本次模型请求未完成",
+      model_decision_failed: "本次需求判断未完成", model_recovery_blocked: "模型恢复暂未完成",
+      message_read_pending: "正在等待原消息", contact_check_pending: "正在核对联系人",
+      history_read_coverage: "已核对聊天记录读取范围", media_observation_incomplete: "资料读取尚未完成",
+      media_stopped: "已停止资料处理", media_reply_stopped: "已停止后续媒体回复",
+      preferred_group_share_observed: "已读取群内分享", group_input_read_failed: "群消息读取未完成",
+      background_video_read_failed: "视频读取未完成", message_interrupted_after_send: "发送后处理被中断，等待核对结果",
+      tool_task_timeout: "工具处理用时较长，结果仍需确认", tool_task_interrupted: "工具处理已中断",
+      tool_task_finished_without_result: "工具任务已结束，尚无可用结果", tool_progress_failed: "工具进度消息未发送成功",
+      tool_progress_receipt_unknown: "工具进度消息的发送结果待确认", tool_started: "开始调用工具",
+      tool_completed: "工具调用完成", tool_failed: "工具调用失败", tool_blocked: "工具调用未获准", tool_cancelled: "工具调用已取消",
+      tool_retry_scheduled: "已安排重试工具调用"
     };
-    function describe(step) {
-      if (labels[step.event]) return labels[step.event];
-      if (step.category === "error") return "这一步未完成，请查看当前任务状态";
-      if (step.tool) return "工具处理进度已更新";
-      return { received: "收到消息", decision: "正在判断下一步", sent: "发送结果已更新" }[step.category] || "处理进度已更新";
-    }
-    function time(step) {
-      const at = new Date(step.at);
-      return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
-    }
+    const statuses = {
+      running: "执行中", started: "执行中", processing: "处理中", completed: "已完成", complete: "已完成",
+      success: "已完成", succeeded: "已完成", done: "已完成", failed: "失败", error: "失败",
+      blocked: "未获准", denied: "未获准", forbidden: "未获准", timeout: "超时", retry: "等待重试",
+      retrying: "重试中", retry_scheduled: "等待重试", scheduled: "已安排", waiting: "等待中",
+      queued: "已排队", received: "已接收", accepted: "微信已接受", sent: "已提交",
+      stopped: "已停止", cancelled: "已取消", canceled: "已取消", paused: "已暂停",
+      unknown: "结果待确认", needs_review: "待核对", silent: "无需回复", skipped: "已跳过"
+    };
     const toolNames = {
       memory_search: "搜索会话记忆", memory_read: "读取相关记忆", web_search: "搜索网页", web_fetch: "读取网页",
       wechat_history: "查找聊天记录", wechat_search: "搜索聊天记录", wechat_messages: "读取原消息",
@@ -3464,84 +3479,215 @@
       server_read: "读取文件", server_write: "保存文件", server_search: "搜索文件", server_exec: "执行处理任务",
       workspace_read: "读取工作笔记", workspace_write: "保存工作笔记", workspace_search: "搜索工作笔记",
       video_inspect: "理解视频内容", speech_synthesize: "制作语音", music_generate: "创作音乐",
-      plugin_job_status: "查看工具进度", plugin_job_cancel: "停止工具任务",
+      project_audio_cpp_models: "查看本机语音模型", project_audio_cpp_synthesize: "生成本机语音",
+      project_audio_cpp_transcribe: "识别本机语音", plugin_job_status: "查看工具进度", plugin_job_cancel: "停止工具任务",
       document_inspect: "读取文档", document_export_pdf: "导出 PDF", agent_owner_report: "向主人私下汇报"
     };
-    function openRound(group) {
-      view.roundDialog?.close();
-      const opener = group.card;
-      const dialog = appElement("dialog", "", "app-dialog round-process-dialog");
-      view.roundDialog = dialog;
-      dialog.setAttribute("aria-label", "回合处理过程");
-      const header = appElement("header", "", "app-dialog-header");
-      const close = memoryButton("关闭", "button compact quiet", () => dialog.close());
-      header.append(appElement("h2", "回合处理过程"), close);
-      const body = appElement("div", "", "app-dialog-body");
-      const message = appElement("p", "正在读取本轮消息…", "round-message-preview");
-      const progress = appElement("p", "", "apps-feedback"); progress.setAttribute("role", "status");
-      const list = appElement("ol", "", "round-timeline");
-      body.append(message, progress, list); dialog.append(header, body); document.body.append(dialog);
-      const controller = view.controller;
-      const cancel = () => { if (dialog.open) dialog.close(); };
-      controller.signal.addEventListener("abort", cancel, { once: true });
-      dialog.addEventListener("close", () => {
-        controller.signal.removeEventListener("abort", cancel);
-        if (view.roundDialog === dialog) view.roundDialog = null;
-        dialog.remove();
-        if (!view.roundDialog?.open && opener.isConnected) opener.focus({ preventScroll: true });
-      }, { once: true });
-      function render() {
-        const steps = [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
-        list.replaceChildren(...steps.map((step) => {
-          const row = appElement("li", "");
-          const text = step.tool ? describe(step) + " · " + (toolNames[step.tool] || "应用工具") : describe(step);
-          row.append(appElement("time", time(step)), appElement("span", text));
-          return row;
-        }));
-      }
-      dialog.showModal(); render();
-      const latest = [...group.steps.values()].sort((a, b) => b.sequence - a.sequence)[0];
-      let previewText = previews.get(group.key) || "";
-      if (previewText) message.textContent = previewText;
-      if (!latest?.message) { message.textContent = previewText || "工作站活动"; return; }
-      void (async () => {
-        let before = "";
-        progress.textContent = "正在补齐处理过程…";
-        try {
-          do {
-            const query = new URLSearchParams({ date: date.value, thread: latest.thread, message: latest.message, limit: "100", include_messages: "true" });
-            if (before) query.set("before", before);
-            const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: controller.signal });
-            if (!dialog.open || !active()) return;
-            for (const step of result.steps || []) group.steps.set(step.sequence, step);
-            const originals = Array.isArray(result.messages) ? result.messages : [];
-            const original = originals.find((item) => item.thread === latest.thread && item.message === latest.message) ||
-              (originals.length === 1 ? originals[0] : null);
-            if (original?.text) {
-              message.textContent = original.text;
-              previewText = original.text;
-              previews.set(group.key, original.text);
-            } else if (!previewText) {
-              message.textContent = "本轮已收到消息，原文按当前历史读取权限隐藏。";
-            }
-            if (!original) {
-              group.card.querySelector(".round-card-preview").textContent = previewText || "消息处理";
-            }
-            render(); before = result.next_before || "";
-          } while (before);
-          progress.textContent = "";
-        } catch (error) {
-          if (dialog.open && active() && !appSessionExpired([{ status: "rejected", reason: error }])) progress.textContent = "部分处理记录暂未读完，请关闭后重试。";
-        }
-      })();
-    }
+    const messageStates = {
+      no_conversation_grant: "当前会话读取已关闭，消息原文已隐藏。",
+      source_unavailable: "原消息暂不可用，以下仍可查看已保存的处理过程。",
+      changed_or_forgotten: "这条消息已更正或清除，原文不再显示。"
+    };
+    const toolStages = { dispatch: "提交调用", invocation: "调用工具", execute: "执行工具", execution: "执行工具", http: "请求服务", decode: "解析结果", authorization: "核对权限", retry: "重试", retry_wait: "等待重试", completed: "已完成" };
+    const toolResults = {
+      ok: "成功", success: "成功", completed: "已完成", service_unavailable: "服务暂不可用", tool_unavailable: "工具暂不可用",
+      timeout: "调用超时", deadline_exceeded: "调用超时", context_deadline_exceeded: "调用超时", permission_denied: "权限已变化",
+      forbidden: "未获准执行", authorization_changed: "权限已变化", source_changed: "来源已变化", source_unavailable: "来源暂不可用",
+      invalid_arguments: "参数无效", invalid_input: "输入无效", cancelled: "调用已取消", canceled: "调用已取消",
+      outcome_unknown: "结果待核对", needs_review: "结果待核对", retry_scheduled: "已安排重试"
+    };
     let next = "", serial = 0;
     const active = () => appConfiguration === view && view.section === "rounds" && view.connection === connection && panel.isConnected;
+    const current = (group, generation) => active() && generation === serial && groups.get(group.key) === group;
+    const ordered = (group) => [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
+    function describe(step) {
+      if (labels[step.event]) return labels[step.event];
+      if (step.tool) return step.category === "error" ? "工具处理未完成" : "工具处理记录";
+      return { received: "收到消息", decision: "正在判断下一步", sent: "发送结果已更新", error: "这一步未完成" }[step.category] || "处理记录";
+    }
+    function time(step) {
+      const at = new Date(step.at);
+      return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+    }
+    function status(step) {
+      if (step.event === "tool_started") return "执行中";
+      if (step.event === "tool_completed") return "已完成";
+      if (step.event === "tool_failed") return "失败";
+      if (step.event === "tool_blocked") return "未获准";
+      if (step.event === "tool_cancelled") return "已取消";
+      if (step.event === "tool_retry_scheduled") return "等待重试";
+      return statuses[step.status] || "已记录";
+    }
+    function messageText(group) {
+      if (group.preview?.state === "available" || (!group.preview?.state && typeof group.preview?.text === "string")) return group.preview.text;
+      if (!group.message) return "工作站活动";
+      return messageStates[group.preview?.state] || (group.loading ? "正在核对收到的消息…" : "原消息暂不可用，以下仍可查看已保存的处理过程。");
+    }
+    function applyPreview(group, messages) {
+      // A response is a fresh authorization/source check. Never retain text
+      // when this exact message is absent or no longer visible in that check.
+      group.preview = (Array.isArray(messages) ? messages : []).find((item) => item.thread === group.thread && item.message === group.message) || null;
+    }
+    function historyNote(group) {
+      if (!group.complete || !group.message) return "";
+      const received = ordered(group).find((step) => step.event === "message_received");
+      return received?.tool_tracking_version === 1 ? "" : "旧回合未保存逐次工具调用，以下为已有处理记录。";
+    }
+    function processFeedback(group) {
+      if (group.loading) return "正在补齐本轮处理过程…";
+      if (group.error) return group.error;
+      if (!group.complete) return "";
+      return group.truncated ? "本机仍保留的本轮过程已载入，较早记录已超出保留范围。" : "本轮处理记录已完整载入。";
+    }
+    function timeline(group) {
+      const list = appElement("ol", "", "round-timeline"); list.setAttribute("aria-label", "本轮处理步骤");
+      const calls = new Map();
+      for (const step of ordered(group)) {
+        const row = appElement("li", "", step.tool ? "round-tool-step" : "round-process-step");
+        row.dataset.sequence = String(step.sequence); row.dataset.event = step.event || "";
+        const at = appElement("time", time(step)); if (step.at) at.dateTime = step.at;
+        const content = appElement("div", "", "round-step-content");
+        const heading = appElement("div", "", "round-step-heading");
+        heading.append(appElement("strong", describe(step), "round-step-title"), appElement("span", status(step), "round-step-status"));
+        content.append(heading);
+        if (step.tool) {
+          const tool = appElement("p", "", "round-tool-name");
+          if (toolNames[step.tool]) tool.append(appElement("span", toolNames[step.tool]));
+          tool.append(appElement("code", step.tool)); content.append(tool);
+          const facts = [];
+          if (step.call_id) {
+            if (!calls.has(step.call_id)) calls.set(step.call_id, calls.size + 1);
+            row.dataset.callId = step.call_id;
+            facts.push("第 " + calls.get(step.call_id) + " 次调用");
+          }
+          if (Number.isInteger(step.tool_attempt) && step.tool_attempt > 0) facts.push("第 " + step.tool_attempt + " 次尝试");
+          if (Number.isFinite(step.duration_ms) && step.duration_ms >= 0 && (step.duration_ms > 0 || step.event === "tool_completed" || step.event === "tool_failed")) facts.push("用时 " + (step.duration_ms < 1000 ? step.duration_ms + " 毫秒" : (step.duration_ms / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 2 }) + " 秒"));
+          if (step.tool_stage) facts.push("阶段：" + (toolStages[step.tool_stage] || "工具处理"));
+          if (step.tool_retries > 0) facts.push("已重试 " + step.tool_retries + " 次");
+          if (step.tool_requests > 0) facts.push("服务请求 " + step.tool_requests + " 次");
+          if (step.tool_code) facts.push("结果：" + (toolResults[step.tool_code] || "工具返回异常，详情保留于本机日志"));
+          if (facts.length) content.append(appElement("p", facts.join(" · "), "round-step-meta"));
+          if (!step.call_id && !step.tool_stage && !step.tool_code && !step.duration_ms) content.append(appElement("p", "旧记录未保存调用标识和耗时。", "round-step-meta"));
+        }
+        row.dataset.state = step.category === "error" || ["tool_failed", "tool_blocked"].includes(step.event) ? "error" : step.event === "tool_completed" ? "completed" : "progress";
+        row.append(at, content); list.append(row);
+      }
+      return list;
+    }
+    function renderDialog(group) {
+      if (view.roundDialog?.roundGroup !== group || !view.roundDialog.open) return;
+      const dialog = view.roundDialog;
+      dialog.querySelector(".round-message-preview").textContent = messageText(group);
+      dialog.querySelector(".round-history-note").textContent = historyNote(group);
+      dialog.querySelector(".round-dialog-process").replaceChildren(timeline(group));
+      dialog.querySelector(".round-card-feedback").textContent = processFeedback(group);
+    }
+    function render(group) {
+      const steps = ordered(group), first = steps[0], latest = steps[steps.length - 1];
+      group.card.dataset.complete = String(group.complete); group.card.setAttribute("aria-busy", String(group.loading));
+      group.time.textContent = time(first); if (first?.at) group.time.dateTime = first.at;
+      group.status.textContent = describe(latest || {});
+      group.messageNode.textContent = messageText(group);
+      group.history.textContent = historyNote(group);
+      group.process.replaceChildren(timeline(group));
+      group.feedback.textContent = processFeedback(group);
+      group.retry.hidden = !group.error; group.retry.disabled = group.loading;
+      renderDialog(group);
+    }
+    function openRound(group) {
+      view.roundDialog?.close();
+      const dialog = appElement("dialog", "", "app-dialog round-process-dialog");
+      view.roundDialog = dialog; dialog.roundGroup = group;
+      dialog.setAttribute("aria-label", "回合处理过程");
+      const header = appElement("header", "", "app-dialog-header");
+      header.append(appElement("h2", "回合处理过程"), memoryButton("关闭", "button compact quiet", () => dialog.close()));
+      const body = appElement("div", "", "app-dialog-body");
+      const note = appElement("p", "", "round-card-feedback"); note.setAttribute("role", "status");
+      body.append(appElement("p", "", "round-message-preview"), appElement("p", "", "round-history-note"), note, appElement("div", "", "round-dialog-process"));
+      dialog.append(header, body); document.body.append(dialog);
+      const cancel = () => { if (dialog.open) dialog.close(); };
+      view.controller.signal.addEventListener("abort", cancel, { once: true });
+      dialog.addEventListener("close", () => {
+        view.controller.signal.removeEventListener("abort", cancel);
+        if (view.roundDialog === dialog) view.roundDialog = null;
+        dialog.remove(); if (group.open.isConnected) group.open.focus({ preventScroll: true });
+      }, { once: true });
+      dialog.showModal(); renderDialog(group);
+    }
+    function addStep(step) {
+      const key = JSON.stringify([step.thread || "", step.message || ""]);
+      let group = groups.get(key);
+      if (!group) {
+        const card = appElement("article", "", "round-message-card");
+        const header = appElement("header", "", "round-card-header");
+        const at = appElement("time", "", "round-card-time"), state = appElement("span", "", "round-card-status");
+        header.append(appElement("h4", step.message ? "收到的消息" : "工作站活动"), at, state);
+        const message = appElement("p", "", "round-card-preview");
+        const history = appElement("p", "", "round-history-note");
+        const process = appElement("div", "", "round-card-process");
+        const progress = appElement("p", "", "round-card-feedback"); progress.setAttribute("role", "status");
+        const actions = appElement("div", "", "round-card-actions");
+        group = { key, thread: step.thread || "", message: step.message || "", card, time: at, status: state, messageNode: message, history, process, feedback: progress, steps: new Map(), preview: null, complete: false, loading: false, error: "" };
+        group.open = memoryButton("单独查看", "button compact secondary", () => openRound(group));
+        group.retry = memoryButton("重试读取本轮过程", "button compact secondary", () => void completeRound(group, serial)); group.retry.hidden = true;
+        actions.append(group.retry, group.open);
+        card.append(header, message, appElement("h5", "处理过程", "round-process-heading"), history, process, progress, actions);
+        groups.set(key, group); records.append(card);
+      }
+      group.steps.set(step.sequence, step);
+      return group;
+    }
+    async function completeRound(group, generation) {
+      if (!current(group, generation) || group.loading || group.complete) return;
+      group.loading = true; group.error = ""; render(group);
+      let before = "";
+      const visited = new Set();
+      try {
+        do {
+          const query = new URLSearchParams({ date: date.value, thread: group.thread, message: group.message, limit: "100", include_messages: "true" });
+          if (before) query.set("before", before);
+          const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
+          if (!current(group, generation)) return;
+          if (!Array.isArray(result.steps)) throw new Error("本轮处理记录格式无效，请重试。");
+          applyPreview(group, result.messages);
+          group.truncated = result.truncated === true;
+          for (const step of result.steps) {
+            // Never put another conversation's result into the selected card.
+            if ((step.thread || "") === group.thread && (step.message || "") === group.message) group.steps.set(step.sequence, step);
+          }
+          render(group);
+          const cursor = result.next_before || "";
+          if (cursor && (cursor === before || visited.has(cursor))) throw new Error("本轮过程读取未能继续，请重试。");
+          if (cursor) visited.add(cursor);
+          before = cursor;
+        } while (before);
+        group.complete = true;
+      } catch (error) {
+        if (current(group, generation) && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          group.preview = null;
+          group.error = "部分处理记录尚未读完，请重试读取本轮过程。";
+        }
+      } finally {
+        if (current(group, generation)) { group.loading = false; render(group); }
+      }
+    }
+    async function completeVisible(generation) {
+      const pending = [...groups.values()].filter((group) => !group.complete && !group.loading);
+      let index = 0;
+      await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
+        while (index < pending.length && active() && generation === serial) await completeRound(pending[index++], generation);
+      }));
+    }
     const more = memoryButton("较早记录", "button compact secondary", () => void load(true)); more.hidden = true;
     async function load(append = false) {
-      const generation = ++serial, query = new URLSearchParams({ date: date.value, include_messages: "true" });
+      const generation = ++serial, query = new URLSearchParams({ date: date.value, limit: "100", include_messages: "true" });
+      // A new list generation invalidates in-flight per-round reads. Clear
+      // their busy state so every unfinished card can join the new queue.
+      for (const group of groups.values()) if (group.loading) {
+        group.loading = false; group.complete = false; group.preview = null; render(group);
+      }
       if (append) query.set("before", next);
-      else { groups.clear(); previews.clear(); records.replaceChildren(); next = ""; }
+      else { view.roundDialog?.close(); groups.clear(); records.replaceChildren(); next = ""; }
       more.hidden = true; feedback.textContent = "正在读取处理过程…";
       try {
         const result = await request("/api/apps/wechat/connections/" + encodeURIComponent(connection) + "/execution-rounds?" + query, { signal: view.controller.signal });
@@ -3549,36 +3695,26 @@
         if (!Array.isArray(result.steps)) throw new Error("暂时无法读取处理过程，请稍后刷新。");
         if (!date.value) date.value = result.date;
         view.roundDates.set(connection, date.value);
-        for (const item of result.messages || []) previews.set(JSON.stringify([item.thread, item.message]), item.text);
-        for (const step of result.steps) {
-          const key = JSON.stringify([step.thread || "", step.message || ""]);
-          let group = groups.get(key);
-          if (!group) {
-            const card = appElement("button", "", "round-message-card");
-            card.type = "button"; card.setAttribute("aria-haspopup", "dialog");
-            group = { key, card, steps: new Map() };
-            card.addEventListener("click", () => openRound(group));
-            groups.set(key, group); records.append(card);
-          }
-          group.steps.set(step.sequence, step);
-        }
-        for (const group of groups.values()) {
-          const steps = [...group.steps.values()].sort((a, b) => a.sequence - b.sequence);
-          const latest = steps[steps.length - 1];
-          const toolCount = steps.filter((step) => step.tool).length;
-          group.card.replaceChildren(
-            appElement("span", time(latest), "round-card-time"),
-            appElement("strong", previews.get(group.key) || (latest.message ? "消息处理" : "工作站活动"), "round-card-preview"),
-            appElement("span", describe(latest), "round-card-status"),
-            appElement("small", steps.length + " 个步骤" + (toolCount ? " · " + toolCount + " 次工具调用" : ""))
-          );
+        const changed = new Set();
+        for (const step of result.steps) changed.add(addStep(step));
+        for (const group of changed) {
+          applyPreview(group, result.messages);
+          // If the first page already covers the day, every card is complete
+          // and another per-message native read would add no process records.
+          group.complete = !append && !result.next_before;
+          group.loading = false; group.truncated = result.truncated === true; render(group);
         }
         next = result.next_before || ""; more.hidden = !next;
-        feedback.textContent = !groups.size ? "这一天还没有处理记录。" : result.truncated ? "这里保留了近期的处理记录。" : "";
+        feedback.textContent = !groups.size ? "这一天还没有处理记录。" : result.truncated ? "较早记录已超出本机保留范围，以下逐条显示仍保留的过程。" : "";
+        void completeVisible(generation);
       } catch (error) {
         if (active() && serial === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
-          feedback.textContent = error.message;
-          more.hidden = !next;
+          feedback.textContent = error.message; more.hidden = !next;
+          for (const group of groups.values()) if (!group.complete && !group.loading) {
+            group.preview = null;
+            group.error = "部分处理记录尚未读完，请重试读取本轮过程。";
+            render(group);
+          }
         }
       }
     }

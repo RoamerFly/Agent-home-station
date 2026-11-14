@@ -124,9 +124,7 @@ try {
  }
  Push-Location $goSource
  try {
-  $dependencies=@(& go list -deps ./cmd/wechat-admin)
-  if($LASTEXITCODE -ne 0){throw 'Windows management server dependency check failed.'}
-  if($dependencies -match '^wechat-bot/internal/(adbserver|devicebroker)$'){throw 'Windows management server includes retired device execution dependencies.'}
+  & (Join-Path $workspace 'scripts\Test-WindowsDeviceRetirement.ps1') -SourceDirectory $goSource -Target Management -Test:$Test
   & go build -buildvcs=false -trimpath -o (Join-Path $OutputDirectory 'wechat-admin.exe') ./cmd/wechat-admin
   if($LASTEXITCODE -ne 0){throw 'Windows management server build failed.'}
  } finally {Pop-Location}

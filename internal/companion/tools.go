@@ -303,7 +303,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 			return Decision{}, err
 		}
-		result, err := e.Tools.Call(ctx, "web_discover", json.RawMessage(`{}`))
+		result, err := observedToolCall(withToolInvocation(ctx, "web_discover"), func(callCtx context.Context) (string, error) {
+			return e.Tools.Call(callCtx, "web_discover", json.RawMessage(`{}`))
+		})
 		calls++
 		if err != nil {
 			result = "内容发现失败：" + mcptools.FailureDescription(err)
@@ -754,13 +756,18 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 		result, callErr := "", error(nil)
 		toolStartedAt := time.Now()
+		toolCtx := withToolInvocation(ctx, response.Tool)
 		if blockedResult != "" {
 			result = blockedResult
+			emitToolDiagnostic(toolCtx, ToolDiagnostic{Event: "tool_blocked", Status: "blocked", Code: "duplicate_or_unverified_call", Stage: "authorization"})
 		} else {
 			if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 				return Decision{}, err
 			}
 			if nativeFunctions && response.Tool == "discover_tools" {
+				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
+				invocation.attempt++
+				emitToolDiagnostic(toolCtx, ToolDiagnostic{Event: "tool_started", Status: "running", Stage: "invocation"})
 				var q struct {
 					Query  string `json:"query"`
 					Offset int    `json:"offset"`
@@ -799,6 +806,11 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 						result = string(b)
 					}
 				}
+				diagnostic := ToolDiagnostic{Event: "tool_completed", Status: "succeeded", Stage: "invocation", DurationMS: time.Since(toolStartedAt).Milliseconds()}
+				if callErr != nil {
+					diagnostic.Event, diagnostic.Status, diagnostic.Code = "tool_failed", "failed", "invalid_tool_arguments"
+				}
+				emitToolDiagnostic(toolCtx, diagnostic)
 			} else {
 				call := func(attemptCtx context.Context) (string, error) {
 					callCtx, cancel := attemptCtx, func() {}
@@ -808,12 +820,14 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 						}
 					}
 					defer cancel()
-					return e.Tools.Call(callCtx, response.Tool, args)
+					return observedToolCall(callCtx, func(executionCtx context.Context) (string, error) {
+						return e.Tools.Call(executionCtx, response.Tool, args)
+					})
 				}
 				if isReadOnlyRecoveryTool(response.Tool) {
-					result, callErr = retryReadOnlyTool(ctx, call)
+					result, callErr = retryReadOnlyTool(toolCtx, call)
 				} else {
-					result, callErr = call(ctx)
+					result, callErr = call(toolCtx)
 				}
 				if callErr != nil && historyNeed != nil {
 					historyNeed.observeReadFailure(response.Tool, args)
@@ -1053,6 +1067,7 @@ func retryReadOnlyTool(ctx context.Context, call func(context.Context) (string, 
 		if !retryable || attempt == 2 {
 			return result, err
 		}
+		emitToolDiagnostic(ctx, ToolDiagnostic{Event: "tool_retry_scheduled", Status: "retrying", Code: "transient_read_failure", Stage: "retry_wait"})
 		if waitErr := waitReadRetry(ctx, delay); waitErr != nil {
 			return result, waitErr
 		}

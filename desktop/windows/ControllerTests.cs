@@ -576,8 +576,10 @@ namespace WechatAgent.Desktop {
                 const string managedPassword = "synthetic-real-cycle-managed-password";
                 var priorPassword = Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD");
                 var d = Deployment.LocalStationDefault(Path.GetFullPath(args[1]));
-                d.Root = Path.Combine(d.Root, "credential-cycle-" + Guid.NewGuid().ToString("N"));
-                d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
+                // Exercise the real portable-install default data/station root.
+                // CI already gives every invocation a fresh output directory;
+                // moving the root here would turn portable ownership repair into
+                // an external-data case and test the wrong security boundary.
                 try {
                     // The first real desktop login has no credential file and
                     // therefore proves that the inherited environment reaches

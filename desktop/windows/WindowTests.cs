@@ -389,7 +389,12 @@ namespace WechatAgent.Desktop {
             // A station package can carry the optional native WeChat runtime.
             // Its presence alone must never start it or make it required.
             Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
-            new CloseSettings(d.Workspace).Save("exit");
+            // The package workspace is the portable installation root even
+            // though this fixture redirects only its station data into the
+            // isolated test root. Use the same administrator-owned portable
+            // allowance as MainForm so CI checkout ownership cannot make the
+            // fixture reject an otherwise install-ready package.
+            new CloseSettings(d.Workspace, true).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 Assert(instance.IsOwner, "local station window owns its isolated control name");
@@ -424,7 +429,7 @@ namespace WechatAgent.Desktop {
             deployment.Url = FreeLocalUrl();
             var emptyRuntime = Path.Combine(workspace, "empty-runtime");
             Directory.CreateDirectory(emptyRuntime);
-            new CloseSettings(workspace).Save("exit");
+            new CloseSettings(workspace, true).Save("exit");
             using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset))
             using (var form = new MainForm(deployment, activation, new ServiceController(deployment), false)) {
                 var retry = (Button)typeof(MainForm).GetField("retry", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
@@ -460,7 +465,7 @@ namespace WechatAgent.Desktop {
                 admin_url = url, wechat_native_url = nativeUrl, wechat_native_enabled = false
             }));
             var d = Deployment.Load(workspace);
-            new CloseSettings(workspace).Save("exit");
+            new CloseSettings(workspace, true).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 form.Show();

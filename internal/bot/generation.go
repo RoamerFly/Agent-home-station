@@ -479,6 +479,21 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 func (w *Worker) generationContext(ctx context.Context, input companion.Input) context.Context {
 	s := w.generation
 	record := func(r Record) { _ = s.call(ctx, func() error { w.activity(r); return w.persistErr }) }
+	toolGeneration := s.jobs[input.Thread]
+	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
+		// Logging the terminal cancellation must survive the execution context
+		// being cancelled. The owner loop still serializes records and rejects
+		// callbacks from a generation that has already been replaced.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		_ = s.call(recordCtx, func() error {
+			if toolGeneration != nil && s.jobs[input.Thread] != toolGeneration {
+				return nil
+			}
+			w.activity(toolDiagnosticRecord(input.Thread, input.TraceID, d))
+			return w.persistErr
+		})
+	})
 	ctx = companion.WithDecisionObserver(ctx, func(d companion.DecisionDiagnostic) {
 		event, status := "model_decision_repair", "retrying"
 		if d.Code == "decision_format_recovered" {

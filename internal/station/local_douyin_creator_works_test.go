@@ -17,6 +17,22 @@ func TestLocalDouyinCreatorWorksSeparateGrantListDetailsAndRevocation(t *testing
 	initializeDouyinWeb(t, f)
 	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
 	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	if view["read_enabled"] != true || view["works_enabled"] != true || view["comments_enabled"] != true {
+		t.Fatalf("login confirmation must retain read-only defaults: %v", view)
+	}
+	// This test checks a separately re-enabled works grant. First construct
+	// that explicitly revoked state; normal login defaults stay read-only on.
+	for _, input := range []map[string]any{
+		{"action": "set_works", "allow_works": false},
+		{"action": "set_read", "allow_read": false},
+	} {
+		input["revision"] = view["revision"]
+		code, next := f.request("POST", localDouyinWebRoute, input, true)
+		if code != 200 {
+			t.Fatalf("prepare revoked read scope: %d %v", code, next)
+		}
+		view = next
+	}
 	manager.readWorks = func(_ context.Context, _ string, in stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
 		if err := authorize(); err != nil {
 			return stationbrowser.DouyinCreatorWorksPage{}, err
