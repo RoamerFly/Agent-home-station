@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -31,17 +32,56 @@ var mobileDeviceCapabilities = []string{
 	"device.list", "device.observe", "device.act", "device.record", "device.read_artifact",
 }
 
+// mobileDeviceBrokerOpener is a package seam for synthetic host-policy tests.
+// Production always uses the fixed devicebroker implementation.
+type mobileDeviceBrokerOpener func(context.Context, devicebroker.Options) (devicebroker.IOBroker, error)
+
+var openMobileDeviceBroker mobileDeviceBrokerOpener = devicebroker.OpenIO
+
+func legacyMobileOptions(o devicebroker.Options) mobile.IOOptions {
+	return mobile.IOOptions{Python: o.Python, PackageDirectory: o.PackageDirectory, CompatibilityEntry: o.CompatibilityEntry,
+		WorkspaceDirectory: o.WorkspaceDirectory, StateDirectory: o.StateDirectory, GlobalLeaseDirectory: o.GlobalLeaseDirectory,
+		ADBRoots: append([]string(nil), o.ADBRoots...), Account: o.Account, Legacy: o.Legacy,
+		Devices: append([]string(nil), o.Devices...), Actions: append([]string(nil), o.Actions...)}
+}
+
+type legacyMobileBrokerAdapter struct{ inner mobile.IOBroker }
+
+func (b legacyMobileBrokerAdapter) Binding() (string, error) { return b.inner.Binding() }
+func (b legacyMobileBrokerAdapter) Begin(ctx context.Context, name string, raw json.RawMessage) (devicebroker.IOCall, error) {
+	if err := devicebroker.CheckIOAuthority(ctx); err != nil {
+		return nil, err
+	}
+	call, err := b.inner.Begin(mobile.WithIOAuthority(ctx, func(current context.Context) error { return devicebroker.CheckIOAuthority(current) }), name, raw)
+	if err != nil {
+		return nil, err
+	}
+	return legacyMobileCallAdapter{inner: call}, nil
+}
+func (b legacyMobileBrokerAdapter) Close() error { return b.inner.Close() }
+
+type legacyMobileCallAdapter struct{ inner mobile.IOCall }
+
+func (c legacyMobileCallAdapter) Service(ctx context.Context, step, device string, raw json.RawMessage) (json.RawMessage, error) {
+	if err := devicebroker.CheckIOAuthority(ctx); err != nil {
+		return nil, err
+	}
+	return c.inner.Service(mobile.WithIOAuthority(ctx, func(current context.Context) error { return devicebroker.CheckIOAuthority(current) }), step, device, raw)
+}
+func (c legacyMobileCallAdapter) Complete(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+	if err := devicebroker.CheckIOAuthority(ctx); err != nil {
+		return nil, err
+	}
+	return c.inner.Complete(mobile.WithIOAuthority(ctx, func(current context.Context) error { return devicebroker.CheckIOAuthority(current) }), raw)
+}
+func (c legacyMobileCallAdapter) Close() error { return c.inner.Close() }
+
 // mobileDeviceReady is deliberately non-starting. Discovery and task queueing
 // must not start a native process, enable a package, or widen a device grant.
 func (m *Manager) mobileDeviceReady(ctx context.Context) error {
-	// Windows production keeps legacy device records as read-only history.  Do
-	// this before consulting package/runtime state so an archived package cannot
-	// be used to infer that a bridge remains runnable.
+	// Archived Windows device records remain read-only history.
 	if m == nil || m.mobileRetired {
 		return errDeviceServiceRetired
-	}
-	if m.deviceIO == nil {
-		return errors.New("device_plugin_broker_unavailable")
 	}
 	store, err := m.packageStore()
 	if err != nil {
@@ -93,8 +133,17 @@ func (m *Manager) mobileDeviceReady(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = m.deviceIO.Inspect(ctx, options); err != nil {
-		if errors.Is(err, mobile.ErrNeedsMigration) {
+	if m.deviceIO != nil {
+		if err = m.deviceIO.Inspect(ctx, legacyMobileOptions(options)); err != nil {
+			if errors.Is(err, mobile.ErrNeedsMigration) {
+				return errors.New("device_plugin_broker_migration_required")
+			}
+			return errors.New("device_plugin_broker_unavailable")
+		}
+		return nil
+	}
+	if err = devicebroker.InspectIOOptions(ctx, options); err != nil {
+		if errors.Is(err, devicebroker.ErrNeedsMigration) {
 			return errors.New("device_plugin_broker_migration_required")
 		}
 		return errors.New("device_plugin_broker_unavailable")
@@ -118,22 +167,23 @@ func mobileDeviceDeploymentPath(path string, directory bool) bool {
 // closed by mobile.Control; the isolated plugin process remains controller-
 // owned and is never closed per task.
 type mobileDevicePluginBridge struct {
-	manager      *Manager
-	store        *pluginhost.Store
-	controller   *pluginruntime.Controller
-	installed    pluginhost.InstalledPackage
-	task         mobile.Task
-	settings     mobile.Settings
-	packageDir   string
-	options      pluginruntime.Options
-	stateDir     string
-	brokerOpener func(context.Context, mobile.IOOptions) (mobile.IOBroker, error)
-	mu           sync.Mutex
-	broker       mobile.IOBroker
-	closed       bool
-	sequence     uint64
-	observations map[string]mobile.Observation
-	artifacts    map[string]mobile.Artifact
+	observationAuthority *mobileObservationAuthority
+	manager              *Manager
+	store                *pluginhost.Store
+	controller           *pluginruntime.Controller
+	installed            pluginhost.InstalledPackage
+	task                 mobile.Task
+	settings             mobile.Settings
+	packageDir           string
+	options              pluginruntime.Options
+	stateDir             string
+	brokerOpener         mobileDeviceBrokerOpener
+	mu                   sync.Mutex
+	broker               devicebroker.IOBroker
+	closed               bool
+	sequence             uint64
+	observations         map[string]mobile.Observation
+	artifacts            map[string]mobile.Artifact
 }
 
 // newMobilePluginBridge is passed to Control.SetBrokerFactory by the manager
@@ -143,6 +193,10 @@ func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, s
 	if m == nil || m.mobileRetired {
 		return nil, errDeviceServiceRetired
 	}
+	return m.openMobilePluginBridge(ctx, task, settings, nil)
+}
+
+func (m *Manager) openMobilePluginBridge(ctx context.Context, task mobile.Task, settings mobile.Settings, authority *mobileObservationAuthority) (mobile.Bridge, error) {
 	if err := m.mobileDeviceReady(ctx); err != nil {
 		return nil, err
 	}
@@ -154,7 +208,7 @@ func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, s
 	if err != nil || !installed.Enabled || installed.Removed {
 		return nil, errors.New("device_plugin_required")
 	}
-	if err = m.mobileDeviceCurrent(task, settings); err != nil {
+	if err = m.mobileDeviceCurrentWithAuthority(ctx, task, settings, authority); err != nil {
 		return nil, err
 	}
 	controller, ready, err := m.installedPluginRuntime()
@@ -177,15 +231,30 @@ func (m *Manager) newMobilePluginBridge(ctx context.Context, task mobile.Task, s
 	if err = os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, errors.New("device_plugin_state_unavailable")
 	}
+	brokerOpener := openMobileDeviceBroker
+	if authority == nil && m.deviceIO != nil {
+		brokerOpener = func(callCtx context.Context, input devicebroker.Options) (devicebroker.IOBroker, error) {
+			legacy, openErr := m.deviceIO.Open(callCtx, legacyMobileOptions(input))
+			if openErr != nil {
+				return nil, openErr
+			}
+			return legacyMobileBrokerAdapter{inner: legacy}, nil
+		}
+	}
 	return &mobileDevicePluginBridge{
-		manager: m, store: store, controller: controller, installed: installed,
+		observationAuthority: authority,
+		manager:              m, store: store, controller: controller, installed: installed,
 		task: task, settings: settings, packageDir: packageDir, options: deployment,
-		stateDir: stateDir, brokerOpener: m.deviceIO.Open,
+		stateDir: stateDir, brokerOpener: brokerOpener,
 		observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{},
 	}, nil
 }
 
 func (m *Manager) mobileDeviceCurrent(task mobile.Task, settings mobile.Settings) error {
+	return m.mobileDeviceCurrentWithAuthority(context.Background(), task, settings, nil)
+}
+
+func (m *Manager) mobileDeviceCurrentWithAuthority(ctx context.Context, task mobile.Task, settings mobile.Settings, authority *mobileObservationAuthority) error {
 	if m == nil || m.mobile == nil || !settings.Enabled {
 		return errors.New("device_plugin_authorization_changed")
 	}
@@ -200,13 +269,37 @@ func (m *Manager) mobileDeviceCurrent(task mobile.Task, settings mobile.Settings
 		return nil
 	}
 	currentTask, ok := m.mobile.Get(task.ID)
-	if !ok || (currentTask.State != "queued" && currentTask.State != "running") || currentTask.ID != task.ID || currentTask.RequestHash != task.RequestHash || currentTask.DeviceID != task.DeviceID || currentTask.FishID != task.FishID || currentTask.DeviceBindingID != task.DeviceBindingID || currentTask.Goal != task.Goal || currentTask.Steps != task.Steps || currentTask.ObservationID != task.ObservationID || !reflect.DeepEqual(currentTask.Source, task.Source) || !m.mobileSourceAllowed(currentTask.Source) {
+	if !ok || (currentTask.State != "queued" && currentTask.State != "running") || currentTask.ID != task.ID || currentTask.RequestHash != task.RequestHash || currentTask.DeviceID != task.DeviceID || currentTask.FishID != task.FishID || currentTask.DeviceBindingID != task.DeviceBindingID || currentTask.Goal != task.Goal || currentTask.Steps != task.Steps || currentTask.ObservationID != task.ObservationID || currentTask.Source != task.Source {
+		return errors.New("device_plugin_authorization_changed")
+	}
+	if authority != nil {
+		grant := authority.grant
+		service, ok := m.mobile.(*mobileWorkflowService)
+		if !ok || task.Source.Admin || task.Source.Account != grant.Account || task.Source.Thread != "host:surf:"+grant.Account || task.Source.Sender != "" || task.Source.MessageID != task.ID || task.DeviceID != grant.DeviceID || task.FishID != grant.FishID || task.DeviceBindingID != grant.BindingID {
+			return errors.New("device_plugin_authorization_changed")
+		}
+		service.stateMu.Lock()
+		defer service.stateMu.Unlock()
+		snapshot, _, err := service.load(false)
+		if err != nil {
+			return err
+		}
+		if snapshot.tasks[task.ID].State != "running" || snapshot.settings.Revision != settings.Revision {
+			return errors.New("device_plugin_authorization_changed")
+		}
+		return authority.current(ctx, service, snapshot)
+	}
+	if !m.mobileSourceAllowed(currentTask.Source) {
 		return errors.New("device_plugin_authorization_changed")
 	}
 	if err := m.mobileTaskBindingCurrent(currentTask); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (b *mobileDevicePluginBridge) current(ctx context.Context, task mobile.Task, settings mobile.Settings) error {
+	return b.manager.mobileDeviceCurrentWithAuthority(ctx, task, settings, b.observationAuthority)
 }
 
 // mobileAccountDeviceBinding returns an explicit fish/device binding only when
@@ -327,6 +420,9 @@ func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, r
 	if err != nil {
 		return nil, err
 	}
+	if b.observationAuthority != nil && capability != "device.observe" {
+		return nil, errors.New("device_action_not_permitted")
+	}
 	// Control advances the durable task between observations and actions. Read
 	// that current task for this *new* operation before taking its immutable
 	// snapshot; already-created policies keep their own prior snapshot.
@@ -339,7 +435,7 @@ func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, r
 		b.task = current
 		b.mu.Unlock()
 	}
-	if err = b.manager.mobileDeviceCurrent(b.task, b.settings); err != nil {
+	if err = b.current(ctx, b.task, b.settings); err != nil {
 		return nil, err
 	}
 	// Freeze the exact task and settings after the live authorization check. A
@@ -357,7 +453,7 @@ func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, r
 	if err != nil || binding == "" {
 		return nil, errors.New("device_plugin_binding_changed")
 	}
-	if err = b.manager.mobileDeviceCurrent(task, settings); err != nil {
+	if err = b.current(ctx, task, settings); err != nil {
 		return nil, err
 	}
 	b.mu.Lock()
@@ -380,7 +476,9 @@ func (b *mobileDevicePluginBridge) newPolicy(ctx context.Context, name string, r
 	if thread == "" {
 		thread = "host:mobile"
 	}
-	if sender == "" {
+	if b.observationAuthority != nil {
+		sender = "fish:" + b.observationAuthority.grant.FishID
+	} else if sender == "" {
 		sender = "administrator"
 	}
 	purpose := task.Goal
@@ -508,7 +606,7 @@ func deviceRequestStep(request map[string]any) (mobile.Step, bool) {
 }
 
 func (b *mobileDevicePluginBridge) mobilePluginCurrent(ctx context.Context, task mobile.Task, settings mobile.Settings, binding string, invocation pluginhost.Invocation, capability string) error {
-	if err := b.manager.mobileDeviceCurrent(task, settings); err != nil {
+	if err := b.current(ctx, task, settings); err != nil {
 		return err
 	}
 	installed, err := b.store.Installed(ctx, mobileDevicePluginID)
@@ -553,19 +651,19 @@ func (b *mobileDevicePluginBridge) bindingCurrent(want string) error {
 	return nil
 }
 
-func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile.Task, settings mobile.Settings) (mobile.IOBroker, error) {
+func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile.Task, settings mobile.Settings) (devicebroker.IOBroker, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.manager == nil || b.manager.mobileRetired {
-		return nil, errDeviceServiceRetired
-	}
 	if b.closed {
 		return nil, errors.New("device_plugin_closed")
+	}
+	if b.manager == nil || b.manager.mobileRetired {
+		return nil, errDeviceServiceRetired
 	}
 	if b.broker != nil {
 		return b.broker, nil
 	}
-	if err := b.manager.mobileDeviceCurrent(task, settings); err != nil {
+	if err := b.current(ctx, task, settings); err != nil {
 		return nil, err
 	}
 	options, err := b.manager.mobileDeviceIOOptions(b.store, b.installed, b.options, settings)
@@ -582,13 +680,13 @@ func (b *mobileDevicePluginBridge) ensureBroker(ctx context.Context, task mobile
 
 // Paths come exclusively from deployment and the selected account. Inspection
 // of these options never opens ADB or admits a device lease.
-func (m *Manager) mobileDeviceIOOptions(store *pluginhost.Store, installed pluginhost.InstalledPackage, deployment pluginruntime.Options, settings mobile.Settings) (mobile.IOOptions, error) {
+func (m *Manager) mobileDeviceIOOptions(store *pluginhost.Store, installed pluginhost.InstalledPackage, deployment pluginruntime.Options, settings mobile.Settings) (devicebroker.Options, error) {
 	code, err := store.PackageDirectory(installed.Digest)
 	if err != nil {
-		return mobile.IOOptions{}, errors.New("device_plugin_required")
+		return devicebroker.Options{}, errors.New("device_plugin_required")
 	}
 	workspace := filepath.Dir(deployment.CatalogDirectory)
-	return mobile.IOOptions{
+	return devicebroker.Options{
 		Python: deployment.Python, PackageDirectory: code,
 		CompatibilityEntry: filepath.Join(workspace, "scripts", "mobile_bridge.py"),
 		WorkspaceDirectory: workspace, StateDirectory: filepath.Join(m.dir, "mobile"),
@@ -614,7 +712,7 @@ type mobileDevicePluginPolicy struct {
 	used      bool
 	failed    bool
 	completed bool
-	ioCall    mobile.IOCall
+	ioCall    devicebroker.IOCall
 	ioFailure error
 	receipt   json.RawMessage
 	status    string
@@ -676,7 +774,10 @@ func (p *mobileDevicePluginPolicy) Service(ctx context.Context, job pluginhost.J
 	if in.DeviceID != "" && (p.capability != "device.list" && in.DeviceID != p.task.DeviceID || p.capability == "device.list" && !contains(p.settings.Devices, in.DeviceID)) {
 		return nil, errors.New("device_plugin_request_changed")
 	}
-	ioContext := mobile.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
+	ioContext := devicebroker.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
+	if authority := p.bridge.observationAuthority; authority != nil {
+		ioContext = devicebroker.WithObservationPackage(ioContext, authority.grant.Package)
+	}
 	if p.ioCall == nil {
 		broker, err := p.bridge.ensureBroker(ctx, p.task, p.settings)
 		if err != nil {
@@ -713,6 +814,9 @@ func (p *mobileDevicePluginPolicy) Service(ctx context.Context, job pluginhost.J
 // Only fixed host failure codes may retain a resource diagnosis. Raw runner
 // errors can contain filenames, serials or credentials and are never exposed.
 func mobileDeviceIOFailure(err error) error {
+	if errors.Is(err, devicebroker.ErrObservationAppMismatch) {
+		return err
+	}
 	failure := &RuntimeFailure{Code: "device_plugin_broker_unavailable", Stage: "device_io", Message: "设备IO请求未完成；请核对原任务状态、授权和本机资源", Continuation: "保留原任务；设备动作结果未确认时先检查状态，不重复提交动作"}
 	if err == nil {
 		return failure
@@ -822,8 +926,12 @@ func (p *mobileDevicePluginPolicy) Validate(ctx context.Context, job pluginhost.
 		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_result_unverified")
 	}
 	p.completed = true // Even a rejected completion cannot replay the native call.
-	ioContext := mobile.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
+	ioContext := devicebroker.WithIOAuthority(ctx, func(current context.Context) error { return p.Check(current, job, cap) })
 	observed, err := p.ioCall.Complete(ioContext, out.Result)
+	if errors.Is(err, devicebroker.ErrObservationAppMismatch) {
+		p.ioFailure = err
+		return pluginruntime.VerifiedResult{}, err
+	}
 	if err != nil || !json.Valid(observed) || len(observed) > mobileDeviceReplyLimit {
 		return pluginruntime.VerifiedResult{}, errors.New("device_plugin_result_unverified")
 	}

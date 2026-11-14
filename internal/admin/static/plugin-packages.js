@@ -210,7 +210,7 @@
  }
  function observationAppControls(device,fish,deviceFish,bindingID,action,reload,current,message){
   const box=el('fieldset',undefined,'mobile-observation-apps'),legend=el('legend','应用观察授权'),apps=(Array.isArray(device.authorized_apps)?device.authorized_apps:[]).map(value=>String(value||'').trim()).filter(Boolean),actions=(Array.isArray(device.authorized_actions)?device.authorized_actions:[]).map(value=>String(value||'').trim()),grants=observationGrants(device,fish,bindingID),granted=new Set(grants.map(grant=>grant.package)),packages=[...new Set([...apps,...granted])],bound=Boolean(fish&&deviceFish===fish&&bindingID),recordsReadable=device.observation_apps_state!=='unavailable',canEnable=bound&&recordsReadable&&device.authorization_state==='ready'&&actions.includes('observe');
-  box.append(legend,el('small','仅设置授权，暂不自动查看手机；后续探索仅可读取当前应用画面，不包含点击、评论或发布。','hint'));
+  box.append(legend,el('small','私有自主探索可读取已授权应用的当前画面，每轮最多观察一次。','hint'));
   if(!bound)box.append(el('small','绑定大肥鱼设备后才能设置自主观察。','hint'));
   else if(!recordsReadable)box.append(el('small','授权记录暂无法读取，暂不能更改。','hint'));
   else if(!granted.size&&!packages.length)box.append(el('small','当前没有已登记应用可设置。','hint'));
@@ -286,12 +286,12 @@
   }catch(e){if(epoch===state.epoch)status.textContent=e.message}
  }
  function renderHostDetail(d){
-  const scope=context(),data=d.host_data||{},diagnostics=data.diagnostics||{},archive=data.state==='archive',readOnly=archive&&data.read_only===true,runtime=d.runtime||{state:'stopped'};
+  const scope=context(),data=d.host_data||{},diagnostics=data.diagnostics||{},archive=data.state==='archive',runtime=d.runtime||{state:'stopped'};
   const heading=detailHeading(d.installed?.package?.name||'设备控制');
   if(!archive&&d.installed&&!d.installed.removed){
    runtimeControls(heading,d);
   }
-  editor.replaceChildren(heading,status);status.textContent=readOnly?'手机控制已停用。原有设备任务、截图和录屏仅供查看，不会创建、停止或取消任务。':archive?'此工具已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'工具未启动；保存设备设置后，可按需启用或手动启动工具。':runtimeNames[runtime.state]||'状态待核对';
+  editor.replaceChildren(heading,status);status.textContent=archive?'此工具已卸载。原有设备任务和受保护素材仍可查看或停止，不会创建新任务。':!d.installed?.enabled?'工具未启动；保存设备设置后，可按需启用或手动启动工具。':runtimeNames[runtime.state]||'状态待核对';
   const message=(text,error=false)=>{if(current(scope)){status.textContent=text;status.classList.toggle('form-error',error)}};
   status.classList.remove('form-error');
   const action=async(name,body={})=>{
@@ -307,12 +307,12 @@
   const bind=(container,label,input,id)=>{input.id='package-mobile-'+id;const caption=el('label',label);caption.htmlFor=input.id;container.append(caption,input)};
   const allowed={configuration:['host_data.settings',['settings.save']],tasks:['host_data.tasks',['tasks.create','tasks.cancel','tasks.stop','']],resources:['host_data.resources',['']],diagnostics:['host_data.diagnostics',['devices.list','']]},seen=new Set();
   for(const declaration of Array.isArray(d.ui_schema?.sections)?d.ui_schema.sections:[]){
-   const spec=allowed[declaration.component],section={...declaration,binding:declaration.binding||spec?.[0],action:declaration.action||({configuration:'settings.save',tasks:readOnly?'':archive?'tasks.cancel':'tasks.create',diagnostics:archive?'':'devices.list'})[declaration.component]||''};
+   const spec=allowed[declaration.component],section={...declaration,binding:declaration.binding||spec?.[0],action:declaration.action||({configuration:'settings.save',tasks:archive?'tasks.cancel':'tasks.create',diagnostics:archive?'':'devices.list'})[declaration.component]||''};
    if(!spec||section.binding!==spec[0]||!spec[1].includes(section.action||'')||seen.has(section.component)||archive&&section.component==='configuration')continue;
    seen.add(section.component);
    const panel=el('section',undefined,'panel package-host-'+section.component);panel.id='plugin-section-'+section.component;panel.dataset.hostComponent=section.component;panel.append(el('h3',section.title||section.component));editor.append(panel);
    if(section.component==='diagnostics'){
-    panel.append(el('p',archive?diagnostics.planner_reason||(readOnly?'仅可查看历史任务和素材。':'仅可查看历史或停止已有任务。'):diagnostics.planner_available===true?'设备规划工具已就绪。':diagnostics.planner_reason||'设备规划工具未就绪，暂不能新建任务。','hint'));
+    panel.append(el('p',archive?diagnostics.planner_reason||'仅可查看历史或停止已有任务。':diagnostics.planner_available===true?'设备规划工具已就绪。':diagnostics.planner_reason||'设备规划工具未就绪，暂不能新建任务。','hint'));
     if(!archive&&section.action==='devices.list'){
      const result=el('p','','hint'),discover=button('检查已授权设备',async()=>{discover.disabled=true;try{const devices=await action('devices.list');if(current(scope)&&result.isConnected)result.textContent=JSON.stringify(devices)}catch(error){message(error.message,true)}finally{if(current(scope)&&discover.isConnected)discover.disabled=false}});panel.append(discover,result);
     }
@@ -339,9 +339,8 @@
     });panel.append(form);
    }
    if(section.component==='tasks'){
-    const controls=el('div',undefined,'inline-actions'),refresh=button('刷新任务',async()=>{try{await reload()}catch(error){message(error.message,true)}});controls.append(refresh);
-    if(!readOnly){const stop=button('停止全部任务',async()=>{stop.disabled=true;try{await action('tasks.stop');await reload()}catch(error){message(error.message,true)}finally{if(current(scope)&&stop.isConnected)stop.disabled=false}});stop.disabled=!(data.tasks||[]).some(task=>['queued','running'].includes(task.state));controls.append(stop)}
-    panel.append(controls);
+    const controls=el('div',undefined,'inline-actions'),refresh=button('刷新任务',async()=>{try{await reload()}catch(error){message(error.message,true)}}),stop=button('停止全部任务',async()=>{stop.disabled=true;try{await action('tasks.stop');await reload()}catch(error){message(error.message,true)}finally{if(current(scope)&&stop.isConnected)stop.disabled=false}});
+    stop.disabled=!(data.tasks||[]).some(task=>['queued','running'].includes(task.state));controls.append(refresh,stop);panel.append(controls);
     renderMobileObservation(panel,data,action,reload,()=>current(scope),archive,message);
     if(!archive&&section.action==='tasks.create'){
      const form=el('form',undefined,'package-host-task-form'),grid=el('div',undefined,'field-grid'),select=el('select'),goal=el('textarea');select.required=goal.required=true;goal.rows=2;goal.maxLength=1000;goal.placeholder='查看当前页面，描述可见内容，不点击或修改设置';for(const id of data.settings?.devices||[])select.append(new Option(id,id));
@@ -363,7 +362,7 @@
      const row=el('article',undefined,'mobile-task'),head=el('div',undefined,'section-heading');head.append(el('strong',task.goal||'未命名设备任务'),el('small',({queued:'等待执行',running:'执行中',completed:'已完成',cancelled:'已取消',needs_review:'需要检查',failed:'失败',stopped:'已停止'})[task.state]||task.state,'hint'));row.append(head,el('p',(task.result||task.reason||'正在检查设备状态')+' · '+(task.device_id||'设备待核对'),'hint'));
      if(task.observation_id){const image=el('img');image.alt='此任务最近一次实际设备截图';image.loading='lazy';image.src=window.WechatAccountContext?.url?.('/api/mobile/tasks/'+encodeURIComponent(task.id)+'/screenshot/'+encodeURIComponent(task.observation_id))||'';row.append(image)}
      for(const artifact of task.artifacts||[]){const video=el('video');video.controls=true;video.preload='metadata';video.src=window.WechatAccountContext?.url?.('/api/mobile/tasks/'+encodeURIComponent(task.id)+'/recording/'+encodeURIComponent(artifact.id))||'';row.append(el('p',artifact.summary||'实际短录屏，无音轨','hint'),video)}
-     if(!readOnly&&['queued','running'].includes(task.state)){const cancel=button('取消任务',async()=>{cancel.disabled=true;try{await action('tasks.cancel',{id:task.id});await reload()}catch(error){message(error.message,true)}finally{if(current(scope)&&cancel.isConnected)cancel.disabled=false}});row.append(cancel)}tasks.append(row);
+     if(['queued','running'].includes(task.state)){const cancel=button('取消任务',async()=>{cancel.disabled=true;try{await action('tasks.cancel',{id:task.id});await reload()}catch(error){message(error.message,true)}finally{if(current(scope)&&cancel.isConnected)cancel.disabled=false}});row.append(cancel)}tasks.append(row);
     }
     if(!tasks.children.length)tasks.append(el('p',archive?'没有保留的设备任务。':'暂无设备任务。','hint'));panel.append(tasks);
    }

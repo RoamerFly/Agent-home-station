@@ -83,9 +83,14 @@ func redactedMCP(c mcpSettings) mcpSettings {
 
 type permittedTools struct {
 	privateSurfOrigin *privateSurfOrigin
-	outboundReviewer  companion.LanguageModel
-	discoveryReader   func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
-	webPageReader     func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
+	// privateMobileObservation is a host-minted, single-use capability which
+	// only exists inside one private surf claim.  It is deliberately separate
+	// from the normal device task tools: a surf run can observe one explicitly
+	// granted app, but cannot plan, act on, or enumerate a device.
+	privateMobileObservation *privateMobileObservationOrigin
+	outboundReviewer         companion.LanguageModel
+	discoveryReader          func(context.Context, mcptools.DiscoverySource, string) ([]mcptools.DiscoveryItem, error)
+	webPageReader            func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
 	// surfInteractionAdapter is registered by the host only for an explicitly
 	// supported public platform.  It is intentionally nil in normal builds.
 	surfInteractionAdapter surfInteractionAdapter
@@ -134,10 +139,11 @@ func (p *permittedTools) ForkTools() companion.ToolAccess {
 	// Hub and plugin Runtime are immutable after construction. Mutable per-call
 	// trace/media state must never be shared between simultaneous conversations.
 	return &permittedTools{hub: p.hub, settings: p.settings, runtime: p.runtime, mcpSourceHash: p.mcpSourceHash,
-		privateSurfOrigin:      p.privateSurfOrigin,
-		surfInteractionAdapter: p.surfInteractionAdapter,
-		outboundReviewer:       p.outboundReviewer,
-		apiNames:               p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
+		privateSurfOrigin:        p.privateSurfOrigin,
+		privateMobileObservation: p.privateMobileObservation,
+		surfInteractionAdapter:   p.surfInteractionAdapter,
+		outboundReviewer:         p.outboundReviewer,
+		apiNames:                 p.apiNames, apiKinds: p.apiKinds, manager: p.manager,
 		discoveryReader: p.discoveryReader, webPageReader: p.webPageReader, media: map[string]companion.GeneratedMedia{}, mediaOrigin: map[string]string{}, crossSourceThreads: map[string]bool{}, crossSourceMessages: map[string][]string{}}
 }
 
@@ -218,6 +224,7 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
 	if p.privateSurfOrigin != nil {
+		tools = append(tools, p.privateMobileObservationTools()...)
 		return tools
 	}
 	if p.trace.Thread != "" {

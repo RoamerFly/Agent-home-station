@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -355,6 +356,21 @@ func (s *mobileWorkflowService) Start(source mobile.Source, device, goal string)
 		hashParts = append(hashParts, fishID, bindingID)
 	}
 	requestHash := namedSpeechSHA(mustJSON(hashParts))
+	// The package invocation carries a fresh nonce, so the host must enforce
+	// the durable request key before invoking it. This keeps a repeated owner
+	// request from creating a second task when the first result is still
+	// queued or when the package response was delayed.
+	s.stateMu.Lock()
+	snapshot, _, loadErr := s.load(false)
+	s.stateMu.Unlock()
+	if loadErr != nil {
+		return mobile.Task{}, loadErr
+	}
+	for _, existing := range snapshot.tasks {
+		if existing.RequestHash == requestHash && existing.DeviceID == device && existing.Goal == goal && reflect.DeepEqual(existing.Source, source) && (mobileWorkflowActive(existing) || existing.State == "completed") {
+			return mobileWorkflowClone(existing), nil
+		}
+	}
 	id := "device-" + randomToken()
 	if len(id) > 128 {
 		id = id[:128]
@@ -452,6 +468,9 @@ func (s *mobileWorkflowService) Screenshot(taskID, observationID string) ([]byte
 func (s *mobileWorkflowService) Artifact(taskID, artifactID string) (mobile.Artifact, []byte, error) {
 	task, _ := s.Get(taskID)
 	return readMobileArtifact(s.manager.dir, task, artifactID)
+}
+func (s *mobileWorkflowService) readBlob(directory, name string, limit int64) ([]byte, error) {
+	return readMobileBlob(s.manager.dir, directory, name, limit)
 }
 
 var _ deviceService = (*mobileWorkflowService)(nil)
@@ -1379,6 +1398,9 @@ func (s *mobileWorkflowService) execute(ctx context.Context, task mobile.Task, s
 	return nil, errors.New("device_workflow_effect_invalid")
 }
 func (s *mobileWorkflowService) captureObservation(raw []byte) (json.RawMessage, error) {
+	return s.captureObservationFor(raw, "", "")
+}
+func (s *mobileWorkflowService) captureObservationFor(raw []byte, expectedDevice, expectedPackage string) (json.RawMessage, error) {
 	var result struct {
 		Text  string `json:"text"`
 		Media []struct {
@@ -1389,6 +1411,12 @@ func (s *mobileWorkflowService) captureObservation(raw []byte) (json.RawMessage,
 	var observation mobile.Observation
 	if json.Unmarshal(raw, &result) != nil || json.Unmarshal([]byte(result.Text), &observation) != nil || !regexpMobileObservation(observation.ID) || len(result.Media) != 1 || result.Media[0].MIME != "image/png" {
 		return nil, errors.New("device_observation_invalid")
+	}
+	if expectedDevice != "" && observation.DeviceID != expectedDevice {
+		return nil, errors.New("device_observation_invalid")
+	}
+	if expectedPackage != "" && observation.Package != expectedPackage {
+		return nil, devicebroker.ErrObservationAppMismatch
 	}
 	data, err := base64.StdEncoding.Strict().DecodeString(result.Media[0].Data)
 	if err != nil || len(data) > 128<<20 {

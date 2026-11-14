@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 )
 
@@ -149,11 +150,8 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 // mobileDeviceGrantSummary only parses the existing allowlisted device
 // profile. It never opens ADB or a broker, so rendering an overview cannot
 // wake the phone or acquire its lease.
-func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]mobile.IOGrant {
-	result := map[string]mobile.IOGrant{}
-	if m.deviceIO == nil {
-		return result
-	}
+func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]devicebroker.IOGrant {
+	result := map[string]devicebroker.IOGrant{}
 	store, err := m.packageStore()
 	if err != nil {
 		return result
@@ -170,7 +168,7 @@ func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]
 	if err != nil {
 		return result
 	}
-	grants, err := m.deviceIO.Grants(context.Background(), options)
+	grants, err := devicebroker.InspectIOGrant(context.Background(), options)
 	if err != nil {
 		return result
 	}
@@ -201,6 +199,46 @@ func mobileObservationFromRecord(record mobileWorkflowRecord, wanted string) (mo
 // tool discovery and device.act; the persisted synthetic task solely gives the
 // existing account-scoped screenshot endpoint an ownership record.
 func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string) (mobileDeviceOverview, error) {
+	return s.observeOnce(ctx, deviceID, nil)
+}
+
+// mobileObservationAuthority is held only by the live, host-owned bridge.
+// Persisted task metadata is evidence, never enough to reconstruct access.
+type mobileObservationAuthority struct {
+	grant mobileObservationAppGrant
+	check func(context.Context) error
+}
+
+func (s *mobileWorkflowService) observeAuthorizedApp(ctx context.Context, grant mobileObservationAppGrant, check func(context.Context) error) (mobileDeviceOverview, error) {
+	if check == nil || grant.GrantID == "" {
+		return mobileDeviceOverview{}, errors.New("device_observation_authority_required")
+	}
+	return s.observeOnce(ctx, grant.DeviceID, &mobileObservationAuthority{grant: grant, check: check})
+}
+
+func (a *mobileObservationAuthority) current(ctx context.Context, s *mobileWorkflowService, snapshot mobileWorkflowSnapshot) error {
+	if err := a.check(ctx); err != nil {
+		return err
+	}
+	current, ok, err := s.observationAppGrant(snapshot, a.grant.DeviceID, a.grant.Package)
+	if err != nil {
+		return err
+	}
+	if !ok || current != a.grant {
+		return errors.New("device_observation_authority_revoked")
+	}
+	control, err := s.observationControl(snapshot)
+	if err != nil {
+		return err
+	}
+	state := control.Devices[a.grant.DeviceID]
+	if state.Paused || state.Takeover {
+		return errors.New("device_observation_paused")
+	}
+	return ctx.Err()
+}
+
+func (s *mobileWorkflowService) observeOnce(ctx context.Context, deviceID string, authority *mobileObservationAuthority) (mobileDeviceOverview, error) {
 	if deviceID == "" {
 		return mobileDeviceOverview{}, errors.New("device_not_authorized")
 	}
@@ -226,6 +264,9 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 			err = errors.New("device_observation_paused")
 		}
 	}
+	if err == nil && authority != nil {
+		err = authority.current(observeCtx, s, snapshot)
+	}
 	if err != nil {
 		s.stateMu.Unlock()
 		cancel()
@@ -236,8 +277,15 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 	// ephemeral task would bypass that guard.
 	queuedAt := time.Now().UTC().Truncate(time.Microsecond)
 	task := mobile.Task{ID: observationTaskID, RequestHash: namedSpeechSHA(mustJSON([]string{"observe", deviceID, observationTaskID, fishID, bindingID})), DeviceID: deviceID, FishID: fishID, DeviceBindingID: bindingID, Goal: "只读查看设备当前画面", State: "running", Source: mobile.Source{Admin: true}, Created: queuedAt, Updated: queuedAt}
+	record := map[string]any{"observation_only": true}
+	if authority != nil {
+		task.Source = mobile.Source{Account: authority.grant.Account, Thread: "host:surf:" + authority.grant.Account, MessageID: observationTaskID}
+		task.RequestHash = namedSpeechSHA(mustJSON([]string{task.RequestHash, authority.grant.GrantID, authority.grant.Package}))
+		record["observation_grant_id"] = authority.grant.GrantID
+		record["observation_package"] = authority.grant.Package
+	}
 	taskRaw, _ := json.Marshal(task)
-	recordRaw, _ := json.Marshal(mobileWorkflowRecord{State: json.RawMessage(`{"observation_only":true}`)})
+	recordRaw, _ := json.Marshal(mobileWorkflowRecord{State: mustJSON(record)})
 	s.mu.Lock()
 	if s.closed || s.devices[deviceID] != "" {
 		s.mu.Unlock()
@@ -262,7 +310,7 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 	}
 	s.stateMu.Unlock()
 
-	bridge, err := s.manager.newMobilePluginBridge(observeCtx, task, snapshot.settings)
+	bridge, err := s.manager.openMobilePluginBridge(observeCtx, task, snapshot.settings, authority)
 	if err == nil {
 		defer bridge.Close()
 		var raw string
@@ -272,42 +320,10 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 			raw, err = bridge.Call(observeCtx, "observe", mustJSON(map[string]string{"device_id": deviceID}))
 		}
 		if err == nil {
-			var captured json.RawMessage
-			captured, err = s.captureObservation([]byte(raw))
+			var view mobileDeviceOverview
+			view, err = s.completeObservation(observeCtx, task, snapshot.settings.Revision, authority, record, []byte(raw))
 			if err == nil {
-				var observation mobile.Observation
-				err = json.Unmarshal(captured, &observation)
-				if err == nil && observation.DeviceID != deviceID {
-					err = errors.New("device_observation_invalid")
-				}
-				if err == nil {
-					s.stateMu.Lock()
-					fresh, freshStore, loadErr := s.load(true)
-					if loadErr != nil {
-						err = loadErr
-					} else if control, controlErr := s.observationControl(fresh); controlErr != nil {
-						err = controlErr
-					} else if observeCtx.Err() != nil {
-						err = errors.New("device_observation_cancelled")
-					} else if bindingErr := s.manager.mobileTaskBindingCurrent(task); bindingErr != nil {
-						err = bindingErr
-					} else if current, ok := fresh.tasks[observationTaskID]; !ok || current.State != "running" || current.RequestHash != task.RequestHash || current.DeviceID != task.DeviceID || current.ObservationID != "" {
-						err = errors.New("device_observation_cancelled")
-					} else if fresh.settings.Revision != snapshot.settings.Revision || control.Devices[deviceID].Paused {
-						err = errors.New("device_observation_paused")
-					} else {
-						control.Devices[deviceID] = mobileObservationDeviceControl{CheckedAt: observation.CapturedAt, Connection: "connected"}
-						task.State, task.ObservationID, task.Updated = "completed", observation.ID, observation.CapturedAt
-						record, _ := json.Marshal(mobileWorkflowRecord{State: mustJSON(map[string]any{"observation_only": true, "observation": json.RawMessage(captured)})})
-						controlRaw, _ := json.Marshal(control)
-						taskRaw, _ := json.Marshal(task)
-						err = s.commit(fresh, freshStore, map[string]json.RawMessage{mobileTaskRecordKey(task.ID): taskRaw, mobileWorkflowKey(task.ID): record, mobileObservationControlKey: controlRaw})
-					}
-					s.stateMu.Unlock()
-					if err == nil {
-						return mobileDeviceOverview{DeviceID: deviceID, ConnectionState: "connected", CheckedAt: observation.CapturedAt, CurrentApp: observation.Package, ObservedAt: observation.CapturedAt, TaskID: observationTaskID, ObservationID: observation.ID, ScreenshotURI: "/api/mobile/tasks/" + observationTaskID + "/screenshot/" + observation.ID}, nil
-					}
-				}
+				return view, nil
 			}
 		}
 	}
@@ -315,8 +331,68 @@ func (s *mobileWorkflowService) ObserveOnce(ctx context.Context, deviceID string
 	// physical disconnect: configuration, validation and cancellation errors
 	// must not masquerade as an offline phone.
 	s.finishObservationTask(observationTaskID, err)
-	s.recordObservationProbe(deviceID, "unknown")
+	if authority == nil {
+		s.recordObservationProbe(deviceID, "unknown")
+	}
 	return mobileDeviceOverview{}, err
+}
+
+func (s *mobileWorkflowService) completeObservation(ctx context.Context, task mobile.Task, revision int64, authority *mobileObservationAuthority, record map[string]any, raw []byte) (mobileDeviceOverview, error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	snapshot, store, err := s.load(true)
+	if err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	control, err := s.observationControl(snapshot)
+	if err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	current := snapshot.tasks[task.ID]
+	if ctx.Err() != nil || current.State != "running" || current.RequestHash != task.RequestHash || current.DeviceID != task.DeviceID || current.ObservationID != "" {
+		return mobileDeviceOverview{}, errors.New("device_observation_cancelled")
+	}
+	if err := s.manager.mobileTaskBindingCurrent(task); err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	if snapshot.settings.Revision != revision || control.Devices[task.DeviceID].Paused {
+		return mobileDeviceOverview{}, errors.New("device_observation_paused")
+	}
+	expectedPackage := ""
+	if authority != nil {
+		if err := authority.current(ctx, s, snapshot); err != nil {
+			return mobileDeviceOverview{}, err
+		}
+		expectedPackage = authority.grant.Package
+	}
+	captured, err := s.captureObservationFor(raw, task.DeviceID, expectedPackage)
+	if err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	var observation mobile.Observation
+	if err := json.Unmarshal(captured, &observation); err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	if authority != nil {
+		if err := authority.current(ctx, s, snapshot); err != nil {
+			return mobileDeviceOverview{}, err
+		}
+	}
+	control.Devices[task.DeviceID] = mobileObservationDeviceControl{CheckedAt: observation.CapturedAt, Connection: "connected"}
+	task.State, task.ObservationID, task.Updated = "completed", observation.ID, observation.CapturedAt
+	record["observation"] = captured
+	if err := s.commit(snapshot, store, map[string]json.RawMessage{
+		mobileTaskRecordKey(task.ID): mustJSON(task),
+		mobileWorkflowKey(task.ID):   mustJSON(mobileWorkflowRecord{State: mustJSON(record)}),
+		mobileObservationControlKey:  mustJSON(control),
+	}); err != nil {
+		return mobileDeviceOverview{}, err
+	}
+	return mobileDeviceOverview{
+		DeviceID: task.DeviceID, ConnectionState: "connected", CheckedAt: observation.CapturedAt,
+		CurrentApp: observation.Package, ObservedAt: observation.CapturedAt, TaskID: task.ID, ObservationID: observation.ID,
+		ScreenshotURI: "/api/mobile/tasks/" + task.ID + "/screenshot/" + observation.ID,
+	}, nil
 }
 
 func (s *mobileWorkflowService) finishObservationTask(id string, cause error) {

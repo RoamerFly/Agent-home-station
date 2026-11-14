@@ -14,8 +14,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"wechat-bot/internal/devicespec"
 )
 
 func mockIOOptions(t *testing.T) (Options, fixturePaths, *int, *int) {
@@ -64,7 +62,7 @@ func mockIOOptions(t *testing.T) (Options, fixturePaths, *int, *int) {
 	}
 	return o, p, &actions, &records
 }
-func ioRequest(t *testing.T, c devicespec.IOCall, step, device string) json.RawMessage {
+func ioRequest(t *testing.T, c IOCall, step, device string) json.RawMessage {
 	t.Helper()
 	raw, err := c.Service(t.Context(), step, device, json.RawMessage(`{}`))
 	if err != nil {
@@ -72,7 +70,7 @@ func ioRequest(t *testing.T, c devicespec.IOCall, step, device string) json.RawM
 	}
 	return raw
 }
-func ioObserve(t *testing.T, b devicespec.IOBroker) string {
+func ioObserve(t *testing.T, b IOBroker) string {
 	t.Helper()
 	c, err := b.Begin(t.Context(), "observe", ioJSON(map[string]any{"device_id": "allowed"}))
 	if err != nil {
@@ -361,7 +359,7 @@ func TestIOAuthorityRevokedMidCommandPreservesUnknownAndNeverReplays(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := devicespec.WithIOAuthority(t.Context(), func(context.Context) error {
+	ctx := WithIOAuthority(t.Context(), func(context.Context) error {
 		if !valid {
 			return errors.New("actor revoked")
 		}
@@ -480,7 +478,7 @@ func TestIOResourceProofBeforeAndAfterCommands(t *testing.T) {
 		t.Run(resource, func(t *testing.T) {
 			o, paths, _, _ := mockIOOptions(t)
 			base := o.Runner
-			var b devicespec.IOBroker
+			var b IOBroker
 			calls := 0
 			o.Runner = func(ctx context.Context, client string, args []string, limit int64, timeout time.Duration) ([]byte, error) {
 				calls++

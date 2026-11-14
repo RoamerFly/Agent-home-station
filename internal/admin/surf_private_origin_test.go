@@ -100,6 +100,42 @@ func TestPrivateSurfOriginOnlyGrantsReadonlyHostBrowsing(t *testing.T) {
 	}
 }
 
+func TestPrivateSurfMobileObservationToolIsClaimBoundAndSingleUse(t *testing.T) {
+	_, _, tools := privateSurfFixture(t)
+	p := tools.tools
+	p.privateMobileObservation = &privateMobileObservationOrigin{
+		surf:  p.privateSurfOrigin,
+		grant: mobileObservationAppGrant{GrantID: "synthetic-observation-grant", Account: p.trace.Account, FishID: "fish", DeviceID: "device", BindingID: "binding", Package: "com.example.home"},
+	}
+	catalog, err := tools.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, tool := range catalog {
+		if tool.Name == privateMobileObservationToolName {
+			seen = true
+			if strings.Contains(tool.Description, "screenshot") && !strings.Contains(tool.Description, "reveal screenshots") {
+				t.Fatal("private observation description exposes an image", tool.Description)
+			}
+		}
+	}
+	if !seen || !privateSurfTool(privateMobileObservationToolName) {
+		t.Fatal("private observation was not discoverable inside the private claim", catalog)
+	}
+	// Schema validation rejects arguments before dispatch, so a malformed model
+	// call cannot consume its only observation attempt.
+	if out, err := tools.Call(t.Context(), privateMobileObservationToolName, json.RawMessage(`{"device_id":"forged"}`)); err == nil || out != "" || p.privateMobileObservation.attempt.Load() {
+		t.Fatal("arguments reached a single-use private observation", out, err)
+	}
+	p.privateMobileObservation.attempt.Store(true)
+	for _, tool := range p.privateMobileObservationTools() {
+		if tool.Name == privateMobileObservationToolName {
+			t.Fatal("consumed observation remained discoverable")
+		}
+	}
+}
+
 func TestPrivateSurfOriginRejectsTransferAndRevocation(t *testing.T) {
 	for _, change := range []string{"account", "trace", "thread", "sender", "topic", "source", "config_revision", "settings", "disabled", "drain", "quiet", "expiry", "execution_cancel"} {
 		t.Run(change, func(t *testing.T) {

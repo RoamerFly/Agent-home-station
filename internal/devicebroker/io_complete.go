@@ -59,8 +59,23 @@ func (c *ioCall) Complete(ctx context.Context, result json.RawMessage) (json.Raw
 		if !ok || len(nodes) > 100 {
 			return nil, errToolDenied
 		}
-		foreground, err := c.focus(ctx, c.device)
+		// A package-scoped autonomous observation intentionally omits UI
+		// hierarchy. Do not let a plugin manufacture unobserved nodes into the
+		// persisted snapshot merely because the optional UI phase was skipped.
+		if c.observationPackage != "" && len(nodes) != 0 {
+			return nil, errors.New("device_observation_ui_unavailable")
+		}
+		var foreground string
+		var err error
+		if c.observationPackage != "" {
+			foreground, err = c.observedFocus(ctx, c.device)
+		} else {
+			foreground, err = c.focus(ctx, c.device)
+		}
 		if err != nil || foreground != s["package"] {
+			if errors.Is(err, ErrObservationAppMismatch) {
+				return nil, err
+			}
 			return nil, errors.New("device_page_changed_during_observation")
 		}
 		png, err := c.blobData(*c.shot)

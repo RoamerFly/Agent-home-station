@@ -181,6 +181,22 @@ func (c *ioCall) focus(ctx context.Context, id string) (string, error) {
 	}
 	return string(match[1]), nil
 }
+
+// observedFocus is the single foreground gate for an application-scoped
+// observation. It intentionally performs a fresh check for every protected
+// read: a previous foreground result is not proof that the app is still in
+// front of the user.
+func (c *ioCall) observedFocus(ctx context.Context, id string) (string, error) {
+	value, err := c.focus(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if c.observationPackage != "" && value != c.observationPackage {
+		return "", ErrObservationAppMismatch
+	}
+	c.foreground = value
+	return value, nil
+}
 func ioStrings(v []string) []string {
 	if v == nil {
 		return []string{}
@@ -293,25 +309,43 @@ func (c *ioCall) Service(ctx context.Context, step, device string, parameters js
 		if c.name != "observe" && c.name != "act" {
 			return nil, errToolDenied
 		}
-		value, err := c.focus(ctx, device)
+		value, err := c.observedFocus(ctx, device)
 		if err != nil {
 			return nil, err
 		}
-		c.foreground = value
 		return ioJSON(map[string]any{"package": value}), nil
 	case "screenshot":
 		if c.name != "observe" && c.name != "act" {
 			return nil, errToolDenied
 		}
+		// The autonomous scope checks both sides of capture. Interactive
+		// observations deliberately retain their original single-capture path.
+		if c.observationPackage != "" {
+			if _, err := c.observedFocus(ctx, device); err != nil {
+				return nil, err
+			}
+		}
 		r, err := c.screen(ctx, device)
 		if err != nil {
 			return nil, err
+		}
+		if c.observationPackage != "" {
+			if _, err := c.observedFocus(ctx, device); err != nil {
+				return nil, err
+			}
 		}
 		c.shot = &r
 		return ioJSON(r), nil
 	case "ui":
 		if c.name != "observe" && c.name != "act" {
 			return nil, errToolDenied
+		}
+		// An autonomous one-shot is intentionally screenshot-only. Returning
+		// the established optional empty shape avoids exposing hierarchy data
+		// if the device changes app between checks.
+		if c.observationPackage != "" {
+			c.ui = ""
+			return ioJSON(map[string]any{"xml": "", "sha256": ioSHA(nil), "available": false}), nil
 		}
 		xml, err := c.readUI(ctx, device)
 		if err != nil {

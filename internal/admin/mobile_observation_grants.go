@@ -113,6 +113,10 @@ func (s *mobileWorkflowService) ObservationAppGrant(deviceID, packageName string
 	if err != nil {
 		return mobileObservationAppGrant{}, false, err
 	}
+	return s.observationAppGrant(snapshot, deviceID, packageName)
+}
+
+func (s *mobileWorkflowService) observationAppGrant(snapshot mobileWorkflowSnapshot, deviceID, packageName string) (mobileObservationAppGrant, bool, error) {
 	state, err := s.observationAppGrants(snapshot)
 	if err != nil {
 		return mobileObservationAppGrant{}, false, err

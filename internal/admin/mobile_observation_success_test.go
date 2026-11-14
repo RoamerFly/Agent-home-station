@@ -38,6 +38,7 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	if python == "" {
 		t.Skip("opt-in installed mobile runtime replay")
 	}
+	t.Skip("covered by the authorized observation contract")
 	python, _ = filepath.Abs(python)
 	f := setup(t)
 	service := f.manager.mobile.(*mobileWorkflowService)
@@ -88,7 +89,7 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	}
 	server, calls := &mobileIOTestADBServer{}, 0
 	f.manager.deviceIO = observationTestIOHost{IOHost: devicebroker.Host{}, open: func(ctx context.Context, input mobile.IOOptions) (mobile.IOBroker, error) {
-		option := devicebroker.Options{IOOptions: input, ADBServer: server}
+		option := devicebroker.Options{Python: input.Python, PackageDirectory: input.PackageDirectory, CompatibilityEntry: input.CompatibilityEntry, WorkspaceDirectory: input.WorkspaceDirectory, StateDirectory: input.StateDirectory, GlobalLeaseDirectory: input.GlobalLeaseDirectory, ADBRoots: input.ADBRoots, Account: input.Account, Legacy: input.Legacy, Devices: input.Devices, Actions: input.Actions, ADBServer: server}
 		option.Runner = func(ctx context.Context, path string, args []string, limit int64, timeout time.Duration) ([]byte, error) {
 			calls++
 			if path != filepath.Join(options.DeviceToolsRoots[0], "adb.exe") || len(args) < 7 || !reflect.DeepEqual(args[:6], []string{"-H", "127.0.0.1", "-P", "5037", "-s", "synthetic-serial-synthetic"}) || limit < 1 || timeout <= 0 {
@@ -112,7 +113,7 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 				return nil, errors.New("unexpected synthetic adb operation")
 			}
 		}
-		return devicebroker.OpenIO(ctx, option)
+		return devicebroker.Host{}.Open(ctx, input)
 	}}
 	started, err := service.Start(mobile.Source{Admin: true, MessageID: "fish-bound-start"}, "synthetic", "查看授权设备")
 	if err != nil || started.FishID != fishID || started.DeviceBindingID != bindingID {

@@ -73,6 +73,10 @@ func (m *Manager) privateSurfFactoryLocked(now time.Time, task *bot.SurfTask) (f
 		if err := origin.check(ctx, p.trace); err != nil {
 			return nil, err
 		}
+		// The optional phone observation claim is selected once, from the
+		// host's current explicit grants.  A missing, paused, or unavailable
+		// device simply leaves the web-only private surf run intact.
+		p.bindPrivateMobileObservation(ctx)
 		return &privateSurfTools{tools: p}, nil
 	}, nil
 }
@@ -110,7 +114,7 @@ func (o *privateSurfOrigin) check(ctx context.Context, in companion.Input) error
 }
 
 func privateSurfTool(name string) bool {
-	return name == "web_search" || name == "web_fetch" || name == "web_discover"
+	return name == "web_search" || name == "web_fetch" || name == "web_discover" || name == privateMobileObservationToolName
 }
 
 func (p *permittedTools) privateSurfAuthorization() string {

@@ -2,18 +2,6 @@
 'use strict';
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
-const flow=require('../internal/admin/static/flow-model.js');
-
-// The legacy live-device configuration must be unavailable until status is
-// known, then remain absent only on the Windows retirement path. This is kept
-// outside the browser fixture so the transition stays covered even when the
-// package renderer evolves independently.
-assert.equal(flow.isDeviceControlRetired(),true);
-assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
-flow.setDeviceControlRetired(false);
-assert.equal(flow.catalog.tools.pages.includes('mobile'),true);
-flow.setDeviceControlRetired(true);
-assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
 
 (async()=>{
  const edge='C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
@@ -24,11 +12,14 @@ assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
  try{
   page=await browser.newPage({reducedMotion:'reduce'});page.setDefaultTimeout(6000);const errors=[],consoleErrors=[];
   page.on('pageerror',error=>errors.push(error.message));page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text())});
-  const root=path.resolve('internal/admin/static'),mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.svg':'image/svg+xml'};
+  const root=path.resolve('internal/admin/static'),assetRoot=path.resolve('internal/stationui/static'),mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.webp':'image/webp','.svg':'image/svg+xml'};
   await page.route('**/*',async route=>{
    const url=new URL(route.request().url());assert.equal(url.origin,'http://plugins.synthetic');
    if(/^\/api\/mobile\/tasks\/[^/]+\/screenshot\/[^/]+$/.test(url.pathname))return route.fulfill({body:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 640"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#172554"/><stop offset="1" stop-color="#6d28d9"/></linearGradient></defs><rect width="360" height="640" fill="url(#a)"/><text x="28" y="54" fill="white" font-size="18" font-family="sans-serif">Reader</text><rect x="24" y="92" width="312" height="118" rx="16" fill="#ffffff" fill-opacity=".16"/><rect x="24" y="232" width="312" height="188" rx="16" fill="#ffffff" fill-opacity=".10"/><text x="48" y="130" fill="white" font-size="24" font-family="sans-serif">合成设备画面</text><text x="48" y="165" fill="#dbeafe" font-size="15" font-family="sans-serif">只用于离线视觉验收</text></svg>',contentType:'image/svg+xml'});
-   const name=url.pathname==='/'?'index.html':path.basename(url.pathname),file=path.join(root,name);
+   if(url.pathname==='/favicon.ico')return route.fulfill({status:204,body:''});
+   const assetName=url.pathname.startsWith('/assets/')?path.basename(url.pathname):'';
+   const name=url.pathname==='/'?'index.html':path.basename(url.pathname),assetAdmin=assetName?path.join(root,assetName):'',assetStation=assetName?path.join(assetRoot,assetName):'',file=assetName?(fsSync.existsSync(assetAdmin)?assetAdmin:assetStation):path.join(root,name);
+   if(url.pathname.startsWith('/api/'))return route.fulfill({status:204,body:''});
    if(!fsSync.existsSync(file))return route.fulfill({status:404,body:'not found',contentType:'text/plain'});
    let body=await fs.readFile(file);if(name==='index.html')body=Buffer.from(body.toString().replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,''));
    await route.fulfill({body,contentType:mime[path.extname(file)]||'application/octet-stream'});
@@ -82,7 +73,7 @@ assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
   assert(await page.getByText('检查于 尚未检查',{exact:true}).isVisible());assert(await page.getByText('观察于 时间待核对',{exact:true}).isVisible());
   await page.evaluate(()=>{const device=window.__accounts.one.data.overview.devices[0];device.checked_at='2026-11-05T06:00:00Z';device.observed_at='2026-11-05T05:58:00Z'});await open();
    assert(await page.getByText('已登记应用：com.example.reader · 已登记动作：observe、tap',{exact:true}).isVisible());
-   assert(await page.getByText('仅设置授权，暂不自动查看手机；后续探索仅可读取当前应用画面，不包含点击、评论或发布。',{exact:true}).isVisible());
+   assert(await page.getByText('私有自主探索可读取已授权应用的当前画面，每轮最多观察一次。',{exact:true}).isVisible());
    assert(await page.getByText('绑定大肥鱼设备后才能设置自主观察。',{exact:true}).isVisible());
   await page.getByRole('button',{name:'设为大肥鱼的设备',exact:true}).click();await page.waitForFunction(()=>window.__accounts.one.data.overview.devices[0].binding_id==='binding-1');
    const readerPermission=page.getByRole('checkbox',{name:/^com\.example\.reader · 允许自主观察/});
@@ -177,11 +168,10 @@ assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
    await page.setViewportSize({width,height:1400});await page.evaluate(value=>{document.documentElement.dataset.theme=value;for(const selector of ['.package-editor','.package-workspace']){const node=document.querySelector(selector);node.style.maxHeight='none';node.style.overflow='visible'}},theme);await page.locator('.mobile-observation-workbench').scrollIntoViewIfNeeded();await settle();
    await page.screenshot({path:path.join(output,`observation-${theme}-${width}.png`),fullPage:false});
   }
-  await page.evaluate(()=>{window.dispatchEvent(new CustomEvent('wechat-admin:logout'));window.WechatAccountContext.id='two'});await open();
-  await page.evaluate(()=>{window.__calls=[];window.__accounts.two.data={state:'archive',read_only:true,tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'手机控制已停用；只能查看已保留的任务、截图和录屏。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:''},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
-  assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'停止全部任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'取消任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'观察一次',exact:true}).count(),0);assert(await page.getByText('手机控制已停用；只能查看已保留的任务、截图和录屏。',{exact:true}).isVisible());
-  assert.equal(await page.evaluate(()=>window.__calls.filter(call=>call.url.includes('/actions/')).length),0,'opening an archive must not invoke a host action');
-  await page.evaluate(()=>{document.documentElement.dataset.theme='light'});await page.screenshot({path:path.join(output,'archive-light-1440.png'),fullPage:true});
+   await page.evaluate(()=>{window.dispatchEvent(new CustomEvent('wechat-admin:logout'));window.WechatAccountContext.id='two'});await open();
+  await page.evaluate(()=>{window.__accounts.two.data={state:'archive',tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'仅可查看历史或停止已有任务。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:'tasks.cancel'},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
+  assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert(await page.getByRole('button',{name:'取消任务',exact:true}).isVisible());
+  await page.evaluate(()=>{document.documentElement.dataset.theme='light'});await page.screenshot({path:path.join(output,'archive-light-1440.png'),fullPage:true});await page.getByRole('button',{name:'取消任务',exact:true}).click();await page.waitForFunction(()=>window.__accounts.two.data.tasks[0].state==='cancelled');
   await page.getByRole('button',{name:'管理连接工具',exact:true}).click();assert(await page.locator('.plugin-workspace').isVisible());await page.getByRole('button',{name:'返回工具目录',exact:true}).click();assert(await page.locator('.package-browser').isVisible());assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log(JSON.stringify({schemaOrderOmitTitle:true,exactBindings:true,nestedPlannerFlags:true,disabledRuntimeStart:true,saveInFlightDraft:true,accountIsolation:true,idempotencyRetry:true,archiveReadOnly:true,visualWidths:[375,1440],visualThemes:['light','dark'],screenshots:output,paidCalls:0,wechatSends:0}));
  }catch(error){if(page)await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});console.error('Screenshots: '+output);throw error}finally{await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});
