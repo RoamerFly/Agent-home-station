@@ -275,7 +275,7 @@ $core=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'
 $forms=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
 $loader=Join-Path $cache 'runtimes\win-x64\native\WebView2Loader.dll'
 $target=Join-Path $OutputDirectory ($(if($LocalStation){'AgentHomeStation.exe'}else{'WechatAgent.exe'}))
-$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'LocalStationRuntime.cs'),$wechatSupervisor,(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'DesktopInstance.cs'),(Join-Path $source 'DouyinAuthorizationDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
+$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'ProcessOwnership.cs'),(Join-Path $source 'LocalStationRuntime.cs'),$wechatSupervisor,(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'DesktopInstance.cs'),(Join-Path $source 'DouyinAuthorizationDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
 if($LocalStation){$arguments+='/define:LOCAL_STATION'}
 $icon=Join-Path $source 'assets\agent-home.ico'
 $arguments+=('/resource:'+(Join-Path $source 'assets\agent-home.png')+',AgentHomeStation.Icon.png')
@@ -312,7 +312,7 @@ $portableWeChatDefaults=$false
 function Invoke-DesktopPackageTests {
  if(-not $Test){return}
  $tests=Join-Path $OutputDirectory 'DesktopTests.exe'
- & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') $wechatSupervisor (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs') (Join-Path $source 'CutoverRehearsal.cs')
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$tests) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'ProcessOwnership.cs') (Join-Path $source 'LocalStationRuntime.cs') $wechatSupervisor (Join-Path $source 'CloseSettings.cs') (Join-Path $source 'DesktopInstance.cs') (Join-Path $source 'ControllerTests.cs') (Join-Path $source 'CutoverRehearsal.cs')
  if($LASTEXITCODE -ne 0){throw 'Desktop tests did not compile.'}
  & $tests
  if($LASTEXITCODE -ne 0){throw 'Desktop controller tests failed.'}
@@ -332,7 +332,7 @@ function Invoke-DesktopPackageTests {
  & $compiler @windowArguments
  if($LASTEXITCODE -ne 0){throw 'Desktop window tests did not compile.'}
  $windowRunner=Join-Path $OutputDirectory 'DesktopWindowTestRunner.exe'
- & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$windowRunner) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'LocalStationRuntime.cs') $wechatSupervisor (Join-Path $source 'WindowTestRunner.cs')
+ & $compiler /nologo /target:exe /platform:x64 /utf8output ('/out:'+$windowRunner) /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll (Join-Path $source 'Deployment.cs') (Join-Path $source 'WindowsRuntime.cs') (Join-Path $source 'ProcessOwnership.cs') (Join-Path $source 'LocalStationRuntime.cs') $wechatSupervisor (Join-Path $source 'WindowTestRunner.cs')
  if($LASTEXITCODE -ne 0){throw 'Isolated window test runner did not compile.'}
  & $windowRunner $windowTests
  if($LASTEXITCODE -ne 0){throw 'Desktop window lifecycle tests failed.'}
