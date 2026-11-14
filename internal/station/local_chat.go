@@ -79,8 +79,9 @@ func newLocalChatService(home *localHomeService) *localChatService {
 		projectTools: &localProjectTools{
 			home: home, options: stationruntime.PackagedToolOptions(),
 			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),
-			yue: newLocalYuEService(home.dataDir, home.root),
-			tts: newLocalTTSBackend(home.dataDir, home.root),
+			yue:   newLocalYuEService(home.dataDir, home.root),
+			tts:   newLocalTTSBackend(home.dataDir, home.root),
+			audio: newLocalAudioCppService(home.dataDir, home.root),
 		}}
 	h.followups = &localTaskFollowupWorker{service: h, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	h.surfActions = newLocalSurfActionWorker(h)

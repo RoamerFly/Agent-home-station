@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "audio-cpp",
+  "name": "audio.cpp 语音引擎",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": [
+    "windows-amd64"
+  ],
+  "runtime": {
+    "transport": "http-adapter",
+    "entrypoint": "runtime/managed-service.json"
+  },
+  "permissions": [
+    "artifact.read",
+    "artifact.write",
+    "model.invoke",
+    "gpu"
+  ],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "335be379adf93b133e3687a01c0d5f5a5183a00949b4547ecf204aeb5ae16d13",
+    "config.schema.json": "ccf99a88820549afe51215fd75032c812a02c7b26365d9d292cb02ba211aa80b",
+    "ui.schema.json": "409e86d61923ff47cfd4cc1a5a5c48e390bb2ad9a144c7ac93766148a7495d06",
+    "runtime/managed-service.json": "6732d4dc4566b1e07ce0026ce85d8a2b90703815764507605191e6c801d45e89",
+    "README.md": "fbae6ead8218df2aaf0c0b877cff3e03d2953d83bc45ddb0afebaed3e5d71da2",
+    "PERMISSIONS.md": "e1425fde7b9b86770b2362f60ac2dd04c7c219cdf089c186ec7e8fa7deba34a4",
+    "MIGRATION.md": "67c7afd980306bc120e1a785f065cf5566ec4db7bb654c2ce5ecb7dc16faa6f4",
+    "CHANGELOG.md": "97a08a09172964b00413cb119f6e12b11a75ec79624324bafd22da04b5f6c13f"
+  }
+}

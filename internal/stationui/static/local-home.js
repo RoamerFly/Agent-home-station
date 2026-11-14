@@ -5371,6 +5371,14 @@
       if (tool.state === "failed") return ["本机语音后端异常", projectToolReason(tool) || "下次语音任务会重新检查本机后端。"];
       return ["已启用，等待任务", "本地聊天需要语音时会按需启动已登记的本机语音后端。"];
     }
+    if (tool && tool.id === "audio-cpp") {
+      if (!tool.runtime_ready) return ["audio.cpp 本机后端未就绪", projectToolReason(tool) || "尚未登记可启动的 audio.cpp 本机后端或模型。"];
+      if (!tool.installed) return ["尚未安装", "安装后可在本地聊天中直接生成语音和识别已登记音频。"];
+      if (!tool.enabled) return ["已安装，未启用", "启用后按需启动 audio.cpp；不会自动发送或上传音频。"];
+      if (tool.state === "running") return ["正在运行", "audio.cpp 服务已由工作站接管，聊天语音任务可直接调用。"];
+      if (tool.state === "failed") return ["audio.cpp 后端异常", projectToolReason(tool) || "请重启本机服务并重新核对模型。"];
+      return ["已启用，待命", "聊天需要语音生成或识别时会自动恢复并调用已登记模型。"];
+    }
     if (!tool.runtime_ready) return ["本地环境未就绪", projectToolReason(tool) || "请先补齐本机运行环境或依赖包。"];
     if (!tool.installed) return ["尚未安装", "安装后才会把工具放入大肥鱼的项目环境。"];
     if (!tool.enabled && tool.update_available) return ["已安装，可更新", "已发现随当前发行包提供的新版本；更新会保留已登记的本地成品。"];
@@ -5399,7 +5407,16 @@
       yue_backend_start_failed: "YuE 后端启动失败，下一次作曲任务会重新检查。",
       station_speech_backend_not_configured: "尚未登记可启动的本机语音后端或可用声线。",
       station_speech_backend_unavailable: "本机语音后端暂不可用，可检查本机运行环境后再试。",
-      station_speech_backend_start_failed: "本机语音后端启动失败，下一次语音任务会重新检查。"
+      station_speech_backend_start_failed: "本机语音后端启动失败，下一次语音任务会重新检查。",
+      audio_cpp_not_installed_or_authorized: "尚未登记或启用 audio.cpp 本机后端。",
+      audio_cpp_model_missing: "已登记的 audio.cpp 模型文件缺失。",
+      audio_cpp_server_unavailable: "audio.cpp 服务程序缺失或校验失败。",
+      audio_cpp_port_occupied_no_adoption: "audio.cpp 端口已被未登记进程占用，工作站不会接管。",
+      audio_cpp_models_not_ready: "audio.cpp 服务已启动，但 TTS/ASR 模型尚未就绪。",
+      audio_cpp_model_changed: "登记的 audio.cpp 模型摘要已变化，请重新登记。",
+      audio_cpp_registration_invalid: "audio.cpp 登记文件格式或权限不符合工作站规则。",
+      audio_cpp_model_registration_invalid: "audio.cpp 模型登记不完整或文件不可读。",
+      audio_cpp_start_timeout: "audio.cpp 启动超时，服务未达到模型就绪状态。"
     };
     const code = typeof tool?.reason === "string" ? tool.reason.trim() : "";
     if (reasons[code]) return reasons[code];
@@ -5409,6 +5426,7 @@
     if (tool?.id === "comfyui") return "本机 ComfyUI 状态暂不可用，请检查本机后端和已登记工作流。";
     if (tool?.id === "yue") return "本机 YuE 状态暂不可用，请检查已登记的官方本机后端。";
     if (tool?.id === "station-speech") return "本机语音状态暂不可用，请检查已登记的本机后端和声线。";
+    if (tool?.id === "audio-cpp") return "audio.cpp 状态暂不可用，请检查本机服务、模型和登记文件。";
     return "本机工具状态暂不可用，请查看工具配置后再试。";
   }
   function comfyWorkflows(tool) {
@@ -5830,12 +5848,36 @@
     section.append(list);
     return section;
   }
+  function renderAudioCppRegistration(tool) {
+    const section = appElement("div", "", "project-tool-permissions project-tool-workflows");
+    section.append(appElement("strong", "本机登记"));
+    section.append(appElement("span", tool?.runtime_ready ? "已读取宿主登记的回环服务和模型摘要。修改登记前请先停止 audio.cpp。" : "选择现有的 station-audio-cpp.json，工作站只复制登记文件并核对其中的程序与模型；不会复制模型。"));
+    if (tool?.runtime_ready) return section;
+    const form = document.createElement("form"); form.className = "comfy-deployment-form"; form.noValidate = true;
+    const label = appElement("label", "audio.cpp 登记文件路径"), input = document.createElement("input");
+    input.type = "text"; input.placeholder = "E:\\Agent\\projects\\freetime\\AI_tools\\Voice-audio-cpp\\station-audio-cpp.json"; input.autocomplete = "off"; input.spellcheck = false;
+    const approval = appElement("label", "", "project-tool-approval"), checkbox = document.createElement("input");
+    checkbox.type = "checkbox"; approval.append(checkbox, document.createTextNode("确认只登记本机路径和哈希，不发送或上传模型"));
+    const button = appElement("button", "登记并核对", "button compact primary"); button.type = "submit";
+    form.append(label, approval, button); label.append(input);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!checkbox.checked || !input.value.trim()) return;
+      button.disabled = true; button.textContent = "正在核对…";
+      try { await request("/api/local/project-tools/audio-cpp/deployment", { method: "PUT", body: JSON.stringify({ registration_path: input.value.trim(), approved: true }) }); await loadProjectTools(); }
+      catch (error) { projectToolsFeedback(error.message || "audio.cpp 登记失败", true); }
+      finally { button.disabled = false; button.textContent = "登记并核对"; }
+    });
+    section.append(form);
+    return section;
+  }
   function projectToolApprovalCopy(tool) {
     if (tool?.id === "obs-preview") return "确认仅访问本机 OBS WebSocket";
     if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
     if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
     if (tool?.id === "yue") return "确认任务素材读写与本机 GPU";
     if (tool?.id === "station-speech") return "确认本机语音成品写入与 GPU";
+    if (tool?.id === "audio-cpp") return "确认本机语音模型读取与成品写入";
     return "确认本机素材读写";
   }
   function projectToolPDFNote(tool) {
@@ -6235,6 +6277,17 @@
         permissions.append(appElement("strong", "语音合成"), appElement("span", "用明确选择的本机声线合成文本，核验后登记音频成品。不会自动发送。"));
         detail.append(permissions, renderStationSpeechBackend(tool), renderStationSpeechVoices(tool));
       }
+      if (tool.id === "audio-cpp") {
+        const permissions = appElement("div", "", "project-tool-permissions");
+        permissions.append(appElement("strong", "本机语音与识别"), appElement("span", "宿主固定接管回环 audio.cpp 服务，使用已登记的 Kokoro TTS 与 SenseVoice ASR 模型。只读获准音频并写入核验成品，不会自动发送。"));
+        detail.append(permissions);
+        const models = appElement("div", "", "project-tool-permissions project-tool-workflows");
+        models.append(appElement("strong", "已登记模型"));
+        const entries = Array.isArray(tool.audio_models) ? tool.audio_models : [];
+        if (!entries.length) models.append(appElement("span", "尚未读取到模型摘要。"));
+        else entries.forEach((model) => models.append(appElement("span", `${model.id || "未知"} · ${model.task || "任务"} · ${model.configured ? "已核验文件" : "缺失"}`, "project-tool-voice")));
+        detail.append(models, renderAudioCppRegistration(tool));
+      }
       if (tool.id === "document-workshop") {
         const permissions = appElement("div", "", "project-tool-permissions");
         permissions.append(appElement("strong", "本次授权"), appElement("span", "本机素材读写限于授权的文档任务，成品保存在本机，可从聊天下载。联网和应用账号权限另行管理。"));
@@ -6247,7 +6300,7 @@
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
       const controlsDisabled = current.loading || Boolean(current.applying);
-      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "obs-preview";
+      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "audio-cpp" || tool.id === "obs-preview";
       if (!tool.installed) {
         const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
         approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !tool.catalog_available || !canInstall;
@@ -6264,6 +6317,12 @@
         button.type = "button"; button.disabled = controlsDisabled || (action === "enable" && !ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
+        if (tool.id === "audio-cpp" && tool.enabled) {
+          const restart = appElement("button", busy ? "正在处理…" : "重启服务", "button compact secondary");
+          restart.type = "button"; restart.disabled = controlsDisabled;
+          restart.addEventListener("click", () => updateProjectTool(tool, "restart", false));
+          controls.append(restart);
+        }
         if (tool.update_available) {
           if (tool.enabled) {
             controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));

@@ -1,0 +1,1 @@
+{"schema_version":1,"service":"audio-cpp","protocol":"audio-cpp-host","protocol_version":1,"ownership":"host-managed-loopback-only","operations":{"health":"/health","models":"/v1/models","speech":"/v1/audio/speech","transcription":"/v1/audio/transcriptions"}}

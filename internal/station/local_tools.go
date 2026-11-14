@@ -160,6 +160,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = append(all, t.localComfyTools(ctx)...)
 		all = append(all, t.localYuETools(ctx)...)
 		all = append(all, t.localTTSTools(ctx)...)
+		all = append(all, t.localAudioCppTools(ctx)...)
 	}
 	var failures error
 	accesses := []companion.ToolAccess{t.memory}
@@ -254,6 +255,8 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 		return t.callLocalYuE(ctx, name, raw)
 	case localTTSVoicesTool, localTTSStartTool, localTTSJobTool:
 		return t.callLocalTTS(ctx, name, raw)
+	case localAudioCppModelsTool, localAudioCppSynthesizeTool, localAudioCppTranscribeTool:
+		return t.callLocalAudioCpp(ctx, name, raw)
 	}
 	if name == localArtifactPublishTool {
 		return t.publishCheckpointed(ctx, raw)

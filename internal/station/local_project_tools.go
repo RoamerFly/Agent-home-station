@@ -38,6 +38,7 @@ type localProjectTools struct {
 	comfy           localComfyBackend
 	yue             localYuEBackend
 	tts             localTTSBackend
+	audio           localAudioCppBackend
 	obs             localOBSPreview
 	ttsCancel       context.CancelFunc           // protected by update
 	ttsJobID        string                       // protected by update
@@ -65,6 +66,7 @@ type localProjectToolView struct {
 	Reason           string                   `json:"reason,omitempty"`
 	VoiceProfiles    []localRVCVoice          `json:"voice_profiles,omitempty"`
 	SpeechVoices     []localTTSVoice          `json:"speech_voices,omitempty"`
+	AudioModels      []localAudioCppModelView `json:"audio_models,omitempty"`
 	Workflows        []localComfyWorkflowView `json:"workflows,omitempty"`
 }
 
@@ -163,6 +165,11 @@ func (s *localProjectTools) close() error {
 		err = errors.Join(err, s.yue.Close(ctx))
 		cancel()
 	}
+	if s.audio != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		err = errors.Join(err, s.audio.Close(ctx))
+		cancel()
+	}
 	if s.host == nil {
 		return err
 	}
@@ -179,6 +186,7 @@ var localProjectPackages = []struct{ ID, Name string }{
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
 	{localTTSPackage, "本机语音"},
+	{localAudioCppPackage, "audio.cpp 语音引擎"},
 	{localOBSPackage, "OBS 本地预览"},
 }
 
@@ -261,6 +269,28 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			}
 		}
 	}
+	if id == localAudioCppPackage {
+		view.RuntimeReady = false
+		view.Reason = "audio_cpp_not_installed_or_authorized"
+		if host != nil && s.audio != nil {
+			info, checkErr := s.audio.Info(ctx, host.store.Account())
+			view.AudioModels = info.Models
+			if checkErr == nil && len(info.Models) > 0 {
+				ready := true
+				for _, model := range info.Models {
+					if (model.ID == info.TTSModelID || model.ID == info.ASRModelID) && !model.Configured {
+						ready = false
+					}
+				}
+				view.RuntimeReady, view.Reason, backendBusy = ready, "", info.Busy
+				if !ready {
+					view.Reason = "audio_cpp_model_missing"
+				}
+			} else if checkErr != nil {
+				view.Reason = checkErr.Error()
+			}
+		}
+	}
 	if id == localOBSPackage {
 		view.RuntimeReady = false
 		view.Reason = "obs_preview_not_configured"
@@ -317,6 +347,7 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 	s.visionConfigurationRoutes(owner, mux)
 	s.comfyDeploymentRoutes(owner, mux)
 	s.yueDeploymentRoutes(owner, mux)
+	s.audioCppDeploymentRoutes(owner, mux)
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.Read()
 		if err != nil {
@@ -364,7 +395,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 	if !websession.Decode(w, r, &in) {
 		return
 	}
-	if in.Action != "install" && in.Action != "upgrade" && in.Action != "enable" && in.Action != "disable" {
+	if in.Action != "install" && in.Action != "upgrade" && in.Action != "enable" && in.Action != "disable" && in.Action != "start" && in.Action != "stop" && in.Action != "restart" {
 		websession.Fail(w, 400, "未知的项目工具操作")
 		return
 	}
@@ -384,7 +415,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		websession.Fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if in.Action == "enable" && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && id != localOBSPackage && !s.runtimeReady() {
+	if (in.Action == "enable" || in.Action == "start" || in.Action == "restart") && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && id != localAudioCppPackage && id != localOBSPackage && !s.runtimeReady() {
 		websession.Fail(w, 409, "Windows 项目工具运行器缺失")
 		return
 	}
@@ -448,6 +479,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			if id == localTTSPackage {
 				grants = localTTSGrants
 			}
+			if id == localAudioCppPackage {
+				grants = localAudioCppGrants
+			}
 			if id == localOBSPackage {
 				grants = []string{"network"}
 			}
@@ -456,6 +490,10 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 	} else {
 		if err != nil || current.Removed || current.Revision != in.Revision {
 			websession.Fail(w, 409, "项目工具版本已变化，请刷新后重试")
+			return
+		}
+		if (in.Action == "start" || in.Action == "stop" || in.Action == "restart") && !current.Enabled {
+			websession.Fail(w, 409, "请先启用该项目工具")
 			return
 		}
 		if id == localOBSPackage {
@@ -470,6 +508,40 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				s.obs.stop()
 			}
 			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+		} else if id == localAudioCppPackage {
+			if in.Action == "enable" || in.Action == "start" || in.Action == "restart" {
+				if s.audio == nil {
+					websession.Fail(w, 409, "audio.cpp 本机后端未登记")
+					return
+				}
+				if in.Action == "enable" {
+					if _, checkErr := s.audio.Info(ctx, record.FishID); checkErr != nil {
+						websession.Fail(w, 409, "请先登记并核对 audio.cpp 的可用模型")
+						return
+					}
+					if _, err = host.store.SetEnabled(ctx, id, current.Revision, true); err != nil {
+						websession.Fail(w, 409, "audio.cpp 工具启用状态未保存")
+						return
+					}
+				}
+				if in.Action == "restart" {
+					stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+					_ = s.audio.Stop(stopCtx)
+					cancel()
+				}
+				if in.Action == "enable" || in.Action == "start" || in.Action == "restart" {
+					err = s.audio.Start(ctx, record.FishID)
+				}
+			} else if in.Action == "stop" {
+				err = s.audio.Stop(ctx)
+			} else {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, false)
+				if err == nil {
+					stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+					err = s.audio.Stop(stopCtx)
+					cancel()
+				}
+			}
 		} else if id == localTTSPackage {
 			if in.Action == "enable" {
 				if s.tts == nil {

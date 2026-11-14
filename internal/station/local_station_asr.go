@@ -98,6 +98,9 @@ func (a stationLocalASR) withSource(check mediaobserve.SourceCheck) stationAudio
 }
 
 func (h *localHomeService) localStationASRVersion(ctx context.Context) (string, error) {
+	if info, err := h.localAudioCppASR(ctx); err == nil {
+		return "audio-cpp-" + info.Binding, nil
+	}
 	binding, err := h.localStationASRBinding(ctx)
 	if err != nil {
 		return "", err
@@ -111,6 +114,20 @@ func (h *localHomeService) transcribeLocalStationAudio(ctx context.Context, wav 
 	}
 	if err := originCheck(); err != nil {
 		return "", err
+	}
+	if info, err := h.localAudioCppASR(ctx); err == nil {
+		record, _ := h.identity.Read()
+		text, transcribeErr := h.projectTools.audio.Transcribe(ctx, record.FishID, info.Binding, wav)
+		if originCheckErr := originCheck(); originCheckErr != nil {
+			return "", originCheckErr
+		}
+		if transcribeErr != nil {
+			return "", transcribeErr
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+		}
+		return strings.TrimSpace(text), nil
 	}
 	binding, err := h.localStationASRBinding(ctx)
 	if err != nil {
@@ -145,6 +162,32 @@ func (h *localHomeService) transcribeLocalStationAudio(ctx context.Context, wav 
 		return "", errors.New("station_asr_result_invalid")
 	}
 	return strings.TrimSpace(text), nil
+}
+
+// localAudioCppASR returns the enabled, owner-registered audio.cpp ASR
+// deployment. It is intentionally a fallback for the existing local-asr
+// profile, so older installations keep their original path unchanged.
+func (h *localHomeService) localAudioCppASR(ctx context.Context) (localAudioCppDeployment, error) {
+	if h == nil || h.projectTools == nil || h.projectTools.audio == nil {
+		return localAudioCppDeployment{}, errors.New("audio_cpp_unavailable")
+	}
+	record, err := h.identity.Read()
+	if err != nil || record.LocalOwner == nil {
+		return localAudioCppDeployment{}, errors.New("audio_cpp_owner_unavailable")
+	}
+	host, err := h.projectTools.forFish(record.FishID)
+	if err != nil {
+		return localAudioCppDeployment{}, err
+	}
+	installed, err := host.store.Installed(ctx, localAudioCppPackage)
+	if err != nil || installed.Removed || !installed.Enabled {
+		return localAudioCppDeployment{}, errors.New("audio_cpp_tool_not_enabled")
+	}
+	info, err := h.projectTools.audio.Info(ctx, record.FishID)
+	if err != nil || info.Binding == "" {
+		return localAudioCppDeployment{}, errors.New("audio_cpp_not_ready")
+	}
+	return info, nil
 }
 
 func (h *localHomeService) localStationASRBinding(ctx context.Context) (localStationASRBinding, error) {
@@ -255,6 +298,9 @@ func (s *localProjectTools) configureStationASR(ctx context.Context, host *local
 	record, err := s.home.identity.Read()
 	if err != nil || record.LocalOwner == nil || host.store.Account() != record.FishID {
 		return errors.New("station_asr_owner_unavailable")
+	}
+	if _, audioErr := s.home.localAudioCppASR(ctx); audioErr == nil {
+		return nil
 	}
 	registration, _, err := s.home.loadLocalStationASRRegistration()
 	if err != nil {

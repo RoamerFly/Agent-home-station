@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 16 {
-		t.Fatalf("expected 16 capability packages, got %d", len(dirs))
+	if len(dirs) != 17 {
+		t.Fatalf("expected 17 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,9 +62,9 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "audio-cpp" || d.Name() == "obs-preview" {
 				transport, entrypoint := "mcp-stdio", "runtime/main.py"
-				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
+				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "audio-cpp" || d.Name() == "obs-preview" {
 					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
 				}
 				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
@@ -136,6 +136,12 @@ func TestOfficialContracts(t *testing.T) {
 						want = map[string]bool{"station-speech.voices": true, "station-speech.synthesize": true, "station-speech.job": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
 							t.Fatal("station speech package must declare only artifact write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "audio-cpp" {
+						want = map[string]bool{"audio-cpp.models": true, "audio-cpp.synthesize": true, "audio-cpp.transcribe": true}
+						if len(p.Permissions) != 4 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "model.invoke" || p.Permissions[3] != "gpu" {
+							t.Fatal("audio.cpp package must declare artifact/model/GPU permissions")
 						}
 					}
 					if d.Name() == "obs-preview" {

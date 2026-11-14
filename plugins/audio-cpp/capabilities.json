@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "audio-cpp.models",
+      "implementation": "ready",
+      "description": "列出已登记且经过宿主核对的 audio.cpp 语音模型。只返回模型编号和任务类型，不披露路径。",
+      "permissions": ["model.invoke"],
+      "input_schema": {"type":"object","properties":{},"additionalProperties":false},
+      "output_schema": {"type":"object"},
+      "discoverable": true,
+      "side_effect": "read"
+    },
+    {
+      "id": "audio-cpp.synthesize",
+      "implementation": "ready",
+      "description": "使用已登记的 Kokoro 声线生成本机 WAV 成品。不会发送或上传。",
+      "permissions": ["artifact.write", "model.invoke", "gpu"],
+      "input_schema": {"type":"object","properties":{"text":{"type":"string","maxLength":12000},"text_language":{"type":"string"}},"required":["text"],"additionalProperties":false},
+      "output_schema": {"type":"object"},
+      "discoverable": true,
+      "side_effect": "artifact"
+    },
+    {
+      "id": "audio-cpp.transcribe",
+      "implementation": "ready",
+      "description": "识别宿主已核验的 WAV 音频并返回文字。不会读取任意路径。",
+      "permissions": ["artifact.read", "model.invoke", "gpu"],
+      "input_schema": {"type":"object","properties":{"artifact_id":{"type":"string"}},"required":["artifact_id"],"additionalProperties":false},
+      "output_schema": {"type":"object"},
+      "discoverable": true,
+      "side_effect": "read"
+    }
+  ]
+}

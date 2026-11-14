@@ -27,6 +27,15 @@ type localProjectOperation struct {
 }
 
 func projectOperation(name string) localProjectOperation {
+	if name == localAudioCppModelsTool {
+		return localProjectOperation{pkg: localAudioCppPackage, capability: "audio-cpp.models"}
+	}
+	if name == localAudioCppSynthesizeTool {
+		return localProjectOperation{pkg: localAudioCppPackage, capability: "audio-cpp.synthesize"}
+	}
+	if name == localAudioCppTranscribeTool {
+		return localProjectOperation{pkg: localAudioCppPackage, capability: "audio-cpp.transcribe", inputExt: ".wav", inputLimit: localAudioCppMaxWAV}
+	}
 	if name == localAudioToolName {
 		return localProjectOperation{pkg: localAudioPackage, capability: localAudioCapability, inputExt: ".wav", inputLimit: stationAttachmentLimit}
 	}
