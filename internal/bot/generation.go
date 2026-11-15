@@ -478,6 +478,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 }
 func (w *Worker) generationContext(ctx context.Context, input companion.Input) context.Context {
 	s := w.generation
+	ctx = companion.WithReplayNonce(ctx, input.ReplayNonce)
 	record := func(r Record) { _ = s.call(ctx, func() error { w.activity(r); return w.persistErr }) }
 	toolGeneration := s.jobs[input.Thread]
 	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
