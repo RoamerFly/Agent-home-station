@@ -61,6 +61,44 @@ func TestMemoryCollisionWithoutAcceptedReceiptStillFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAcceptedReceiptMemoryConflictKeepsPlanAndWorkerRunning(t *testing.T) {
+	w, c, n, in := planWorker(t, &planReviewModel{})
+	text := "本次已接受的新回复"
+	if _, err := w.sendText(context.Background(), in, 0, text); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.runtime.Deliveries) != 1 || w.runtime.Deliveries[0].State != "accepted" {
+		t.Fatalf("delivery was not accepted: %#v", w.runtime.Deliveries)
+	}
+	// Simulate an imported/previous memory row for the same native receipt.
+	// The accepted native bubble remains authoritative for delivery, while the
+	// old companion row must remain unchanged.
+	key := deliveryMemoryKey(w.runtime.Deliveries[0])
+	if err := c.Store.AcceptedDelivery(in, "迁移保留的旧回复", key, c.Config, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if !w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{text}}) {
+		t.Fatal("plan was not queued")
+	}
+	p := w.runtime.Plans[0]
+	p.State, p.Index, p.Slot = "waiting_receipt", 0, 0
+	p.Sent = nil
+	readyPlans(w)
+	w.reconcileUtterancePlans(context.Background())
+	if w.persistErr != nil || p.State != "accepted" || len(n.submissions) != 1 {
+		t.Fatalf("accepted conflict stopped worker or resent: err=%v state=%s submissions=%d", w.persistErr, p.State, len(n.submissions))
+	}
+	counts := map[string]int{}
+	for _, turn := range c.Store.Context(in, c.Config, time.Now()).Messages {
+		if turn.Role == "assistant" {
+			counts[turn.Text]++
+		}
+	}
+	if counts["迁移保留的旧回复"] != 1 || counts[text] != 0 {
+		t.Fatalf("memory conflict overwrote or duplicated old memory: %#v", counts)
+	}
+}
+
 func TestAcceptedTextMemoryUsesReceiptAndRejectsMismatchedBody(t *testing.T) {
 	w, c, _, in := planWorker(t, &planReviewModel{})
 	if _, err := w.sendText(context.Background(), in, 0, "已确认正文"); err != nil {

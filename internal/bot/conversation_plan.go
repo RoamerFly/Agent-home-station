@@ -194,7 +194,9 @@ func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text st
 		in.ReplyContext = d.Input.ReplyContext
 	}
 	var err error
-	if _, native := w.sender.(reliableNative); native {
+	memoryConflict := false
+	_, native := w.sender.(reliableNative)
+	if native {
 		// A durable plan that went through the native sender must be tied to
 		// its confirmed receipt.  Do not substitute a plan/index-derived key:
 		// that can collide with imported history and is not proof of delivery.
@@ -208,6 +210,14 @@ func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text st
 		}
 	} else {
 		err = c.Accepted(in, text)
+	}
+	if native && errors.Is(err, companion.ErrDeliveryMemoryConflict) {
+		// The native receipt is already accepted, but companion memory may
+		// contain an older bubble for the same receipt (for example after a
+		// historical replay).  Keep the durable delivery and the old memory;
+		// never overwrite the remembered text and never stop the whole worker.
+		memoryConflict = true
+		err = nil
 	}
 	if err != nil {
 		w.persistErr = err
@@ -241,6 +251,9 @@ func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text st
 		}
 	}
 	w.activity(Record{Event: "message_sent", Category: "sent", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Content: text, Status: "accepted", Origin: "bot", Reason: reason, SendID: sendID})
+	if memoryConflict {
+		w.activity(Record{Event: "delivery_memory_conflict", Category: "error", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Content: text, Status: "accepted", Reason: "accepted_delivery_kept_memory_conflict", ToolCode: "delivery_memory_conflict", SendID: sendID, Origin: "bot"})
+	}
 	w.refreshMediaParent(p.Input.TraceID)
 }
 func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
