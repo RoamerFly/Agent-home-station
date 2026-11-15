@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -213,6 +214,7 @@ func (s *localProjectTools) isActive(id string) bool {
 func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
 	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
 	var backendBusy bool
+	var backendRunning bool
 	if s.options.CatalogDirectory != "" {
 		info, err := os.Lstat(filepath.Join(s.options.CatalogDirectory, view.ID, "plugin.json"))
 		view.CatalogAvailable = err == nil && info.Mode().IsRegular()
@@ -223,6 +225,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			info, err := s.rvc.Info(ctx, host.store.Account())
 			view.RuntimeReady, view.VoiceProfiles = err == nil && len(info.Profiles) != 0, info.Profiles
 			backendBusy = err == nil && info.Busy
+			backendRunning = err == nil && info.Running
 			if err != nil {
 				view.Reason = localRVCSetupReason(err)
 			} else if !view.RuntimeReady {
@@ -251,7 +254,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		if host != nil && s.yue != nil {
 			info, err := s.yue.Info(ctx, host.store.Account())
 			if err == nil {
-				view.RuntimeReady, backendBusy, view.Reason = true, info.Busy, ""
+				view.RuntimeReady, backendBusy, backendRunning, view.Reason = true, info.Busy, info.Running, ""
 			} else {
 				view.Reason = localComputeSetupReason(localYuEPackage, err)
 			}
@@ -332,7 +335,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
-	case backendBusy || s.isActive(id):
+	case backendBusy || backendRunning || s.isActive(id):
 		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State
@@ -568,7 +571,23 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if in.Action == "enable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, true)
+			} else if in.Action == "disable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, false)
+			} else if in.Action == "stop" {
+				err = s.yue.Stop(ctx)
+			} else if in.Action == "start" || in.Action == "restart" {
+				info, infoErr := s.yue.Info(ctx, record.FishID)
+				if infoErr != nil {
+					err = infoErr
+				} else {
+					if in.Action == "restart" {
+						_ = s.yue.Stop(ctx)
+					}
+					err = s.yue.Use(ctx, record.FishID, info.Binding, true, func(localComfyAudioClient) error { return nil })
+				}
+			}
 			if err == nil && in.Action == "disable" && s.yue != nil {
 				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
 				err = s.yue.Stop(stopCtx)
@@ -607,7 +626,27 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if in.Action == "enable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, true)
+			} else if in.Action == "disable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, false)
+			} else if in.Action == "stop" {
+				err = s.rvc.Stop(ctx)
+			} else if in.Action == "start" || in.Action == "restart" {
+				info, infoErr := s.rvc.Info(ctx, record.FishID)
+				if infoErr != nil || len(info.Profiles) == 0 {
+					err = infoErr
+					if err == nil {
+						err = errors.New("station_rvc_profile_not_registered")
+					}
+				} else {
+					if in.Action == "restart" {
+						_ = s.rvc.Stop(ctx)
+					}
+					profile := info.Profiles[0].ID
+					_, _, err = s.rvc.Call(ctx, record.FishID, info.Binding, http.MethodGet, "/rvc-health?voice_profile_id="+url.QueryEscape(profile), "", nil)
+				}
+			}
 			if err == nil && in.Action == "disable" && s.rvc != nil {
 				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
 				err = s.rvc.Stop(stopCtx)

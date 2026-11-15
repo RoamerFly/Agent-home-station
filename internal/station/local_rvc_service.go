@@ -418,7 +418,11 @@ func (s *localRVCService) waitHealthy(ctx context.Context, fish string, port int
 }
 
 func (s *localRVCService) newReadyFile(fish string) (string, string, error) {
-	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "rvc"), "ready")
+	// Keep the ready proof directory distinct from the token file and aligned
+	// with the control script's path policy. The script rejects a generic
+	// `ready` sibling so an unrelated file cannot be adopted as the station
+	// startup proof.
+	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "rvc"), "station-rvc-ready")
 	if err := os.MkdirAll(directory, 0700); err != nil || !localRVCSafeDirectory(directory) {
 		return "", "", errors.New("station_rvc_ready_directory_unavailable")
 	}
