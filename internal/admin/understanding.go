@@ -165,7 +165,7 @@ func sharedVideoReadReason(err error) string {
 	if errors.As(err, &resolution) {
 		return resolution.code
 	}
-	if err != nil && strings.HasPrefix(err.Error(), "media_") && publicShareErrorCode.MatchString(err.Error()) {
+	if err != nil && publicShareErrorCode.MatchString(err.Error()) && (strings.HasPrefix(err.Error(), "media_") || strings.HasPrefix(err.Error(), "share_media_")) {
 		return err.Error()
 	}
 	var web *mcptools.WebError
