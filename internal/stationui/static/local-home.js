@@ -2538,7 +2538,7 @@
         // old bot implementation; the station only owns the outer identity
         // and native-account lifecycle.
         if (record.id === "wechat" && window.location.port !== "8080") {
-          window.location.href = "http://127.0.0.1:8080/";
+          window.location.href = "http://127.0.0.1:8080/?from_station=1";
           return;
         }
         if (apps.openID && apps.openID !== record.id) {

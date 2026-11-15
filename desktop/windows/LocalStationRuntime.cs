@@ -85,12 +85,24 @@ namespace WechatAgent.Desktop {
                     legacyEnv["WECHAT_BOT_STATE_DIR"] = Path.Combine(legacyDir, "bot-state");
                     legacyEnv["WECHAT_ADMIN_LISTEN"] = new Uri(d.LegacyUrl).Authority;
                     legacyEnv["WECHAT_ADMIN_ORIGIN"] = d.LegacyUrl;
+                    legacyEnv["WECHAT_LEGACY_AUTOLOGIN"] = "1";
                     legacyEnv["WECHAT_NATIVE_URL"] = d.StationNativeUrl;
                     legacyEnv["WECHAT_NATIVE_TOKEN_FILE"] = Path.Combine(d.Root, "apps", "wechat", "native", "api-token");
                     legacyEnv["WECHAT_NATIVE_ACCOUNT"] = "desktop";
                     legacyEnv["WECHAT_STATION_DATA_DIR"] = d.Root;
                     legacyEnv["WECHAT_STATION_WORKER_DIR"] = workerDir;
                     legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "local-model.json");
+                    var packageRoot = d.Workspace;
+                    var pythonRoot = Path.Combine(packageRoot, "runtimes", "windows-python-cli");
+                    var pluginHelper = Path.Combine(packageRoot, "runtimes", "windows-agent-host", "windows_plugin_host.pyw");
+                    legacyEnv["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
+                        python = Path.Combine(pythonRoot, "python.exe"),
+                        pythonw = Path.Combine(pythonRoot, "pythonw.exe"),
+                        windows_helper = pluginHelper,
+                        runtime_roots = new [] { pythonRoot },
+                        document_runtime_root = Path.Combine(packageRoot, "runtimes", "document-workshop"),
+                        catalog_directory = Path.Combine(packageRoot, "plugins")
+                    });
                     Stage("legacy-admin.start.begin");
                     legacy = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, legacyEnv, Path.Combine(d.Root, "logs", "legacy-wechat.log"), job);
                     Stage("legacy-admin.start.ok");

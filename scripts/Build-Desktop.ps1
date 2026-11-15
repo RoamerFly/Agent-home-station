@@ -192,6 +192,11 @@ if($WithOBSPreview -and -not $LocalStation){throw 'WithOBSPreview is only valid 
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
 if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
+# The standard station package exposes the installed Douyin application
+# alongside WeChat. Its autonomous abilities remain separately authorized in
+# the application settings; omitting the package here only makes the card
+# disappear from the catalog.
+if($LocalStation -and $WithWeChatApp){$WithDouyinApp=$true}
 # A document converter is intentionally opt-in.  The three existing source
 # directory arguments are the opt-in contract: when absent, a LocalStation
 # document workshop remains able to create DOCX files but carries no PDF/OCR

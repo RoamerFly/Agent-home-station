@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -33,6 +34,7 @@ type Server struct {
 	loginMu      sync.Mutex
 	operation    string
 	loginUnknown bool
+	autoLogin    bool
 }
 
 func randomToken() string { return identity.RandomToken() }
@@ -52,7 +54,7 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 }
 
 func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handler, error) {
-	s := &Server{manager: manager, auth: auth}
+	s := &Server{manager: manager, auth: auth, autoLogin: os.Getenv("WECHAT_LEGACY_AUTOLOGIN") == "1"}
 	if root {
 		var err error
 		s.accounts, err = newAccountRegistry(s)
@@ -144,6 +146,9 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		name := r.URL.Path
+		if s.autoLogin && name == "/" && r.URL.Query().Get("from_station") == "1" {
+			s.auth.AutoLogin(w, r)
+		}
 		if stationui.ServeLegacy(w, r, name) {
 			return
 		}

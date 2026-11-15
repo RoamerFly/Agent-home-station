@@ -211,6 +211,33 @@ func (s *Store) Login(w http.ResponseWriter, r *http.Request) {
 	Respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": csrf})
 }
 
+// AutoLogin creates a local station handoff session without displaying a
+// second password form. Callers must already have checked the request's
+// loopback host and only enable this for an explicit local handoff.
+func (s *Store) AutoLogin(w http.ResponseWriter, r *http.Request) bool {
+	if !allowedHost(r, s.origin) {
+		return false
+	}
+	id, csrf := randomToken(), randomToken()
+	now := time.Now()
+	s.mu.Lock()
+	for key, value := range s.sessions {
+		if !now.Before(value.expires) {
+			delete(s.sessions, key)
+		}
+	}
+	if len(s.sessions) >= 32 {
+		for key := range s.sessions {
+			delete(s.sessions, key)
+			break
+		}
+	}
+	s.sessions[id] = Session{CSRF: csrf, expires: now.Add(lifetime)}
+	s.mu.Unlock()
+	s.cookie(w, r, id, int(lifetime/time.Second))
+	return true
+}
+
 func (s *Store) Logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(s.cookieName); err == nil {
 		s.mu.Lock()
