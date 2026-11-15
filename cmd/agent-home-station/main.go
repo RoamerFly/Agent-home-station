@@ -35,19 +35,21 @@ import (
 const defaultListen = "127.0.0.1:8082"
 
 type config struct {
-	dataDir              string
-	workspaceRoot        string
-	listen               string
-	runtimeFile          string
-	desktop              bool
-	wechatNativeURL      string
-	wechatNativePID      int
-	legacySettingsSource string
-	legacySettingsDigest string
-	legacyHomeSource     string
-	legacyHomeTarget     string
-	legacyHomeDigest     string
-	legacyHomeMaxBytes   int64
+	dataDir                      string
+	workspaceRoot                string
+	listen                       string
+	runtimeFile                  string
+	desktop                      bool
+	wechatNativeURL              string
+	wechatNativePID              int
+	legacySettingsSource         string
+	legacySettingsDigest         string
+	legacyHomeSource             string
+	legacyHomeTarget             string
+	legacyHomeDigest             string
+	legacyHomeMaxBytes           int64
+	toolPackagesDirectory        string
+	applicationPackagesDirectory string
 }
 
 func main() {
@@ -159,7 +161,7 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 			}
 		}
 	}
-	handler, err := station.NewLocalHomeHandlerWithApps(cfg.dataDir, cfg.workspaceRoot, password, "", registry, windows)
+	handler, err := station.NewLocalHomeHandlerWithPackageDirectories(cfg.dataDir, cfg.workspaceRoot, password, "", registry, cfg.toolPackagesDirectory, cfg.applicationPackagesDirectory, windows)
 	if err != nil {
 		return err
 	}
@@ -267,6 +269,8 @@ func parseConfig(args []string, executable string) (config, error) {
 	legacyHomeTarget := fs.String("legacy-home-target", "", "接续到鱼家目录内尚不存在的相对目录")
 	legacyHomeDigest := fs.String("legacy-home-digest", "", "按预演摘要确认接续选定资料，完成后退出")
 	legacyHomeMaxBytes := fs.Int64("legacy-home-max-bytes", 1<<30, "本次资料接续的可配置字节预算")
+	toolPackagesDirectory := fs.String("tool-packages-directory", "", "公共工具包目录（绝对路径，供应用 Agent 共用）")
+	applicationPackagesDirectory := fs.String("application-packages-directory", "", "公共应用包目录（绝对路径，可供微信和抖音共用）")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -329,6 +333,18 @@ func parseConfig(args []string, executable string) (config, error) {
 	if *runtimeFlag != "" && !filepath.IsAbs(*runtimeFlag) {
 		return config{}, errors.New("runtime configuration must be absolute")
 	}
+	if *toolPackagesDirectory != "" {
+		if !filepath.IsAbs(*toolPackagesDirectory) {
+			return config{}, errors.New("tool packages directory must be absolute")
+		}
+		*toolPackagesDirectory = filepath.Clean(*toolPackagesDirectory)
+	}
+	if *applicationPackagesDirectory != "" {
+		if !filepath.IsAbs(*applicationPackagesDirectory) {
+			return config{}, errors.New("application packages directory must be absolute")
+		}
+		*applicationPackagesDirectory = filepath.Clean(*applicationPackagesDirectory)
+	}
 	if *wechatNativeURL != "" || *wechatNativePID != 0 {
 		endpoint, err := url.Parse(*wechatNativeURL)
 		if err != nil || !*desktopFlag || *wechatNativePID <= 0 || endpoint.Scheme != "http" ||
@@ -352,6 +368,8 @@ func parseConfig(args []string, executable string) (config, error) {
 		legacySettingsSource: *legacySettingsSource, legacySettingsDigest: *legacySettingsDigest,
 		legacyHomeSource: *legacyHomeSource, legacyHomeTarget: *legacyHomeTarget,
 		legacyHomeDigest: *legacyHomeDigest, legacyHomeMaxBytes: *legacyHomeMaxBytes,
+		toolPackagesDirectory:        *toolPackagesDirectory,
+		applicationPackagesDirectory: *applicationPackagesDirectory,
 	}, nil
 }
 

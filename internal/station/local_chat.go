@@ -73,11 +73,15 @@ type localChatService struct {
 
 func newLocalChatService(home *localHomeService) *localChatService {
 	ctx, cancel := context.WithCancel(context.Background())
+	toolOptions := stationruntime.PackagedToolOptions()
+	if home.toolPackages != "" {
+		toolOptions.CatalogDirectory = filepath.Clean(home.toolPackages)
+	}
 	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
-			home: home, options: stationruntime.PackagedToolOptions(),
+			home: home, options: toolOptions,
 			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),
 			yue:   newLocalYuEService(home.dataDir, home.root),
 			tts:   newLocalTTSBackend(home.dataDir, home.root),

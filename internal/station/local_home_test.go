@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/fishidentity"
 )
 
@@ -142,6 +143,22 @@ func TestLocalHomeWithoutWeChatPreservesIdentityAndAuthorization(t *testing.T) {
 	}
 	if code, _ := restarted.request("POST", "/api/local/home", map[string]any{"action": "authorize", "revision": next["revision"]}, true); code != http.StatusOK {
 		t.Fatal("explicit resume failed", code)
+	}
+}
+
+func TestExternalToolCatalogDirectoryIsBoundBeforeApplicationRestore(t *testing.T) {
+	base := t.TempDir()
+	toolDirectory, err := filepath.Abs("../../plugins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewLocalHomeHandlerWithPackageDirectories(filepath.Join(base, "host"), filepath.Join(base, "workspace"), "synthetic-local-password", "", apphost.Registry{}, toolDirectory, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handler.Close()
+	if got := handler.chat.projectTools.options.CatalogDirectory; got != toolDirectory {
+		t.Fatalf("tool catalog = %q, want %q", got, toolDirectory)
 	}
 }
 

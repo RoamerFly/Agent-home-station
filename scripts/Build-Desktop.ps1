@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -191,6 +191,14 @@ if($WithAudioCpp -and -not $LocalStation){throw 'WithAudioCpp is only valid with
 if($WithOBSPreview -and -not $LocalStation){throw 'WithOBSPreview is only valid with -LocalStation.'}
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
 if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
+foreach($externalDirectory in @(@{Name='ToolPackagesDirectory';Value=$ToolPackagesDirectory},@{Name='ApplicationPackagesDirectory';Value=$ApplicationPackagesDirectory})){
+ if(-not $externalDirectory.Value){continue}
+ if(-not [IO.Path]::IsPathRooted($externalDirectory.Value)){throw ($externalDirectory.Name+' must be an absolute path.')}
+ $externalPath=[IO.Path]::GetFullPath($externalDirectory.Value)
+ if(-not (Test-Path -LiteralPath $externalPath -PathType Container)){throw ($externalDirectory.Name+' does not exist: '+$externalPath)}
+ Assert-NoReparsePointAncestor $externalPath
+}
+if(-not $LocalStation -and ($ToolPackagesDirectory -or $ApplicationPackagesDirectory)){throw 'External tool/application package directories require a LocalStation build.'}
 if($WithWeChatRuntime){$WithWeChatApp=$true}
 # The standard station package exposes the installed Douyin application
 # alongside WeChat. Its autonomous abilities remain separately authorized in
@@ -242,7 +250,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview){
+if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview) -and -not ($LocalStation -and $ToolPackagesDirectory)){
  $pluginSource=Join-Path $workspace 'plugins'
  $catalogArgs=@('--source',$pluginSource,'--output',(Join-Path $OutputDirectory 'plugins'))
  if(-not $LocalStation){
@@ -250,8 +258,13 @@ if((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUn
   if(-not $supported.Count){throw 'No supported tools found for the Windows desktop catalog.'}
   foreach($package in $supported){$catalogArgs+=@('--package',$package.Name)}
  }
- if($LocalStation -and $WithShareReader){$catalogArgs+=@('--package','share-reader')}
- if($LocalStation -and $WithMediaUnderstanding){$catalogArgs+=@('--package','media-understanding')}
+ # A WeChat application needs the read-only share and media capability
+ # declarations in the package itself.  Previously LocalStation only staged
+ # web-search, so the legacy console could list these packages from the
+ # compiled catalog but could never install or invoke them.
+ if($LocalStation -and $WithWeChatApp){$catalogArgs+=@('--package','share-reader','--package','media-understanding','--package','music','--package','speech')}
+ if($LocalStation -and $WithShareReader -and -not $WithWeChatApp){$catalogArgs+=@('--package','share-reader')}
+ if($LocalStation -and $WithMediaUnderstanding -and -not $WithWeChatApp){$catalogArgs+=@('--package','media-understanding')}
  if($LocalStation -and $WithDocumentWorkshop){$catalogArgs+=@('--package','document-workshop')}
  if($LocalStation -and $WithAudioWorkshop){$catalogArgs+=@('--package','audio-workshop')}
  if($LocalStation -and $WithRVCBackend){$catalogArgs+=@('--package','rvc')}
@@ -269,7 +282,7 @@ $appIDs=@()
 if((-not $LocalStation) -or $WithWeChatApp){$appIDs+='wechat'}
 if($WithBilibiliApp){$appIDs+='bilibili'}
 if($WithDouyinApp){$appIDs+='douyin'}
-if($appIDs.Count){
+if($appIDs.Count -and -not ($LocalStation -and $ApplicationPackagesDirectory)){
  $appPackages=@(foreach($appID in $appIDs){'--package';$appID})
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json @appPackages
  if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}
@@ -306,7 +319,7 @@ if($LocalStation){
   & go build -trimpath -o $station './cmd/agent-home-station'
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
  } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
- if($appIDs.Count){
+ if($appIDs.Count -and -not $ApplicationPackagesDirectory){
   & $station verify-app-catalog @appIDs
   if($LASTEXITCODE -ne 0){throw 'Connected Apps do not match the built LocalStation server.'}
  }
@@ -405,26 +418,34 @@ if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWo
   if($LASTEXITCODE -ne 0){throw 'Project-local native document runtime preparation failed.'}
  }
 }
+if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $ApplicationPackagesDirectory)){
+ $secrets=Join-Path $OutputDirectory 'secrets'
+ $deployment=Join-Path $secrets 'local-deployment.json'
+ Assert-NoReparsePointAncestor $deployment
+ $existingDeployment=Get-Item -LiteralPath $deployment -Force -ErrorAction SilentlyContinue
+ if($existingDeployment){
+  try{$existingData=Get-Content -LiteralPath $deployment -Raw | ConvertFrom-Json}catch{throw 'Existing local-deployment.json is not valid JSON.'}
+  foreach($entry in @(@{Name='tool_packages_directory';Value=$ToolPackagesDirectory},@{Name='application_packages_directory';Value=$ApplicationPackagesDirectory})){
+   if($entry.Value -and [string]$existingData.($entry.Name) -ne [IO.Path]::GetFullPath($entry.Value)){throw ('Existing local-deployment.json has a different '+$entry.Name+'. Use a fresh output directory or edit the package configuration explicitly.')}
+  }
+ }elseif(-not (Get-Item -LiteralPath (Join-Path $OutputDirectory 'data') -Force -ErrorAction SilentlyContinue)){
+  New-Item -ItemType Directory -Force -Path $secrets | Out-Null
+  $jsonData=[ordered]@{backend='local-station'}
+  if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
+  if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)}
+  if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)}
+  $json=($jsonData | ConvertTo-Json)
+  $bytes=[Text.Encoding]::UTF8.GetBytes($json)
+  $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  try{$file.Write($bytes,0,$bytes.Length);$file.Flush($true)}finally{$file.Dispose()}
+ }
+ if($WithWeChatRuntime -and $Portable){$portableWeChatDefaults=$true}
+}
 if($Portable){
  $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
- if($LocalStation){
-  if($WithWeChatRuntime){
-   $secrets=Join-Path $OutputDirectory 'secrets'
-   $deployment=Join-Path $secrets 'local-deployment.json'
-   Assert-NoReparsePointAncestor $deployment
-   if(-not (Get-Item -LiteralPath $deployment -Force -ErrorAction SilentlyContinue) -and
-      -not (Get-Item -LiteralPath (Join-Path $OutputDirectory 'data') -Force -ErrorAction SilentlyContinue)){
-    New-Item -ItemType Directory -Force -Path $secrets | Out-Null
-    # This is a public default for a fresh WeChat edition, with no account or private paths.
-    $json=([ordered]@{backend='local-station';wechat_native_url='http://127.0.0.1:6174';wechat_native_enabled=$true} | ConvertTo-Json)
-    $bytes=[Text.Encoding]::UTF8.GetBytes($json)
-    $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-    try{$file.Write($bytes,0,$bytes.Length);$file.Flush($true)}finally{$file.Dispose()}
-    $portableWeChatDefaults=$true
-   }
-  }
+  if($LocalStation){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
   Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length

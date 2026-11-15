@@ -28,6 +28,16 @@ type LocalHomeHandler struct {
 	home *localHomeService
 }
 
+// SetApplicationPackagesDirectory selects the externally managed public
+// application package root. The directory is read and verified on demand;
+// application source is never copied into the station data directory.
+func (h *LocalHomeHandler) SetApplicationPackagesDirectory(directory string) {
+	if h == nil || h.home == nil || directory == "" {
+		return
+	}
+	h.home.appCatalog = filepath.Clean(directory)
+}
+
 // localHomeService owns the companion's home, not an application's account.
 // Authentication is provided by the local owner's management session. No
 // Native, account Manager, device bridge or model is constructed by this path.
@@ -36,6 +46,7 @@ type localHomeService struct {
 	root          string
 	dataDir       string
 	chatAvailable bool
+	toolPackages  string
 	appCatalog    string
 	appInstallMu  sync.Mutex
 	artifacts     *localArtifactStore
@@ -55,8 +66,20 @@ func NewLocalHomeHandler(dir, workspaceRoot, password, origin string, windows ..
 // NewLocalHomeHandlerWithApps attaches registrations already verified by the
 // station host. Applications cannot register themselves through the HTTP API.
 func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, registry apphost.Registry, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
+	return NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, origin, registry, "", "", windows...)
+}
+
+// NewLocalHomeHandlerWithPackageDirectories wires externally managed public
+// package roots before applications are attached and restored. The station
+// reads these roots on demand; it never copies them into private data.
+func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, origin string, registry apphost.Registry, toolPackagesDirectory, applicationPackagesDirectory string, windows ...*agenthost.WindowsConfig) (*LocalHomeHandler, error) {
 	if dir == "" || workspaceRoot == "" {
 		return nil, errors.New("本地主人配置无效")
+	}
+	for name, directory := range map[string]string{"公共工具包目录": toolPackagesDirectory, "公共应用包目录": applicationPackagesDirectory} {
+		if directory != "" && !filepath.IsAbs(directory) {
+			return nil, errors.New(name + "必须是绝对路径")
+		}
 	}
 	auth, err := websession.New(password, origin, localOwnerCookie)
 	if errors.Is(err, websession.ErrOrigin) {
@@ -97,7 +120,8 @@ func NewLocalHomeHandlerWithApps(dir, workspaceRoot, password, origin string, re
 		}
 	}
 	mux := http.NewServeMux()
-	home := &localHomeService{identity: fishidentity.New(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner}
+	home := &localHomeService{identity: fishidentity.New(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
+		toolPackages: toolPackagesDirectory, appCatalog: applicationPackagesDirectory}
 	home.registerHomeRoutes(auth, mux)
 	chat := newLocalChatService(home)
 	chat.windows = runner

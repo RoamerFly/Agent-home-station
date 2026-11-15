@@ -111,6 +111,35 @@ func TestLocalAppSourceInstallPreservesEditsAndDoesNotConnect(t *testing.T) {
 	}
 }
 
+func TestExternalApplicationCatalogDirectoryIsUsed(t *testing.T) {
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	catalog, err := filepath.Abs("../../connected-apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.handler.SetApplicationPackagesDirectory(catalog)
+	f.login()
+	code, payload := f.request("GET", "/api/local/apps/catalog", nil, false)
+	if code != http.StatusOK {
+		t.Fatal(code, payload)
+	}
+	applications, ok := payload["applications"].([]any)
+	if !ok {
+		t.Fatal("invalid catalog", payload)
+	}
+	seen := map[string]bool{}
+	for _, item := range applications {
+		row, ok := item.(map[string]any)
+		if ok {
+			seen[row["id"].(string)] = true
+		}
+	}
+	if !seen["wechat"] || !seen["douyin"] {
+		t.Fatalf("external application catalog missing expected apps: %v", seen)
+	}
+}
+
 func TestLocalAppCatalogPreservesInstalledStateWithoutSourceAndWhilePaused(t *testing.T) {
 	f, home := localAppInstallFixture(t)
 	row := localCatalogApplication(t, f)

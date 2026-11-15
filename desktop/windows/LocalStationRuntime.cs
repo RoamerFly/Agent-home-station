@@ -63,6 +63,8 @@ namespace WechatAgent.Desktop {
                 }
                 cancel.ThrowIfCancellationRequested();
                 var args = new List<string> { "--desktop", "--data", d.Root, "--workspace", d.StationWorkspace, "--listen", new Uri(d.Url).Authority };
+                if (!String.IsNullOrEmpty(d.ToolPackagesDirectory)) args.AddRange(new [] { "--tool-packages-directory", d.ToolPackagesDirectory });
+                if (!String.IsNullOrEmpty(d.ApplicationPackagesDirectory)) args.AddRange(new [] { "--application-packages-directory", d.ApplicationPackagesDirectory });
                 if (wechat != null) wechat.AddServerArguments(args);
                 var programEnv = new Dictionary<string, string>();
                 var media = Path.Combine(Path.GetDirectoryName(d.StationExe), "runtimes", "windows-media");
@@ -101,7 +103,7 @@ namespace WechatAgent.Desktop {
                         windows_helper = pluginHelper,
                         runtime_roots = new [] { pythonRoot },
                         document_runtime_root = Path.Combine(packageRoot, "runtimes", "document-workshop"),
-                        catalog_directory = Path.Combine(packageRoot, "plugins")
+                        catalog_directory = String.IsNullOrEmpty(d.ToolPackagesDirectory) ? Path.Combine(packageRoot, "plugins") : d.ToolPackagesDirectory
                     });
                     Stage("legacy-admin.start.begin");
                     legacy = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, legacyEnv, Path.Combine(d.Root, "logs", "legacy-wechat.log"), job);

@@ -21,6 +21,9 @@ import (
 )
 
 func (h *localHomeService) configureAppCatalog() {
+	if h.appCatalog != "" {
+		return
+	}
 	if executable, err := os.Executable(); err == nil {
 		h.appCatalog = filepath.Join(filepath.Dir(executable), "connected-apps")
 	}

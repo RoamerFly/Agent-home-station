@@ -22,7 +22,6 @@ import (
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginruntime"
-	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/stationservices"
 	"wechat-bot/internal/workspacefs"
 )
@@ -121,13 +120,12 @@ type stationWechatWorker struct {
 	cutoverBlocked atomic.Bool
 }
 
-func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, localASR stationLocalASR, localVision stationLocalVision, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
+func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, shareOptions pluginruntime.Options, localASR stationLocalASR, localVision stationLocalVision, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
 	if !ok || !supported || entry.Registration != "station-native" {
 		return registry, nil, nil
 	}
-	shareOptions := stationruntime.PackagedToolOptions()
 	host := &stationWechat{
 		stationWechatNative: native, root: filepath.Join(dataDir, "apps", wechatapp.ID, "workers"),
 		dataDir: dataDir, workspaceRoot: workspaceRoot,

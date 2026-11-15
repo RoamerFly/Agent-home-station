@@ -28,6 +28,17 @@
 {"backend":"windows-native","data_root":"data","account":"desktop","admin_url":"http://127.0.0.1:8081","native_url":"http://127.0.0.1:6174"}
 ```
 
+LocalStation 也支持把公共包放在发行包之外，由开发版和发行版共同引用，不需要把同一份源码复制进每个包。`tool_packages_directory` 是公共工具包根目录，供微信、抖音等应用发现 Agent 工具；`application_packages_directory` 是应用包根目录，至少包含 `wechat`、`douyin` 等应用目录。两个值都必须是当前 Windows 机器上的绝对路径，运行时按目录读取并在请求时校验来源：
+
+```json
+{
+  "tool_packages_directory": "E:\\Agent\\projects\\freetime\\AI_tools",
+  "application_packages_directory": "E:\\Agent\\projects\\freetime\\connected-apps"
+}
+```
+
+不配置时仍回退使用便携包内的 `plugins` 和 `connected-apps`。配置外部目录后，外部目录优先；应用接入目录仍是工作站的私有可编辑副本，外部目录只负责包声明与源码发现，不会覆盖用户资料。
+
 相对数据根按程序工作区解析，不依赖当前工作目录，需放在支持 Windows ACL 的可写磁盘（如 NTFS）。数据、密钥和日志由当前用户与 SYSTEM 独占；链接/重解析路径、校验失败的程序、非回环地址及占用端口拒绝启动，不接管其他实例。`data/logs/` 记录启动失败。页面会话在 `secrets/`。升级保留 `data/`、`secrets/`、模型和生成物。
 
 Windows 后台使用前台 `wx serve` 子进程，由桌面进程统一管理；使用 Windows Job Object 管理本实例及其子进程。正常退出先鉴权排空全部账号并以只读 SQLite 查询核验原生附件队列，随后通过继承的私有 stdin 管道让 Go 服务优雅退出，再使用绑定实例身份的原生停止协议停止微信；不登出账号，不增加公开停止接口，不依赖 Python。桌面进程意外终止时 Job Object 结束其所属进程树，持久任务由后续启动恢复。新安装不导入或启动已有 WSL 实例。

@@ -50,6 +50,38 @@ func TestExplicitPathsMustBeAbsolute(t *testing.T) {
 	if err == nil {
 		t.Fatal("relative workspace path was accepted")
 	}
+	_, err = parseConfig([]string{"-application-packages-directory", "relative"}, `C:\\Program Files\\Agent Home Station\\Agent-home-station.exe`)
+	if err == nil {
+		t.Fatal("relative application package path was accepted")
+	}
+	_, err = parseConfig([]string{"-tool-packages-directory", "relative"}, `C:\\Program Files\\Agent Home Station\\Agent-home-station.exe`)
+	if err == nil {
+		t.Fatal("relative tool package path was accepted")
+	}
+}
+
+func TestApplicationPackagesDirectoryIsPreserved(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "bin", "Agent-home-station.exe")
+	path := filepath.Join(t.TempDir(), "connected-apps")
+	cfg, err := parseConfig([]string{"-application-packages-directory", path}, executable)
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if cfg.applicationPackagesDirectory != path {
+		t.Fatalf("applicationPackagesDirectory = %q, want %q", cfg.applicationPackagesDirectory, path)
+	}
+}
+
+func TestToolPackagesDirectoryIsPreserved(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "bin", "Agent-home-station.exe")
+	path := filepath.Join(t.TempDir(), "plugins")
+	cfg, err := parseConfig([]string{"-tool-packages-directory", path}, executable)
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if cfg.toolPackagesDirectory != path {
+		t.Fatalf("toolPackagesDirectory = %q, want %q", cfg.toolPackagesDirectory, path)
+	}
 }
 
 func TestLocalListenAddress(t *testing.T) {
