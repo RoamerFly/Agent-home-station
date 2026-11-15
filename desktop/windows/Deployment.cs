@@ -301,6 +301,15 @@ namespace WechatAgent.Desktop {
             if (!d.LocalStation) throw new InvalidOperationException("分享解析登录只支持本机工作站。");
             var list = await Request("/api/apps/wechat/connections", null);
             var items = list.ContainsKey("items") ? list["items"] as object[] : null;
+            if (items != null && items.Length == 0) {
+                // A migrated package can already have the native `desktop`
+                // account while the station application registry has not yet
+                // materialized its first connection. Provisioning with the
+                // reserved id is idempotent and never creates a second user.
+                await Request("/api/apps/wechat/connections", new { request_id = "00000000000000000000000000000001" });
+                list = await Request("/api/apps/wechat/connections", null);
+                items = list.ContainsKey("items") ? list["items"] as object[] : null;
+            }
             if (items == null || items.Length != 1) throw new InvalidOperationException("当前需要唯一的微信连接，请先在工作站核对账号。");
             var item = items[0] as Dictionary<string, object>;
             var connection = item == null ? "" : Deployment.Text(item, "id");
