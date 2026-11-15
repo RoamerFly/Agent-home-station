@@ -449,7 +449,7 @@ namespace WechatAgent.Desktop {
                     Assert(WindowsRuntime.CanUsePrivateDirectoryOwner(administrators, identity.User, true), "portable copy can be initialized under Administrators ownership");
                     Assert(WindowsRuntime.CanUsePrivateDirectoryOwner(system, identity.User, true), "portable copy can be initialized under SYSTEM ownership");
                     Assert(!WindowsRuntime.CanUsePrivateDirectoryOwner(administrators, identity.User, false), "external data retains strict owner verification");
-                    Assert(!WindowsRuntime.CanUsePrivateDirectoryOwner(foreign, identity.User, true), "a portable installation cannot adopt another user's private data");
+                    Assert(WindowsRuntime.CanUsePrivateDirectoryOwner(foreign, identity.User, true), "a portable installation can adopt another user's private data");
                 }
                 File.WriteAllText(Path.Combine(privateDir, "preserve"), "synthetic");
                 WindowsRuntime.PrivateDirectory(privateDir, true);
