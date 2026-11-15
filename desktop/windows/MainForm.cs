@@ -448,21 +448,13 @@ namespace WechatAgent.Desktop {
             var dialog = legacyWechatConsole; legacyWechatConsole = null;
             if (dialog != null && !dialog.IsDisposed) dialog.CloseForServiceStop();
         }
-        async void OpenLegacyShareCredentialLogin(LegacyWechatConsoleDialog console, string provider, string account, int revision) {
+        void OpenLegacyShareCredentialLogin(LegacyWechatConsoleDialog console, string provider, string account, int revision) {
             if (console == null || console.IsDisposed || String.IsNullOrWhiteSpace(account)) return;
-            string connection;
-            try {
-                var target = await controller.ShareReaderTarget(CancellationToken.None);
-                connection = target.Item1; revision = target.Item2;
-            } catch (Exception error) {
-                MessageBox.Show(this, error.Message, "微信分享解析", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
             CloseShareCredentialLogin();
             var dialog = new ShareCredentialLoginDialog(deployment, provider,
                 async (selectedProvider, cookie) => {
                     try {
-                        await controller.SaveShareReaderCredentials(connection, selectedProvider, cookie, revision, CancellationToken.None);
+                        await controller.SaveLegacyShareReaderCredentials(selectedProvider, cookie, CancellationToken.None);
                         console.Reload();
                     } catch (Exception error) {
                         MessageBox.Show(this, "登录凭据未能保存。\n" + error.Message, "微信分享解析", MessageBoxButtons.OK, MessageBoxIcon.Warning);

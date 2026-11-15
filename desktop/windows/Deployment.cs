@@ -278,6 +278,9 @@ namespace WechatAgent.Desktop {
         readonly ICommandRunner runner;
         readonly HttpClient client;
         readonly CookieContainer cookies = new CookieContainer();
+        readonly HttpClient legacyClient;
+        readonly CookieContainer legacyCookies = new CookieContainer();
+        string legacyCsrf = "";
         readonly Func<TimeSpan, CancellationToken, Task> delay;
         Process anchor;
         WindowsRuntime windows;
@@ -287,7 +290,9 @@ namespace WechatAgent.Desktop {
         internal ServiceController(Deployment deployment, ICommandRunner commands = null, HttpMessageHandler http = null, Func<TimeSpan, CancellationToken, Task> wait = null) {
             d = deployment; runner = commands ?? new HiddenRunner();
             client = new HttpClient(http ?? new HttpClientHandler { UseProxy = false, CookieContainer = cookies, AllowAutoRedirect = false });
+            legacyClient = new HttpClient(new HttpClientHandler { UseProxy = false, CookieContainer = legacyCookies, AllowAutoRedirect = false });
             client.Timeout = TimeSpan.FromSeconds(10); delay = wait ?? Task.Delay;
+            legacyClient.Timeout = TimeSpan.FromSeconds(10);
             if (d.Windows) windows = new WindowsRuntime(d, runner);
             if (d.LocalStation) station = new LocalStationRuntime(d);
         }
@@ -297,27 +302,18 @@ namespace WechatAgent.Desktop {
                 throw new InvalidOperationException("分享登录信息无效。");
             return await Request("/api/local/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader/credentials", new { provider = provider, cookie = cookie, revision = revision });
         }
-        internal async Task<Tuple<string, int>> ShareReaderTarget(CancellationToken token) {
-            if (!d.LocalStation) throw new InvalidOperationException("分享解析登录只支持本机工作站。");
-            var list = await Request("/api/apps/wechat/connections", null);
-            var items = list.ContainsKey("items") ? list["items"] as object[] : null;
-            if (items != null && items.Length == 0) {
-                // A migrated package can already have the native `desktop`
-                // account while the station application registry has not yet
-                // materialized its first connection. Provisioning with the
-                // reserved id is idempotent and never creates a second user.
-                await Request("/api/apps/wechat/connections", new { request_id = "00000000000000000000000000000001" });
-                list = await Request("/api/apps/wechat/connections", null);
-                items = list.ContainsKey("items") ? list["items"] as object[] : null;
-            }
-            if (items == null || items.Length != 1) throw new InvalidOperationException("当前需要唯一的微信连接，请先在工作站核对账号。");
-            var item = items[0] as Dictionary<string, object>;
-            var connection = item == null ? "" : Deployment.Text(item, "id");
-            if (String.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("当前微信连接编号不可用。");
-            var detail = await Request("/api/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader", null);
+        internal async Task<Dictionary<string, object>> SaveLegacyShareReaderCredentials(string provider, string cookie, CancellationToken token) {
+            if (!d.LocalStation || String.IsNullOrWhiteSpace(provider) || String.IsNullOrWhiteSpace(cookie)) throw new InvalidOperationException("分享登录信息无效。");
+            var detail = await LegacyRequest("/api/plugin-packages/share-reader", null);
+            var installed = detail.ContainsKey("installed") ? detail["installed"] as Dictionary<string, object> : null;
+            var configuration = detail.ContainsKey("configuration") ? detail["configuration"] as Dictionary<string, object> : null;
+            if (installed == null || installed.ContainsKey("removed") && Convert.ToBoolean(installed["removed"])) throw new InvalidOperationException("旧版微信控制台尚未安装分享内容读取工具。");
+            if (configuration == null || !configuration.ContainsKey("revision")) throw new InvalidOperationException("分享内容读取工具配置不可用，请刷新工具页。");
             int revision;
-            if (!detail.ContainsKey("revision") || !Int32.TryParse(Deployment.Text(detail, "revision"), out revision)) throw new InvalidOperationException("分享解析工具版本不可用，请刷新后重试。");
-            return Tuple.Create(connection, revision);
+            if (!Int32.TryParse(Deployment.Text(configuration, "revision"), out revision)) throw new InvalidOperationException("分享内容读取工具配置版本不可用。");
+            var values = configuration.ContainsKey("values") ? configuration["values"] as Dictionary<string, object> : null;
+            var secrets = new Dictionary<string, string> { { provider == "assistant" ? "assistant_cookie" : "yuanbao_cookie", cookie } };
+            return await LegacyRequest("/api/plugin-packages/share-reader/configuration", new { revision = revision, values = values ?? new Dictionary<string, object>(), secrets = secrets, clear_secrets = new string[0] });
         }
         internal Task<CommandResult> Wsl(CancellationToken token, params string[] args) {
             var argv = new [] { "-d", d.Distro, "-u", d.User, "--exec" }.Concat(args).ToArray();
@@ -339,6 +335,29 @@ namespace WechatAgent.Desktop {
                 if (body != null) request.Content = new StringContent(Deployment.Json.Serialize(body), Encoding.UTF8, "application/json");
                 using (var response = await client.SendAsync(request)) {
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException("管理服务请求失败（HTTP " + (int)response.StatusCode + "）；没有强行停止服务。");
+                    return Deployment.Json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
+                }
+            }
+        }
+        async Task<Dictionary<string, object>> LegacyRequest(string path, object body) {
+            if (String.IsNullOrWhiteSpace(d.LegacyUrl)) throw new InvalidOperationException("旧版微信控制台地址不可用。");
+            if (legacyCookies.GetCookies(new Uri(d.LegacyUrl)).Count == 0 || legacyCsrf == "") {
+                using (var handoff = new HttpRequestMessage(HttpMethod.Get, d.LegacyUrl + "/?from_station=1")) {
+                    handoff.Headers.Add("Origin", d.LegacyUrl);
+                    using (var response = await legacyClient.SendAsync(handoff)) {
+                        if (!response.IsSuccessStatusCode) throw new InvalidOperationException("旧版微信控制台未能建立本机工作站会话。");
+                        IEnumerable<string> values;
+                        if (!response.Headers.TryGetValues("X-CSRF-Token", out values)) throw new InvalidOperationException("旧版微信控制台未返回安全会话令牌。");
+                        legacyCsrf = values.FirstOrDefault() ?? "";
+                    }
+                }
+            }
+            using (var request = new HttpRequestMessage(body == null ? HttpMethod.Get : HttpMethod.Post, d.LegacyUrl + path)) {
+                request.Headers.Add("Origin", d.LegacyUrl);
+                request.Headers.Add("X-CSRF-Token", legacyCsrf);
+                if (body != null) request.Content = new StringContent(Deployment.Json.Serialize(body), Encoding.UTF8, "application/json");
+                using (var response = await legacyClient.SendAsync(request)) {
+                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException("旧版微信工具请求失败（HTTP " + (int)response.StatusCode + "）。");
                     return Deployment.Json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
                 }
             }
@@ -519,6 +538,6 @@ namespace WechatAgent.Desktop {
             }
             if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
-        public void Dispose() { client.Dispose(); StopAnchor(); if (windows != null) windows.Dispose(); if (station != null) station.Dispose(); }
+        public void Dispose() { client.Dispose(); legacyClient.Dispose(); StopAnchor(); if (windows != null) windows.Dispose(); if (station != null) station.Dispose(); }
     }
 }
