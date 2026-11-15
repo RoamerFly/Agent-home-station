@@ -30,6 +30,7 @@ namespace WechatAgent.Desktop {
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         WebView2 web;
         DouyinAuthorizationDialog douyinAuthorization;
+        ShareCredentialLoginDialog shareCredentialLogin;
         CancellationTokenSource operation;
         bool busy, allowExit, exitRequested, stoppingCommitted;
         FormWindowState restoredState = FormWindowState.Maximized;
@@ -157,6 +158,7 @@ namespace WechatAgent.Desktop {
             exitRequested = true;
             ++pageGeneration;
             CloseDouyinAuthorization();
+            CloseShareCredentialLogin();
             if (busy) {
                 status.Text = "操作完成后将安全停止服务并退出…";
                 tray.Text = "Agent-home-station · 正在准备退出";
@@ -188,7 +190,7 @@ namespace WechatAgent.Desktop {
         }
         void ClosePage() {
             ++pageGeneration;
-            CloseDouyinAuthorization();
+            CloseDouyinAuthorization(); CloseShareCredentialLogin();
             var view = web; web = null;
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             if (!IsDisposed && !Disposing) { placeholder.Visible = true; placeholder.BringToFront(); }
@@ -314,6 +316,10 @@ namespace WechatAgent.Desktop {
                 PickProjectDirectory(view, generation, input);
                 return;
             }
+            if (Deployment.Text(input, "type") == "share-reader-auth-open") {
+                OpenShareCredentialLogin(view, generation, input);
+                return;
+            }
             if (Deployment.Text(input, "type") != "douyin-auth-open") return;
             var authorizationURL = Deployment.Text(input, "url");
             var expiresAt = Deployment.Text(input, "expires_at");
@@ -366,6 +372,33 @@ namespace WechatAgent.Desktop {
             try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = type, state = state, callback_url = callback, error = error })); }
             catch (InvalidOperationException) { }
         }
+        void OpenShareCredentialLogin(WebView2 view, int generation, Dictionary<string, object> input) {
+            string provider = Deployment.Text(input, "provider");
+            string connection = Deployment.Text(input, "connection");
+            int revision;
+            if (!Int32.TryParse(Deployment.Text(input, "revision"), out revision) || String.IsNullOrWhiteSpace(connection) || (provider != "yuanbao" && provider != "assistant")) {
+                PostShareCredentialResult(view, generation, connection, provider, false, "登录信息无效，请刷新工具状态后重试。");
+                return;
+            }
+            CloseShareCredentialLogin();
+            var dialog = new ShareCredentialLoginDialog(deployment, provider,
+                async (selectedProvider, cookie) => {
+                    try {
+                        await controller.SaveShareReaderCredentials(connection, selectedProvider, cookie, revision, CancellationToken.None);
+                        PostShareCredentialResult(view, generation, connection, selectedProvider, true, "登录凭据已保存。");
+                    } catch (Exception error) {
+                        PostShareCredentialResult(view, generation, connection, selectedProvider, false, error.Message);
+                    }
+                }, reason => PostShareCredentialResult(view, generation, connection, provider, false, reason));
+            shareCredentialLogin = dialog;
+            dialog.FormClosed += delegate { if (shareCredentialLogin == dialog) shareCredentialLogin = null; };
+            dialog.Show(this);
+        }
+        void PostShareCredentialResult(WebView2 view, int generation, string connection, string provider, bool ok, string message) {
+            if (!CurrentPage(view, generation) || view.CoreWebView2 == null || !ManagementPage(view.Source == null ? "" : view.Source.ToString())) return;
+            try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = "share-reader-auth-result", connection = connection, provider = provider, ok = ok, message = message ?? "" })); }
+            catch (InvalidOperationException) { }
+        }
         void PostDesktopControl(WebView2 view, int generation) {
             if (!CurrentPage(view, generation) || view.CoreWebView2 == null) return;
             try {
@@ -391,6 +424,10 @@ namespace WechatAgent.Desktop {
             var dialog = douyinAuthorization; douyinAuthorization = null;
             if (dialog != null && !dialog.IsDisposed) dialog.CancelForServiceStop();
         }
+        void CloseShareCredentialLogin() {
+            var dialog = shareCredentialLogin; shareCredentialLogin = null;
+            if (dialog != null && !dialog.IsDisposed) dialog.CancelForServiceStop();
+        }
         bool CurrentPage(WebView2 view, int generation) {
             return !IsDisposed && !Disposing && !exitRequested && !allowExit && generation == pageGeneration && web == view && !view.IsDisposed;
         }
@@ -413,7 +450,7 @@ namespace WechatAgent.Desktop {
         void SetRetryText(string text) { retry.Text = retry.AccessibleName = text; }
         void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
-            if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
+            if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); CloseShareCredentialLogin(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
             base.Dispose(disposing);
         }
     }

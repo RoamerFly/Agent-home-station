@@ -1065,6 +1065,16 @@
       }
       const action = value.enabled ? "disable" : "enable";
       content.append(appSetupButton((value.enabled ? "停用" : "启用") + (media ? "媒体理解" : "解析"), () => load({ action, revision: value.revision })));
+      if (!media) {
+        const loginNote = appElement("small", "可在受限登录窗口中完成登录；Cookie 只由桌面宿主保存为主机凭据，不会显示给页面或工具。", "share-reader-login-note");
+        const loginRow = appElement("div", "", "app-worker-actions share-reader-login-actions");
+        const openLogin = (provider, label) => appSetupButton(label, () => {
+          if (!window.chrome?.webview) { appFeedback("请从桌面工作站打开网页登录。", true); return; }
+          window.chrome.webview.postMessage({ type: "share-reader-auth-open", provider, connection: id, revision: value.revision });
+        });
+        loginRow.append(openLogin("yuanbao", "网页登录元宝"), openLogin("assistant", "网页登录视频号助手"));
+        content.append(loginNote, loginRow);
+      }
       if (value.enabled) return;
       if (media) content.append(appElement("small", "视觉与音轨转写分别配置。接口地址须为完整 HTTPS 地址。"));
       const configuration = value.configuration || {};
@@ -7432,6 +7442,15 @@
   if (window.chrome?.webview) {
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
+      if (value.type === "share-reader-auth-result") {
+        if (value.ok === true) {
+          appFeedback(value.message || "登录凭据已保存。");
+          if (appConfiguration?.record?.id === "wechat") renderAppConfiguration();
+        } else if (value.message) {
+          appFeedback(value.message, true);
+        }
+        return;
+      }
       if (value.type === "project-directory-picker-result") {
         const pending = pendingDirectoryPickers.get(String(value.request_id || ""));
         if (!pending) return;

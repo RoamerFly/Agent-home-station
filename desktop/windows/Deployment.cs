@@ -286,6 +286,11 @@ namespace WechatAgent.Desktop {
             if (d.LocalStation) station = new LocalStationRuntime(d);
         }
         internal CookieCollection SessionCookies() { return cookies.GetCookies(new Uri(d.Url)); }
+        internal async Task<Dictionary<string, object>> SaveShareReaderCredentials(string connection, string provider, string cookie, int revision, CancellationToken token) {
+            if (!d.LocalStation || String.IsNullOrWhiteSpace(connection) || String.IsNullOrWhiteSpace(provider) || String.IsNullOrWhiteSpace(cookie))
+                throw new InvalidOperationException("分享登录信息无效。");
+            return await Request("/api/local/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader/credentials", new { provider = provider, cookie = cookie, revision = revision });
+        }
         internal Task<CommandResult> Wsl(CancellationToken token, params string[] args) {
             var argv = new [] { "-d", d.Distro, "-u", d.User, "--exec" }.Concat(args).ToArray();
             return runner.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "wsl.exe"), argv, token);
