@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.parse
 import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -29,6 +30,29 @@ def comfy_memory_arguments(mode):
     return list(flags[mode])
 
 
+def external_comfy_url(value):
+    """Validate a registered loopback Comfy endpoint.
+
+    The Windows music supervisor may reuse a separately managed Station Comfy
+    process.  Only an explicit loopback URL is accepted; the supervisor never
+    turns this option into a general network proxy.
+    """
+    if not value:
+        return None
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or parsed.username or parsed.password:
+        raise ValueError('music_comfy_url_must_be_loopback')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('music_comfy_url_path_invalid')
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError('music_comfy_url_port_invalid') from None
+    if port is None or not 1024 <= port <= 65535:
+        raise ValueError('music_comfy_url_port_invalid')
+    return f'http://127.0.0.1:{port}'
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -44,9 +68,14 @@ def main():
                         default=os.environ.get('MUSIC_VRAM_MODE', 'auto'),
                         help='Comfy memory strategy. auto keeps backend device selection; low/none can put semantic generation on CPU.')
     parser.add_argument('--healthcheck', action='store_true')
+    parser.add_argument('--comfy-url', default=os.environ.get('MUSIC_COMFY_URL'),
+                        help='reuse a separately managed loopback ComfyUI endpoint')
+    parser.add_argument('--comfy-input', default=os.environ.get('MUSIC_COMFY_INPUT'),
+                        help='input directory shared with an external ComfyUI endpoint')
     parser.add_argument('--desktop', action='store_true', help='stop when the owning control pipe closes')
     args = parser.parse_args()
     memory_arguments = comfy_memory_arguments(args.vram_mode)
+    comfy_url = external_comfy_url(args.comfy_url)
     if args.startup_timeout <= 0: raise ValueError('startup_timeout_must_be_positive')
     if not 1 <= args.port <= 65535: raise ValueError('invalid_music_port')
     token = Path(args.token_file).resolve(strict=True)
@@ -104,30 +133,51 @@ def main():
     try:
         lease = AccountIPC(args.ipc, public, private)
         ipc, sock = lease.directory, lease.socket
-        if sys.platform == "win32":
-            argv[argv.index("--socket") + 1] = str(sock)
-            children.append(launch_windows(public, private, private, argv, gpu=True))
-            from windows_lpac import host_pipe_path
-            sock = host_pipe_path(str(sock), children[0])
+        if comfy_url is None:
+            if sys.platform == "win32":
+                argv[argv.index("--socket") + 1] = str(sock)
+                children.append(launch_windows(public, private, private, argv, gpu=True))
+                from windows_lpac import host_pipe_path
+                sock = host_pipe_path(str(sock), children[0])
+            else:
+                children.append(subprocess.Popen(command(public, private, private, argv, gpu=True, ipc=ipc)))
+            for _ in range(args.startup_timeout):
+                if stopping.is_set():
+                    return
+                if children[0].poll() is not None:
+                    raise RuntimeError("isolated_comfy_exited")
+                try:
+                    with open_request(str(sock), "http://127.0.0.1:8188/system_stats", timeout=2) as reply:
+                        json.load(reply)
+                    break
+                except (OSError, ValueError):
+                    time.sleep(1)
+            else:
+                raise RuntimeError("isolated_comfy_start_timeout")
         else:
-            children.append(subprocess.Popen(command(public, private, private, argv, gpu=True, ipc=ipc)))
-        for _ in range(args.startup_timeout):
-            if stopping.is_set():
-                return
-            if children[0].poll() is not None:
-                raise RuntimeError("isolated_comfy_exited")
-            try:
-                with open_request(str(sock), "http://127.0.0.1:8188/system_stats", timeout=2) as reply:
-                    json.load(reply)
-                break
-            except (OSError, ValueError):
-                time.sleep(1)
-        else:
-            raise RuntimeError("isolated_comfy_start_timeout")
+            # A Station-owned Comfy process is started and stopped by Station;
+            # this supervisor owns only the authenticated legacy bridge.
+            request = urllib.request.Request(comfy_url + '/system_stats')
+            for _ in range(args.startup_timeout):
+                if stopping.is_set():
+                    return
+                try:
+                    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2) as reply:
+                        json.load(reply)
+                    break
+                except (OSError, ValueError, urllib.error.HTTPError):
+                    time.sleep(1)
+            else:
+                raise RuntimeError("external_comfy_start_timeout")
         bridge = [python, str(scripts / "yue_bridge.py"), "--project", str(project),
                   "--workflow-dir", str(workflows), "--state", str(state / "jobs"),
-                  "--token-file", str(token), "--bind", args.bind, "--port", str(args.port), "--managed-public", str(public),
-                  "--managed-private", str(private), "--comfy-socket", str(sock), "--comfy-input", str(state / "input")]
+                  "--token-file", str(token), "--bind", args.bind, "--port", str(args.port),
+                  "--managed-public", str(public), "--managed-private", str(private),
+                  "--comfy-input", str(args.comfy_input or state / "input")]
+        if comfy_url is None:
+            bridge += ["--comfy-socket", str(sock)]
+        else:
+            bridge += ["--comfy-url", comfy_url]
         voice = public / "manifests/singing-voice.config"
         if voice.is_file():
             bridge += ["--singing-voice-config", str(voice)]

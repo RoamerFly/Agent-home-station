@@ -24,6 +24,12 @@ type windowsMusicConfig struct {
 	Entry   string `json:"entry"`
 	Media   string `json:"media"`
 	IPC     string `json:"ipc"`
+	// ComfyURL optionally points at a separately managed Station Comfy
+	// process. Empty keeps the private child-process behavior.
+	ComfyURL string `json:"comfy_url,omitempty"`
+	// ComfyInput is the shared input folder used by an external Comfy process
+	// for cover references. It is ignored when ComfyURL is empty.
+	ComfyInput string `json:"comfy_input,omitempty"`
 }
 
 const windowsMusicServiceID = "music.local"
@@ -174,6 +180,31 @@ func regularMusicPath(path string, directory bool) error {
 	return nil
 }
 
+func registeredComfyURL(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", toolInputError("windows_music_comfy_url_must_be_loopback")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1024 || port > 65535 {
+		return "", toolInputError("windows_music_comfy_url_port_invalid")
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port), nil
+}
+
+func registeredComfyInput(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+		return "", toolInputError("windows_music_comfy_input_invalid")
+	}
+	return raw, nil
+}
+
 func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if m.draining() {
 		return "", toolInputError("windows_music_start_paused_for_update")
@@ -186,6 +217,14 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if err != nil || len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
 		return "", toolInputError("windows_music_not_installed_or_authorized")
 	}
+	comfyURL, err := registeredComfyURL(config.ComfyURL)
+	if err != nil {
+		return "", err
+	}
+	comfyInput, err := registeredComfyInput(config.ComfyInput)
+	if err != nil {
+		return "", err
+	}
 	public := filepath.Join(m.managedRoot(), "public_workspace")
 	pythonRoot := filepath.Join(public, "runtimes") + string(os.PathSeparator)
 	if !strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) || !strings.EqualFold(filepath.Base(config.Python), "python.exe") || filepath.Base(config.Entry) != "managed_music_service.py" {
@@ -196,6 +235,14 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		dir  bool
 	}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
 		if err := regularMusicPath(resource.path, resource.dir); err != nil {
+			return "", err
+		}
+	}
+	if comfyInput != "" {
+		if comfyURL == "" {
+			return "", toolInputError("windows_music_comfy_input_requires_url")
+		}
+		if err := regularMusicPath(comfyInput, true); err != nil {
 			return "", err
 		}
 	}
@@ -259,11 +306,18 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		}
 		return nil
 	}
+	arguments := []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
+		"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"}
+	if comfyURL != "" {
+		arguments = append(arguments, "--comfy-url", comfyURL)
+		if comfyInput != "" {
+			arguments = append(arguments, "--comfy-input", comfyInput)
+		}
+	}
 	spec := pluginruntime.ManagedServiceSpec{
 		OwnerPlugin: "music",
 		Binding:     binding, Executable: config.Python,
-		Arguments: []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
-			"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"},
+		Arguments: arguments,
 		Directory: filepath.Dir(config.Entry),
 		Environment: []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WINDIR=" + os.Getenv("WINDIR"), "SystemDrive=" + os.Getenv("SystemDrive"),
 			"PATH=" + config.Media + string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32"),

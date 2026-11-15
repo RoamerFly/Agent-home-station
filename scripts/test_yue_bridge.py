@@ -6,11 +6,19 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality, registered_comfy_url
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_comfy_url_is_loopback_and_canonical(self):
+        self.assertEqual(registered_comfy_url('http://127.0.0.1:6191'), 'http://127.0.0.1:6191')
+        for value in ('http://localhost:6191', 'http://192.168.1.2:6191',
+                      'https://127.0.0.1:6191', 'http://127.0.0.1:80',
+                      'http://127.0.0.1:6191/path'):
+            with self.assertRaises(ValueError):
+                registered_comfy_url(value)
+
     def test_managed_conversion_uses_helper_inside_public_mount(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);output=root/'output.wav';expected={'config_sha256':'synthetic','python':'/usr/bin/python3'}
@@ -75,7 +83,7 @@ class SongWorkflowTests(unittest.TestCase):
 
     def test_recovery_uses_persisted_workflow_instead_of_changed_project_file(self):
         body=self.body()
-        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text())
+        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text(encoding='utf-8'))
         template['33:8']['inputs']['steps']=57
         with tempfile.TemporaryDirectory() as tmp:
             graph=prepare_song_graph(Path(tmp)/'missing-workflows',body,'synthetic',Path(tmp),template=template)

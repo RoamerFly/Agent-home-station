@@ -206,14 +206,32 @@ def signal_station_ready(path,nonce,port,scope):
     finally:
         Path(temporary).unlink(missing_ok=True)
 
+
+def registered_comfy_url(value):
+    parsed = urlsplit(value or '')
+    if parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or parsed.username or parsed.password:
+        raise ValueError('comfy_url_must_be_loopback')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('comfy_url_path_invalid')
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError('comfy_url_port_invalid') from None
+    if port is None or not 1024 <= port <= 65535:
+        raise ValueError('comfy_url_port_invalid')
+    return f'http://127.0.0.1:{port}'
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input')
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input');p.add_argument('--comfy-url',default='')
     p.add_argument('--rvc-only',action='store_true')
     p.add_argument('--station-fish')
     p.add_argument('--desktop',action='store_true')
     p.add_argument('--ready-file')
     p.add_argument('--ready-nonce')
     args=p.parse_args()
+    # Socket mode keeps the historical loopback URL as the request target for
+    # music_unix_client; an explicit URL selects a separately managed Comfy.
+    comfy_url=registered_comfy_url(args.comfy_url) if args.comfy_url else 'http://127.0.0.1:8188'
     station=args.rvc_only
     if (station != bool(args.station_fish) or args.desktop and not station or
             bool(args.ready_file) != bool(args.ready_nonce) or args.ready_file and not station):
@@ -243,7 +261,8 @@ def main():
             sandbox={'public':str(canonical(args.managed_public)),'private':str(canonical(args.managed_private))}
             bound_account=account_scope(sandbox['private'])
             if not state.is_relative_to(Path(sandbox['private'])):raise ValueError('music_state_outside_account')
-            if not args.comfy_socket or not args.comfy_input:raise ValueError('isolated_comfy_paths_required')
+            if not args.comfy_input or (not args.comfy_socket and not args.comfy_url):
+                raise ValueError('isolated_comfy_paths_required')
         input_dir=Path(args.comfy_input).resolve() if args.comfy_input else project/'comfy/ComfyUI/input'
         if sandbox and not input_dir.is_relative_to(Path(sandbox['private'])):raise ValueError('music_input_outside_account')
         input_dir.mkdir(parents=True,exist_ok=True)
@@ -297,7 +316,7 @@ def main():
             if station:job['phase']='needs_review'
     save()
     def api(route,body=None,timeout=20):
-        req=urllib.request.Request('http://127.0.0.1:8188'+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+        req=urllib.request.Request(comfy_url+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
         with comfy_open(req,timeout=timeout) as r:
             data=r.read()
             return json.loads(data) if data else {}
@@ -338,7 +357,7 @@ def main():
                     audio=next((x for x in files if Path(x['filename']).suffix.lower() in ('.wav','.mp3','.flac','.ogg','.m4a')),None)
                     if not audio:raise ValueError('no_generated_audio')
                     from urllib.parse import urlencode
-                    with comfy_open('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
+                    with comfy_open(comfy_url+'/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
                     if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
                     output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
                     duration=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))

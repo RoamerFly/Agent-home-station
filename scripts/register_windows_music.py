@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import uuid
 import subprocess
+from urllib.parse import urlsplit
 
 from prepare_windows_python import prepare, digest
 from install_windows_gpt_nltk import install as install_gpt_nltk
@@ -19,6 +20,33 @@ from register_gpt_sovits import install_plugin_entry, mark_plugin_inference
 from rvc_train_trial import BINDING as TRAINING_BINDING, training_resources
 
 POLICY = "registry-read-private-network-v1"
+
+
+def registered_comfy_url(value):
+    """Validate an optional Station-owned local Comfy endpoint."""
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.username or parsed.password:
+        raise ValueError("music_comfy_url_must_be_loopback")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("music_comfy_url_path_invalid")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("music_comfy_url_port_invalid") from None
+    if port is None or not 1024 <= port <= 65535:
+        raise ValueError("music_comfy_url_port_invalid")
+    return f"http://127.0.0.1:{port}"
+
+
+def registered_comfy_input(value):
+    if not value:
+        return ""
+    path = Path(value).resolve()
+    if not path.is_absolute() or path != Path(value):
+        raise ValueError("music_comfy_input_invalid")
+    return str(path)
 
 
 def deployed_training_resources(program_runtimes):
@@ -104,7 +132,7 @@ def publish_json(path, value, backup=True):
     pending.replace(path)
 
 
-def register(workspace, legacy_public, admin, program_runtimes, authorize=False, repair_inheritance=True):
+def register(workspace, legacy_public, admin, program_runtimes, authorize=False, repair_inheritance=True, comfy_url="", comfy_input=""):
     if os.name != "nt" or not authorize:
         raise ValueError("explicit_windows_music_policy_authorization_required")
     workspace, legacy_public, admin, program_runtimes = [Path(p).resolve(strict=True) for p in
@@ -249,8 +277,17 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         raise ValueError("bundled_windows_music_controls_required")
     ipc = admin / "windows-music-ipc"
     ipc.mkdir(mode=0o700, exist_ok=True)
-    publish_json(admin / "windows-music.json", {"enabled": True, "policy": POLICY, "python": python,
-                                               "entry": str(entry), "media": str(program_runtimes / "windows-media"), "ipc": str(ipc)})
+    profile = {"enabled": True, "policy": POLICY, "python": python,
+               "entry": str(entry), "media": str(program_runtimes / "windows-media"), "ipc": str(ipc)}
+    normalized_comfy_url = registered_comfy_url(comfy_url)
+    if normalized_comfy_url:
+        profile["comfy_url"] = normalized_comfy_url
+        normalized_comfy_input = registered_comfy_input(comfy_input)
+        if normalized_comfy_input:
+            profile["comfy_input"] = normalized_comfy_input
+    elif comfy_input:
+        raise ValueError("music_comfy_input_requires_url")
+    publish_json(admin / "windows-music.json", profile)
     print(json.dumps({"registered": True, "platform": "windows-x64", "voice_configs": count,
                       "package_versions": len(installed), "policy": POLICY, "model_tasks_started": 0, "wechat_sends": 0}))
 
@@ -261,8 +298,10 @@ if __name__ == "__main__":
     parser.add_argument("--legacy-public", required=True)
     parser.add_argument("--admin", required=True)
     parser.add_argument("--program-runtimes", required=True)
+    parser.add_argument("--comfy-url", default="", help="optional Station-owned loopback ComfyUI URL")
+    parser.add_argument("--comfy-input", default="", help="input folder shared with the external ComfyUI")
     parser.add_argument("--authorize-registry-and-private-network", action="store_true")
     parser.add_argument("--inheritance-already-verified", action="store_true", help="skip repeating the full initial migration ACL repair")
     args = parser.parse_args()
     register(args.workspace, args.legacy_public, args.admin, args.program_runtimes, args.authorize_registry_and_private_network,
-             not args.inheritance_already_verified)
+             not args.inheritance_already_verified, args.comfy_url, args.comfy_input)

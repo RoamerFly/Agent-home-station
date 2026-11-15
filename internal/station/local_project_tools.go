@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -216,8 +215,8 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	var backendBusy bool
 	var backendRunning bool
 	if s.options.CatalogDirectory != "" {
-		info, err := os.Lstat(filepath.Join(s.options.CatalogDirectory, view.ID, "plugin.json"))
-		view.CatalogAvailable = err == nil && info.Mode().IsRegular()
+		_, err := catalogPackageDir(s.options.CatalogDirectory, view.ID)
+		view.CatalogAvailable = err == nil
 	}
 	if id == localRVCPackage {
 		view.RuntimeReady = false
@@ -461,7 +460,12 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				websession.Fail(w, 409, "当前发行包未提供该项目工具")
 				return
 			}
-			prepared, prepareErr := host.store.Prepare(ctx, filepath.Join(s.options.CatalogDirectory, id))
+			packageDir, resolveErr := catalogPackageDir(s.options.CatalogDirectory, id)
+			if resolveErr != nil {
+				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
+				return
+			}
+			prepared, prepareErr := host.store.Prepare(ctx, packageDir)
 			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != contract.ManifestSHA256 {
 				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return

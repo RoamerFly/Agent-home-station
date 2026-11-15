@@ -98,6 +98,44 @@ func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 	}
 }
 
+func TestRegisteredComfyURLOnlyAllowsLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"empty", "", ""},
+		{"canonical", "http://127.0.0.1:6191", "http://127.0.0.1:6191"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := registeredComfyURL(tc.raw)
+			if err != nil || got != tc.want {
+				t.Fatalf("registeredComfyURL(%q) = %q, %v", tc.raw, got, err)
+			}
+		})
+	}
+	for _, raw := range []string{
+		"http://localhost:6191",
+		"http://192.168.1.2:6191",
+		"https://127.0.0.1:6191",
+		"http://127.0.0.1:80",
+		"http://127.0.0.1:6191/path",
+	} {
+		if _, err := registeredComfyURL(raw); err == nil {
+			t.Fatalf("registeredComfyURL accepted unsafe endpoint %q", raw)
+		}
+	}
+}
+
+func TestRegisteredComfyInputRequiresCanonicalAbsolutePath(t *testing.T) {
+	if got, err := registeredComfyInput(""); err != nil || got != "" {
+		t.Fatalf("empty input = %q, %v", got, err)
+	}
+	for _, raw := range []string{"relative/input", "C:/Comfy/input/../input"} {
+		if _, err := registeredComfyInput(raw); err == nil {
+			t.Fatalf("registeredComfyInput accepted %q", raw)
+		}
+	}
+}
+
 func TestManagedServiceRegistryInitializationDoesNotAcquireManagerLock(t *testing.T) {
 	m := &Manager{}
 	m.mu.Lock()

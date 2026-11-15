@@ -10,7 +10,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
 from managed_music_runner import command
-from managed_music_service import comfy_memory_arguments
+from managed_music_service import comfy_memory_arguments, external_comfy_url
 from music_unix_client import open_request
 
 
@@ -24,6 +24,15 @@ class MusicMemoryPolicyTests(unittest.TestCase):
         self.assertEqual(comfy_memory_arguments('auto'), [])
         with self.assertRaisesRegex(ValueError, 'invalid_music_vram_mode'):
             comfy_memory_arguments('--gpu-only --cpu')
+
+    def test_external_comfy_url_is_registered_loopback_only(self):
+        self.assertEqual(external_comfy_url(None), None)
+        self.assertEqual(external_comfy_url('http://127.0.0.1:6191'), 'http://127.0.0.1:6191')
+        for value in ('http://localhost:6191', 'http://192.168.1.2:6191',
+                      'https://127.0.0.1:6191', 'http://127.0.0.1:80',
+                      'http://127.0.0.1:6191/path'):
+            with self.assertRaises(ValueError):
+                external_comfy_url(value)
 
 
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bwrap"), "Linux Bubblewrap integration")
