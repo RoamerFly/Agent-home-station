@@ -201,13 +201,17 @@ func (c *Client) CheckVersion(ctx context.Context, expected string) error {
 		return ErrProtocol
 	}
 	switch response.System.Version {
-	case ReferenceVersion, "0.44.0":
-		if expected != "" && response.System.Version != expected {
+	case ReferenceVersion, "0.44.0", "0.45.0":
+		// ReferenceVersion names the host protocol family. A newer audited
+		// Windows ComfyUI may keep the same API while reporting a newer patch
+		// version; callers pinning a different explicit version still require an
+		// exact match.
+		if expected != "" && expected != ReferenceVersion && response.System.Version != expected {
 			return fmt.Errorf("%w: installed ComfyUI version differs from the host pin", ErrProtocol)
 		}
 		return nil
 	default:
-		return fmt.Errorf("%w: expected audited ComfyUI protocol (0.37.2 or 0.44.0)", ErrProtocol)
+		return fmt.Errorf("%w: expected audited ComfyUI protocol (0.37.2, 0.44.0 or 0.45.0)", ErrProtocol)
 	}
 }
 

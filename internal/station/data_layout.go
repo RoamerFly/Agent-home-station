@@ -77,6 +77,20 @@ func stationObservationsDir(dataDir string) string {
 	return filepath.Join(dataDir, "app-observations")
 }
 
+func stationBillingDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "local-billing")
+	}
+	return filepath.Join(dataDir, "local-billing")
+}
+
+func stationProcessesDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "local-processes")
+	}
+	return filepath.Join(dataDir, "local-processes")
+}
+
 // stationNativeLifecycleRelative keeps native locks and stop proofs inside
 // main_setting for structured homes. Legacy homes continue using their
 // historical root-level filenames during migration.
@@ -117,6 +131,27 @@ func stationToolLogsDir(dataDir, tool string) string {
 		return filepath.Join(stationPublicToolsDir(dataDir), tool, "logs")
 	}
 	return filepath.Join(dataDir, "station-"+tool+"-logs")
+}
+
+func stationRVCRegistrationPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolRoot(dataDir, "rvc"), "station-rvc.json")
+	}
+	return filepath.Join(dataDir, "station-rvc.json")
+}
+
+func stationRVCTokenPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolPrivateDir(dataDir, "rvc"), "station-rvc-token")
+	}
+	return filepath.Join(dataDir, "station-rvc-token")
+}
+
+func stationYuERegistrationPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolRoot(dataDir, "yue"), "station-yue.json")
+	}
+	return filepath.Join(dataDir, "station-yue.json")
 }
 
 func preferDataDirectory(root, preferred, legacy string) string {

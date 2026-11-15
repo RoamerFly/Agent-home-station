@@ -67,7 +67,7 @@ namespace WechatAgent.Desktop {
                 if (!String.IsNullOrEmpty(d.ApplicationPackagesDirectory)) args.AddRange(new [] { "--application-packages-directory", d.ApplicationPackagesDirectory });
                 if (wechat != null) wechat.AddServerArguments(args);
                 var programEnv = new Dictionary<string, string>();
-                var media = Path.Combine(Path.GetDirectoryName(d.StationExe), "runtimes", "windows-media");
+                var media = Path.Combine(Deployment.PackageRuntimeRoot(d.Workspace), "windows-media");
                 var ffmpeg = Path.Combine(media, "ffmpeg.exe");
                 var ffprobe = Path.Combine(media, "ffprobe.exe");
                 if (File.Exists(ffmpeg) && File.Exists(ffprobe)
@@ -94,15 +94,16 @@ namespace WechatAgent.Desktop {
                     legacyEnv["WECHAT_STATION_DATA_DIR"] = d.Root;
                     legacyEnv["WECHAT_STATION_WORKER_DIR"] = workerDir;
                     legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "main_setting", "authority", "local-model.json");
-                    var packageRoot = Path.GetDirectoryName(d.StationExe);
-                    var pythonRoot = Path.Combine(packageRoot, "runtimes", "windows-python-cli");
-                    var pluginHelper = Path.Combine(packageRoot, "runtimes", "windows-agent-host", "windows_plugin_host.pyw");
+                    var packageRoot = d.Workspace;
+                    var packageRuntime = Deployment.PackageRuntimeRoot(packageRoot);
+                    var pythonRoot = Path.Combine(packageRuntime, "windows-python-cli");
+                    var pluginHelper = Path.Combine(packageRuntime, "windows-agent-host", "windows_plugin_host.pyw");
                     legacyEnv["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
                         python = Path.Combine(pythonRoot, "python.exe"),
                         pythonw = Path.Combine(pythonRoot, "pythonw.exe"),
                         windows_helper = pluginHelper,
                         runtime_roots = new [] { pythonRoot },
-                        document_runtime_root = Path.Combine(packageRoot, "runtimes", "document-workshop"),
+                        document_runtime_root = Path.Combine(packageRuntime, "document-workshop"),
                         catalog_directory = String.IsNullOrEmpty(d.ToolPackagesDirectory) ? Path.Combine(packageRoot, "plugins") : d.ToolPackagesDirectory
                     });
                     Stage("legacy-admin.start.begin");

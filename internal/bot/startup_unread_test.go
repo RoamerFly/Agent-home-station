@@ -36,6 +36,38 @@ func TestOwnerSingleMessageRetryIsNotConvertedToUnreadBatch(t *testing.T) {
 	}
 }
 
+func TestIndependentGroupTextRequestAllowsSameSenderShareCard(t *testing.T) {
+	share := companion.SourceRef{MessageID: "share", MessageType: 49}
+	in := companion.Input{
+		Directed: true,
+		Sender:   "sender",
+		TraceID:  "text",
+		UnreadMessages: []companion.ConversationEvent{
+			{MessageID: "share", Sender: "sender", Source: &share},
+			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}},
+		},
+	}
+	if !independentGroupTextRequest(&in, in.UnreadMessages[0]) {
+		t.Fatal("same-sender share card should remain background for a later explicit text request")
+	}
+}
+
+func TestIndependentGroupTextRequestKeepsReferencedShareBlocking(t *testing.T) {
+	share := companion.SourceRef{MessageID: "share", MessageType: 49}
+	in := companion.Input{
+		Directed: true,
+		Sender:   "sender",
+		TraceID:  "text",
+		UnreadMessages: []companion.ConversationEvent{
+			{MessageID: "share", Sender: "sender", Source: &share},
+			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}, ReplyTo: &share},
+		},
+	}
+	if independentGroupTextRequest(&in, in.UnreadMessages[0]) {
+		t.Fatal("a directly referenced share card must remain blocking")
+	}
+}
+
 func (s *pagedUnreadSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
 	n, _ := strconv.Atoi(after)
 	page := linuxnative.EventPage{NextCursor: after}

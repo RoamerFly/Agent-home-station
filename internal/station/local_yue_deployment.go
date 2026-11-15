@@ -36,7 +36,7 @@ func (s *localProjectTools) yueDeploymentRoutes(owner *websession.Store, mux *ht
 
 func (s *localProjectTools) readYuEDeployment() (localYuEDeploymentView, error) {
 	v := localYuEDeploymentView{Revision: "unconfigured"}
-	path := filepath.Join(s.home.dataDir, localYuERegistrationFile)
+	path := stationYuERegistrationPath(s.home.dataDir)
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return v, nil
 	}
@@ -148,7 +148,7 @@ func (s *localProjectTools) yueDeployment(w http.ResponseWriter, r *http.Request
 		websession.Fail(w, 409, err.Error())
 		return
 	}
-	path := filepath.Join(s.home.dataDir, localYuERegistrationFile)
+	path := stationYuERegistrationPath(s.home.dataDir)
 	release, err := hostfile.Lock(path + ".lock")
 	if err != nil {
 		websession.Fail(w, 503, "YuE 部署登记暂不可写")

@@ -22,18 +22,28 @@ func PackagedToolOptions() pluginruntime.Options {
 }
 
 // PackagedToolOptionsAt is the deterministic counterpart used by package
-// assembly and tests. packageDir is the root containing runtimes/ and
-// plugins/, not a user-editable Agent workspace.
+// assembly and tests. A shipped package keeps host runtimes in the compact
+// top-level `env` directory; the historical `runtimes` name remains a read
+// fallback so existing development packages continue to open.
 func PackagedToolOptionsAt(packageDir string) pluginruntime.Options {
-	python := filepath.Join(packageDir, "runtimes", "windows-python-cli")
+	runtimeRoot := packagedRuntimeRoot(packageDir)
+	python := filepath.Join(runtimeRoot, "windows-python-cli")
 	return pluginruntime.Options{
 		Python:              filepath.Join(python, "python.exe"),
 		Pythonw:             filepath.Join(python, "pythonw.exe"),
-		WindowsHelper:       filepath.Join(packageDir, "runtimes", "windows-agent-host", "windows_plugin_host.pyw"),
+		WindowsHelper:       filepath.Join(runtimeRoot, "windows-agent-host", "windows_plugin_host.pyw"),
 		RuntimeRoots:        []string{python},
 		CatalogDirectory:    filepath.Join(packageDir, "plugins"),
-		DocumentRuntimeRoot: filepath.Join(packageDir, "runtimes", "document-workshop"),
+		DocumentRuntimeRoot: filepath.Join(runtimeRoot, "document-workshop"),
 	}
+}
+
+func packagedRuntimeRoot(packageDir string) string {
+	env := filepath.Join(packageDir, "env")
+	if info, err := os.Stat(env); err == nil && info.IsDir() {
+		return env
+	}
+	return filepath.Join(packageDir, "runtimes")
 }
 
 // ToolRuntimeReady reports whether the packaged Windows interpreter and LPAC

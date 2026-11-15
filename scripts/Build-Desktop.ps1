@@ -87,7 +87,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   if(-not $allowed){throw ('The selected WeChat runtime contains a file that is not a native dependency or notice: '+$relative)}
  }
 
- $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
+ $runtimeRoot=Join-Path $PackageDirectory 'env'
  $destination=Join-Path $runtimeRoot 'windows-x64'
  Assert-NoReparsePointAncestor $PackageDirectory
  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -151,7 +151,7 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
  if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw 'The trusted local speech runner is missing from plugins/speech/runtime.'}
  Assert-NoReparsePointAncestor $source
  $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLower()
- $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
+ $runtimeRoot=Join-Path $PackageDirectory 'env'
  $destination=Join-Path $runtimeRoot 'windows-station-speech'
  $manifestPath=Join-Path $destination 'runtime-manifest.json'
  Assert-NoReparsePointAncestor $PackageDirectory
@@ -217,14 +217,14 @@ if($hasDocumentRuntimeInput -and (-not $DocumentPythonPackagesDirectory -or -not
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace ($(if($LocalStation){'dist\local-station-preview'}else{'dist\windows-desktop'}))}
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 # Rebuilding is not a migration or a request to delete previous output.
-foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_bridge.py')){
+foreach($relative in @('plugins\mobile-control','env\windows-music\mobile_bridge.py')){
  $obsolete=Join-Path $OutputDirectory $relative
  if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
   throw 'Output contains retired mobile components; build into a fresh directory.'
  }
 }
 if($LocalStation){
- $foreignOutput=@('WechatAgent.exe','runtimes\windows-music')
+ $foreignOutput=@('WechatAgent.exe','env\windows-music')
 }else{
  $foreignOutput=@('AgentHomeStation.exe','agent-home-station-server.exe')
 }
@@ -365,11 +365,11 @@ function Invoke-DesktopPackageTests {
  }
 }
 # Incremental desktop updates need the matching plugin launch protocol too.
-$broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
+ $broker=Join-Path $OutputDirectory 'env\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
 foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 if($WithRVCBackend){
- $control=Join-Path $OutputDirectory 'runtimes\windows-station-rvc'
+ $control=Join-Path $OutputDirectory 'env\windows-station-rvc'
  $files=[ordered]@{}
  foreach($name in @('managed_music_runner.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
                     'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
@@ -407,7 +407,7 @@ if($WithRVCBackend){
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
 if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithAudioCpp -or $WithMediaUnderstanding) -and -not $Portable){
- $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
+ $runtimeRoot=Join-Path $OutputDirectory 'env'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}
  if($hasDocumentRuntimeInput){
@@ -448,7 +448,7 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
  if($WithWeChatRuntime -and $Portable){$portableWeChatDefaults=$true}
 }
 if($Portable){
- $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
+ $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
   if($LocalStation){
@@ -458,13 +458,13 @@ if($Portable){
   Get-FileHash -LiteralPath $target -Algorithm SHA256
   return
  }
- $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
+ $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
  if($Test){$nativeArgs.Test=$true}
  if($GoSourcePatch){$nativeArgs.GoSourcePatch=$GoSourcePatch}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
- $music=Join-Path $OutputDirectory 'runtimes\windows-music'
+ $music=Join-Path $OutputDirectory 'env\windows-music'
  New-Item -ItemType Directory -Force -Path $music | Out-Null
  Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*' -and $_.Name -ne 'mobile_bridge.py'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
  foreach($name in @('gpt_sovits_windows_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}

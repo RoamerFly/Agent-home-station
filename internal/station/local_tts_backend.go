@@ -329,8 +329,9 @@ func (s *localTTSService) windowsConfig() (agenthost.Config, error) {
 	if !localTTSSafeDirectory(s.executableDir) {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}
-	pythonw := filepath.Join(s.executableDir, "runtimes", "windows-python-cli", "pythonw.exe")
-	helper := filepath.Join(s.executableDir, "runtimes", "windows-agent-host", "windows_agent_host.pyw")
+	runtimeRoot := stationPackageRuntimeRoot(s.executableDir)
+	pythonw := filepath.Join(runtimeRoot, "windows-python-cli", "pythonw.exe")
+	helper := filepath.Join(runtimeRoot, "windows-agent-host", "windows_agent_host.pyw")
 	if !localTTSSafeRegular(pythonw) || !localTTSSafeRegular(helper) {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}

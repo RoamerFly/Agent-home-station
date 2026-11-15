@@ -136,6 +136,14 @@ func newLocalRVCServiceAt(dataDir, editableRoot, executableDir string) *localRVC
 	}
 }
 
+func stationPackageRuntimeRoot(executableDir string) string {
+	env := filepath.Join(executableDir, "env")
+	if info, err := os.Stat(env); err == nil && info.IsDir() {
+		return env
+	}
+	return filepath.Join(executableDir, "runtimes")
+}
+
 func (s *localRVCService) Info(ctx context.Context, fish string) (localRVCDeployment, error) {
 	if err := checkLocalRVCFish(fish); err != nil {
 		return localRVCDeployment{}, err
@@ -287,8 +295,9 @@ func (s *localRVCService) start(ctx context.Context, fish, expectedBinding strin
 		return err
 	}
 	var token string
-	control := filepath.Join(s.executableDir, "runtimes", "windows-station-rvc")
-	python := filepath.Join(s.executableDir, "runtimes", "windows-python-cli", "python.exe")
+	runtimeRoot := stationPackageRuntimeRoot(s.executableDir)
+	control := filepath.Join(runtimeRoot, "windows-station-rvc")
+	python := filepath.Join(runtimeRoot, "windows-python-cli", "python.exe")
 	private := localRVCPrivateScope(registration.Workspace, fish)
 	state := filepath.Join(private, "music", "jobs")
 	logDir := stationToolLogsDir(s.dataDir, "rvc")
@@ -327,7 +336,7 @@ func (s *localRVCService) start(ctx context.Context, fish, expectedBinding strin
 		Executable:  python,
 		Arguments: []string{"-X", "utf8", filepath.Join(control, "yue_bridge.py"), "--rvc-only", "--station-fish", fish,
 			"--project", filepath.Join(registration.Workspace, "public_workspace"), "--managed-public", filepath.Join(registration.Workspace, "public_workspace"),
-			"--managed-private", private, "--state", state, "--token-file", filepath.Join(s.dataDir, localRVCTokenFile), "--ready-file", readyPath, "--ready-nonce", readyNonce,
+			"--managed-private", private, "--state", state, "--token-file", stationRVCTokenPath(s.dataDir), "--ready-file", readyPath, "--ready-nonce", readyNonce,
 			"--bind", "127.0.0.1", "--port", strconv.Itoa(registration.Port), "--desktop"},
 		Directory:       control,
 		Environment:     localRVCEnvironment(registration.Media, scratch),
@@ -466,7 +475,7 @@ func (s *localRVCService) loadRegistration(ctx context.Context) (localRVCRegistr
 	if err := ctx.Err(); err != nil {
 		return localRVCRegistration{}, nil, err
 	}
-	data, err := localRVCReadRegular(filepath.Join(s.dataDir, localRVCRegistrationFile), 64<<10)
+	data, err := localRVCReadRegular(stationRVCRegistrationPath(s.dataDir), 64<<10)
 	if err != nil || len(data) == 0 {
 		return localRVCRegistration{}, nil, errors.New("station_rvc_not_installed_or_authorized")
 	}
@@ -478,7 +487,7 @@ func (s *localRVCService) loadRegistration(ctx context.Context) (localRVCRegistr
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localRVCRegistration{}, nil, err
 	}
-	manifest, err := localRVCControlManifest(filepath.Join(s.executableDir, "runtimes", "windows-station-rvc"))
+	manifest, err := localRVCControlManifest(filepath.Join(stationPackageRuntimeRoot(s.executableDir), "windows-station-rvc"))
 	if err != nil {
 		return localRVCRegistration{}, nil, err
 	}
@@ -575,7 +584,7 @@ func (s *localRVCService) readOrCreateToken() (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	path := filepath.Join(s.dataDir, localRVCTokenFile)
+	path := stationRVCTokenPath(s.dataDir)
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", errors.New("station_rvc_authentication_unavailable")
@@ -599,7 +608,7 @@ func (s *localRVCService) readOrCreateToken() (string, error) {
 }
 
 func (s *localRVCService) readExistingToken() (string, error) {
-	path := filepath.Join(s.dataDir, localRVCTokenFile)
+	path := stationRVCTokenPath(s.dataDir)
 	data, err := localRVCReadRegular(path, 4096)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

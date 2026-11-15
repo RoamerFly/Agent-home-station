@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"wechat-bot/internal/billing"
@@ -135,7 +134,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	}
 	var usageErr error
 	ctx = deepseek.WithUsageObserver(deepseek.WithPurpose(ctx, purpose), func(u deepseek.Usage) {
-		dir := filepath.Join(h.home.dataDir, "local-billing")
+		dir := stationBillingDir(h.home.dataDir)
 		err := os.MkdirAll(dir, 0700)
 		var ledger *billing.Store
 		if err == nil {

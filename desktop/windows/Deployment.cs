@@ -147,14 +147,20 @@ namespace WechatAgent.Desktop {
             if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.UserInfo != "" || uri.AbsolutePath != "/" || uri.Query != "" || uri.Fragment != "" || (explicitPort && !Regex.IsMatch(value, @"\Ahttp://127\.0\.0\.1:[1-9][0-9]*\z"))) throw new InvalidOperationException("本机服务地址必须使用 http://127.0.0.1:端口。");
             return explicitPort ? value : uri.GetLeftPart(UriPartial.Authority);
         }
+        internal static string PackageRuntimeRoot(string packageRoot) {
+            var env = Path.Combine(packageRoot, "env");
+            return Directory.Exists(env) ? env : Path.Combine(packageRoot, "runtimes");
+        }
         internal static Deployment WindowsDefault(string workspace) {
-            return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe") };
+            var packageRuntime = PackageRuntimeRoot(workspace);
+            return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(packageRuntime, "windows-x64", "wx.exe"), AdminExe = Path.Combine(packageRuntime, "windows-x64", "wechat-admin.exe") };
         }
         internal static Deployment LocalStationDefault(string workspace) {
             var data = Path.Combine(workspace, "data", "station");
             data = Path.Combine(workspace, "data");
             var runtime = Path.Combine(data, "main_setting", "runtime");
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "workspace"), StationExe = Path.Combine(runtime, "agent-home-station-server.exe"), AdminExe = Path.Combine(runtime, "runtimes", "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(runtime, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
+            var packageRuntime = PackageRuntimeRoot(workspace);
+            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "workspace"), StationExe = Path.Combine(runtime, "agent-home-station-server.exe"), AdminExe = Path.Combine(packageRuntime, "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(packageRuntime, "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
         }
         // Keep the desktop's local-station login resolution identical to the
         // Go server. The old Windows-native and WSL deployments retain their
@@ -228,7 +234,7 @@ namespace WechatAgent.Desktop {
             // default action instead of showing a command-line error.
             if (args.Length == 0 || args.Length == 1 && args[0] == "--workspace") {
                 var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "data", "main_setting", "runtime", "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
+                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "data", "main_setting", "runtime", "agent-home-station-server.exe")) || File.Exists(Path.Combine(PackageRuntimeRoot(baseDirectory), "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
                 for (var dir = new DirectoryInfo(baseDirectory); dir != null; dir = dir.Parent)
                     if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
                 throw new InvalidOperationException("找不到本机部署。请把程序放在完整工作站目录后直接双击。若使用自定义目录，再传入 --workspace 项目目录。");

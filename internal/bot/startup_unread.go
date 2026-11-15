@@ -345,7 +345,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 			return err
 		}
 		if err != nil && in.IsGroup {
-			if w.hasScopedMedia(linuxnative.Message{Type: 43}) && independentGroupTextRequest(in, *event) {
+			if independentGroupTextRequest(in, *event) {
 				event.MediaReadFailed = true
 				report(Record{Event: "background_video_read_failed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
 					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: "背景视频未读到内容，继续独立文字请求。"})
@@ -369,11 +369,20 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 	return nil
 }
 
-// A different sender's ordinary video can remain background for a verified
-// text request. Keep the existing failure policy when it is the actual target,
-// shares the requester, or is explicitly referenced anywhere in this batch.
+// An unrelated video or share card can remain background for a verified text
+// request. Keep the existing failure policy when it is the actual target or
+// is explicitly referenced anywhere in this batch. A share from the same
+// sender is allowed when a later message is the explicit text request; this
+// prevents one unreadable card from blocking an independent song/voice task.
 func independentGroupTextRequest(in *companion.Input, media companion.ConversationEvent) bool {
-	if !in.Directed || media.Source == nil || media.Source.MessageType != 43 || media.MessageID == in.TraceID || media.Sender == "" || media.Sender == in.Sender {
+	if !in.Directed || media.Source == nil || media.MessageID == in.TraceID || media.Sender == "" {
+		return false
+	}
+	background := media.Source.MessageType == 43 || media.Source.MessageType == 49
+	if !background {
+		return false
+	}
+	if media.Source.MessageType != 49 && media.Sender == in.Sender {
 		return false
 	}
 	anchorText := false

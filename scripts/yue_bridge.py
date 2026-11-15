@@ -187,7 +187,11 @@ def station_ready_file(value,nonce,token_path,scope):
     if not path.is_absolute() or path.name!=scope+'-'+nonce+'.json':
         raise ValueError('station_rvc_ready_path_invalid')
     parent=canonical(path.parent)
-    if parent!=token_path.parent/'station-rvc-ready':
+    # The host keeps the token and one-time ready proof in the same private
+    # tool directory. Older builds used a root-level token, so derive the
+    # sibling directory from the actual token parent instead of hard-coding a
+    # second legacy name.
+    if parent!=token_path.parent/'ready':
         raise ValueError('station_rvc_ready_path_invalid')
     return parent/path.name
 

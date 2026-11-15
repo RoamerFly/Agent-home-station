@@ -47,7 +47,7 @@ func newLocalProcessTools(access *localWorkspaceAccess, dataDir string, cfg *age
 	if err != nil {
 		return nil, err
 	}
-	jobs, err := agenthost.OpenJobs(filepath.Join(dataDir, "local-processes"))
+	jobs, err := agenthost.OpenJobs(stationProcessesDir(dataDir))
 	if err != nil {
 		return nil, err
 	}

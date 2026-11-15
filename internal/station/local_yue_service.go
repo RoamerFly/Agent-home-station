@@ -200,7 +200,7 @@ func (s *localYuEService) loadRegistration(ctx context.Context) (localYuERegistr
 	if err := ctx.Err(); err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err
 	}
-	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localYuERegistrationFile), "station_yue_", localYuEMaxManifest)
+	data, err := readLocalComputeRegistration(stationYuERegistrationPath(s.dataDir), "station_yue_", localYuEMaxManifest)
 	if err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err
 	}
