@@ -18,6 +18,8 @@ namespace WechatAgent.Desktop {
         readonly WebView2 view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White };
         bool terminal;
 
+        internal event Action<string, string, int> ShareReaderLoginRequested;
+
         internal LegacyWechatConsoleDialog(Deployment deployment, Action closed) {
             this.deployment = deployment; this.closed = closed;
             Text = "微信控制台";
@@ -61,7 +63,7 @@ namespace WechatAgent.Desktop {
             core.Settings.AreDefaultScriptDialogsEnabled = false;
             core.Settings.AreHostObjectsAllowed = false;
             core.Settings.IsStatusBarEnabled = false;
-            core.Settings.IsWebMessageEnabled = false;
+            core.Settings.IsWebMessageEnabled = true;
             core.Settings.AreBrowserAcceleratorKeysEnabled = true;
             core.Settings.IsSwipeNavigationEnabled = false;
             view.AllowExternalDrop = false;
@@ -73,9 +75,24 @@ namespace WechatAgent.Desktop {
             core.PermissionRequested += delegate(object sender, CoreWebView2PermissionRequestedEventArgs e) { e.State = CoreWebView2PermissionState.Deny; };
             core.LaunchingExternalUriScheme += delegate(object sender, CoreWebView2LaunchingExternalUriSchemeEventArgs e) { e.Cancel = true; };
             core.ProcessFailed += delegate { Finish(); };
+            core.WebMessageReceived += delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) { HandleWebMessage(e); };
             core.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) {
                 if (!terminal && !AllowsNavigation(e.Uri)) e.Cancel = true;
             };
+        }
+
+        void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs message) {
+            if (terminal) return;
+            try {
+                var input = Deployment.Json.Deserialize<System.Collections.Generic.Dictionary<string, object>>(message.WebMessageAsJson);
+                if (input == null || Deployment.Text(input, "type") != "share-reader-auth-open") return;
+                string provider = Deployment.Text(input, "provider");
+                string account = Deployment.Text(input, "account");
+                int revision;
+                if ((provider != "yuanbao" && provider != "assistant") || String.IsNullOrWhiteSpace(account) || !Int32.TryParse(Deployment.Text(input, "revision"), out revision)) return;
+                var handler = ShareReaderLoginRequested;
+                if (handler != null) handler(provider, account, revision);
+            } catch (Exception) { }
         }
 
         bool AllowsNavigation(string value) {
@@ -85,6 +102,10 @@ namespace WechatAgent.Desktop {
         }
 
         internal void CloseForServiceStop() { Finish(); }
+        internal void Reload() {
+            if (terminal || IsDisposed || view.CoreWebView2 == null) return;
+            try { view.CoreWebView2.Reload(); } catch (InvalidOperationException) { }
+        }
         void Finish() {
             if (terminal) return;
             terminal = true;

@@ -439,6 +439,7 @@ namespace WechatAgent.Desktop {
             CloseLegacyWechatConsole();
             LegacyWechatConsoleDialog dialog = null;
             dialog = new LegacyWechatConsoleDialog(deployment, () => { if (legacyWechatConsole == dialog) legacyWechatConsole = null; });
+            dialog.ShareReaderLoginRequested += delegate(string provider, string account, int revision) { OpenLegacyShareCredentialLogin(dialog, provider, account, revision); };
             legacyWechatConsole = dialog;
             dialog.FormClosed += delegate { if (legacyWechatConsole == dialog) legacyWechatConsole = null; };
             dialog.Show(this);
@@ -446,6 +447,32 @@ namespace WechatAgent.Desktop {
         void CloseLegacyWechatConsole() {
             var dialog = legacyWechatConsole; legacyWechatConsole = null;
             if (dialog != null && !dialog.IsDisposed) dialog.CloseForServiceStop();
+        }
+        async void OpenLegacyShareCredentialLogin(LegacyWechatConsoleDialog console, string provider, string account, int revision) {
+            if (console == null || console.IsDisposed || String.IsNullOrWhiteSpace(account)) return;
+            string connection;
+            try {
+                var target = await controller.ShareReaderTarget(CancellationToken.None);
+                connection = target.Item1; revision = target.Item2;
+            } catch (Exception error) {
+                MessageBox.Show(this, error.Message, "微信分享解析", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            CloseShareCredentialLogin();
+            var dialog = new ShareCredentialLoginDialog(deployment, provider,
+                async (selectedProvider, cookie) => {
+                    try {
+                        await controller.SaveShareReaderCredentials(connection, selectedProvider, cookie, revision, CancellationToken.None);
+                        console.Reload();
+                    } catch (Exception error) {
+                        MessageBox.Show(this, "登录凭据未能保存。\n" + error.Message, "微信分享解析", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                }, reason => {
+                    if (!String.IsNullOrWhiteSpace(reason) && reason != "已取消登录。") MessageBox.Show(this, reason, "微信分享解析", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                });
+            shareCredentialLogin = dialog;
+            dialog.FormClosed += delegate { if (shareCredentialLogin == dialog) shareCredentialLogin = null; };
+            dialog.Show(this);
         }
         bool CurrentPage(WebView2 view, int generation) {
             return !IsDisposed && !Disposing && !exitRequested && !allowExit && generation == pageGeneration && web == view && !view.IsDisposed;

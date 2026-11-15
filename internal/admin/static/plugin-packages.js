@@ -118,6 +118,11 @@
   editor.replaceChildren(heading,status);status.textContent=d.runtime_connected?(runtimeNames[runtime.state]||'状态待核对')+(d.installed.enabled?'；停止后可修改配置。':'；保存配置后可启动。'):'执行环境未配置；可先保存配置，安装不会自动启动。';
   if(d.readiness){const [label,hint]=packageSummary(p,d.installed,d.readiness,runtime);status.textContent=label+' · '+hint+(d.installed.enabled?'。停用后可修改配置。':'')}
   const permissions=el('p',(d.installed.permissions||[]).map(x=>names[x]||x).join('、')||'未授予额外权限','hint');editor.append(permissions);
+  if(state.selected==='share-reader'){
+   const login=el('div',undefined,'inline-actions share-reader-login-actions');
+   const openLogin=(provider,label)=>{const control=button(label,()=>{if(!window.chrome?.webview){status.textContent='请从工作站旧版微信控制台打开网页登录。';return}window.chrome.webview.postMessage({type:'share-reader-auth-open',provider,account:account(),revision:d.installed.revision})});control.className='secondary';login.append(control)};
+   login.append(el('strong','网页登录'));openLogin('yuanbao','网页登录元宝');openLogin('assistant','网页登录视频号助手');editor.append(login);
+  }
   const form=el('form');form.id='package-config-form';const fields=el('div',undefined,'package-fields');
   const configured=new Set(d.configuration.configured_secrets||[]);
   for(const [name,spec] of Object.entries(d.schema.properties||{})){

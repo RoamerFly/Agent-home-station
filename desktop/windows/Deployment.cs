@@ -297,6 +297,19 @@ namespace WechatAgent.Desktop {
                 throw new InvalidOperationException("分享登录信息无效。");
             return await Request("/api/local/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader/credentials", new { provider = provider, cookie = cookie, revision = revision });
         }
+        internal async Task<Tuple<string, int>> ShareReaderTarget(CancellationToken token) {
+            if (!d.LocalStation) throw new InvalidOperationException("分享解析登录只支持本机工作站。");
+            var list = await Request("/api/apps/wechat/connections", null);
+            var items = list.ContainsKey("items") ? list["items"] as object[] : null;
+            if (items == null || items.Length != 1) throw new InvalidOperationException("当前需要唯一的微信连接，请先在工作站核对账号。");
+            var item = items[0] as Dictionary<string, object>;
+            var connection = item == null ? "" : Deployment.Text(item, "id");
+            if (String.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("当前微信连接编号不可用。");
+            var detail = await Request("/api/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader", null);
+            int revision;
+            if (!detail.ContainsKey("revision") || !Int32.TryParse(Deployment.Text(detail, "revision"), out revision)) throw new InvalidOperationException("分享解析工具版本不可用，请刷新后重试。");
+            return Tuple.Create(connection, revision);
+        }
         internal Task<CommandResult> Wsl(CancellationToken token, params string[] args) {
             var argv = new [] { "-d", d.Distro, "-u", d.User, "--exec" }.Concat(args).ToArray();
             return runner.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "wsl.exe"), argv, token);
