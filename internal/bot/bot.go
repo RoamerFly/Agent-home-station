@@ -914,7 +914,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			return
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		_, err := image.SendImage(sendCtx, input.Thread, decision.ImageID)
+		status, err := image.SendImage(sendCtx, input.Thread, decision.ImageID)
 		cancel()
 		if err != nil {
 			w.config.Log("image_send_failed_or_unknown_not_retried")
@@ -923,6 +923,11 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 				status = "unknown"
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[图片] " + decision.ImageID, Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err), Origin: "bot"})
+			return
+		}
+		if !mediaStatusConfirmed(status, "image") {
+			w.config.Log("image_send_receipt_unconfirmed")
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[图片] " + decision.ImageID, Status: "unknown", Reason: "media_receipt_unconfirmed", SendID: status.ID, Origin: "bot"})
 			return
 		}
 		if err := character.Accepted(input, "[发送了一张管理员授权的图片] "+decision.ImageID); err != nil {
@@ -975,7 +980,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			sendTimeout = 12 * time.Minute
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-		_, err := sender.SendMedia(sendCtx, input.Thread, media.Kind, sourceID)
+		status, err := sender.SendMedia(sendCtx, input.Thread, media.Kind, sourceID)
 		cancel()
 		if err != nil {
 			w.config.Log("generated_media_send_failed_or_unknown_not_retried")
@@ -984,6 +989,11 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 				status = "unknown"
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[" + media.Kind + "] " + media.Title, Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err), Origin: "bot"})
+			return
+		}
+		if !mediaStatusConfirmed(status, media.Kind) {
+			w.config.Log("generated_media_send_receipt_unconfirmed")
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[" + media.Kind + "] " + media.Title, Status: "unknown", Reason: "media_receipt_unconfirmed", SendID: status.ID, Origin: "bot"})
 			return
 		}
 		if err = character.Accepted(input, "[发送了 "+media.Kind+" 媒体]"); err != nil {
