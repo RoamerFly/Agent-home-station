@@ -16,6 +16,13 @@ type publicPluginMediaOrigin struct{ origin, destination string }
 // binary through MCP. Only its location/type is returned; download and content
 // validation happen separately under the original task authorization.
 func ReadPublicPluginShareSource(ctx context.Context, raw string, maxBytes int64, timeout time.Duration) ([]byte, string, string, error) {
+	// Kuaishou public share pages can return a shell or an interstitial to the
+	// generic tool user-agent. Reuse the existing read-only Kuaishou request
+	// policy so the plugin receives the same public page that the native media
+	// reader accepts; this does not add cookies or authenticated state.
+	if kuaishouPhotoID(raw) != "" {
+		ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
+	}
 	return ReadPublicPluginPage(context.WithValue(ctx, publicPluginMediaProbeKey{}, true), raw, maxBytes, timeout)
 }
 

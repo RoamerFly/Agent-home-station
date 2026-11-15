@@ -113,6 +113,8 @@ type Manager struct {
 	memoryRunners       map[string]context.CancelFunc
 	memoryRunnersClosed bool
 	memoryServiceMu     sync.Mutex
+	workerMu            sync.RWMutex
+	worker              *bot.Worker
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry
@@ -155,6 +157,26 @@ type Manager struct {
 	actions             *wechatapp.ActionLedger
 	mcp                 mcpSettings
 	plugins             *pluginLedger
+}
+
+func (m *Manager) setWorker(worker *bot.Worker) {
+	m.workerMu.Lock()
+	m.worker = worker
+	m.workerMu.Unlock()
+}
+
+func (m *Manager) clearWorker(worker *bot.Worker) {
+	m.workerMu.Lock()
+	if m.worker == worker {
+		m.worker = nil
+	}
+	m.workerMu.Unlock()
+}
+
+func (m *Manager) currentWorker() *bot.Worker {
+	m.workerMu.RLock()
+	defer m.workerMu.RUnlock()
+	return m.worker
 }
 
 // NewManager constructs a root manager without a native device transport.
@@ -670,6 +692,8 @@ func (m *Manager) start(c Config) {
 			m.log("bot_configuration_error")
 			return
 		}
+		m.setWorker(worker)
+		defer m.clearWorker(worker)
 		reminderCtx, cancelReminders := context.WithCancel(ctx)
 		if character, ok := model.(*companion.Engine); ok {
 			memoryCtx, cancelMemory := context.WithCancel(ctx)

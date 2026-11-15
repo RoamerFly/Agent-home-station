@@ -771,6 +771,27 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("POST /api/agent/recover-music-message", s.protected(s.recoverMusicMessage))
 	mux.HandleFunc("POST /api/agent/recover-private-message", s.protected(s.recoverPrivatePrefixMessage))
+	mux.HandleFunc("POST /api/agent/replay-messages", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			MessageIDs []string `json:"message_ids"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		worker := s.manager.currentWorker()
+		if worker == nil {
+			fail(w, 409, "Agent尚未运行，不能重放原消息")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		report, err := worker.ReplayMessages(ctx, in.MessageIDs)
+		if err != nil {
+			fail(w, 409, err.Error())
+			return
+		}
+		respond(w, 200, report)
+	}))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true, "workspace": s.manager.managedLayoutStatus()})
 	}))

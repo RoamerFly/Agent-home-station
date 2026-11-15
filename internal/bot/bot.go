@@ -121,6 +121,7 @@ type Worker struct {
 	generation       *generationScheduler
 	mediaPreparation *mediaPreparation
 	runtime          *runtimeState
+	replayRequests   chan replayRequest
 	persistErr       error
 	recovering       bool
 	config           Config
@@ -163,7 +164,7 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 	if config.Log == nil {
 		config.Log = func(string) {}
 	}
-	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed}, nil
+	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed, replayRequests: make(chan replayRequest, 4)}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
