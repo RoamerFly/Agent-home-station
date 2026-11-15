@@ -77,7 +77,20 @@ func PrepareStationLegacyData(legacyDir, modelFile, workerDir string) error {
 	// The station's memory is already merged and source-scoped. Copy it once
 	// into the directory expected by the old manager; never overwrite a legacy
 	// database that an operator has subsequently edited.
-	return copyTreeIfMissing(filepath.Join(workerDir, "memory"), filepath.Join(legacyDir, "companion"))
+	if err := copyTreeIfMissing(filepath.Join(workerDir, "memory"), filepath.Join(legacyDir, "companion")); err != nil {
+		return err
+	}
+	// A real old admin journal may have been restored beside the station
+	// workers. It is copied as-is so the old console can project those genuine
+	// rounds; memory events and synthetic fixtures are never converted here.
+	activitySource := filepath.Join(filepath.Dir(filepath.Dir(workerDir)), "legacy-activity.json")
+	activityTarget := filepath.Join(legacyDir, "activity.json")
+	if _, err := os.Stat(activityTarget); errors.Is(err, os.ErrNotExist) {
+		if _, sourceErr := os.Stat(activitySource); sourceErr == nil {
+			return copyFileIfMissing(activitySource, activityTarget)
+		}
+	}
+	return nil
 }
 
 func readStationLegacyModel(path string) (stationLegacyModel, error) {
@@ -168,4 +181,24 @@ func copyTreeIfMissing(source, destination string) error {
 		return err
 	}
 	return nil
+}
+
+func copyFileIfMissing(source, destination string) error {
+	if _, err := os.Stat(destination); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	return errors.Join(copyErr, closeErr)
 }
