@@ -13,6 +13,9 @@ import (
 )
 
 type Input struct {
+	// ReplayNonce is host-issued for a bounded, read-only administrator retry
+	// of an original native source. It never authorizes delivery or mutation.
+	ReplayNonce string `json:"-"`
 	// PrivateQuote is a host-observed native reference, never quoted text.
 	// It is rechecked against the native message and delivery ledger on use.
 	PrivateQuote string `json:"private_quote,omitempty"`

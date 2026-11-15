@@ -109,6 +109,18 @@ func (w *Worker) authorizedMessage(message linuxnative.Message) bool {
 	})
 }
 
+func (w *Worker) replayNonce(messageID string) string {
+	if w.runtime == nil || messageID == "" {
+		return ""
+	}
+	for _, item := range w.runtime.Inbox {
+		if item.Event.Data.MessageID == messageID {
+			return item.ReplayNonce
+		}
+	}
+	return ""
+}
+
 var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 
 type MediaObservationEvidence = companion.MediaObservationEvidence
@@ -399,6 +411,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			analysisCtx = companion.WithReplayNonce(analysisCtx, w.replayNonce(message.ID))
 			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
 			mediaObservationEvidence = observationEvidence
 			mediaObservationState = "observed"
@@ -431,7 +444,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		if (w.config.GroupRules[message.ThreadID].Mode == "social" || legacyPreferredShare) && !w.addressed(message) {
 			mode = "social"
 		}
-		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
+		input := companion.Input{ReplayNonce: w.replayNonce(message.ID), Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
 		original := ""
 		if message.Type == 1 {
 			original = message.Body

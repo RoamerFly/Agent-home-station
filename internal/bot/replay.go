@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -123,6 +125,7 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		candidates = append(candidates, candidate{item: found, msg: message})
 	}
 	for _, c := range candidates {
+		c.item.ReplayNonce = replayNonce("share-read-replay", c.msg.ID, time.Now().UTC().Format(time.RFC3339Nano))
 		c.item.Phase = "received"
 		c.item.Backlog = true
 		c.item.BacklogParent = ""
@@ -147,6 +150,11 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		return report, err
 	}
 	return report, nil
+}
+
+func replayNonce(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
 func replayHasEffects(runtime *runtimeState, id string) bool {

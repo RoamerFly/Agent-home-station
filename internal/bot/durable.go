@@ -29,6 +29,7 @@ type inboxItem struct {
 	RecoveryTools    []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
 	RecoveryEvidence *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
 	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
+	ReplayNonce      string                            `json:"replay_nonce,omitempty"`
 }
 
 func (w *Worker) ownerModelReview(id string) bool {

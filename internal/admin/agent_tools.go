@@ -43,6 +43,12 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	if p.privileged() {
 		tools = append(tools, diagnosticsTool())
 		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand, owner only. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
+		tools = append(tools,
+			agentTool("station_tool_status", "Read the public Station project-tool catalog or one tool's lifecycle state. Owner only; returns sanitized status, readiness and revision without paths or credentials. Input {tool_id?:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`),
+			agentTool("station_tool_start", "Start one enabled public Station project tool and wait for its host health check. Owner only; tool_id is discovered from station_tool_status. Does not create a media task or send WeChat. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+			agentTool("station_tool_stop", "Stop one public Station project tool while retaining its enabled intent. Owner only; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+			agentTool("station_tool_restart", "Restart one enabled public Station project tool and wait for its host health check. Owner only; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+		)
 	}
 	projectTools := p.projectPluginTools(context.Background())
 	tools = append(tools, projectTools...)
@@ -95,7 +101,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "station_tool_") || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -139,6 +145,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	}
 	if name == "music_service_start" {
 		return p.controlMusicService(ctx, "start")
+	}
+	if strings.HasPrefix(name, "station_tool_") {
+		return p.callStationTool(ctx, strings.TrimPrefix(name, "station_tool_"), args)
 	}
 	if name == "project_checkout_plugin" {
 		return p.checkoutPluginSource(ctx, args)

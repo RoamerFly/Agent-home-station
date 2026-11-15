@@ -177,6 +177,15 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 		return nil, err
 	}
 	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: wechatapp.ReceivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
+	if tool == "share.resolve_public" {
+		nonce := companion.ReplayNonce(ctx)
+		if nonce == "" {
+			nonce = companion.ReplayNonceFromContext(ctx)
+		}
+		if nonce != "" {
+			p.requestSuffix = "admin-readonly-replay-" + nonce
+		}
+	}
 	if actor, ok := sourceActorFromContext(ctx); ok {
 		// The proof is useful only for the exact account and source conversation
 		// it was minted for. Do not downgrade a mismatched explicit request into
