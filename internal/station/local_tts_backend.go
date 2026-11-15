@@ -234,7 +234,7 @@ func (s *localTTSService) run(ctx context.Context, fish, binding string, registr
 	// random MkdirTemp root would continuously mint distinct LPAC identities and
 	// leave ACL entries on the interpreter/model files. Each invocation still
 	// uses unique output paths, even if an old broker survived a host crash.
-	directory := filepath.Join(s.dataDir, "station-speech-jobs", mediaspec.SpeechSHA256([]byte(fish+"\n"+voice.version())))
+	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "jobs", mediaspec.SpeechSHA256([]byte(fish+"\n"+voice.version())))
 	if err := localTTSEnsureDir(directory); err != nil {
 		return localTTSResult{}, errors.New("station_speech_private_directory_unavailable")
 	}
@@ -334,7 +334,7 @@ func (s *localTTSService) windowsConfig() (agenthost.Config, error) {
 	if !localTTSSafeRegular(pythonw) || !localTTSSafeRegular(helper) {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}
-	spool := filepath.Join(s.dataDir, "station-speech-spool")
+	spool := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "spool")
 	if err := localTTSEnsureDir(spool); err != nil {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}

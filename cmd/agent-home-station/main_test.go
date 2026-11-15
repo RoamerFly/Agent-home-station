@@ -31,11 +31,11 @@ func TestDefaultPathsUseExecutableLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig() error = %v", err)
 	}
-	wantData := filepath.Join(filepath.Dir(executable), "data", "station")
+	wantData := filepath.Join(filepath.Dir(executable), "data")
 	if cfg.dataDir != wantData {
 		t.Fatalf("dataDir = %q, want %q", cfg.dataDir, wantData)
 	}
-	wantWorkspace := filepath.Join(wantData, "managed-workspaces")
+	wantWorkspace := filepath.Join(wantData, "main", "workspaces")
 	if cfg.workspaceRoot != wantWorkspace {
 		t.Fatalf("workspaceRoot = %q, want %q", cfg.workspaceRoot, wantWorkspace)
 	}

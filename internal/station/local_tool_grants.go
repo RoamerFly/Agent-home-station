@@ -41,7 +41,7 @@ type localToolGrantsStore struct {
 }
 
 func newLocalToolGrantsStore(dir string) *localToolGrantsStore {
-	return &localToolGrantsStore{path: filepath.Join(dir, "tool-grants.json")}
+	return &localToolGrantsStore{path: filepath.Join(stationAuthorityDir(dir), "tool-grants.json")}
 }
 
 func (s *localToolGrantsStore) View() localToolGrants {

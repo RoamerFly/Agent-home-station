@@ -73,7 +73,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 	if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
 		return out, errors.New("目标站带有封存记录，无法作为接收站")
 	}
-	workerRoot := filepath.Join("apps", wechatapp.ID, "workers")
+	workerRoot := filepath.Join(stationApplicationsRelative(dir), wechatapp.ID, "workers")
 	worker, err := workspacefs.OpenExistingDirectory(root, filepath.Join(workerRoot, req.ConnectionID))
 	if err != nil {
 		return out, errors.New("无法读取目标站的微信连接资料")

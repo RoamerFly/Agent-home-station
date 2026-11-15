@@ -330,7 +330,7 @@ func (p *localDouyinWebPublication) stage(ctx context.Context, access localDouyi
 	// MAX_PATH, even though Go and FFmpeg can. Bind the same identity in a hash
 	// instead of nesting three 64-character IDs into the upload path.
 	key := sha256.Sum256([]byte(access.record.FishID + "\x00" + req.Reference.TaskID + "\x00" + req.Reference.ManifestSHA256))
-	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "publication-staging")
+	dir := filepath.Join(stationApplicationsDir(p.home.dataDir), "douyin", "publication-staging")
 	path := filepath.Join(dir, hex.EncodeToString(key[:])+strings.ToLower(filepath.Ext(name)))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", apphost.ErrPublicationUnavailable

@@ -90,7 +90,7 @@ namespace WechatAgent.Desktop {
             Shown += async delegate {
                 try {
                     Program.ConfigureWebViewLoader(deployment.Workspace);
-                    var folder = Path.Combine(deployment.Workspace, "secrets", "douyin-oauth-webview");
+                    var folder = Path.Combine(deployment.PrivateSettingsRoot, "douyin-oauth-webview");
                     Directory.CreateDirectory(folder);
                     // This is deliberately not the main page or the user\'s Edge profile.
                     var environment = await CoreWebView2Environment.CreateAsync(null, folder);

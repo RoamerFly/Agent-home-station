@@ -273,7 +273,7 @@ func (s *localProjectTools) prepareYuEDeploymentManifest(r *localYuERegistration
 		return "", failure
 	}
 	// A new private generation never replaces an owner's explicit manifest.
-	path := filepath.Join(s.home.dataDir, "station-yue-manifest-"+uuid.NewString()+".json")
+	path := filepath.Join(stationToolRoot(s.home.dataDir, "yue"), "manifest-"+uuid.NewString()+".json")
 	if err = hostfile.WritePrivate(path, raw); err != nil {
 		return "", failure
 	}

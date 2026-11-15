@@ -8,8 +8,8 @@ namespace WechatAgent.Desktop {
         readonly string path;
         readonly bool portable;
         internal string Behavior { get; private set; }
-        internal CloseSettings(string workspace, bool portable = false) {
-            path = Path.Combine(workspace, "secrets", "desktop-settings.json");
+        internal CloseSettings(string workspace, bool portable = false, string settingsRoot = null) {
+            path = Path.Combine(settingsRoot ?? Path.Combine(workspace, "secrets"), "desktop-settings.json");
             this.portable = portable;
             Behavior = "ask";
             if (!File.Exists(path)) return;

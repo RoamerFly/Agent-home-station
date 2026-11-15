@@ -16,7 +16,7 @@ import (
 // StationRegistration admits only the daemon launched for the station's
 // private WeChat directory. Account setup is owner-only; Agent workers are separate.
 func StationRegistration(ctx context.Context, endpoint string, pid int, stationData string) (apphost.Registration, error) {
-	nativeDir := filepath.Join(stationData, "apps", ID, "native")
+	nativeDir := filepath.Join(stationData, "applications", ID, "native")
 	root, err := workspacefs.OpenPath(nativeDir)
 	if err != nil {
 		return apphost.Registration{}, errors.New("微信原生私有目录不可读")

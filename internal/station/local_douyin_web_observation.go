@@ -56,7 +56,7 @@ func (p *localDouyinWebObservation) state(ctx context.Context) (localDouyinWebAc
 	if err := m.ctx.Err(); err != nil {
 		return localDouyinWebAccess{}, err
 	}
-	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", identity.FishID)
+	dir := filepath.Join(stationApplicationsDir(p.home.dataDir), "douyin", "web-login", identity.FishID)
 	root, err := workspacefs.OpenPath(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return p.access(identity.FishID, identity.LocalOwner.ID, localDouyinWebRecord{Version: 1, FishID: identity.FishID}, localDouyinWebView{State: "unconfigured"}), nil
@@ -94,7 +94,7 @@ func (p *localDouyinWebObservation) access(fish, owner string, r localDouyinWebR
 	version := sha256.Sum256(append([]byte("douyin-web-text-v2\x00"+fish+"\x00"+owner+"\x00"), raw...))
 	return localDouyinWebAccess{record: r, connection: apphost.Connection{ID: douyinapp.WebReadConnectionID,
 		AccountID: "web-profile-" + hex.EncodeToString(account[:20]), Label: "抖音网页内容", Configuration: state},
-		profile: filepath.Join(p.home.dataDir, "apps", "douyin", "web-login", fish, r.Profile), version: hex.EncodeToString(version[:])}
+		profile: filepath.Join(stationApplicationsDir(p.home.dataDir), "douyin", "web-login", fish, r.Profile), version: hex.EncodeToString(version[:])}
 }
 
 func (p *localDouyinWebObservation) Connection(ctx context.Context) (apphost.Connection, bool, error) {

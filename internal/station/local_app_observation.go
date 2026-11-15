@@ -32,7 +32,7 @@ func (h *localHomeService) bindBundledObservationApps(registry apphost.Registry)
 		if _, _, err := h.verifyAppSource(id); err != nil {
 			continue
 		}
-		dir := filepath.Join(h.dataDir, "apps", id)
+		dir := filepath.Join(stationApplicationsDir(h.dataDir), id)
 		switch id {
 		case biliapp.ID:
 			bili := biliapp.New(dir)

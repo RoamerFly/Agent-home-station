@@ -26,7 +26,7 @@ func runLegacySpeech(ctx context.Context, args []string, output io.Writer) error
 		return errors.New("声线接续需要明确指定 data 和 plan 的绝对路径")
 	}
 	if *workspace == "" {
-		*workspace = filepath.Join(*dataDir, "managed-workspaces")
+		*workspace = station.DefaultWorkspaceRoot(*dataDir)
 	}
 	if !filepath.IsAbs(*workspace) {
 		return errors.New("工作空间根目录需要绝对路径")

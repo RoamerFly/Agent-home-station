@@ -24,7 +24,8 @@ namespace WechatAgent.Desktop {
         // The local station starts no WeChat-native runtime unless the owner
         // explicitly opts in through wechat_native_url and has not disabled startup.
         internal bool LocalStationNative { get { return LocalStation && StationNativeEnabled && StationNativeUrl != ""; } }
-        internal string StationNativeRoot { get { return Path.Combine(Root, "apps", "wechat", "native"); } }
+        internal string PrivateSettingsRoot { get { return LocalStation ? Path.Combine(Root, "main_setting") : Path.Combine(Workspace, "secrets"); } }
+        internal string StationNativeRoot { get { return Path.Combine(Root, "applications", "wechat", "native"); } }
         internal bool UsesPortableStationData(string launcherDirectory) {
             if (!LocalStation) return false;
             var package = LocalStationDefault(launcherDirectory);
@@ -38,7 +39,8 @@ namespace WechatAgent.Desktop {
         internal static Deployment Load(string workspace) {
             workspace = Path.GetFullPath(workspace);
             var config = Path.Combine(workspace, "secrets", "local-deployment.json");
-            if (!File.Exists(config)) return File.Exists(Path.Combine(workspace, "agent-home-station-server.exe")) ? LocalStationDefault(workspace) : WindowsDefault(workspace);
+            if (!File.Exists(config)) config = Path.Combine(workspace, "data", "main_setting", "local-deployment.json");
+            if (!File.Exists(config)) return File.Exists(Path.Combine(workspace, "agent-home-station-server.exe")) || File.Exists(Path.Combine(workspace, "data", "main_setting", "runtime", "agent-home-station-server.exe")) ? LocalStationDefault(workspace) : WindowsDefault(workspace);
             return Parse(workspace, Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(config, Encoding.UTF8)));
         }
         static Deployment Parse(string workspace, Dictionary<string, object> data) {
@@ -47,7 +49,7 @@ namespace WechatAgent.Desktop {
                 if (Text(data, "runtime_directory") != "") local.StationExe = Path.Combine(Path.GetFullPath(Path.Combine(workspace, Text(data, "runtime_directory"))), "agent-home-station-server.exe");
                 if (Text(data, "data_root") != "") {
                     local.Root = Path.GetFullPath(Path.Combine(workspace, Text(data, "data_root")));
-                    local.StationWorkspace = Path.Combine(local.Root, "managed-workspaces");
+                    local.StationWorkspace = Path.Combine(local.Root, "workspace");
                 }
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "tool_packages_directory") != "") {
@@ -143,12 +145,16 @@ namespace WechatAgent.Desktop {
         }
         internal static Deployment LocalStationDefault(string workspace) {
             var data = Path.Combine(workspace, "data", "station");
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
+            data = Path.Combine(workspace, "data");
+            var runtime = Path.Combine(data, "main_setting", "runtime");
+            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "workspace"), StationExe = Path.Combine(runtime, "agent-home-station-server.exe"), AdminExe = Path.Combine(runtime, "runtimes", "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(runtime, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
         }
         // Keep the desktop's local-station login resolution identical to the
         // Go server. The old Windows-native and WSL deployments retain their
         // legacy admin paths in ServiceController.Login below.
         internal static string LocalStationPassword(string root, string explicitPassword) {
+            var structuredAuthority = Path.Combine(root, "main_setting", "authority");
+            if (Directory.Exists(structuredAuthority)) root = structuredAuthority;
             bool found;
             var password = ReadLocalStationPassword(root, "admin-password", out found);
             if (found) return password;
@@ -215,7 +221,7 @@ namespace WechatAgent.Desktop {
             // default action instead of showing a command-line error.
             if (args.Length == 0 || args.Length == 1 && args[0] == "--workspace") {
                 var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
+                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "data", "main_setting", "runtime", "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
                 for (var dir = new DirectoryInfo(baseDirectory); dir != null; dir = dir.Parent)
                     if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
                 throw new InvalidOperationException("找不到本机部署。请把程序放在完整工作站目录后直接双击。若使用自定义目录，再传入 --workspace 项目目录。");

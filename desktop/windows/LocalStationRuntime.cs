@@ -24,14 +24,14 @@ namespace WechatAgent.Desktop {
 
         void Stage(string name, int errorCode = 0) {
             try {
-                var path = Path.Combine(d.Root, "logs", "startup-stage.log");
+            var path = Path.Combine(d.Root, "main_setting", "logs", "startup-stage.log");
                 var suffix = errorCode == 0 ? "" : " code=0x" + errorCode.ToString("X8");
                 File.AppendAllText(path, DateTime.UtcNow.ToString("o") + "\t" + name + suffix + Environment.NewLine, new UTF8Encoding(false));
             } catch { }
         }
 
         internal void CheckAlive() {
-            if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/station/logs/station.log；没有改动微信或旧数据。");
+            if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/main_setting/logs/station.log；没有改动微信或旧数据。");
         }
         internal async Task Start(CancellationToken cancel) {
             cancel.ThrowIfCancellationRequested();
@@ -46,7 +46,7 @@ namespace WechatAgent.Desktop {
             // Overlapping private data and unsafe desktop ownership are host
             // errors. They must still stop the launch instead of degrading.
             if (startNative) WechatStationRuntime.ValidateLayout(d);
-            WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
+                WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "main_setting", "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
             Stage("logs-ready");
             try { Stage("free-port.begin"); WindowsRuntime.FreePort(d.Url); Stage("free-port.ok"); }
             catch { Stage("free-port.failed"); throw; }
@@ -76,25 +76,25 @@ namespace WechatAgent.Desktop {
                     programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
                 }
                 if (startNative && wechat != null && File.Exists(d.AdminExe)) {
-                    var legacyDir = Path.Combine(d.Root, "apps", "wechat", "legacy-admin");
-                    var workerRoot = Path.Combine(d.Root, "apps", "wechat", "workers");
+                    var legacyDir = Path.Combine(d.Root, "applications", "wechat", "legacy-admin");
+                    var workerRoot = Path.Combine(d.Root, "applications", "wechat", "workers");
                     var workerDirs = Directory.Exists(workerRoot) ? Directory.GetDirectories(workerRoot) : new string[0];
                     var workerDir = workerDirs.Length == 1 ? workerDirs[0] : Path.Combine(workerRoot, "legacy");
                     var legacyEnv = new Dictionary<string, string>(programEnv);
                     legacyEnv["WECHAT_ADMIN_DATA_DIR"] = legacyDir;
-                    var stationPasswordPath = Path.Combine(d.Root, "admin-password");
+                    var stationPasswordPath = Path.Combine(d.Root, "main_setting", "authority", "admin-password");
                     if (File.Exists(stationPasswordPath)) legacyEnv["WECHAT_ADMIN_PASSWORD"] = File.ReadAllText(stationPasswordPath).Trim();
                     legacyEnv["WECHAT_BOT_STATE_DIR"] = Path.Combine(legacyDir, "bot-state");
                     legacyEnv["WECHAT_ADMIN_LISTEN"] = new Uri(d.LegacyUrl).Authority;
                     legacyEnv["WECHAT_ADMIN_ORIGIN"] = d.LegacyUrl;
                     legacyEnv["WECHAT_LEGACY_AUTOLOGIN"] = "1";
                     legacyEnv["WECHAT_NATIVE_URL"] = d.StationNativeUrl;
-                    legacyEnv["WECHAT_NATIVE_TOKEN_FILE"] = Path.Combine(d.Root, "apps", "wechat", "native", "api-token");
+                    legacyEnv["WECHAT_NATIVE_TOKEN_FILE"] = Path.Combine(d.Root, "applications", "wechat", "native", "api-token");
                     legacyEnv["WECHAT_NATIVE_ACCOUNT"] = "desktop";
                     legacyEnv["WECHAT_STATION_DATA_DIR"] = d.Root;
                     legacyEnv["WECHAT_STATION_WORKER_DIR"] = workerDir;
-                    legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "local-model.json");
-                    var packageRoot = d.Workspace;
+                    legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "main_setting", "authority", "local-model.json");
+                    var packageRoot = Path.GetDirectoryName(d.StationExe);
                     var pythonRoot = Path.Combine(packageRoot, "runtimes", "windows-python-cli");
                     var pluginHelper = Path.Combine(packageRoot, "runtimes", "windows-agent-host", "windows_plugin_host.pyw");
                     legacyEnv["WECHAT_PLUGIN_RUNTIME_CONFIG"] = Deployment.Json.Serialize(new {
@@ -106,12 +106,12 @@ namespace WechatAgent.Desktop {
                         catalog_directory = String.IsNullOrEmpty(d.ToolPackagesDirectory) ? Path.Combine(packageRoot, "plugins") : d.ToolPackagesDirectory
                     });
                     Stage("legacy-admin.start.begin");
-                    legacy = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, legacyEnv, Path.Combine(d.Root, "logs", "legacy-wechat.log"), job);
+                    legacy = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, legacyEnv, Path.Combine(d.Root, "main_setting", "logs", "legacy-wechat.log"), job);
                     Stage("legacy-admin.start.ok");
                     programEnv["AHS_LEGACY_WECHAT"] = "1";
                 }
                 Stage("server.start.begin");
-                server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
+                server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "main_setting", "logs", "station.log"), job);
                 Stage("server.start.ok");
                 stationAdmitted = true;
                 Stage("server.admitted");

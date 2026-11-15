@@ -45,7 +45,7 @@ func (p *localDouyinWebInteraction) replyPacing(a localDouyinWebAccess, now time
 	if !validLocalDouyinWebID(a.record.Profile) || !fishidentity.ValidFishID(a.record.FishID) {
 		return time.Time{}, errors.New("invalid reply profile")
 	}
-	dir := filepath.Join(p.home.dataDir, "apps", "douyin", "reply-pacing", a.record.FishID)
+	dir := filepath.Join(stationApplicationsDir(p.home.dataDir), "douyin", "reply-pacing", a.record.FishID)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return time.Time{}, err

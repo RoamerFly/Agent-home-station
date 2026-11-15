@@ -301,7 +301,7 @@ func (h *localHomeService) douyinRegistrationDetached() (bool, error) {
 	if identity.LocalOwner == nil {
 		return false, nil
 	}
-	root, err := workspacefs.OpenPath(filepath.Join(h.dataDir, "apps", "douyin", "web-login", identity.FishID))
+	root, err := workspacefs.OpenPath(filepath.Join(stationApplicationsDir(h.dataDir), "douyin", "web-login", identity.FishID))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -329,7 +329,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 		v.State = "saved"
 	}
 	if record.Profile != "" {
-		profile, err := workspacefs.OpenPath(filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", record.FishID, record.Profile))
+		profile, err := workspacefs.OpenPath(filepath.Join(stationApplicationsDir(m.home.dataDir), "douyin", "web-login", record.FishID, record.Profile))
 		if err != nil {
 			v.State, v.ConfirmedAt = "unconfirmed", ""
 			v.Reason = "网页登录资料目录缺失或不可用，请重新登录或移除登记"
@@ -448,7 +448,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	fail := func(code int, message string) (localDouyinWebView, int, error) {
 		return localDouyinWebView{}, code, errors.New(message)
 	}
-	dir := filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", fish)
+	dir := filepath.Join(stationApplicationsDir(m.home.dataDir), "douyin", "web-login", fish)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return fail(503, "网页登录私有目录不可用")

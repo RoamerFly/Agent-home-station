@@ -77,7 +77,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 	if home.toolPackages != "" {
 		toolOptions.CatalogDirectory = filepath.Clean(home.toolPackages)
 	}
-	h := &localChatService{home: home, models: newLocalModelStore(home.dataDir), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
+	h := &localChatService{home: home, models: newLocalModelStore(stationAuthorityDir(home.dataDir)), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
@@ -235,7 +235,7 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 		return nil, companion.Input{}, errors.New("本机服务正在停止")
 	}
 	if h.store == nil {
-		store, err := companion.NewStore(filepath.Join(h.home.dataDir, "local-companion", record.FishID))
+		store, err := companion.NewStore(filepath.Join(stationMemoryDir(h.home.dataDir), record.FishID))
 		if err != nil {
 			return nil, companion.Input{}, errors.New("本地聊天存储不可用，原记录保留")
 		}

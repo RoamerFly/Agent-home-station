@@ -120,7 +120,7 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 		}
 	}
 	mux := http.NewServeMux()
-	home := &localHomeService{identity: fishidentity.New(dir), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
+	home := &localHomeService{identity: fishidentity.New(stationAuthorityDir(dir)), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
 		toolPackages: toolPackagesDirectory, appCatalog: applicationPackagesDirectory}
 	home.registerHomeRoutes(auth, mux)
 	chat := newLocalChatService(home)
@@ -144,7 +144,7 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	chat.liveOutput, chat.liveSource, chat.liveEncoder = stationLiveOutput(dir, workspaceRoot, chat.livePrograms)
 	chat.obsDeploymentRoutes(auth, mux)
 	chat.startLiveRecovery()
-	chat.observations = apphost.NewObserver(registry, filepath.Join(dir, "app-observations"))
+	chat.observations = apphost.NewObserver(registry, stationObservationsDir(dir))
 	chat.routes(auth, mux)
 	chat.startLocalTaskFollowups()
 	chat.startSurfActionContinuations()

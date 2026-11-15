@@ -430,7 +430,14 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
   }
  }else{
   New-Item -ItemType Directory -Force -Path $secrets | Out-Null
+  $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))
+  New-Item -ItemType Directory -Force -Path $dataRoot,(Join-Path $dataRoot 'applications'),(Join-Path $dataRoot 'publictools'),(Join-Path $dataRoot 'main_setting'),(Join-Path $dataRoot 'workspace') | Out-Null
+  $layoutPath=Join-Path $dataRoot 'data-layout.json'
+  if(-not (Test-Path -LiteralPath $layoutPath -PathType Leaf)){
+   [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/main"}',[Text.UTF8Encoding]::new($false))
+  }
   $jsonData=[ordered]@{backend='local-station';data_root=(Join-Path $OutputDirectory 'data');workspace_root=(Join-Path $OutputDirectory 'data\managed-workspaces')}
+  $jsonData.workspace_root=(Join-Path $dataRoot 'workspace')
   if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
   if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)}
   if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)}

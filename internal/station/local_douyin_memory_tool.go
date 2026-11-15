@@ -58,7 +58,7 @@ func (t *localToolSet) douyinMemoryState(ctx context.Context) (localDouyinWebRec
 	if m.ctx.Err() != nil {
 		return localDouyinWebRecord{}, apphost.ErrObservationForbidden
 	}
-	dir := filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", t.access.fishID)
+	dir := filepath.Join(stationApplicationsDir(m.home.dataDir), "douyin", "web-login", t.access.fishID)
 	root, err := workspacefs.OpenPath(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return localDouyinWebRecord{}, nil

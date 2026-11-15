@@ -261,7 +261,7 @@ func (s *localComfyService) start(ctx context.Context, fish, expectedBinding str
 			return err
 		}
 	}
-	logDir := filepath.Join(s.dataDir, "station-comfyui-logs")
+	logDir := stationToolLogsDir(s.dataDir, "comfyui")
 	if err := os.MkdirAll(logDir, 0700); err != nil || !localComfyServiceSafeDirectory(logDir) {
 		return errors.New("station_comfyui_log_directory_unavailable")
 	}
@@ -549,7 +549,7 @@ func localComfyEnvironment(r localComfyRegistration, private string) []string {
 }
 
 func (s *localComfyService) ensurePrivateScope(fish string) (string, error) {
-	private := filepath.Join(s.dataDir, "station-comfyui", localComfyFishHash(fish))
+	private := filepath.Join(stationToolPrivateDir(s.dataDir, "comfyui"), localComfyFishHash(fish))
 	for _, directory := range []string{private, filepath.Join(private, "input"), filepath.Join(private, "output"), filepath.Join(private, "temp"), filepath.Join(private, "user"), filepath.Join(private, "appdata"), filepath.Join(private, "home"), filepath.Join(private, "hf-cache")} {
 		if err := os.MkdirAll(directory, 0700); err != nil || !localComfyServiceSafeDirectory(directory) {
 			return "", errors.New("station_comfyui_private_scope_unavailable")

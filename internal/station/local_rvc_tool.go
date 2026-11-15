@@ -141,7 +141,7 @@ func (t *localToolSet) localRVCTools(ctx context.Context) []mcptools.Tool {
 }
 
 func (s *localProjectTools) rvcRegistered(fish string) bool {
-	stat, err := os.Stat(filepath.Join(s.home.dataDir, "project-tools", fish))
+	stat, err := os.Stat(filepath.Join(stationPublicToolsDir(s.home.dataDir), fish))
 	return err == nil && stat.IsDir()
 }
 

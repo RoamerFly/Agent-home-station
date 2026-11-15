@@ -168,7 +168,7 @@ func (s *localYuEService) start(ctx context.Context, fish, binding string, r loc
 			return err
 		}
 	}
-	logDir := filepath.Join(s.dataDir, "station-yue-logs")
+	logDir := stationToolLogsDir(s.dataDir, "yue")
 	if err := os.MkdirAll(logDir, 0700); err != nil || !localComfyServiceSafeDirectory(logDir) {
 		return errors.New("station_yue_log_directory_unavailable")
 	}
@@ -347,7 +347,7 @@ func localYuEArguments(r localYuERegistration, entry, frontend, private string) 
 }
 
 func (s *localYuEService) ensurePrivateScope(fish string) (string, error) {
-	private := filepath.Join(s.dataDir, "station-yue", localYuEFishHash(fish))
+	private := filepath.Join(stationToolPrivateDir(s.dataDir, "yue"), localYuEFishHash(fish))
 	for _, d := range []string{private, filepath.Join(private, "input"), filepath.Join(private, "output"), filepath.Join(private, "temp"), filepath.Join(private, "user"), filepath.Join(private, "appdata"), filepath.Join(private, "home"), filepath.Join(private, "hf-cache")} {
 		if err := os.MkdirAll(d, 0700); err != nil || !localComfyServiceSafeDirectory(d) {
 			return "", errors.New("station_yue_private_scope_unavailable")

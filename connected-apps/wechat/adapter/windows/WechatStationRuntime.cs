@@ -48,8 +48,8 @@ namespace WechatAgent.Desktop {
         }
         void AdmitNativeDirectories() {
             var nativeRoot = d.StationNativeRoot;
-            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps"), UsesPortableData);
-            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "apps", "wechat"), UsesPortableData);
+            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications"), UsesPortableData);
+            WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications", "wechat"), UsesPortableData);
             WindowsRuntime.PrivateDirectory(nativeRoot, UsesPortableData);
         }
         void RejectOfflineNativeRelease() {
@@ -200,7 +200,7 @@ namespace WechatAgent.Desktop {
             // Empty explicit environment: OwnedProcess clears WECHAT_/
             // XDG_ values, and this child inherits no station secrets.
             job = new ProcessJob();
-            native = OwnedProcess.Start(d.StationNativeExe, new [] { "--json", "--server-config", Path.Combine(d.StationNativeRoot, "native-server.toml"), "--data-dir", d.StationNativeRoot, "--listen", d.StationNativeUrl.Substring("http://".Length), "serve" }, Path.GetDirectoryName(d.StationNativeExe), new Dictionary<string, string>(), Path.Combine(d.Root, "logs", "wechat-native.log"), job, true);
+            native = OwnedProcess.Start(d.StationNativeExe, new [] { "--json", "--server-config", Path.Combine(d.StationNativeRoot, "native-server.toml"), "--data-dir", d.StationNativeRoot, "--listen", d.StationNativeUrl.Substring("http://".Length), "serve" }, Path.GetDirectoryName(d.StationNativeExe), new Dictionary<string, string>(), Path.Combine(d.Root, "main_setting", "logs", "wechat-native.log"), job, true);
             await WaitForNative(cancel);
         }
         internal async Task Start(CancellationToken cancel) {

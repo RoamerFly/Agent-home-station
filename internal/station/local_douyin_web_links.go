@@ -39,7 +39,7 @@ func localDouyinWebFollowUpID(snapshot, video string) string {
 }
 
 func (p *localDouyinWebObservation) snapshotDirectory(a localDouyinWebAccess) string {
-	return filepath.Join(p.home.dataDir, "apps", "douyin", "web-snapshots", a.record.FishID, a.version)
+	return filepath.Join(stationApplicationsDir(p.home.dataDir), "douyin", "web-snapshots", a.record.FishID, a.version)
 }
 
 // A guessed video ID is insufficient. The exact video must be present in an

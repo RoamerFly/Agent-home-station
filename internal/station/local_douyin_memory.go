@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS audit (
 );`
 
 func openLocalDouyinMemory(ctx context.Context, home *localHomeService, create bool) (*sql.DB, error) {
-	path := filepath.Join(home.dataDir, "apps", "douyin", "memory")
+	path := filepath.Join(stationApplicationsDir(home.dataDir), "douyin", "memory")
 	open := workspacefs.OpenPath
 	if create {
 		open = workspacefs.EnsurePath
@@ -191,7 +191,7 @@ func (m *localDouyinWebLogin) captureMemory(ctx context.Context, record localDou
 	if owner.LocalOwner.ID != record.Memory.Owner {
 		return nil
 	}
-	path := filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", record.FishID)
+	path := filepath.Join(stationApplicationsDir(m.home.dataDir), "douyin", "web-login", record.FishID)
 	root, err := workspacefs.OpenPath(path)
 	if err != nil {
 		return err

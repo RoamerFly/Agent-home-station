@@ -25,7 +25,7 @@ func attachStationWechatArchive(registry apphost.Registry, dataDir string, apps 
 	if _, attached := registry.Lookup(wechatapp.ID); attached {
 		return registry, apps, nil
 	}
-	dir := filepath.Join(dataDir, "apps", wechatapp.ID, "workers")
+	dir := filepath.Join(stationApplicationsDir(dataDir), wechatapp.ID, "workers")
 	root, err := workspacefs.OpenPath(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return registry, apps, nil

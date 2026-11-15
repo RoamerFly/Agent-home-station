@@ -59,7 +59,7 @@ func (t *localToolSet) projectHostForDiscovery() *localProjectToolHost {
 	if err != nil {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(t.projectTools.home.dataDir, "project-tools", grant.FishID)); err != nil {
+	if _, err := os.Stat(filepath.Join(stationPublicToolsDir(t.projectTools.home.dataDir), grant.FishID)); err != nil {
 		return nil
 	}
 	host, _ := t.projectTools.forFish(grant.FishID)

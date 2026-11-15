@@ -415,7 +415,7 @@ namespace WechatAgent.Desktop {
                 { "WECHAT_ADMIN_DATA_DIR", adminDir }, { "WECHAT_BOT_STATE_DIR", Path.Combine(d.Root, "bot-state") },
                 { "WECHAT_ADMIN_LISTEN", new Uri(d.Url).Authority }, { "WECHAT_ADMIN_ORIGIN", d.Url },
                 { "WECHAT_NATIVE_URL", d.NativeUrl }, { "WECHAT_NATIVE_TOKEN_FILE", Path.Combine(d.Root, "api-token") },
-                { "WECHAT_NATIVE_ACCOUNT", d.Account }, { "WECHAT_WORKSPACE_ROOT", Path.Combine(d.Root, "managed-workspaces") }
+                { "WECHAT_NATIVE_ACCOUNT", d.Account }, { "WECHAT_WORKSPACE_ROOT", Path.Combine(d.Root, "workspace") }
             };
             foreach (var pair in programEnv) env[pair.Key] = pair.Value;
             var pythonw = Path.Combine(resources, "windows-python-cli", "pythonw.exe");

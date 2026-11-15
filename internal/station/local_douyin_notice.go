@@ -67,7 +67,7 @@ func (m *localDouyinWebLogin) noticeState(fish string) (localDouyinWebRecord, st
 	if err := m.ctx.Err(); err != nil {
 		return localDouyinWebRecord{}, "", err
 	}
-	dir := filepath.Join(m.home.dataDir, "apps", "douyin", "web-login", fish)
+	dir := filepath.Join(stationApplicationsDir(m.home.dataDir), "douyin", "web-login", fish)
 	root, err := workspacefs.OpenPath(dir)
 	if err != nil {
 		return localDouyinWebRecord{}, "", errLocalDouyinNoticeGrant

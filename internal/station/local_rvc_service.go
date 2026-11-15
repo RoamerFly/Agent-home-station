@@ -291,7 +291,7 @@ func (s *localRVCService) start(ctx context.Context, fish, expectedBinding strin
 	python := filepath.Join(s.executableDir, "runtimes", "windows-python-cli", "python.exe")
 	private := localRVCPrivateScope(registration.Workspace, fish)
 	state := filepath.Join(private, "music", "jobs")
-	logDir := filepath.Join(s.dataDir, "station-rvc-logs")
+	logDir := stationToolLogsDir(s.dataDir, "rvc")
 	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return errors.New("station_rvc_log_directory_unavailable")
 	}
@@ -409,7 +409,7 @@ func (s *localRVCService) waitHealthy(ctx context.Context, fish string, port int
 }
 
 func (s *localRVCService) newReadyFile(fish string) (string, string, error) {
-	directory := filepath.Join(s.dataDir, "station-rvc-ready")
+	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "rvc"), "ready")
 	if err := os.MkdirAll(directory, 0700); err != nil || !localRVCSafeDirectory(directory) {
 		return "", "", errors.New("station_rvc_ready_directory_unavailable")
 	}

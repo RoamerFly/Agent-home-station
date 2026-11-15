@@ -105,7 +105,7 @@ namespace WechatAgent.Desktop {
                 bytes = new byte[stream.Length]; stream.Read(bytes, 0, bytes.Length);
             }
             string hash; using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
-            string folder = Path.Combine(workspace, "temp", "desktop", "runtime", hash);
+            string folder = Path.Combine(workspace, "data", "main_setting", "runtime", "desktop", hash);
             Directory.CreateDirectory(folder); string path = Path.Combine(folder, "WebView2Loader.dll");
             if (!File.Exists(path) || !File.ReadAllBytes(path).SequenceEqual(bytes)) File.WriteAllBytes(path, bytes);
             return folder;

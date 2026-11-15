@@ -137,7 +137,7 @@ func (h *localHomeService) transcribeLocalStationAudio(ctx context.Context, wav 
 		return "", err
 	}
 
-	scratch := filepath.Join(h.dataDir, "station-asr-scratch")
+	scratch := filepath.Join(stationToolPrivateDir(h.dataDir, "media-understanding"), "asr-scratch")
 	windows, err := h.localStationASRWindows()
 	if err != nil {
 		return "", err
@@ -259,7 +259,7 @@ func (h *localHomeService) localStationASRWindows() (*agenthost.WindowsConfig, e
 		return nil, errors.New("station_asr_windows_runtime_unavailable")
 	}
 	config := *h.windows
-	config.Spool = filepath.Join(h.dataDir, "station-asr-spool")
+	config.Spool = filepath.Join(stationToolPrivateDir(h.dataDir, "media-understanding"), "asr-spool")
 	if err := config.Validate(); err != nil {
 		return nil, errors.New("station_asr_windows_runtime_unavailable")
 	}

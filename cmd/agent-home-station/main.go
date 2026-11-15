@@ -138,7 +138,7 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 		}{Status: "applied", LegacySettingsPlan: plan})
 	}
 
-	password, err := stationauth.Password(cfg.dataDir, os.Getenv("AHS_ADMIN_PASSWORD"))
+	password, err := stationauth.Password(station.AuthorityRoot(cfg.dataDir), os.Getenv("AHS_ADMIN_PASSWORD"))
 	if err != nil {
 		return err
 	}
@@ -312,7 +312,7 @@ func parseConfig(args []string, executable string) (config, error) {
 	}
 	dataDir := *dataFlag
 	if dataDir == "" {
-		dataDir = filepath.Join(filepath.Dir(executable), "data", "station")
+		dataDir = filepath.Join(filepath.Dir(executable), "data")
 	} else if !filepath.IsAbs(dataDir) {
 		return config{}, errors.New("data directory must be absolute")
 	}
@@ -320,7 +320,7 @@ func parseConfig(args []string, executable string) (config, error) {
 
 	workspaceRoot := *workspaceFlag
 	if workspaceRoot == "" {
-		workspaceRoot = filepath.Join(dataDir, "managed-workspaces")
+		workspaceRoot = filepath.Join(dataDir, "workspace")
 	} else if !filepath.IsAbs(workspaceRoot) {
 		return config{}, errors.New("workspace directory must be absolute")
 	}
@@ -357,7 +357,7 @@ func parseConfig(args []string, executable string) (config, error) {
 		if err != nil || port == 0 || strconv.FormatUint(port, 10) == adminPort {
 			return config{}, errors.New("微信原生服务端口不可用或与管理端口相同")
 		}
-		appRoot := filepath.Join(dataDir, "apps", wechatapp.ID)
+		appRoot := filepath.Join(station.ApplicationsRoot(dataDir), wechatapp.ID)
 		if pathsOverlap(appRoot, workspaceRoot) {
 			return config{}, errors.New("微信应用私有目录不能与工作空间重叠")
 		}

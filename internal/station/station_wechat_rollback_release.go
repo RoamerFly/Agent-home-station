@@ -74,7 +74,7 @@ func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, ve
 		return out, errors.New("成长站微信原生服务仍在使用，或停机锁不可用")
 	}
 	defer unlockStation()
-	workerDir := filepath.Join("apps", wechatapp.ID, "workers")
+	workerDir := filepath.Join(stationApplicationsRelative(dataDir), wechatapp.ID, "workers")
 	worker, err := workspacefs.OpenExistingDirectory(stationRoot, filepath.Join(workerDir, req.ConnectionID))
 	if err != nil {
 		return out, errors.New("找不到此微信连接的本地交接资料")

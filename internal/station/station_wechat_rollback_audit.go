@@ -284,5 +284,5 @@ func (s *stationWechat) runningDesktopEpoch() string {
 }
 
 func sameStationNativeRoot(root string, daemon linuxnative.DaemonStatus) bool {
-	return sameCutoverPath(filepath.Join(root, "apps", "wechat", "native"), daemon.DataDirectory)
+	return sameCutoverPath(filepath.Join(stationApplicationsDir(root), "wechat", "native"), daemon.DataDirectory)
 }

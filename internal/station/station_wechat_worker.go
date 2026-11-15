@@ -127,7 +127,7 @@ func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string,
 		return registry, nil, nil
 	}
 	host := &stationWechat{
-		stationWechatNative: native, root: filepath.Join(dataDir, "apps", wechatapp.ID, "workers"),
+		stationWechatNative: native, root: filepath.Join(stationApplicationsDir(dataDir), wechatapp.ID, "workers"),
 		dataDir: dataDir, workspaceRoot: workspaceRoot,
 		installation: entry.InstallationID, modelPersona: model.Persona, model: model.Client,
 		workers:   map[string]*stationWechatWorker{},

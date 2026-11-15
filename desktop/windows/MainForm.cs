@@ -45,7 +45,7 @@ namespace WechatAgent.Desktop {
         internal MainForm(Deployment d, EventWaitHandle activation) : this(d, activation, new ServiceController(d), true) { }
         internal MainForm(Deployment d, EventWaitHandle activation, ServiceController services, bool startOnShown) {
             deployment = d; activate = activation; controller = services;
-            closeSettings = new CloseSettings(d.Workspace, d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory));
+            closeSettings = new CloseSettings(d.Workspace, d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory), d.PrivateSettingsRoot);
             Text = "Agent-home-station"; Size = new Size(1440, 980); MinimumSize = new Size(880, 600);
             WindowState = FormWindowState.Maximized;
             StartPosition = FormStartPosition.CenterScreen; AutoScaleMode = AutoScaleMode.Dpi;
@@ -180,7 +180,7 @@ namespace WechatAgent.Desktop {
         }
         void WindowEvent(string name) {
             try {
-                string directory=Path.Combine(deployment.Workspace,"secrets"),path=Path.Combine(directory,"desktop-windows.jsonl");
+                string directory=deployment.PrivateSettingsRoot,path=Path.Combine(directory,"desktop-windows.jsonl");
                 Directory.CreateDirectory(directory);
                 if(File.Exists(path)&&new FileInfo(path).Length>65536)File.WriteAllText(path,"");
                 File.AppendAllText(path,Deployment.Json.Serialize(new { time=DateTime.UtcNow, event_name=name, pid=Process.GetCurrentProcess().Id, executable=Application.ExecutablePath, main_window=IsHandleCreated?Handle.ToInt64():0, visible_management_windows=Application.OpenForms.Cast<Form>().Count(form=>form is MainForm&&form.Visible) })+Environment.NewLine);
@@ -260,7 +260,7 @@ namespace WechatAgent.Desktop {
             var view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White, Visible = false }; web = view; Controls.Add(view);
             try {
                 Program.ConfigureWebViewLoader(deployment.Workspace);
-                var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(deployment.Workspace, "secrets", "desktop-webview"));
+                var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(deployment.PrivateSettingsRoot, "desktop-webview"));
                 if (!CurrentPage(view, generation)) return;
                 await view.EnsureCoreWebView2Async(environment);
                 if (!CurrentPage(view, generation)) return;
@@ -304,7 +304,7 @@ namespace WechatAgent.Desktop {
             if (Deployment.Text(input, "type") == "open-logs") {
                 // Diagnostics stay local: the page only asks the host to reveal
                 // the folder, it never receives log contents.
-                var logs = Path.Combine(deployment.Root, "logs");
+                var logs = Path.Combine(deployment.Root, "main_setting", "logs");
                 Directory.CreateDirectory(logs);
                 try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + logs + "\"") { UseShellExecute = true }); }
                 catch (Exception) { }

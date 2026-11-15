@@ -50,7 +50,7 @@ type localModelStore struct {
 var errLocalModelRevision = errors.New("本机聊天模型设置已更新，请刷新后再保存")
 
 func newLocalModelStore(dir string) *localModelStore {
-	return &localModelStore{path: filepath.Join(dir, "local-model.json")}
+	return &localModelStore{path: filepath.Join(stationAuthorityDir(dir), "local-model.json")}
 }
 
 func defaultLocalModelSettings() LocalModelSettings {

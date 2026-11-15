@@ -177,7 +177,7 @@ func (s *localAudioCppService) Start(ctx context.Context, fish string) error {
 		return errors.New("audio_cpp_service_closed")
 	}
 	s.mu.Unlock()
-	logDir := filepath.Join(s.dataDir, "station-audio-cpp-logs")
+	logDir := stationToolLogsDir(s.dataDir, "audio-cpp")
 	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return errors.New("audio_cpp_log_directory_unavailable")
 	}
@@ -195,7 +195,7 @@ func (s *localAudioCppService) Start(ctx context.Context, fish string) error {
 	_, err = s.services.Start(ctx, serviceID, pluginruntime.ManagedServiceSpec{
 		OwnerPlugin: localAudioCppOwner, Binding: binding, Executable: r.Engine.Server,
 		Arguments: args, Directory: filepath.Dir(r.Engine.Server), Environment: env,
-		LogPath: logPath, PendingJobsPath: filepath.Join(s.dataDir, "station-audio-cpp-jobs.json"),
+		LogPath: logPath, PendingJobsPath: filepath.Join(stationToolPrivateDir(s.dataDir, "audio-cpp"), "jobs.json"),
 		StopTimeout: 10 * time.Second, Check: check,
 	}, func(admitCtx context.Context, launch func() error) error {
 		listener, listenErr := net.Listen("tcp", net.JoinHostPort(r.Host, strconv.Itoa(r.Port)))
