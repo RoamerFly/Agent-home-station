@@ -425,7 +425,7 @@ namespace WechatAgent.Desktop {
         static async Task WebViewRecoveryTests(string package, string root) {
             var workspace = Path.Combine(root, "station-webview-recovery");
             var deployment = Deployment.LocalStationDefault(workspace);
-            deployment.StationExe = Path.Combine(package, "agent-home-station-server.exe");
+            deployment.StationExe = Path.Combine(package, "data", "main_setting", "runtime", "agent-home-station-server.exe");
             deployment.Url = FreeLocalUrl();
             var emptyRuntime = Path.Combine(workspace, "empty-runtime");
             Directory.CreateDirectory(emptyRuntime);

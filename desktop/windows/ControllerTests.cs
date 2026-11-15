@@ -409,7 +409,7 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"admin_url\":\"http://127.0.0.1:18082\",\"wechat_native_url\":\"http://127.0.0.1:18174\"}");
                 var local = Deployment.Load(root);
                 Assert(local.LocalStationNative && local.StationNativeUrl.EndsWith(":18174") && local.StationNativeExe == Path.Combine(root, "runtimes", "windows-x64", "wx.exe"), "local station native runtime is explicit and package local");
-                Assert(local.StationNativeRoot == Path.Combine(root, "data", "station", "apps", "wechat", "native"), "local station native data is private and separate");
+                Assert(local.StationNativeRoot == Path.Combine(root, "data", "applications", "wechat", "native"), "local station native data is private and separate");
                 File.WriteAllText(config, "{\"backend\":\"local-station\",\"wechat_native_url\":\"http://127.0.0.1:18174\",\"wechat_native_enabled\":false}");
                 var paused = Deployment.Load(root);
                 Assert(!paused.LocalStationNative && paused.StationNativeUrl.EndsWith(":18174") && paused.StationNativeRoot == local.StationNativeRoot, "disabling native startup preserves the configured URL and data root");

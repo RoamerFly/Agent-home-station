@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -30,6 +31,34 @@ namespace WechatAgent.Desktop {
             } catch { }
         }
 
+        // A desktop crash can leave the same package's station child behind
+        // after its job handle was lost. The desktop itself is singleton, so
+        // an exact executable match in this package is safe to reclaim before
+        // starting the new owned child. Foreign executables and processes in
+        // another package are left untouched and still fail the port check.
+        void ReclaimStalePackageServer() {
+            var expected = WindowsRuntime.ComparablePath(d.StationExe);
+            var legacy = WindowsRuntime.ComparablePath(Path.Combine(d.Workspace, "agent-home-station-server.exe"));
+            foreach (var process in Process.GetProcessesByName("agent-home-station-server")) {
+                try {
+                    if (process.Id == Process.GetCurrentProcess().Id || process.HasExited) continue;
+                    string path;
+                    try { path = WindowsRuntime.ComparablePath(process.MainModule.FileName); }
+                    catch { continue; }
+                    if (!String.Equals(path, expected, StringComparison.OrdinalIgnoreCase) &&
+                        !String.Equals(path, legacy, StringComparison.OrdinalIgnoreCase)) continue;
+                    Stage("stale-server.reclaim.begin");
+                    process.Kill();
+                    if (!process.WaitForExit(5000)) throw new InvalidOperationException("同包旧服务未能退出。");
+                    Stage("stale-server.reclaim.ok");
+                } catch (InvalidOperationException) { throw; }
+                catch (Exception error) {
+                    Stage("stale-server.reclaim.failed");
+                    throw new InvalidOperationException("同一工作站的残留服务未能安全退出，请关闭后重试。", error);
+                } finally { process.Dispose(); }
+            }
+        }
+
         internal void CheckAlive() {
             if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/main_setting/logs/station.log；没有改动微信或旧数据。");
         }
@@ -48,7 +77,12 @@ namespace WechatAgent.Desktop {
             if (startNative) WechatStationRuntime.ValidateLayout(d);
                 WindowsRuntime.PrivateDirectory(d.Root, UsesPortableData); Directory.CreateDirectory(Path.Combine(d.Root, "main_setting", "logs")); Directory.CreateDirectory(d.StationWorkspace); WindowsRuntime.NoLinks(d.StationWorkspace);
             Stage("logs-ready");
-            try { Stage("free-port.begin"); WindowsRuntime.FreePort(d.Url); Stage("free-port.ok"); }
+            try {
+                Stage("free-port.begin");
+                ReclaimStalePackageServer();
+                WindowsRuntime.FreePort(d.Url);
+                Stage("free-port.ok");
+            }
             catch { Stage("free-port.failed"); throw; }
             try { Stage("process-job.begin"); job = new ProcessJob(); Stage("process-job.ok"); }
             catch { Stage("process-job.failed", ProcessJob.LastConstructionErrorCode); throw; }

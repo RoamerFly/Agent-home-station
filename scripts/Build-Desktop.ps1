@@ -310,7 +310,9 @@ $arguments+=('/win32icon:'+$icon)
 & $compiler @arguments
 if($LASTEXITCODE -ne 0){throw 'Desktop build failed.'}
 if($LocalStation){
- $station=Join-Path $OutputDirectory 'agent-home-station-server.exe'
+ $stationRoot=Join-Path $OutputDirectory 'data\main_setting\runtime'
+ New-Item -ItemType Directory -Force -Path $stationRoot | Out-Null
+ $station=Join-Path $stationRoot 'agent-home-station-server.exe'
  $oldOS=$env:GOOS; $oldArch=$env:GOARCH
  Push-Location $workspace
  try {
