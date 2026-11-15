@@ -793,7 +793,16 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 	}
 	if enabled, _ := ctx.Value(kuaishouRequestKey{}).(bool); enabled {
 		host := req.URL.Hostname()
-		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" || kuaishouMediaHost(host) {
+		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" {
+			// Kuaishou's share SSR serves a small {"result":2} shell to
+			// desktop Chrome, while the same public work returns its exact
+			// INIT_STATE to a mobile client. Keep this fixed and credential-free;
+			// the share parser still binds the response to the received photo ID.
+			req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1")
+			req.Header.Set("Referer", "https://www.kuaishou.com/")
+		} else if kuaishouMediaHost(host) {
+			// CDN playback endpoints do not need the mobile SSR profile. Keep
+			// the established browser identity for media range requests.
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
 			req.Header.Set("Referer", "https://www.kuaishou.com/")
 		}

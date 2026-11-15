@@ -36,6 +36,36 @@ func TestKuaishouAcceptsFileBudgetWithoutUnsupportedPageError(t *testing.T) {
 	}
 }
 
+func TestKuaishouPageUsesMobileSSRUserAgent(t *testing.T) {
+	const id = "3xsynthetic12345"
+	page := map[string]any{"photo-state": map[string]any{"photo": map[string]any{
+		"share_info": "userId=3xauthor&photoId=" + id,
+		"caption":    "synthetic mobile SSR video",
+		"duration":   97133,
+		"mainMvUrls": []any{map[string]any{"url": "https://synthetic.djvod.ndcimgs.com/video.mp4"}},
+	}}}
+	body, _ := json.Marshal(page)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if !strings.Contains(r.Header.Get("User-Agent"), "iPhone") {
+			_, _ = w.Write([]byte(`{"result":2,"error_msg":null}`))
+			return
+		}
+		_, _ = w.Write(append([]byte("<script>window.INIT_STATE = "), body...))
+	}))
+	defer srv.Close()
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}}
+	defer transport.CloseIdleConnections()
+	ctx := context.WithValue(context.Background(), publicSessionKey{}, &publicReadSession{Transport: transport})
+	video, err := DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, 512<<20)
+	if err != nil || !video.LinkOnly || video.DurationMS != 97133 || requests != 1 || video.Title != "synthetic mobile SSR video" {
+		t.Fatal("mobile SSR request did not recover exact Kuaishou work", video, err, requests)
+	}
+}
+
 func TestKuaishouUsesExactReceivedPhotoAndBoundedReferences(t *testing.T) {
 	id := "3xsynthetic12345"
 	state := map[string]any{"defaultClient": map[string]any{
