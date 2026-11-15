@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 MAX_PAGE_BYTES = 4 * 1024 * 1024  # Host stdio response envelope boundary.
 PHOTO = re.compile(r"^/(?:fw/photo|short-video)/([A-Za-z0-9]{8,40})/?$")
 STATE = re.compile(r"window\.__APOLLO_STATE__\s*=\s*")
+INIT_STATE = re.compile(r"window\.INIT_STATE\s*=\s*")
 KUAI_HOSTS = {"v.m.chenzhongtech.com", "www.kuaishou.com", "kuaishou.com"}
 BILI_HOSTS = {"www.bilibili.com", "bilibili.com"}
 BILI_VIDEO = re.compile(r"^/video/(BV[A-Za-z0-9]{10})/?$")
@@ -155,10 +156,87 @@ def photo_id(raw):
     return identity
 
 
+def kuaishou_init_state_photo(body, identity):
+    """Read the current SSR INIT_STATE shape used by Kuaishou share pages."""
+    marker = INIT_STATE.search(body)
+    if not marker:
+        raise ValueError("video_page_metadata_unavailable")
+    try:
+        data, _ = json.JSONDecoder().raw_decode(body[marker.end():])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("video_page_metadata_unavailable") from None
+    urls, seen = [], set()
+
+    def add(value):
+        try:
+            normalized = public_url(value)
+            p = urlsplit(normalized)
+            if (p.scheme == "https" and p.port is None and p.hostname.endswith((".kwaicdn.com", ".djvod.ndcimgs.com"))
+                    and normalized not in seen):
+                seen.add(normalized)
+                urls.append(normalized)
+        except (TypeError, ValueError):
+            pass
+
+    def collect(value, depth=0):
+        if depth > 10:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in ("url", "backupUrl"):
+                    if isinstance(child, str):
+                        add(child)
+                    elif isinstance(child, list) and len(child) <= 10:
+                        for item in child:
+                            add(item)
+                collect(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child, depth + 1)
+
+    found = None
+    nodes = 0
+
+    def walk(value, depth=0):
+        nonlocal found, nodes
+        if found is not None or depth > 18 or nodes >= 20000:
+            return
+        nodes += 1
+        if isinstance(value, dict):
+            photo = value.get("photo")
+            if isinstance(photo, dict):
+                share_info = photo.get("share_info", "")
+                caption = photo.get("caption", "")
+                duration = photo.get("duration")
+                if (isinstance(share_info, str) and identity in share_info and isinstance(caption, str)
+                        and len(caption.encode("utf8")) <= 4096 and type(duration) is int
+                        and 0 < duration <= 3600000):
+                    before = len(urls)
+                    main = photo.get("mainMvUrls", [])
+                    if isinstance(main, list):
+                        for item in main:
+                            if isinstance(item, dict):
+                                add(item.get("url"))
+                    collect(photo.get("manifest"))
+                    if len(urls) > before:
+                        found = (caption, duration, urls[:])
+                        return
+            for child in value.values():
+                walk(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, depth + 1)
+
+    walk(data)
+    if found is None:
+        raise ValueError("video_page_metadata_unavailable")
+    return found
+
+
 def kuaishou_photo(body, identity):
     marker = STATE.search(body)
     if not marker:
-        raise ValueError("video_page_metadata_unavailable")
+        return kuaishou_init_state_photo(body, identity)
     try:
         data, _ = json.JSONDecoder().raw_decode(body[marker.end():])
         client = data["defaultClient"]
@@ -171,7 +249,10 @@ def kuaishou_photo(body, identity):
         if type(duration) is not int or not 0 < duration <= 3600000 or not isinstance(caption, str) or len(caption.encode("utf8")) > 4096:
             raise ValueError()
     except (KeyError, TypeError, ValueError):
-        raise ValueError("video_page_metadata_unavailable") from None
+        try:
+            return kuaishou_init_state_photo(body, identity)
+        except ValueError:
+            raise ValueError("video_page_metadata_unavailable") from None
 
     def resolve(value):
         visited = set()
@@ -217,7 +298,10 @@ def kuaishou_photo(body, identity):
                         for url in value["json"]:
                             add(url)
     if not urls:
-        raise ValueError("video_public_playback_unavailable")
+        try:
+            return kuaishou_init_state_photo(body, identity)
+        except ValueError:
+            raise ValueError("video_public_playback_unavailable") from None
     return caption, duration, urls
 
 

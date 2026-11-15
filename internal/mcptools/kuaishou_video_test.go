@@ -102,3 +102,29 @@ func TestKuaishouNewCDNAndExactPhotoBackupURLs(t *testing.T) {
 		t.Fatal("valid backup lost when primary is unavailable", urls, err)
 	}
 }
+
+func TestKuaishouInitStateFallbackReadsExactPhoto(t *testing.T) {
+	id := "3xsynthetic12345"
+	state := map[string]any{
+		"photo-state": map[string]any{
+			"photo": map[string]any{
+				"share_info": "userId=3xauthor&photoId=" + id,
+				"caption":    "synthetic init-state video",
+				"duration":   97133,
+				"mainMvUrls": []any{map[string]any{"url": "https://synthetic.djvod.ndcimgs.com/video.mp4?init=1"}},
+				"manifest": map[string]any{"adaptationSet": []any{map[string]any{
+					"representation": []any{map[string]any{"backupUrl": []any{"https://synthetic.kwaicdn.com/video.mp4?init=2"}}},
+				}}},
+			},
+		},
+	}
+	b, _ := json.Marshal(state)
+	body := append([]byte("<script>window.INIT_STATE = "), b...)
+	p, urls, err := parseKuaishouPhoto(body, id)
+	if err != nil || p.ID != id || p.Duration != 97133 || len(urls) != 2 {
+		t.Fatal(p, urls, err)
+	}
+	if urls[0] != "https://synthetic.djvod.ndcimgs.com/video.mp4?init=1" || urls[1] != "https://synthetic.kwaicdn.com/video.mp4?init=2" {
+		t.Fatal("unexpected init-state media URLs", urls)
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 var kuaishouPhotoPath = regexp.MustCompile(`^/(?:fw/photo|short-video)/([A-Za-z0-9]{8,40})/?$`)
 var kuaishouStateMarker = regexp.MustCompile(`window\.__APOLLO_STATE__\s*=\s*`)
+var kuaishouInitStateMarker = []byte("window.INIT_STATE")
 
 type kuaishouRequestKey struct{}
 
@@ -49,7 +50,13 @@ type kuaishouPhoto struct {
 // recommended works, scripts and arbitrary JSON URLs are never media sources.
 func parseKuaishouPhoto(body []byte, id string) (kuaishouPhoto, []string, error) {
 	var photo kuaishouPhoto
+	fallback := func() (kuaishouPhoto, []string, error) {
+		return parseKuaishouInitState(body, id)
+	}
 	missing := func() (kuaishouPhoto, []string, error) {
+		if parsed, urls, err := fallback(); err == nil {
+			return parsed, urls, nil
+		}
 		return photo, nil, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
 	}
 	if len(body) > 2<<20 {
@@ -136,9 +143,128 @@ func parseKuaishouPhoto(body []byte, id string) (kuaishouPhoto, []string, error)
 		}
 	}
 	if len(urls) == 0 {
+		if parsed, fallbackURLs, fallbackErr := fallback(); fallbackErr == nil {
+			return parsed, fallbackURLs, nil
+		}
 		return photo, nil, &WebError{Code: "video_public_playback_unavailable", Stage: "video_playback"}
 	}
 	return photo, urls, nil
+}
+
+// Newer Kuaishou share pages expose the exact work in window.INIT_STATE rather
+// than the older Apollo state object. Keep the fallback bounded and require
+// the received photo id in share_info before accepting a nested photo object.
+// This reads only the page's own server-rendered state; it does not execute
+// scripts or follow arbitrary URLs.
+func parseKuaishouInitState(body []byte, id string) (kuaishouPhoto, []string, error) {
+	var empty kuaishouPhoto
+	marker := bytes.Index(body, kuaishouInitStateMarker)
+	if marker < 0 {
+		return empty, nil, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+	}
+	eq := bytes.IndexByte(body[marker:], '=')
+	if eq < 0 {
+		return empty, nil, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+	}
+	dec := json.NewDecoder(bytes.NewReader(body[marker+eq+1:]))
+	var root any
+	if dec.Decode(&root) != nil {
+		return empty, nil, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+	}
+	var result kuaishouPhoto
+	var urls []string
+	seen := map[string]bool{}
+	add := func(raw string) {
+		u, err := url.Parse(raw)
+		if err == nil && u.Scheme == "https" && kuaishouMediaHost(u.Hostname()) && u.Port() == "" && validPublicURL(raw) == nil && len(raw) <= 8192 && !seen[raw] {
+			seen[raw] = true
+			urls = append(urls, raw)
+		}
+	}
+	var visit func(any, int)
+	nodes := 0
+	visit = func(value any, depth int) {
+		if depth > 18 || nodes >= 20000 || result.ID != "" {
+			return
+		}
+		nodes++
+		m, ok := value.(map[string]any)
+		if !ok {
+			if list, ok := value.([]any); ok {
+				for _, item := range list {
+					visit(item, depth+1)
+					if result.ID != "" {
+						return
+					}
+				}
+			}
+			return
+		}
+		if rawPhoto, ok := m["photo"].(map[string]any); ok {
+			shareInfo, _ := rawPhoto["share_info"].(string)
+			caption, _ := rawPhoto["caption"].(string)
+			duration, _ := rawPhoto["duration"].(float64)
+			if strings.Contains(shareInfo, id) && caption != "" && len(caption) <= 4096 && duration > 0 && duration <= 3600000 {
+				result = kuaishouPhoto{ID: id, Caption: caption, Duration: int64(duration)}
+				if manifest, ok := rawPhoto["manifest"]; ok {
+					if encoded, err := json.Marshal(manifest); err == nil {
+						result.Manifest = encoded
+					}
+				}
+				if main, ok := rawPhoto["mainMvUrls"].([]any); ok {
+					for _, item := range main {
+						if entry, ok := item.(map[string]any); ok {
+							if raw, ok := entry["url"].(string); ok {
+								add(raw)
+							}
+						}
+					}
+				}
+				var collect func(any, int)
+				collect = func(node any, level int) {
+					if level > 10 {
+						return
+					}
+					switch item := node.(type) {
+					case map[string]any:
+						for key, child := range item {
+							if (key == "url" || key == "backupUrl") && strings.Contains(strings.ToLower(key), "url") {
+								if raw, ok := child.(string); ok {
+									add(raw)
+								} else if list, ok := child.([]any); ok {
+									for _, candidate := range list {
+										if raw, ok := candidate.(string); ok {
+											add(raw)
+										}
+									}
+								}
+							}
+							collect(child, level+1)
+						}
+					case []any:
+						for _, child := range item {
+							collect(child, level+1)
+						}
+					}
+				}
+				collect(rawPhoto["manifest"], 0)
+				if len(urls) > 0 {
+					return
+				}
+			}
+		}
+		for _, child := range m {
+			visit(child, depth+1)
+			if result.ID != "" {
+				return
+			}
+		}
+	}
+	visit(root, 0)
+	if result.ID == "" || len(urls) == 0 {
+		return empty, nil, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}
+	}
+	return result, urls, nil
 }
 
 func downloadKuaishouVideo(ctx context.Context, raw string, limit int64, content bool) (PublicVideo, error) {

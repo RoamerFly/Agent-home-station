@@ -21,9 +21,15 @@ type windowsMusicConfig struct {
 	Enabled bool   `json:"enabled"`
 	Policy  string `json:"policy"`
 	Python  string `json:"python"`
-	Entry   string `json:"entry"`
-	Media   string `json:"media"`
-	IPC     string `json:"ipc"`
+	// PublicRoot is the single public tool package mounted read-only by the
+	// compatibility bridge. Empty keeps the historical managed workspace root.
+	PublicRoot string `json:"public_root,omitempty"`
+	// SingingVoiceConfig is account/application state and therefore stays in
+	// data even when the public RVC package is outside the workspace.
+	SingingVoiceConfig string `json:"singing_voice_config,omitempty"`
+	Entry              string `json:"entry"`
+	Media              string `json:"media"`
+	IPC                string `json:"ipc"`
 	// ComfyURL optionally points at a separately managed Station Comfy
 	// process. Empty keeps the private child-process behavior.
 	ComfyURL string `json:"comfy_url,omitempty"`
@@ -205,6 +211,43 @@ func registeredComfyInput(raw string) (string, error) {
 	return raw, nil
 }
 
+func registeredMusicPublicRoot(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if err := regularMusicPath(raw, true); err != nil {
+		return "", err
+	}
+	manifest := filepath.Join(raw, "plugin.json")
+	if err := regularMusicPath(manifest, false); err != nil {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil || len(data) > 16384 {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	var value struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(data, &value) != nil || strings.TrimSpace(value.ID) == "" {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	if err := regularMusicPath(filepath.Join(raw, "runtime"), true); err != nil {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	return filepath.Clean(raw), nil
+}
+
+func registeredMusicVoiceConfig(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if err := regularMusicPath(raw, false); err != nil {
+		return "", toolInputError("windows_music_voice_config_invalid")
+	}
+	return filepath.Clean(raw), nil
+}
+
 func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if m.draining() {
 		return "", toolInputError("windows_music_start_paused_for_update")
@@ -226,15 +269,37 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		return "", err
 	}
 	public := filepath.Join(m.managedRoot(), "public_workspace")
-	pythonRoot := filepath.Join(public, "runtimes") + string(os.PathSeparator)
+	if config.PublicRoot != "" {
+		public, err = registeredMusicPublicRoot(config.PublicRoot)
+		if err != nil {
+			return "", err
+		}
+	}
+	voiceConfig, err := registeredMusicVoiceConfig(config.SingingVoiceConfig)
+	if err != nil {
+		return "", err
+	}
+	// A package root stores its executable runtime under `runtime/`; the
+	// historical managed-workspaces layout used `runtimes/`. Accept the
+	// package layout while retaining the legacy workspace boundary.
+	pythonRootName := "runtimes"
+	if _, statErr := os.Stat(filepath.Join(public, "plugin.json")); statErr == nil {
+		pythonRootName = "runtime"
+	}
+	pythonRoot := filepath.Join(public, pythonRootName) + string(os.PathSeparator)
 	if !strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) || !strings.EqualFold(filepath.Base(config.Python), "python.exe") || filepath.Base(config.Entry) != "managed_music_service.py" {
 		return "", toolInputError("windows_music_runtime_identity_invalid")
 	}
 	for _, resource := range []struct {
 		path string
 		dir  bool
-	}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
+	}{{public, true}, {config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
 		if err := regularMusicPath(resource.path, resource.dir); err != nil {
+			return "", err
+		}
+	}
+	if voiceConfig != "" {
+		if err := regularMusicPath(voiceConfig, false); err != nil {
 			return "", err
 		}
 	}
@@ -299,8 +364,13 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		for _, resource := range []struct {
 			path string
 			dir  bool
-		}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
+		}{{public, true}, {config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
 			if err := regularMusicPath(resource.path, resource.dir); err != nil {
+				return err
+			}
+		}
+		if voiceConfig != "" {
+			if err := regularMusicPath(voiceConfig, false); err != nil {
 				return err
 			}
 		}
@@ -308,6 +378,12 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	arguments := []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
 		"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"}
+	if config.PublicRoot != "" {
+		arguments = append(arguments, "--public-root", public)
+	}
+	if voiceConfig != "" {
+		arguments = append(arguments, "--singing-voice-config", voiceConfig)
+	}
 	if comfyURL != "" {
 		arguments = append(arguments, "--comfy-url", comfyURL)
 		if comfyInput != "" {

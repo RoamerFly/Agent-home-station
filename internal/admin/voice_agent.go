@@ -55,7 +55,43 @@ func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
 		public[i].Public = true
 		seen[public[i].ID] = true
 	}
-	if p.privileged() {
+	// A persisted owner task carries the owner's authorization into its
+	// continuation trace. This matters after a restart: the continuation may
+	// no longer have the original chat sender fields attached, but it must still
+	// be able to select the owner's private RVC/GPT-SoVITS voice.
+	ownerTask := false
+	// The scheduler may resume a task in a delivery conversation whose thread
+	// no longer matches the task's original source thread.  Resolve the
+	// persisted task by account and ID first, then validate the persisted
+	// owner identity and source thread.  Using lookupTask with the current
+	// continuation thread alone made private voices disappear after recovery.
+	ownerTaskAuthorized := func(task agentTask) bool {
+		c := p.manager.agent.config()
+		return task.OwnerRequested && task.Account == p.manager.native.Account() &&
+			contains(c.OwnerIDs, task.Sender) && c.allowsPrivilegedThread(task.Thread) &&
+			permittedRecipient(p.manager.Config().Config, task.Thread)
+	}
+	for _, candidate := range []string{p.trace.TaskID, p.trace.TraceID, strings.TrimPrefix(p.trace.TraceID, "recover-")} {
+		if candidate == "" || ownerTask {
+			continue
+		}
+		if task, ok := p.manager.agent.lookupTask(candidate, p.trace.Account, p.trace.Thread); ok {
+			ownerTask = ownerTaskAuthorized(task)
+		}
+		if ownerTask {
+			break
+		}
+		// A recovery can legitimately change the delivery thread.  Search the
+		// persisted task/history by account without trusting the model-provided
+		// thread, while retaining the owner and recipient checks above.
+		for _, task := range p.manager.agent.list(p.trace.Account, "") {
+			if task.ID == candidate && ownerTaskAuthorized(task) {
+				ownerTask = true
+				break
+			}
+		}
+	}
+	if p.privileged() || ownerTask {
 		private, err := readVoiceEntries(p.manager.privateVoiceLibrary())
 		if err != nil {
 			return nil, err

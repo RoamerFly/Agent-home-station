@@ -58,6 +58,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', default=os.environ.get('WECHAT_WORKSPACE_ROOT', '/workspace'))
     parser.add_argument('--private', default=os.environ.get('MUSIC_PRIVATE_WORKSPACE'))
+    parser.add_argument('--public-root', default=os.environ.get('MUSIC_PUBLIC_ROOT', ''),
+                        help='registered public tool package; defaults to workspace/public_workspace')
+    parser.add_argument('--singing-voice-config', default=os.environ.get('MUSIC_SINGING_VOICE_CONFIG', ''),
+                        help='account-specific singing voice configuration outside the public package')
     parser.add_argument('--python', default='/usr/local/music-env/bin/python3.10')
     parser.add_argument('--token-file', default=os.environ.get('MUSIC_TOKEN_FILE', '/run/secrets/yue-token'))
     parser.add_argument('--ipc', default='/run/music')
@@ -87,7 +91,9 @@ def main():
                 raise SystemExit(1)
         return
     workspace = Path(args.workspace).resolve(strict=True)
-    public = workspace / "public_workspace"
+    public = Path(args.public_root).resolve(strict=True) if args.public_root else workspace / "public_workspace"
+    from managed_music_runner import managed_public_root
+    public = managed_public_root(public)
     if not args.private: raise ValueError("music_private_workspace_required")
     private = Path(args.private).resolve(strict=True)
     if private.parent != workspace / "pri_workspace":
@@ -178,7 +184,7 @@ def main():
             bridge += ["--comfy-socket", str(sock)]
         else:
             bridge += ["--comfy-url", comfy_url]
-        voice = public / "manifests/singing-voice.config"
+        voice = Path(args.singing_voice_config).resolve(strict=True) if args.singing_voice_config else public / "manifests/singing-voice.config"
         if voice.is_file():
             bridge += ["--singing-voice-config", str(voice)]
         # The token-bearing HTTP bridge is trusted control code outside the

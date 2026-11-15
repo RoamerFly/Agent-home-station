@@ -31,7 +31,24 @@ def state(primary=VIDEO, backup=BACKUP):
     }}, ensure_ascii=False) + ";window.unrelatedScript='not executed'"
 
 
+def init_state():
+    return "window.INIT_STATE = " + json.dumps({"photo-state": {"photo": {
+        "share_info": "userId=3xauthor&photoId=" + PHOTO,
+        "caption": "INIT_STATE 合成视频",
+        "duration": 97133,
+        "mainMvUrls": [{"url": VIDEO}],
+        "manifest": {"adaptationSet": [{"representation": [{"backupUrl": [BACKUP]}]}]},
+    }}}, ensure_ascii=False)
+
+
 class PublicShareTests(unittest.TestCase):
+    def test_current_init_state_shape_is_parsed_for_exact_work(self):
+        result = parser.resolve({"url": PAGE}, lambda *a: response(init_state()))
+        self.assertEqual(result["title"], "INIT_STATE 合成视频")
+        self.assertEqual(result["duration_ms"], 97133)
+        self.assertEqual(result["private_media_locators"], [VIDEO, BACKUP])
+        self.assertEqual(result["coverage"], "media_locator_only")
+
     def test_same_work_canonical_retry_preserves_request_not_display_tokens(self):
         original = "https://v.m.chenzhongtech.com/fw/photo/"+PHOTO+"?shareToken=synthetic"
         calls = []

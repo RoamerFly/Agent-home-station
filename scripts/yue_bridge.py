@@ -48,23 +48,85 @@ def requested_singing_profile(body,config_path):
     if voice is None:raise ValueError('singing_voice_not_ready')
     return voice
 
-def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None):
+_SHARED_RUNTIME_FIELDS = ('runtime', 'python', 'rvc_python', 'rvc_project')
+
+
+def _merge_profile_runtime_config(profile_path, base_path, destination):
+    """Use the current public runtime with a private profile's voice assets.
+
+    Voice profiles are private data and can outlive the public tool package.
+    Older profiles therefore contain absolute paths into the previous public
+    workspace.  Keep their model/index/profile fields, but take the executable
+    runtime paths from the current registered singing configuration.  The
+    merged file is an ephemeral private-workspace file and is removed after the
+    conversion; no profile data is rewritten in place.
+    """
+    if not base_path:
+        return Path(profile_path), None
+    profile = Path(profile_path).resolve(strict=True)
+    base = Path(base_path).resolve(strict=True)
+    if profile == base:
+        return profile, None
+    profile_data = load_singing_config(profile)
+    base_data = load_singing_config(base)
+    if profile_data.get('engine') != base_data.get('engine'):
+        raise ValueError('singing_voice_configuration_changed')
+    changed = False
+    for key in _SHARED_RUNTIME_FIELDS:
+        value = base_data.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError('singing_voice_resources_missing')
+        if profile_data.get(key) != value:
+            profile_data[key] = value
+            changed = True
+    if not changed:
+        return profile, None
+    destination = Path(destination).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f'.{destination.stem}-', suffix='.singing.json', dir=destination.parent)
+    os.close(fd)
+    temporary_path = Path(temporary)
+    try:
+        temporary_path.write_text(json.dumps(profile_data, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return temporary_path, temporary_path
+
+
+def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None,base_config_path=None):
     current=singing_profile(config_path,expected['config_sha256']) if cancelled is not None else singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
-    if cancelled is not None or not sandbox:
-        converter=Path(__file__).with_name('singing_voice.py').resolve()
-    else:
-        converter=Path(sandbox['public'])/'projects/agent-tools/singing_voice.py'
-    argv=[current['python'],str(converter),'--config',str(config_path),'--source',str(source),'--output',str(destination)]
-    if cancelled is not None:
-        argv.append('--offline')
+    effective_config,temporary_config = _merge_profile_runtime_config(config_path,base_config_path,destination)
     try:
+        if temporary_config is None:
+            interpreter=current['python']
+        else:
+            effective_data=load_singing_config(effective_config)
+            interpreter=effective_data.get('python')
+            if not isinstance(interpreter,str) or not interpreter:
+                raise ValueError('singing_voice_resources_missing')
+        if cancelled is not None or not sandbox:
+            converter=Path(__file__).with_name('singing_voice.py').resolve()
+        else:
+            converter=Path(sandbox['public'])/'projects/agent-tools/singing_voice.py'
+            # Standalone public tool packages do not duplicate the bridge control
+            # scripts under projects/agent-tools. Reuse the trusted control copy
+            # when that legacy path is absent; the Windows runner mounts it read-only.
+            if not converter.is_file():
+                converter=Path(__file__).with_name('singing_voice.py').resolve()
+        argv=[interpreter,str(converter),'--config',str(effective_config),'--source',str(source),'--output',str(destination)]
+        if cancelled is not None:
+            argv.append('--offline')
         if sandbox:
             from managed_music_runner import run
             options={'cancelled':cancelled} if cancelled is not None else {}
             run(sandbox['public'],sandbox['private'],str(destination.parent),argv,gpu=True,timeout=3600,**options)
         else:subprocess.run(argv,check=True,timeout=3600,**no_console_options())
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
+    finally:
+        if temporary_config is not None:
+            temporary_config.unlink(missing_ok=True)
     if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
     return destination
 
@@ -420,9 +482,9 @@ def main():
             def convert_voice(config,expected,source,destination):
                 if station:
                     if cancelled():raise ValueError('station_rvc_interrupted')
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled,base_config_path=args.singing_voice_config)
                 else:
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,base_config_path=args.singing_voice_config)
 
             output=rvc_cover.convert(body,state,jid,config,profile,convert_voice)
             if station:

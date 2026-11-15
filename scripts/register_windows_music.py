@@ -132,13 +132,16 @@ def publish_json(path, value, backup=True):
     pending.replace(path)
 
 
-def register(workspace, legacy_public, admin, program_runtimes, authorize=False, repair_inheritance=True, comfy_url="", comfy_input=""):
+def register(workspace, legacy_public, admin, program_runtimes, authorize=False, repair_inheritance=True,
+             comfy_url="", comfy_input="", public_root=""):
     if os.name != "nt" or not authorize:
         raise ValueError("explicit_windows_music_policy_authorization_required")
     workspace, legacy_public, admin, program_runtimes = [Path(p).resolve(strict=True) for p in
                                                         (workspace, legacy_public, admin, program_runtimes)]
     training = deployed_training_resources(program_runtimes)
-    public = workspace / "public_workspace"
+    public = Path(public_root).resolve(strict=True) if public_root else workspace / "public_workspace"
+    if public.is_symlink() or getattr(public, "is_junction", lambda: False)() or not public.is_dir():
+        raise ValueError("music_public_tool_root_invalid")
     packages = public / "runtimes/windows-music-packages"
     if not (packages / "torch").is_dir() or not (packages / "aiohttp").is_dir():
         raise ValueError("verified_windows_music_packages_required")
@@ -237,7 +240,10 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         return value
 
     default = voice_config(legacy_public / "manifests/singing-voice.config")
-    publish_json(public / "manifests/singing-voice.config", default)
+    # This profile contains account-specific model paths, so keep it in the
+    # application data tree even when public code/models live in a tool package.
+    voice_config_path = legacy_public / "manifests/singing-voice.config"
+    publish_json(voice_config_path, default)
     count = 0
     roots = [public / "models/voice-library"]
     roots += [p / "voice-library" for p in (workspace / "pri_workspace").iterdir() if p.is_dir() and not p.is_symlink()]
@@ -278,6 +284,7 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
     ipc = admin / "windows-music-ipc"
     ipc.mkdir(mode=0o700, exist_ok=True)
     profile = {"enabled": True, "policy": POLICY, "python": python,
+               "public_root": str(public), "singing_voice_config": str(voice_config_path),
                "entry": str(entry), "media": str(program_runtimes / "windows-media"), "ipc": str(ipc)}
     normalized_comfy_url = registered_comfy_url(comfy_url)
     if normalized_comfy_url:
@@ -300,8 +307,9 @@ if __name__ == "__main__":
     parser.add_argument("--program-runtimes", required=True)
     parser.add_argument("--comfy-url", default="", help="optional Station-owned loopback ComfyUI URL")
     parser.add_argument("--comfy-input", default="", help="input folder shared with the external ComfyUI")
+    parser.add_argument("--public-root", default="", help="registered public tool package root")
     parser.add_argument("--authorize-registry-and-private-network", action="store_true")
     parser.add_argument("--inheritance-already-verified", action="store_true", help="skip repeating the full initial migration ACL repair")
     args = parser.parse_args()
     register(args.workspace, args.legacy_public, args.admin, args.program_runtimes, args.authorize_registry_and_private_network,
-             not args.inheritance_already_verified, args.comfy_url, args.comfy_input)
+             not args.inheritance_already_verified, args.comfy_url, args.comfy_input, args.public_root)

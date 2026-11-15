@@ -716,6 +716,7 @@ func (m *Manager) start(c Config) {
 		if err != nil {
 			m.setState("error")
 			m.log("bot_stopped_check_connection_or_checkpoint")
+			m.log("bot_runtime_detail_" + botFailureDetail(err))
 			m.log(botFailureReason(err))
 			m.record(bot.Record{Event: "bot_runtime_failed", Category: "error", Origin: "system", Status: "failed", Reason: botFailureReason(err)})
 		}

@@ -23,3 +23,27 @@ func botFailureReason(err error) string {
 	}
 	return "bot_state_processing_failed"
 }
+
+// Keep the fixed public failure code while retaining a bounded, sanitized
+// detail in the private admin log for local recovery. This is especially
+// useful on Windows where checkpoint replacement errors can be transient.
+func botFailureDetail(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	value := strings.ToLower(err.Error())
+	value = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, value)
+	value = strings.Trim(value, "_")
+	if len(value) > 160 {
+		value = value[:160]
+	}
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
