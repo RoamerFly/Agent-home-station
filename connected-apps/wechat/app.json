@@ -101,7 +101,7 @@
     "adapter/station_worker.go": "2369ae315bfc39ee3e4dc5234af151bd1df0cf7de7237c9daaab6af86ee33eeb",
     "adapter/station_worker_test.go": "3b874e95bd98a8194ce35c6849c5b0168359cc2bc14ba452b98d8c966781840a",
     "adapter/tools.go": "bfaee95d98792e67425c807c7eb11c74647c2531cfd0ce6252dff873b3e2f3b0",
-    "adapter/windows/WechatStationRuntime.cs": "2db9e9d3eab4ed41417da90442b03ce7fd1dddea3fba945a5e7c66f66fd72fb1",
+    "adapter/windows/WechatStationRuntime.cs": "8e53797249b420caee1cdefd95eb3acfc4a3e84bf7eff0ac0a8f01945c72e4e6",
     "adapter/worker_checkpoint.go": "6a4072f84328eaa863bed0f8901d4828d4ccfc369c71553f4030bd4bded483c7",
     "adapter/worker_checkpoint_test.go": "e9a3bb1aaa15e49a7b3ee36493b54852156390548a38d38ae7734059977244a8",
     "adapter/worker_checkpoint_windows_test.go": "4bcdf45f600ccb5dc6d793738a1a5b19b739385ba0074d0cf1d90e0ef94c7e51",
@@ -109,7 +109,7 @@
     "capabilities.json": "bbdeb872b36220639af35e56a1bf1a67356e8d0f55235b2b88378eaa55072ccb",
     "config.schema.json": "8491177ce18b8c2860389a81e3022162f5ba7d98024abf04251bf0eb8d16bd57",
     "config/README.md": "b8abc4aaf42f02970bb3b7db56301c2444dc4a180ff8f249648a795bf662a5d7",
-    "runtime/components.json": "0c1d2a41162415d154139b8c8956ade26fa5ae887ec707906baff7e9e45ff039",
+    "runtime/components.json": "133bfcc8a8ca387ef01acdacbc4d0c52923433ae3e8e9c40843ef89b98dcfa2d",
     "ui.schema.json": "c38bd0cfc1d56a37eb4d8d241f5dfb0a86dfe116a9e0f2ae502c6e82dddca517",
     "workspace/README.md": "0bdb5577b891591f700547835f613ce5fcdc9816b2c5028ed872e624bc5d6640"
   }

@@ -273,7 +273,7 @@ func (s *stationWechat) runningDesktopEpoch() string {
 		return ""
 	}
 	defer root.Close()
-	raw, err := readLegacyImportFile(root, stationNativeStopFile, 16<<10)
+	raw, err := readLegacyImportFile(root, stationNativeLifecycleRelative(s.dataDir, stationNativeStopFile), 16<<10)
 	var marker stationNativeStop
 	if err != nil || json.Unmarshal(raw, &marker) != nil || marker.Version != 1 || marker.State != "starting" ||
 		len(marker.Epoch) != 32 || strings.Trim(marker.Epoch, "0123456789abcdef") != "" || !sameCutoverPath(s.dataDir, marker.DataRoot) ||

@@ -65,12 +65,15 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		return out, errors.New("无法打开目标站数据目录")
 	}
 	defer root.Close()
-	unlock, err := lockReleaseRoot(root, dir, stationNativeRunLockFile)
+	stationRunLock := stationNativeLifecycleRelative(dir, stationNativeRunLockFile)
+	stationRelease := stationNativeLifecycleRelative(dir, stationNativeReleaseFile)
+	stationStop := stationNativeLifecycleRelative(dir, stationNativeStopFile)
+	unlock, err := lockReleaseRoot(root, dir, stationRunLock)
 	if err != nil {
 		return out, errors.New("目标站仍在使用，或停机锁不可用")
 	}
 	defer unlock()
-	if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
+	if _, err := root.Lstat(stationRelease); !errors.Is(err, os.ErrNotExist) {
 		return out, errors.New("目标站带有封存记录，无法作为接收站")
 	}
 	workerRoot := filepath.Join(stationApplicationsRelative(dir), wechatapp.ID, "workers")
@@ -88,7 +91,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		!targetHost.activationBound(*proof, req.ConnectionID, archive.Plan, proof.TargetDataset) || legacyImportOverlap(dir, proof.OldRoot) {
 		return out, errors.New("目标站缺少原连接一致的冻结记录和交接资料")
 	}
-	stopRaw, err := readLegacyImportFile(root, stationNativeStopFile, 16<<10)
+	stopRaw, err := readLegacyImportFile(root, stationStop, 16<<10)
 	var stop stationNativeStop
 	if err != nil || json.Unmarshal(stopRaw, &stop) != nil || stop.Version != 1 || stop.State != "stopped" ||
 		!sameCutoverPath(stop.DataRoot, stop.DataRoot) || sameCutoverPath(stop.DataRoot, dir) ||

@@ -77,6 +77,16 @@ func stationObservationsDir(dataDir string) string {
 	return filepath.Join(dataDir, "app-observations")
 }
 
+// stationNativeLifecycleRelative keeps native locks and stop proofs inside
+// main_setting for structured homes. Legacy homes continue using their
+// historical root-level filenames during migration.
+func stationNativeLifecycleRelative(dataDir, name string) string {
+	if structuredDataRoot(dataDir) && directoryExists(filepath.Join(dataDir, "main_setting")) {
+		return filepath.Join("main_setting", name)
+	}
+	return name
+}
+
 // DefaultWorkspaceRoot is exported for the command entry point and legacy
 // migration commands. It keeps old tests and homes on their former path while
 // new release data uses data/main/workspaces.

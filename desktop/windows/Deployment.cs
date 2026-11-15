@@ -26,6 +26,12 @@ namespace WechatAgent.Desktop {
         internal bool LocalStationNative { get { return LocalStation && StationNativeEnabled && StationNativeUrl != ""; } }
         internal string PrivateSettingsRoot { get { return LocalStation ? Path.Combine(Root, "main_setting") : Path.Combine(Workspace, "secrets"); } }
         internal string StationNativeRoot { get { return Path.Combine(Root, "applications", "wechat", "native"); } }
+        internal string StationLifecycleRoot {
+            get {
+                var main = Path.Combine(Root, "main_setting");
+                return LocalStation ? main : Root;
+            }
+        }
         internal bool UsesPortableStationData(string launcherDirectory) {
             if (!LocalStation) return false;
             var package = LocalStationDefault(launcherDirectory);
@@ -54,16 +60,16 @@ namespace WechatAgent.Desktop {
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "tool_packages_directory") != "") {
                     var tools = Text(data, "tool_packages_directory");
-                    if (!Path.IsPathRooted(tools) || tools.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
-                        throw new InvalidOperationException("公共工具包目录必须是本机绝对路径。");
-                    local.ToolPackagesDirectory = Path.GetFullPath(tools);
+                    if (tools.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
+                        throw new InvalidOperationException("公共工具包目录路径无效。");
+                    local.ToolPackagesDirectory = Path.GetFullPath(Path.IsPathRooted(tools) ? tools : Path.Combine(workspace, tools));
                     if (Directory.Exists(local.ToolPackagesDirectory)) WindowsRuntime.NoLinks(local.ToolPackagesDirectory);
                 }
                 if (Text(data, "application_packages_directory") != "") {
                     var apps = Text(data, "application_packages_directory");
-                    if (!Path.IsPathRooted(apps) || apps.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
-                        throw new InvalidOperationException("公共应用包目录必须是本机绝对路径。");
-                    local.ApplicationPackagesDirectory = Path.GetFullPath(apps);
+                    if (apps.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
+                        throw new InvalidOperationException("公共应用包目录路径无效。");
+                    local.ApplicationPackagesDirectory = Path.GetFullPath(Path.IsPathRooted(apps) ? apps : Path.Combine(workspace, apps));
                     if (Directory.Exists(local.ApplicationPackagesDirectory)) WindowsRuntime.NoLinks(local.ApplicationPackagesDirectory);
                 }
                 if (Text(data, "admin_url") != "") local.Url = LocalUrl(Text(data, "admin_url"));
@@ -105,6 +111,7 @@ namespace WechatAgent.Desktop {
             if (!LocalStation || String.IsNullOrEmpty(StationNativeUrl))
                 throw new InvalidOperationException("请先在本机部署中配置微信原生地址。");
             var config = Path.Combine(Workspace, "secrets", "local-deployment.json");
+            if (!File.Exists(config) && LocalStation) config = Path.Combine(Root, "main_setting", "local-deployment.json");
             ValidateDeploymentFile(config);
             var original = File.ReadAllBytes(config);
             var text = Encoding.UTF8.GetString(original).TrimStart('\uFEFF');

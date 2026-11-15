@@ -48,12 +48,13 @@ namespace WechatAgent.Desktop {
         }
         void AdmitNativeDirectories() {
             var nativeRoot = d.StationNativeRoot;
+            WindowsRuntime.PrivateDirectory(d.StationLifecycleRoot, UsesPortableData);
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications"), UsesPortableData);
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications", "wechat"), UsesPortableData);
             WindowsRuntime.PrivateDirectory(nativeRoot, UsesPortableData);
         }
         void RejectOfflineNativeRelease() {
-            var marker = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-release.json");
+            var marker = Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-release.json");
             try {
                 var attributes = File.GetAttributes(marker);
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -71,7 +72,7 @@ namespace WechatAgent.Desktop {
             }
         }
         void BeginNativeRun() {
-            var path = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-run.lock");
+            var path = Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-run.lock");
             NoLinkedFile(path);
             var gate = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
             try {
@@ -91,7 +92,7 @@ namespace WechatAgent.Desktop {
             try { gate.Unlock(0, 1); }
             finally { gate.Dispose(); }
         }
-        string NativeStopStatePath() { return Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-stop.json"); }
+        string NativeStopStatePath() { return Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-stop.json"); }
         void WriteNativeStopState(string state, string epoch, string serverId, string generation) {
             if (state != "starting" && state != "stopped") throw new ArgumentException("本机成长站停止状态无效。", "state");
             if (String.IsNullOrEmpty(epoch) || epoch.Length != 32 || !epoch.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))

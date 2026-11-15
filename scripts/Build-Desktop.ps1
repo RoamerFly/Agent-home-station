@@ -419,8 +419,9 @@ if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWo
  }
 }
 if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $ApplicationPackagesDirectory)){
- $secrets=Join-Path $OutputDirectory 'secrets'
- $deployment=Join-Path $secrets 'local-deployment.json'
+ $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))
+ $settingsRoot=Join-Path $dataRoot 'main_setting'
+ $deployment=Join-Path $settingsRoot 'local-deployment.json'
  Assert-NoReparsePointAncestor $deployment
  $existingDeployment=Get-Item -LiteralPath $deployment -Force -ErrorAction SilentlyContinue
  if($existingDeployment){
@@ -429,18 +430,16 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
    if($entry.Value -and [string]$existingData.($entry.Name) -ne [IO.Path]::GetFullPath($entry.Value)){throw ('Existing local-deployment.json has a different '+$entry.Name+'. Use a fresh output directory or edit the package configuration explicitly.')}
   }
  }else{
-  New-Item -ItemType Directory -Force -Path $secrets | Out-Null
-  $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))
+  New-Item -ItemType Directory -Force -Path $settingsRoot | Out-Null
   New-Item -ItemType Directory -Force -Path $dataRoot,(Join-Path $dataRoot 'applications'),(Join-Path $dataRoot 'publictools'),(Join-Path $dataRoot 'main_setting'),(Join-Path $dataRoot 'workspace') | Out-Null
   $layoutPath=Join-Path $dataRoot 'data-layout.json'
   if(-not (Test-Path -LiteralPath $layoutPath -PathType Leaf)){
    [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/main"}',[Text.UTF8Encoding]::new($false))
   }
-  $jsonData=[ordered]@{backend='local-station';data_root=(Join-Path $OutputDirectory 'data');workspace_root=(Join-Path $OutputDirectory 'data\managed-workspaces')}
-  $jsonData.workspace_root=(Join-Path $dataRoot 'workspace')
+  $jsonData=[ordered]@{backend='local-station';data_root='data';workspace_root='data\workspace'}
   if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
-  if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)}
-  if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)}
+  if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools')){$jsonData.tool_packages_directory='publictools'}
+  if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'applications')){$jsonData.application_packages_directory='applications'}
   $json=($jsonData | ConvertTo-Json)
   $bytes=[Text.Encoding]::UTF8.GetBytes($json)
   $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)

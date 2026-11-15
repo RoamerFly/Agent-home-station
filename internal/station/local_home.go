@@ -102,7 +102,7 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	}
 	var fenceErr error
 	if entry, ok := registry.Lookup(wechatapp.ID); ok && entry.Registration == "station-native" {
-		if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
+		if _, err := root.Lstat(stationNativeLifecycleRelative(dir, stationNativeReleaseFile)); !errors.Is(err, os.ErrNotExist) {
 			fenceErr = errors.New("微信原生启动已禁用或无法核对解除交接记录")
 		}
 	}

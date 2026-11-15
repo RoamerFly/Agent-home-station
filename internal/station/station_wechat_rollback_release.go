@@ -69,7 +69,9 @@ func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, ve
 		return out, errors.New("无法打开成长站数据目录")
 	}
 	defer stationRoot.Close()
-	unlockStation, err := lockReleaseRoot(stationRoot, dataDir, stationNativeRunLockFile)
+	stationRunLock := stationNativeLifecycleRelative(dataDir, stationNativeRunLockFile)
+	stationStop := stationNativeLifecycleRelative(dataDir, stationNativeStopFile)
+	unlockStation, err := lockReleaseRoot(stationRoot, dataDir, stationRunLock)
 	if err != nil {
 		return out, errors.New("成长站微信原生服务仍在使用，或停机锁不可用")
 	}
@@ -110,7 +112,7 @@ func releaseLegacyWechat(ctx context.Context, req LegacyWechatReleaseRequest, ve
 	if auditErr != nil || json.Unmarshal(auditRaw, &audit) != nil || !audit.matchesTarget(target) {
 		return out, errors.New("找不到与此冻结连接匹配的核对报告")
 	}
-	markerRaw, markerErr := readLegacyImportFile(stationRoot, stationNativeStopFile, 16<<10)
+	markerRaw, markerErr := readLegacyImportFile(stationRoot, stationStop, 16<<10)
 	var marker stationNativeStop
 	if markerErr != nil || json.Unmarshal(markerRaw, &marker) != nil {
 		return out, errors.New("缺少成长站微信原生服务的正常停机记录")
@@ -165,6 +167,7 @@ func lockReleaseRoot(root *os.Root, path, name string) (func(), error) {
 
 func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, stationRoot, oldRoot *os.Root, proof legacyActivation, oldServer, stopDigest string, unknown int) (LegacyWechatReleaseResult, error) {
 	var out LegacyWechatReleaseResult
+	stationRelease := stationNativeLifecycleRelative(cutoverPath(req.DataDir), stationNativeReleaseFile)
 	key := legacyHandoverKey(proof)
 	claimRaw, err := json.Marshal(key)
 	if err != nil {
@@ -180,7 +183,7 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 	}
 	intent := legacyReleaseIntent{Version: 1, ConnectionID: req.ConnectionID, AuditDigest: req.AuditDigest, ApplyDigest: applyDigest,
 		ClaimDigest: claimDigest, AcceptUnknown: req.AcceptUnknown, RelocationTarget: req.RelocationTarget}
-	intentRaw, intentErr := readLegacyImportFile(stationRoot, stationNativeReleaseFile, 4096)
+	intentRaw, intentErr := readLegacyImportFile(stationRoot, stationRelease, 4096)
 	hasIntent := intentErr == nil
 	var saved legacyReleaseIntent
 	if hasIntent && (json.Unmarshal(intentRaw, &saved) != nil || saved != intent) || !hasIntent && !errors.Is(intentErr, os.ErrNotExist) {
@@ -229,7 +232,7 @@ func releaseLegacyClaim(ctx context.Context, req LegacyWechatReleaseRequest, sta
 		if err := writeLegacyStagedFile(stationRoot, stage, intent); err != nil {
 			return LegacyWechatReleaseResult{}, errors.New("无法保存成长站微信原生启动禁用记录")
 		}
-		if err := stationRoot.Rename(stage, stationNativeReleaseFile); err != nil {
+		if err := stationRoot.Rename(stage, stationRelease); err != nil {
 			return LegacyWechatReleaseResult{}, errors.New("无法启用成长站微信原生启动禁用记录")
 		}
 	}
