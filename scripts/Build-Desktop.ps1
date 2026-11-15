@@ -428,9 +428,9 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
   foreach($entry in @(@{Name='tool_packages_directory';Value=$ToolPackagesDirectory},@{Name='application_packages_directory';Value=$ApplicationPackagesDirectory})){
    if($entry.Value -and [string]$existingData.($entry.Name) -ne [IO.Path]::GetFullPath($entry.Value)){throw ('Existing local-deployment.json has a different '+$entry.Name+'. Use a fresh output directory or edit the package configuration explicitly.')}
   }
- }elseif(-not (Get-Item -LiteralPath (Join-Path $OutputDirectory 'data') -Force -ErrorAction SilentlyContinue)){
+ }else{
   New-Item -ItemType Directory -Force -Path $secrets | Out-Null
-  $jsonData=[ordered]@{backend='local-station'}
+  $jsonData=[ordered]@{backend='local-station';data_root=(Join-Path $OutputDirectory 'data');workspace_root=(Join-Path $OutputDirectory 'data\managed-workspaces')}
   if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
   if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)}
   if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)}
