@@ -2509,6 +2509,15 @@
     control.append(input, track, appElement("span", "应用开关 · " + note + (enabled === true ? "（自主功能另行授权）" : ""), "app-power-label"));
     return control;
   }
+  function openLegacyWechatConsole() {
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "wechat-legacy-console-open" });
+      return;
+    }
+    // Keep a browser fallback for local preview builds. The desktop host
+    // replaces this navigation with an owned modal window in the packaged app.
+    window.location.href = "http://127.0.0.1:8080/?from_station=1";
+  }
   function renderApps(renderDetail = true) {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
@@ -2543,12 +2552,8 @@
       const power = appPowerSwitch(record);
       if (power) card.append(power);
       open.addEventListener("click", () => {
-        // The WeChat application is deliberately opened in the complete
-        // legacy Whale Console. Its page, controls and API contract are the
-        // old bot implementation; the station only owns the outer identity
-        // and native-account lifecycle.
-        if (record.id === "wechat" && window.location.port !== "8080") {
-          window.location.href = "http://127.0.0.1:8080/?from_station=1";
+        if (record.id === "wechat") {
+          openLegacyWechatConsole();
           return;
         }
         if (apps.openID && apps.openID !== record.id) {
@@ -4525,6 +4530,7 @@
         if (record.id === "wechat") {
           if (!apps.power.loaded && !apps.power.loading && apps.registered?.some((row) => row.id === "wechat")) void loadWechatPower();
           const page = legacyWechatSection("账号与授权", "沿用旧版微信 Bot 的账号卡、扫码登录和授权核对入口。", "legacy-account-page");
+          page.append(memoryButton("打开旧版微信控制台", "button compact secondary", openLegacyWechatConsole));
           page.append(wechatDesktopServiceRow(), appConnectionRow(record, view.connection));
           if (selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
             if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };

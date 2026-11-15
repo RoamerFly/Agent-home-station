@@ -31,6 +31,7 @@ namespace WechatAgent.Desktop {
         WebView2 web;
         DouyinAuthorizationDialog douyinAuthorization;
         ShareCredentialLoginDialog shareCredentialLogin;
+        LegacyWechatConsoleDialog legacyWechatConsole;
         CancellationTokenSource operation;
         bool busy, allowExit, exitRequested, stoppingCommitted;
         FormWindowState restoredState = FormWindowState.Maximized;
@@ -159,6 +160,7 @@ namespace WechatAgent.Desktop {
             ++pageGeneration;
             CloseDouyinAuthorization();
             CloseShareCredentialLogin();
+            CloseLegacyWechatConsole();
             if (busy) {
                 status.Text = "操作完成后将安全停止服务并退出…";
                 tray.Text = "Agent-home-station · 正在准备退出";
@@ -190,7 +192,7 @@ namespace WechatAgent.Desktop {
         }
         void ClosePage() {
             ++pageGeneration;
-            CloseDouyinAuthorization(); CloseShareCredentialLogin();
+            CloseDouyinAuthorization(); CloseShareCredentialLogin(); CloseLegacyWechatConsole();
             var view = web; web = null;
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             if (!IsDisposed && !Disposing) { placeholder.Visible = true; placeholder.BringToFront(); }
@@ -320,6 +322,10 @@ namespace WechatAgent.Desktop {
                 OpenShareCredentialLogin(view, generation, input);
                 return;
             }
+            if (Deployment.Text(input, "type") == "wechat-legacy-console-open") {
+                OpenLegacyWechatConsole();
+                return;
+            }
             if (Deployment.Text(input, "type") != "douyin-auth-open") return;
             var authorizationURL = Deployment.Text(input, "url");
             var expiresAt = Deployment.Text(input, "expires_at");
@@ -428,6 +434,19 @@ namespace WechatAgent.Desktop {
             var dialog = shareCredentialLogin; shareCredentialLogin = null;
             if (dialog != null && !dialog.IsDisposed) dialog.CancelForServiceStop();
         }
+        void OpenLegacyWechatConsole() {
+            if (!deployment.LocalStation || String.IsNullOrEmpty(deployment.LegacyUrl) || IsDisposed || Disposing || exitRequested || allowExit) return;
+            CloseLegacyWechatConsole();
+            LegacyWechatConsoleDialog dialog = null;
+            dialog = new LegacyWechatConsoleDialog(deployment, () => { if (legacyWechatConsole == dialog) legacyWechatConsole = null; });
+            legacyWechatConsole = dialog;
+            dialog.FormClosed += delegate { if (legacyWechatConsole == dialog) legacyWechatConsole = null; };
+            dialog.Show(this);
+        }
+        void CloseLegacyWechatConsole() {
+            var dialog = legacyWechatConsole; legacyWechatConsole = null;
+            if (dialog != null && !dialog.IsDisposed) dialog.CloseForServiceStop();
+        }
         bool CurrentPage(WebView2 view, int generation) {
             return !IsDisposed && !Disposing && !exitRequested && !allowExit && generation == pageGeneration && web == view && !view.IsDisposed;
         }
@@ -450,7 +469,7 @@ namespace WechatAgent.Desktop {
         void SetRetryText(string text) { retry.Text = retry.AccessibleName = text; }
         void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
-            if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); CloseShareCredentialLogin(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
+            if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); CloseShareCredentialLogin(); CloseLegacyWechatConsole(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
             base.Dispose(disposing);
         }
     }
