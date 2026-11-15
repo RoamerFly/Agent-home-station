@@ -17,7 +17,7 @@ var kuaishouInitStateMarker = []byte("window.INIT_STATE")
 type kuaishouRequestKey struct{}
 
 func kuaishouMediaHost(host string) bool {
-	return strings.HasSuffix(host, ".kwaicdn.com") || strings.HasSuffix(host, ".djvod.ndcimgs.com")
+	return strings.HasSuffix(host, ".kwaicdn.com") || strings.HasSuffix(host, ".djvod.ndcimgs.com") || strings.HasSuffix(host, ".kwimgs.com") || strings.HasSuffix(host, ".yximgs.com")
 }
 
 func kuaishouPhotoID(raw string) string {
