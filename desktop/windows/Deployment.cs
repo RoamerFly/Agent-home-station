@@ -17,6 +17,7 @@ namespace WechatAgent.Desktop {
         internal string Workspace, Distro, User, Root, Account, Music;
         internal string Backend = "wsl", NativeUrl = "http://127.0.0.1:6174";
         internal string NativeExe, AdminExe, StationExe, StationWorkspace, StationNativeExe, StationNativeUrl;
+        internal string LegacyUrl = "http://127.0.0.1:8080";
         internal bool StationNativeEnabled = true;
         internal bool Windows { get { return Backend == "windows-native"; } }
         internal bool LocalStation { get { return Backend == "local-station"; } }
@@ -128,7 +129,7 @@ namespace WechatAgent.Desktop {
         }
         internal static Deployment LocalStationDefault(string workspace) {
             var data = Path.Combine(workspace, "data", "station");
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), StationNativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = "", StationNativeUrl = "" };
+            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "managed-workspaces"), StationExe = Path.Combine(workspace, "agent-home-station-server.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
         }
         // Keep the desktop's local-station login resolution identical to the
         // Go server. The old Windows-native and WSL deployments retain their

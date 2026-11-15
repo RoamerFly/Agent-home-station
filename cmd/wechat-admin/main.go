@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -58,6 +59,14 @@ func run() error {
 	dir := os.Getenv("WECHAT_ADMIN_DATA_DIR")
 	if dir == "" {
 		dir = "/data/admin"
+	}
+	if stationData, workerDir, modelFile := os.Getenv("WECHAT_STATION_DATA_DIR"), os.Getenv("WECHAT_STATION_WORKER_DIR"), os.Getenv("WECHAT_STATION_MODEL_FILE"); stationData != "" || workerDir != "" || modelFile != "" {
+		if stationData == "" || workerDir == "" || modelFile == "" {
+			return fmt.Errorf("工作站旧版微信目录配置不完整")
+		}
+		if err := admin.PrepareStationLegacyData(dir, modelFile, workerDir); err != nil {
+			return err
+		}
 	}
 	password, err := admin.Password(dir, os.Getenv("WECHAT_ADMIN_PASSWORD"))
 	if err != nil {

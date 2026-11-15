@@ -173,6 +173,12 @@ func (s *stationWechat) closeWorkerResources() {
 }
 
 func (s *stationWechat) restore() {
+	// In legacy-console mode the old admin.Manager owns the same native
+	// account and checkpoint. Starting the station worker as well would make
+	// two bots race on one account, so the station keeps the provider/UI only.
+	if os.Getenv("AHS_LEGACY_WECHAT") == "1" {
+		return
+	}
 	s.lifecycle.Restore(s.Connections, s.restoreWorker)
 }
 

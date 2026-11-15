@@ -2533,6 +2533,14 @@
       const power = appPowerSwitch(record);
       if (power) card.append(power);
       open.addEventListener("click", () => {
+        // The WeChat application is deliberately opened in the complete
+        // legacy Whale Console. Its page, controls and API contract are the
+        // old bot implementation; the station only owns the outer identity
+        // and native-account lifecycle.
+        if (record.id === "wechat" && window.location.port !== "8080") {
+          window.location.href = "http://127.0.0.1:8080/";
+          return;
+        }
         if (apps.openID && apps.openID !== record.id) {
           clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
         }

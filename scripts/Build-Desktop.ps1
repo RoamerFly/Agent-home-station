@@ -70,16 +70,20 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
  if(-not(Test-Path -LiteralPath $wxSource -PathType Leaf)){throw 'The selected WeChat runtime has no wx.exe.'}
  $wxHash=(Get-FileHash -LiteralPath $wxSource -Algorithm SHA256).Hash.ToLower()
  if([string]::IsNullOrWhiteSpace($sourceManifest.native_sha256) -or $sourceManifest.native_sha256.ToLower() -ne $wxHash){throw 'The selected WeChat runtime wx.exe does not match its manifest hash.'}
+ $legacyAdminSource=Join-Path $source 'wechat-admin.exe'
+ if(-not(Test-Path -LiteralPath $legacyAdminSource -PathType Leaf)){throw 'The selected WeChat runtime has no wechat-admin.exe for the legacy console.'}
+ $legacyAdminHash=(Get-FileHash -LiteralPath $legacyAdminSource -Algorithm SHA256).Hash.ToLower()
+ if([string]::IsNullOrWhiteSpace($sourceManifest.admin_sha256) -or $sourceManifest.admin_sha256.ToLower() -ne $legacyAdminHash){throw 'The selected wechat-admin.exe does not match its manifest hash.'}
 
- $required=@('wx.exe','vcruntime140.dll','MSVC-REDISTRIBUTABLE-NOTICE.txt','agent-wechat-LICENSE.txt')
+ $required=@('wx.exe','wechat-admin.exe','vcruntime140.dll','MSVC-REDISTRIBUTABLE-NOTICE.txt','agent-wechat-LICENSE.txt')
  $sourceNames=@($files | ForEach-Object {Get-RelativeRuntimePath $source $_.FullName})
  foreach($name in $required){if($sourceNames -notcontains $name){throw ('The selected WeChat runtime is incomplete: missing '+$name+'.')}}
  foreach($file in $files){
   $relative=Get-RelativeRuntimePath $source $file.FullName
-  # The legacy native package includes the old management server.  It is not
-  # a LocalStation dependency and must never be copied into this bundle.
-  if($relative -in @('windows-native-manifest.json','wechat-admin.exe')){continue}
-  $allowed=($relative -eq 'wx.exe') -or ($relative -match '(?i)\.dll$') -or ($relative -match '(?i)(license|notice).*\.txt$')
+   # The old management server is part of the LocalStation legacy-console
+   # runtime; other native bundle files remain strictly allowlisted.
+  if($relative -eq 'windows-native-manifest.json'){continue}
+  $allowed=($relative -in @('wx.exe','wechat-admin.exe')) -or ($relative -match '(?i)\.dll$') -or ($relative -match '(?i)(license|notice).*\.txt$')
   if(-not $allowed){throw ('The selected WeChat runtime contains a file that is not a native dependency or notice: '+$relative)}
  }
 
@@ -95,7 +99,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   $hashes=[ordered]@{}
   foreach($file in $files){
    $relative=Get-RelativeRuntimePath $source $file.FullName
-   if($relative -in @('windows-native-manifest.json','wechat-admin.exe')){continue}
+   if($relative -eq 'windows-native-manifest.json'){continue}
    $target=Join-Path $staging $relative.Replace('/','\')
    New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
    Copy-Item -LiteralPath $file.FullName -Destination $target
@@ -114,6 +118,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    native_patch_sha256=$sourceManifest.native_patch_sha256
    native_license_commit=$sourceManifest.native_license_commit
    native_sha256=$wxHash
+   admin_sha256=$(if($sourceManifest.admin_sha256){$sourceManifest.admin_sha256.ToLower()}else{''})
    files=$hashes
    live_login_verified=$false
    live_delivery_verified=$false
@@ -135,7 +140,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
  } finally {
   if($stagingCreated -and (Test-Path -LiteralPath $staging)){Remove-Item -LiteralPath $staging -Recurse -Force}
  }
- Write-Output ('Staged verified WeChat native runtime: '+$destination+' ('+$files.Count+' files; no account data or management executable).')
+ Write-Output ('Staged verified WeChat native runtime and legacy console: '+$destination+' ('+$files.Count+' files; no account data).')
 }
 
 function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
@@ -206,7 +211,7 @@ foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_b
  }
 }
 if($LocalStation){
- $foreignOutput=@('WechatAgent.exe','runtimes\windows-x64\wechat-admin.exe','runtimes\windows-music')
+ $foreignOutput=@('WechatAgent.exe','runtimes\windows-music')
 }else{
  $foreignOutput=@('AgentHomeStation.exe','agent-home-station-server.exe')
 }

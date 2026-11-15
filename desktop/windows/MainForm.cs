@@ -408,7 +408,7 @@ namespace WechatAgent.Desktop {
                 else if (message.WParam.ToInt64() == 2) restoredState = FormWindowState.Maximized;
             }
         }
-        bool Local(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.GetLeftPart(UriPartial.Authority) == deployment.Url && uri.UserInfo == ""; }
+        bool Local(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.UserInfo == "" && (uri.GetLeftPart(UriPartial.Authority) == deployment.Url || deployment.LocalStation && uri.GetLeftPart(UriPartial.Authority) == deployment.LegacyUrl); }
         static bool Http(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"); }
         void SetRetryText(string text) { retry.Text = retry.AccessibleName = text; }
         void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }

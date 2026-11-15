@@ -11,6 +11,7 @@ namespace WechatAgent.Desktop {
     internal sealed class LocalStationRuntime : IDisposable {
         readonly Deployment d;
         OwnedProcess server;
+        OwnedProcess legacy;
         ProcessJob job;
         WechatStationRuntime wechat;
         bool stationAdmitted;
@@ -39,6 +40,7 @@ namespace WechatAgent.Desktop {
             if (server != null) { server.Dispose(); server = null; }
             if (job != null) { job.Dispose(); job = null; }
             await StopWechat(false, true);
+            if (legacy != null) { legacy.Dispose(); legacy = null; }
             if (!File.Exists(d.StationExe)) throw new InvalidOperationException("本机成长站程序不存在，请使用 LocalStation 预览包重新构建。");
             WindowsRuntime.NoLinks(d.StationExe); WindowsRuntime.NoLinks(d.Root);
             // Overlapping private data and unsafe desktop ownership are host
@@ -71,6 +73,29 @@ namespace WechatAgent.Desktop {
                     WindowsRuntime.NoLinks(media);
                     programEnv["PATH"] = media + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
                 }
+                if (startNative && wechat != null && File.Exists(d.AdminExe)) {
+                    var legacyDir = Path.Combine(d.Root, "apps", "wechat", "legacy-admin");
+                    var workerRoot = Path.Combine(d.Root, "apps", "wechat", "workers");
+                    var workerDirs = Directory.Exists(workerRoot) ? Directory.GetDirectories(workerRoot) : new string[0];
+                    var workerDir = workerDirs.Length == 1 ? workerDirs[0] : Path.Combine(workerRoot, "legacy");
+                    var legacyEnv = new Dictionary<string, string>(programEnv);
+                    legacyEnv["WECHAT_ADMIN_DATA_DIR"] = legacyDir;
+                    var stationPasswordPath = Path.Combine(d.Root, "admin-password");
+                    if (File.Exists(stationPasswordPath)) legacyEnv["WECHAT_ADMIN_PASSWORD"] = File.ReadAllText(stationPasswordPath).Trim();
+                    legacyEnv["WECHAT_BOT_STATE_DIR"] = Path.Combine(legacyDir, "bot-state");
+                    legacyEnv["WECHAT_ADMIN_LISTEN"] = new Uri(d.LegacyUrl).Authority;
+                    legacyEnv["WECHAT_ADMIN_ORIGIN"] = d.LegacyUrl;
+                    legacyEnv["WECHAT_NATIVE_URL"] = d.StationNativeUrl;
+                    legacyEnv["WECHAT_NATIVE_TOKEN_FILE"] = Path.Combine(d.Root, "apps", "wechat", "native", "api-token");
+                    legacyEnv["WECHAT_NATIVE_ACCOUNT"] = "desktop";
+                    legacyEnv["WECHAT_STATION_DATA_DIR"] = d.Root;
+                    legacyEnv["WECHAT_STATION_WORKER_DIR"] = workerDir;
+                    legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "local-model.json");
+                    Stage("legacy-admin.start.begin");
+                    legacy = OwnedProcess.Start(d.AdminExe, new [] { "--desktop" }, d.Workspace, legacyEnv, Path.Combine(d.Root, "logs", "legacy-wechat.log"), job);
+                    Stage("legacy-admin.start.ok");
+                    programEnv["AHS_LEGACY_WECHAT"] = "1";
+                }
                 Stage("server.start.begin");
                 server = OwnedProcess.Start(d.StationExe, args.ToArray(), d.Workspace, programEnv, Path.Combine(d.Root, "logs", "station.log"), job);
                 Stage("server.start.ok");
@@ -83,6 +108,7 @@ namespace WechatAgent.Desktop {
             if (startFailure != null) {
                 Stage("startup.cleanup.begin");
                 if (server != null) { server.Dispose(); server = null; }
+                if (legacy != null) { legacy.Dispose(); legacy = null; }
                 Exception cleanupFailure = null;
                 if (job != null) { job.Dispose(); job = null; }
                 try { await StopWechat(false, true); } catch (Exception error) { cleanupFailure = error; }
@@ -92,7 +118,7 @@ namespace WechatAgent.Desktop {
             }
         }
         internal async Task Stop() {
-            var ownedServer = server; server = null; Exception failure = null;
+            var ownedServer = server; server = null; var ownedLegacy = legacy; legacy = null; Exception failure = null;
             var gracefulServer = false;
             try {
                 // The station stops before its daemon, preventing new provider
@@ -105,6 +131,13 @@ namespace WechatAgent.Desktop {
                 }
             } catch (Exception error) { failure = new InvalidOperationException("本机成长站未能正常完成关闭；微信原生服务仍将按本实例的归属信息停止。", error); }
             finally { if (ownedServer != null) ownedServer.Dispose(); }
+            if (ownedLegacy != null) {
+                try {
+                    if (ownedLegacy.Alive) await ownedLegacy.StopWeb(); else await ownedLegacy.WaitStopped();
+                    if (ownedLegacy.ExitCode != 0 && failure == null) failure = new InvalidOperationException("旧版微信控制台未能正常关闭。");
+                } catch (Exception error) { if (failure == null) failure = error; }
+                finally { ownedLegacy.Dispose(); }
+            }
             if (job != null) { job.Dispose(); job = null; }
             try { await StopWechat(gracefulServer && failure == null, false); }
             catch (Exception error) { if (failure == null) failure = error; }
@@ -121,6 +154,7 @@ namespace WechatAgent.Desktop {
 
         public void Dispose() {
             if (server != null) server.Dispose();
+            if (legacy != null) legacy.Dispose();
             if (job != null) job.Dispose();
             if (wechat != null) wechat.Dispose();
         }
