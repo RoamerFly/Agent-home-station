@@ -171,7 +171,7 @@ def kuaishou_init_state_photo(body, identity):
         try:
             normalized = public_url(value)
             p = urlsplit(normalized)
-            if (p.scheme == "https" and p.port is None and p.hostname.endswith((".kwaicdn.com", ".djvod.ndcimgs.com"))
+            if (p.scheme == "https" and p.port is None and p.hostname.endswith((".kwaicdn.com", ".djvod.ndcimgs.com", ".kwimgs.com", ".yximgs.com"))
                     and normalized not in seen):
                 seen.add(normalized)
                 urls.append(normalized)
