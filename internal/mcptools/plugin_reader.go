@@ -34,6 +34,13 @@ func GetPublicPluginMedia(ctx context.Context, raw, source string, maxBytes int6
 	if err != nil {
 		return nil, "", err
 	}
+	// Kuaishou's CDN playback endpoints require the same credential-free
+	// browser profile as its public share page. The plugin returns only a
+	// source-verified locator, so derive this transport hint from the pinned
+	// public host rather than accepting a caller-supplied header or cookie.
+	if u, parseErr := url.Parse(raw); parseErr == nil && kuaishouMediaHost(u.Hostname()) {
+		ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
+	}
 	return GetPublicMedia(ctx, raw, maxBytes)
 }
 
