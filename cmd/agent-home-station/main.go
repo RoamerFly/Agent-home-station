@@ -148,7 +148,28 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 	}
 	var registry apphost.Registry
 	if cfg.wechatNativeURL != "" {
-		registration, attachErr := wechatapp.StationRegistration(ctx, cfg.wechatNativeURL, cfg.wechatNativePID, cfg.dataDir)
+		var registration apphost.Registration
+		var attachErr error
+		// The desktop-owned native child can report ready a few milliseconds
+		// before its scoped status endpoint is reachable. Retry admission inside
+		// the bounded startup window instead of degrading a valid login to
+		// waiting_login on the first transient probe.
+		for attempt := 0; attempt < 5; attempt++ {
+			registration, attachErr = wechatapp.StationRegistration(ctx, cfg.wechatNativeURL, cfg.wechatNativePID, cfg.dataDir)
+			if attachErr == nil {
+				break
+			}
+			if attempt == 4 {
+				break
+			}
+			timer := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
 		if attachErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
