@@ -58,12 +58,16 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		if !wasRunning {
 			task.State = "waiting_delivery"
 		}
-		task.LastResult = fmt.Sprintf("微信已接受附件 %d/%d", delivery.Accepted, delivery.Expected)
+		if delivery.TotalParts > 0 {
+			task.LastResult = fmt.Sprintf("微信服务端已接受语音分段 %d/%d", delivery.AcceptedParts, delivery.TotalParts)
+		} else {
+			task.LastResult = fmt.Sprintf("微信服务端已接受内容 %d/%d", delivery.Accepted, delivery.Expected)
+		}
 		if delivery.TextExpected > 0 {
 			task.LastResult += fmt.Sprintf("；文字 %d/%d", delivery.TextAccepted, delivery.TextExpected)
 		}
 		if delivery.TotalParts > 0 {
-			task.LastResult += fmt.Sprintf("；语音分段 %d/%d", delivery.AcceptedParts, delivery.TotalParts)
+			// The leading status already names the server-side voice receipt.
 		}
 		switch delivery.State {
 		case "accepted":
@@ -76,16 +80,16 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 				}
 			}
 			if delivery.CaptionOmitted {
-				task.LastResult += "；所需附件已完成交付，说明文字由模型选择省略"
+				task.LastResult += "；所需媒体已获微信服务端回执，客户端显示/播放尚未核实；说明文字由模型选择省略"
 			} else {
-				task.LastResult += "；所需附件与介绍已完成交付"
+				task.LastResult += "；所需媒体与介绍已获微信服务端回执，客户端显示/播放尚未核实"
 			}
 		case "failed", "partial_failed":
 			task.State = "failed"
 			if delivery.Expected > 0 && delivery.Accepted == delivery.Expected {
-				task.LastResult += "；附件已全部接受，后续文字说明未完成；不会重复发送附件"
+				task.LastResult += "；媒体已全部获微信服务端回执，后续文字说明未完成；不会重复发送媒体"
 			} else {
-				task.LastResult += "；交付中断，请查看失败项，已接受内容不重复发送"
+				task.LastResult += "；媒体投递中断，请查看失败项，已获回执内容不重复发送"
 			}
 		case "needs_review":
 			task.State = "needs_review"
