@@ -169,6 +169,50 @@ func TestMemberReminderPersistsAndDispatchesAfterRestartWithoutProactivePermissi
 		t.Fatal("mirror stale")
 	}
 }
+
+func TestOwnerReminderAcceptedReceiptCreatesResumableAgentFollowUp(t *testing.T) {
+	f, p, n := memberReminder(t)
+	f.manager.agent.mu.Lock()
+	f.manager.agent.settings.OwnerIDs = []string{"wxid_member"}
+	f.manager.agent.settings.PrivilegedThreads = []string{"*"}
+	f.manager.agent.mu.Unlock()
+	task := createReminder(t, p, 1)
+	f.manager.tickReminders(context.Background(), task.Next.Add(time.Second))
+	if len(n.requests) != 1 {
+		t.Fatal("reminder was not submitted", n.requests)
+	}
+	n.status.State = "accepted"
+	n.status.ServerID = "owner-reminder-receipt"
+	saved := f.manager.agent.list("test", task.Thread)[0]
+	f.manager.tickReminders(context.Background(), saved.Next.Add(3*time.Hour))
+	tasks := f.manager.agent.list("test", task.Thread)
+	var reminder, followUp *agentTask
+	for i := range tasks {
+		candidate := tasks[i]
+		if candidate.ID == task.ID {
+			reminder = &candidate
+		}
+		if candidate.ParentID == task.ID {
+			followUp = &candidate
+		}
+	}
+	if reminder == nil || reminder.State != "completed" || reminder.Reminder.FollowUpTaskID == "" {
+		t.Fatal("accepted reminder was not completed and linked", tasks)
+	}
+	if followUp == nil || followUp.State != "pending" || !followUp.OwnerRequested || followUp.RequestedText != "喝水" {
+		t.Fatal("owner reminder did not create a resumable follow-up", tasks)
+	}
+	if followUp.Constraints == nil || followUp.Constraints.Purpose != "reminder_followup" {
+		t.Fatal("follow-up constraints missing", followUp.Constraints)
+	}
+	if second, err := f.manager.scheduleReminderFollowUp(*reminder); err != nil || second != followUp.ID {
+		t.Fatal("follow-up was not idempotent", second, err)
+	}
+	if len(f.manager.agent.list("test", task.Thread)) != 2 {
+		t.Fatal("duplicate follow-up created")
+	}
+}
+
 func TestMemberReminderScopeCancellationIdempotencyAndNoPromotion(t *testing.T) {
 	f, p, n := memberReminder(t)
 	task := createReminder(t, p, 7200)

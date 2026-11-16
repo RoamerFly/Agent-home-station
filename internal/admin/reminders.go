@@ -27,6 +27,7 @@ type reminderSpec struct {
 	Job              string                  `json:"job_id,omitempty"`
 	Attempts         int                     `json:"checks"`
 	ServerID         string                  `json:"server_id,omitempty"`
+	FollowUpTaskID   string                  `json:"follow_up_task_id,omitempty"`
 }
 
 func reminderTool() mcptools.Tool {
@@ -300,6 +301,16 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 				t.LastResult = "提醒已取得微信接受回执"
 			}
 		}
+		var followUpID string
+		if t.State == "completed" {
+			followUpID, err = m.scheduleReminderFollowUp(t)
+			if err != nil {
+				m.log("reminder_followup_save_failed")
+			}
+			if followUpID != "" {
+				t.Reminder.FollowUpTaskID = followUpID
+			}
+		}
 		// Do not overwrite a concurrent user cancellation with a late receipt.
 		if updated, e := m.agent.reminderUpdate(t); e != nil {
 			m.log("reminder_state_save_failed")
@@ -312,6 +323,70 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 		}
 		return // One paced submission/status check per tick; no invocation quota.
 	}
+}
+
+// scheduleReminderFollowUp turns an owner reminder into a real resumable
+// Agent task after the reminder itself has received an accepted receipt. The
+// reminder remains a delivery record; the follow-up is the normal model/tool
+// entry point, so a request such as "make a song and send it to the group"
+// can create child tasks and execute tools instead of stopping at the text
+// reminder.
+func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
+	if t.Reminder == nil || t.Account != m.native.Account() || !contains(m.agent.config().OwnerIDs, t.Sender) {
+		return "", nil
+	}
+	id := agentID("reminder-followup", t.ID)
+	if existing, ok := m.agent.lookupTask(id, t.Account, t.Thread); ok {
+		if existing.State != "cancelled" && existing.State != "failed" {
+			return id, nil
+		}
+	}
+	var source *companion.SourceRef
+	var reply *companion.ReplyContext
+	if t.Constraints != nil {
+		if t.Constraints.Source != nil {
+			copy := *t.Constraints.Source
+			source = &copy
+		}
+		if t.Constraints.ReplyContext != nil {
+			copy := *t.Constraints.ReplyContext
+			reply = &copy
+		}
+	}
+	follow := agentTask{
+		ID:             id,
+		Account:        t.Account,
+		Thread:         t.Thread,
+		RequestThread:  t.Thread,
+		SourceThread:   t.Thread,
+		DeliveryThread: t.Thread,
+		Sender:         t.Sender,
+		ParentID:       t.ID,
+		OwnerRequested: true,
+		State:          "pending",
+		Next:           time.Now().UTC(),
+		OriginTrace:    t.OriginTrace,
+		RequestedText:  t.RequestedText,
+		Title:          "提醒到期后处理 · " + logText(t.RequestedText, 70),
+		Checkpoint:     "提醒已取得微信接受回执。请重新读取当前上下文，按原请求创建或继续真正的多步骤任务，调用所需工具并核对发送回执；不能只回复已记住。",
+		Constraints: &TaskConstraints{
+			Purpose:        "reminder_followup",
+			Account:        t.Account,
+			Thread:         t.Thread,
+			DeliveryThread: t.Thread,
+			Requester:      t.Sender,
+			Source:         source,
+			ReplyContext:   reply,
+		},
+	}
+	if follow.RequestedText == "" {
+		follow.RequestedText = strings.TrimPrefix(t.Reminder.Text, "提醒你：")
+	}
+	if err := m.agent.task(follow); err != nil {
+		return "", err
+	}
+	m.record(bot.Record{Event: "agent_task_saved", Category: "decision", ThreadID: follow.Thread, Sender: follow.Sender, MessageID: follow.OriginTrace, Status: "pending", Content: follow.Title, Reason: "reminder_due_followup", Origin: "agent"})
+	return id, nil
 }
 
 // Compare-and-swap prevents a late receipt from resurrecting a cancelled task.
