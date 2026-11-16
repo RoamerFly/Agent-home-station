@@ -14,10 +14,13 @@ import (
 
 func TestStationWechatAgentTaskPersistsAndClaimsOwnerCheckpoint(t *testing.T) {
 	dir := t.TempDir()
-	owner := func() (stationservices.Owner, error) { return stationservices.Owner{FishID: "one", ID: "owner"}, nil }
+	owner := func() (stationservices.Owner, error) { return stationservices.Owner{FishID: "fish", ID: "owner"}, nil }
 	host := &stationWechat{ctx: context.Background(), workers: map[string]*stationWechatWorker{}, ownerReader: owner}
 	worker := &stationWechatWorker{connectionID: "one", host: host, dir: dir, runtimeDir: dir, account: "one", policy: stationWechatPolicy{Grants: map[string]time.Time{"room": time.Unix(0, 0).UTC()}}}
 	host.workers["one"] = worker
+	if err := worker.saveWechatOwner(stationWechatOwnerState{Account: "one", Revision: 1, Binding: &stationWechatOwnerBinding{Sender: "owner", Dataset: "dataset", Message: "message", Fish: "fish", Owner: "owner", BoundAt: time.Now().UTC()}}); err != nil {
+		t.Fatal(err)
+	}
 	tools := &stationAttachmentTools{crossHost: host, crossConnection: "one", reads: map[string]time.Time{"room": time.Unix(0, 0).UTC()}, trace: companion.Input{Channel: "wechat", Account: "one", Thread: "room", Sender: "owner", Mode: "direct", Directed: true, TraceID: "incoming", MessageTime: time.Now().UTC().Format(time.RFC3339Nano)}}
 	raw := json.RawMessage(`{"key":"repair","title":"检查工具","checkpoint":"继续核对工具状态","state":"waiting","delay_seconds":0}`)
 	if _, err := tools.callAgentTaskTool(context.Background(), "agent_task", raw); err != nil {

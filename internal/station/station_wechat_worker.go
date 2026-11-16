@@ -128,6 +128,18 @@ type stationWechatWorker struct {
 	cutoverBlocked atomic.Bool
 }
 
+func (s *stationWechat) ownerBoundToWechat(connection, account string, in companion.Input) bool {
+	if s == nil || s.ownerReader == nil || in.Account != account || in.Sender == "" {
+		return false
+	}
+	owner, err := s.ownerReader()
+	if err != nil || owner.FishID == "" || owner.ID == "" {
+		return false
+	}
+	state, err := s.wechatOwnerState(connection, account)
+	return err == nil && state.Binding != nil && state.Binding.Sender == in.Sender && state.Binding.Fish == owner.FishID && state.Binding.Owner == owner.ID
+}
+
 func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, shareOptions pluginruntime.Options, localASR stationLocalASR, localVision stationLocalVision, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
 	entry, ok := registry.Lookup(wechatapp.ID)
 	native, supported := entry.Provider.(stationWechatNative)
@@ -768,8 +780,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		if s.localChat == nil || s.ownerReader == nil {
 			return nil
 		}
-		owner, err := s.ownerReader()
-		if err != nil || owner.FishID != in.Account || owner.ID != in.Sender {
+		if !s.ownerBoundToWechat(station.connectionID, in.Account, in) {
 			return nil
 		}
 		store, localInput, err := s.localChat.conversation()
@@ -788,8 +799,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		if policy.Grants[in.Thread].IsZero() || s.ownerReader == nil {
 			return false
 		}
-		owner, err := s.ownerReader()
-		return err == nil && owner.FishID == in.Account && owner.ID == in.Sender
+		return s.ownerBoundToWechat(station.connectionID, in.Account, in)
 	})
 	tools := mergeStationToolAccess(attachment, publicTools, nil)
 	var roundErrorLogged atomic.Bool

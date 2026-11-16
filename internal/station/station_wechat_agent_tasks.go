@@ -121,11 +121,7 @@ func (w *stationWechatWorker) ownerTaskAllowed(in companion.Input) bool {
 	if w.host == nil || w.host.ownerReader == nil {
 		return false
 	}
-	owner, err := w.host.ownerReader()
-	if err != nil || owner.FishID != in.Account || owner.ID != in.Sender {
-		return false
-	}
-	return !w.policy.Grants[in.Thread].IsZero()
+	return !w.policy.Grants[in.Thread].IsZero() && w.host.ownerBoundToWechat(w.connectionID, in.Account, in)
 }
 
 func (w *stationWechatWorker) agentTaskToolAccess(in companion.Input) bool {
@@ -239,8 +235,8 @@ func (t *stationAttachmentTools) callAgentTaskTool(ctx context.Context, name str
 
 func (w *stationWechatWorker) claimAgentTask(now time.Time, account string, busy func(string) bool) (*companion.Input, error) {
 	w.ownerMu.Lock()
-	defer w.ownerMu.Unlock()
 	tasks, err := w.readAgentTasks()
+	w.ownerMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -252,15 +248,29 @@ func (w *stationWechatWorker) claimAgentTask(now time.Time, account string, busy
 		if w.host == nil || w.host.ownerReader == nil || w.policy.Grants[task.Thread].IsZero() {
 			continue
 		}
-		owner, ownerErr := w.host.ownerReader()
-		if ownerErr != nil || owner.FishID != task.Account || owner.ID != task.Sender {
+		if !w.host.ownerBoundToWechat(w.connectionID, task.Account, companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Directed: true}) {
 			continue
 		}
-		task.State, task.Runs, task.Updated = "running", task.Runs+1, now.UTC()
-		if err := w.writeAgentTasks(tasks); err != nil {
-			return nil, err
+		w.ownerMu.Lock()
+		latest, latestErr := w.readAgentTasks()
+		if latestErr != nil {
+			w.ownerMu.Unlock()
+			return nil, latestErr
 		}
-		return &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, Mode: "direct", Directed: true, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), BackgroundResult: true, TaskID: task.ID, OriginTraceID: task.OriginTrace, TraceID: task.ID + "-run-" + now.UTC().Format("20060102T150405"), Text: "继续已保存任务：" + task.Checkpoint, MessageTime: now.UTC().Format(time.RFC3339Nano)}, nil
+		for j := range latest {
+			if latest[j].ID != task.ID || latest[j].State != "pending" && latest[j].State != "waiting" || time.Now().Before(latest[j].Next) {
+				continue
+			}
+			latest[j].State, latest[j].Runs, latest[j].Updated = "running", latest[j].Runs+1, now.UTC()
+			if writeErr := w.writeAgentTasks(latest); writeErr != nil {
+				w.ownerMu.Unlock()
+				return nil, writeErr
+			}
+			claimed := latest[j]
+			w.ownerMu.Unlock()
+			return &companion.Input{Channel: "wechat", Account: claimed.Account, Thread: claimed.Thread, Sender: claimed.Sender, Mode: "direct", Directed: true, IsGroup: strings.HasSuffix(claimed.Thread, "@chatroom"), BackgroundResult: true, TaskID: claimed.ID, OriginTraceID: claimed.OriginTrace, TraceID: claimed.ID + "-run-" + now.UTC().Format("20060102T150405"), Text: "继续已保存任务：" + claimed.Checkpoint, MessageTime: now.UTC().Format(time.RFC3339Nano)}, nil
+		}
+		w.ownerMu.Unlock()
 	}
 	return nil, nil
 }
