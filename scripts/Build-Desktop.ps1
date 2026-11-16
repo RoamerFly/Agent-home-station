@@ -126,6 +126,18 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   [IO.File]::WriteAllText((Join-Path $staging 'windows-native-manifest.json'),($record | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
   if((Get-FileHash -LiteralPath (Join-Path $staging 'wx.exe') -Algorithm SHA256).Hash.ToLower() -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
   if(Test-Path -LiteralPath $destination){
+   # A previous manual update could have left the temporary backup names that
+   # Windows tools commonly create beside the native bundle. They are not part
+   # of the verified runtime and would make the station's strict inventory
+   # check reject an otherwise valid package. Remove only these two known
+   # generated names; all other unexpected files remain a hard error.
+   foreach($backupName in @('wechat-admin.exe~','wx.exe~')){
+    $backupPath=Join-Path $destination $backupName
+    if(Test-Path -LiteralPath $backupPath -PathType Leaf){
+     Remove-Item -LiteralPath $backupPath -Force
+     Write-Output ('Removed stale native runtime backup: '+$backupPath)
+    }
+   }
    if(Test-LocalStationRuntimeIdentical -Existing $destination -ExpectedFiles $hashes -ExpectedNativeHash $wxHash){
     Write-Output ('Verified existing WeChat native runtime: '+$destination+'; it was not replaced.')
     return

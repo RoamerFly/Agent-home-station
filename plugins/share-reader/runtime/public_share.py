@@ -16,6 +16,11 @@ PHOTO = re.compile(r"^/(?:fw/photo|short-video)/([A-Za-z0-9]{8,40})/?$")
 STATE = re.compile(r"window\.__APOLLO_STATE__\s*=\s*")
 INIT_STATE = re.compile(r"window\.INIT_STATE\s*=\s*")
 KUAI_HOSTS = {"v.m.chenzhongtech.com", "www.kuaishou.com", "kuaishou.com"}
+
+
+def is_kuaishou_host(host):
+    """Accept the rotating m.chenzhongtech.com share hosts used by short links."""
+    return isinstance(host, str) and (host in KUAI_HOSTS or host.endswith(".m.chenzhongtech.com"))
 BILI_HOSTS = {"www.bilibili.com", "bilibili.com"}
 BILI_VIDEO = re.compile(r"^/video/(BV[A-Za-z0-9]{10})/?$")
 BILI_SHORT = re.compile(r"^/[A-Za-z0-9]{3,32}/?$")
@@ -144,7 +149,7 @@ def read_response(response, maximum):
 
 def photo_id(raw):
     p = urlsplit(public_url(raw))
-    if p.hostname not in KUAI_HOSTS or p.port is not None:
+    if not is_kuaishou_host(p.hostname) or p.port is not None:
         return ""
     match = PHOTO.fullmatch(p.path)
     if not match:
@@ -430,7 +435,7 @@ def resolve(args, get):
                 final = public_url(replacement["url"])
         else:
             host = urlsplit(final).hostname
-            if host in KUAI_HOSTS or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
+            if is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
                 # These pages need a platform adapter. App landing text is never
                 # a substitute for the received video's actual content.
                 raise ValueError("share_platform_adapter_required")

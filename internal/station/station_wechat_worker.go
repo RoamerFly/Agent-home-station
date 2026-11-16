@@ -128,6 +128,60 @@ type stationWechatWorker struct {
 	cutoverBlocked atomic.Bool
 }
 
+func (s *stationWechat) addBoundOwnerReplyGrant(connection, account string, policy stationWechatPolicy) stationWechatPolicy {
+	state, err := s.wechatOwnerState(connection, account)
+	grants := make(map[string]time.Time, len(policy.Grants)+1)
+	for thread, granted := range policy.Grants {
+		grants[thread] = granted
+	}
+	if err == nil && state.Binding != nil && !state.Binding.BoundAt.IsZero() {
+		ownerInput := companion.Input{Channel: wechatapp.ID, Account: account, Thread: state.Binding.Sender, Sender: state.Binding.Sender, Directed: true, Mode: "direct"}
+		if s.ownerBoundToWechat(connection, account, ownerInput) && (grants[state.Binding.Sender].IsZero() || grants[state.Binding.Sender].Before(state.Binding.BoundAt)) {
+			grants[state.Binding.Sender] = state.Binding.BoundAt
+		}
+	}
+	// Older single-account releases have a trusted legacy agent-config.json
+	// with owner_ids but no newer owner-binding.json yet. Preserve that
+	// explicit owner authorization during cutover so the owner's private chat
+	// does not get treated as an ordinary unlisted contact. Other contacts
+	// remain subject to explicit reply grants.
+	for _, sender := range s.legacyOwnerReplyIDs() {
+		if grants[sender].IsZero() {
+			grants[sender] = time.Unix(0, 0).UTC()
+		}
+	}
+	policy.Grants = grants
+	return policy
+}
+
+func (s *stationWechat) legacyOwnerReplyIDs() []string {
+	if s == nil || s.dataDir == "" {
+		return nil
+	}
+	path := filepath.Join(s.dataDir, "applications", wechatapp.ID, "legacy-admin", "agent-config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 8<<20 {
+		return nil
+	}
+	var cfg struct {
+		Enabled  bool     `json:"enabled"`
+		OwnerIDs []string `json:"owner_ids"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil || !cfg.Enabled || len(cfg.OwnerIDs) > 30 {
+		return nil
+	}
+	seen := make(map[string]bool, len(cfg.OwnerIDs))
+	ids := make([]string, 0, len(cfg.OwnerIDs))
+	for _, id := range cfg.OwnerIDs {
+		id = strings.TrimSpace(id)
+		if id != "" && identity.ValidPathID(id) && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (s *stationWechat) ownerBoundToWechat(connection, account string, in companion.Input) bool {
 	if s == nil || s.ownerReader == nil || in.Account != account || in.Sender == "" {
 		return false
@@ -751,6 +805,11 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		return err
 	}
 	station.account = native.Account()
+	// The bound owner private chat is an implicit reply scope. It is not a
+	// group whitelist entry, so add it to this run's immutable policy snapshot
+	// after rechecking the persisted owner binding. Other private contacts still
+	// require an explicit reply grant.
+	policy = s.addBoundOwnerReplyGrant(station.connectionID, native.Account(), policy)
 	dir := station.dir
 	if err := wechatapp.WaitWorkerLogin(ctx, native); err != nil {
 		return err

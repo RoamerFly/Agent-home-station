@@ -18,7 +18,7 @@ func TestShareCardDescriptionNeverClaimsWatchingOrIncludesCredentials(t *testing
 }
 
 func TestSharedVideoReadReasonPreservesPublicMediaFailure(t *testing.T) {
-	for _, code := range []string{"share_media_unavailable", "share_media_download_failed", "share_media_candidates_partial"} {
+	for _, code := range []string{"share_media_unavailable", "share_media_download_failed", "share_media_candidates_partial", "share_requires_browser", "share_platform_adapter_required"} {
 		if got := sharedVideoReadReason(errors.New(code)); got != code {
 			t.Fatalf("reason for %q = %q", code, got)
 		}

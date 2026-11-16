@@ -60,6 +60,15 @@ class PublicShareTests(unittest.TestCase):
         self.assertEqual(result["source_url"], PAGE)
         self.assertNotIn("shareToken", json.dumps(result))
 
+    def test_rotating_kuaishou_short_link_host_uses_init_state(self):
+        original = "https://v.kuaishou.com/n1gmEfeR"
+        canonical = "https://kph8gvfz.m.chenzhongtech.com/fw/photo/" + PHOTO + "?cc=share_wxms&photoId=" + PHOTO
+        result = parser.resolve({"url": original, "video_required": True}, lambda *a: response(init_state(), canonical))
+        self.assertEqual(result["platform"], "kuaishou")
+        self.assertEqual(result["object_id"], PHOTO)
+        self.assertEqual(result["title"], "INIT_STATE 合成视频")
+        self.assertEqual(result["private_media_locators"], [VIDEO, BACKUP])
+
     def test_exact_photo_and_candidates_are_not_video_observation(self):
         first = parser.resolve({"url": PAGE, "candidate_limit": 1}, lambda *a: response(state()))
         self.assertEqual(first["private_media_locators"], [VIDEO])
