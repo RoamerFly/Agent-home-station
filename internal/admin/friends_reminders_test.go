@@ -213,6 +213,48 @@ func TestOwnerReminderAcceptedReceiptCreatesResumableAgentFollowUp(t *testing.T)
 	}
 }
 
+func TestReminderDueEntersExecutionRoundWithoutNativeReceipt(t *testing.T) {
+	f, p, n := memberReminder(t)
+	f.manager.agent.mu.Lock()
+	f.manager.agent.settings.OwnerIDs = []string{"wxid_member"}
+	f.manager.agent.settings.PrivilegedThreads = []string{"*"}
+	f.manager.agent.mu.Unlock()
+	task := createReminder(t, p, 3600)
+	f.manager.processDueReminders(context.Background(), task.Next.Add(time.Hour), false)
+	if len(n.requests) != 0 {
+		t.Fatal("due reminder sent a native message", n.requests)
+	}
+	tasks := f.manager.agent.list("test", task.Thread)
+	var followUp *agentTask
+	for i := range tasks {
+		if tasks[i].ParentID == task.ID {
+			followUp = &tasks[i]
+		}
+	}
+	if followUp == nil || !followUp.ReminderDue || followUp.State != "pending" || followUp.RequestedText != "喝水" {
+		t.Fatal("due reminder did not enter execution round", tasks)
+	}
+	if len(tasks) != 2 || tasks[0].Reminder == nil && tasks[1].Reminder == nil {
+		t.Fatal("original reminder record was not retained", tasks)
+	}
+}
+
+func TestReminderOverdueAtStartupNeedsOwnerDecision(t *testing.T) {
+	f, p, n := memberReminder(t)
+	task := createReminder(t, p, 3600)
+	f.manager.agent.mu.Lock()
+	stored := f.manager.agent.data.Tasks[task.ID]
+	stored.Reminder.Due = time.Now().Add(-time.Minute)
+	stored.Next = stored.Reminder.Due
+	f.manager.agent.data.Tasks[task.ID] = stored
+	f.manager.agent.mu.Unlock()
+	f.manager.prepareReminderSchedule(time.Now())
+	got := f.manager.agent.list("test", task.Thread)[0]
+	if got.State != "needs_review" || !strings.Contains(got.LastResult, "主人") || len(n.requests) != 0 {
+		t.Fatal("overdue startup reminder was executed automatically", got, n.requests)
+	}
+}
+
 func TestMemberReminderScopeCancellationIdempotencyAndNoPromotion(t *testing.T) {
 	f, p, n := memberReminder(t)
 	task := createReminder(t, p, 7200)

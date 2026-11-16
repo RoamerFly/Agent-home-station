@@ -157,6 +157,7 @@ type Manager struct {
 	actions             *wechatapp.ActionLedger
 	mcp                 mcpSettings
 	plugins             *pluginLedger
+	reminderWake        chan struct{}
 }
 
 func (m *Manager) setWorker(worker *bot.Worker) {
@@ -259,7 +260,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO, reminderWake: make(chan struct{}, 1)}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {

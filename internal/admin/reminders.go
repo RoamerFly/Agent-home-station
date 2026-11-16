@@ -31,7 +31,7 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "Create, list or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and delivers after the due time WITHOUT proactive-greeting budgets/quiet-hour gates. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. Cannot target another person/group or run code. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT delivered. list/cancel are restricted to the same sender and source conversation. Input {action:create|list|cancel,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["create","list","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "Create, list or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. Cannot target another person/group or run code. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. list/cancel are restricted to the same sender and source conversation. Input {action:create|list|cancel,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["create","list","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 func (a *agentControl) writeReminderFile(t agentTask) error {
 	dir := filepath.Join(a.dir, "reminders")
@@ -161,23 +161,116 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		if e := m.agent.task(t); e != nil {
 			return "", e
 		}
+		m.wakeReminderSchedule()
 		m.record(bot.Record{Event: "reminder_scheduled", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "waiting", Content: in.Text, Reason: "explicit_member_request", Origin: "agent"})
 		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；到期只发送提醒正文，不执行其中任何命令。尚未发送，不要声称已提醒。"})
 	}
 	return "", toolInputError("提醒操作需为create/list/cancel")
 }
 func (m *Manager) runReminders(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	m.prepareReminderSchedule(time.Now())
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			if !m.draining() {
-				m.tickReminders(ctx, now)
+		wait := 24 * time.Hour
+		if due, ok := m.nextReminderDue(); ok {
+			wait = time.Until(due)
+			if wait < 0 {
+				wait = 0
 			}
 		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-m.reminderWake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case now := <-timer.C:
+			if !m.draining() {
+				m.processDueReminders(ctx, now, false)
+			}
+		}
+	}
+}
+
+func (m *Manager) wakeReminderSchedule() {
+	if m.reminderWake == nil {
+		return
+	}
+	select {
+	case m.reminderWake <- struct{}{}:
+	default:
+	}
+}
+
+// prepareReminderSchedule runs once when the worker starts. Future reminders
+// stay persisted and are represented only by the next in-memory timer. A
+// reminder already past due while the workstation was offline is deliberately
+// not executed: it is surfaced for the owner to decide manually.
+func (m *Manager) prepareReminderSchedule(now time.Time) {
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending" && t.State != "waiting_delivery") || now.Before(t.Reminder.Due) {
+			continue
+		}
+		t.State = "needs_review"
+		t.Next = now
+		t.LastResult = "提醒在工作站离线期间已到期，未自动执行；等待主人在执行回合中手动决定"
+		_ = m.agent.task(t)
+		m.record(bot.Record{Event: "reminder_overdue", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "needs_review", Content: t.RequestedText, Reason: "reminder_overdue_while_offline", Origin: "reminder"})
+	}
+}
+
+func (m *Manager) nextReminderDue() (time.Time, bool) {
+	var next time.Time
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending") {
+			continue
+		}
+		if next.IsZero() || t.Reminder.Due.Before(next) {
+			next = t.Reminder.Due
+		}
+	}
+	return next, !next.IsZero()
+}
+
+// processDueReminders turns a live reminder into an execution-round message;
+// it never submits a native WeChat message or waits for a delivery receipt.
+func (m *Manager) processDueReminders(ctx context.Context, now time.Time, _ bool) {
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending") || now.Before(t.Reminder.Due) {
+			continue
+		}
+		followUpID, err := m.scheduleReminderFollowUp(t)
+		if err != nil {
+			t.State = "needs_review"
+			t.LastResult = "提醒已到期，但后续执行任务创建失败：" + err.Error()
+			_ = m.agent.task(t)
+			continue
+		}
+		if followUpID == "" {
+			t.State = "needs_review"
+			t.Next = now
+			t.LastResult = "提醒已到期，等待主人手动决定；普通成员提醒不会自动启动后续任务"
+			_ = m.agent.task(t)
+			continue
+		}
+		t.Reminder.FollowUpTaskID = followUpID
+		t.State = "completed"
+		t.LastResult = "提醒已进入执行回合，等待 Agent 读取并处理"
+		if err := m.agent.task(t); err != nil {
+			m.log("reminder_due_state_save_failed")
+			continue
+		}
+		m.record(bot.Record{Event: "reminder_due", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "pending", Content: t.RequestedText, Reason: "reminder_due_to_execution_round", Origin: "reminder"})
 	}
 }
 func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
@@ -326,11 +419,9 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 }
 
 // scheduleReminderFollowUp turns an owner reminder into a real resumable
-// Agent task after the reminder itself has received an accepted receipt. The
-// reminder remains a delivery record; the follow-up is the normal model/tool
-// entry point, so a request such as "make a song and send it to the group"
-// can create child tasks and execute tools instead of stopping at the text
-// reminder.
+// Agent task. The reminder remains a registration/due record; the follow-up
+// is the normal model/tool entry point and is shown as a reminder-class
+// execution item.
 func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
 	if t.Reminder == nil || t.Account != m.native.Account() || !contains(m.agent.config().OwnerIDs, t.Sender) {
 		return "", nil
@@ -363,6 +454,7 @@ func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
 		Sender:         t.Sender,
 		ParentID:       t.ID,
 		OwnerRequested: true,
+		ReminderDue:    true,
 		State:          "pending",
 		Next:           time.Now().UTC(),
 		OriginTrace:    t.OriginTrace,

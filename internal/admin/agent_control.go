@@ -136,6 +136,7 @@ type agentTask struct {
 	PendingOperations  []string          `json:"pending_operations,omitempty"`
 	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
+	ReminderDue        bool              `json:"reminder_due,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
 	ParentID           string            `json:"parent_task_id,omitempty"`
 	Goal               string            `json:"goal,omitempty"`
