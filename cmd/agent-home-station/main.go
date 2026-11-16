@@ -94,7 +94,13 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 		return errors.New("cannot determine executable location")
 	}
 	if len(args) > 0 && args[0] == "verify-app-catalog" {
-		return verifyAppCatalog(filepath.Dir(path), args[1:], output)
+		verifyArgs := args[1:]
+		catalogDirectory := filepath.Join(filepath.Dir(path), "applications")
+		if len(verifyArgs) >= 2 && verifyArgs[0] == "--catalog" {
+			catalogDirectory = verifyArgs[1]
+			verifyArgs = verifyArgs[2:]
+		}
+		return verifyAppCatalog(catalogDirectory, verifyArgs, output)
 	}
 	cfg, err := parseConfig(args, path)
 	if err != nil {
@@ -255,7 +261,14 @@ func runWithDesktopInput(ctx context.Context, args []string, output io.Writer, i
 }
 
 func verifyAppCatalog(directory string, ids []string, output io.Writer) error {
-	contracts, err := appcatalog.VerifyBundled(filepath.Join(directory, "connected-apps"), ids)
+	catalogDirectory := directory
+	if base := filepath.Base(filepath.Clean(directory)); base != "applications" && base != "connected-apps" {
+		catalogDirectory = filepath.Join(directory, "applications")
+		if _, err := os.Stat(catalogDirectory); errors.Is(err, os.ErrNotExist) {
+			catalogDirectory = filepath.Join(directory, "connected-apps")
+		}
+	}
+	contracts, err := appcatalog.VerifyBundled(catalogDirectory, ids)
 	if err != nil {
 		return err
 	}

@@ -296,7 +296,8 @@ if($WithBilibiliApp){$appIDs+='bilibili'}
 if($WithDouyinApp){$appIDs+='douyin'}
 if($appIDs.Count -and -not ($LocalStation -and $ApplicationPackagesDirectory)){
  $appPackages=@(foreach($appID in $appIDs){'--package';$appID})
- & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json @appPackages
+ $applicationCatalog = Join-Path $OutputDirectory $(if($LocalStation){'applications'}else{'connected-apps'})
+ & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output $applicationCatalog --descriptor app.json @appPackages
  if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}
 }
 if(-not(Test-Path -LiteralPath $archive)){
@@ -334,7 +335,7 @@ if($LocalStation){
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
  } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
  if($appIDs.Count -and -not $ApplicationPackagesDirectory){
-  & $station verify-app-catalog @appIDs
+  & $station verify-app-catalog --catalog $applicationCatalog @appIDs
   if($LASTEXITCODE -ne 0){throw 'Connected Apps do not match the built LocalStation server.'}
  }
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
