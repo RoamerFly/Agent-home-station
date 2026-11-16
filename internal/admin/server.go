@@ -54,7 +54,14 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 }
 
 func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handler, error) {
-	s := &Server{manager: manager, auth: auth, autoLogin: os.Getenv("WECHAT_LEGACY_AUTOLOGIN") == "1"}
+	autoLogin := os.Getenv("WECHAT_LEGACY_AUTOLOGIN") == "1"
+	for _, arg := range os.Args[1:] {
+		if arg == "--desktop" {
+			autoLogin = true
+			break
+		}
+	}
+	s := &Server{manager: manager, auth: auth, autoLogin: autoLogin}
 	if root {
 		var err error
 		s.accounts, err = newAccountRegistry(s)

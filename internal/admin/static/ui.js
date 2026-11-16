@@ -11,7 +11,6 @@
   // One delegated reset; use native form validation rather than inserting
   // extra error rows and focus/scroll handlers for every individual input.
   document.addEventListener('input',event=>event.target.removeAttribute?.('aria-invalid'));
-  document.querySelector('#login-password').setAttribute('aria-describedby','login-error');
   // A single moving selection. CSS transitions can reverse in flight; measure
   // only on navigation/resize, never on pointer movement or every animation frame.
   const nav=side.querySelector('nav'),position=document.createElement('span');

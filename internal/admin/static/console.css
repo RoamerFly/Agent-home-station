@@ -44,7 +44,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .danger-text { color:var(--danger); background:transparent; }
 .danger-text:hover { border-color:var(--danger); }
 a { color:var(--accent); }
-.hint,.muted,.login-note { color:var(--muted); font-size:12px; line-height:1.7; }
+.hint,.muted { color:var(--muted); font-size:12px; line-height:1.7; }
 .empty { color:var(--muted); font-size:14px; padding:24px 16px; text-align:center; }
 .form-error,.error { color:var(--danger); }
 .form-error:empty,.hint:empty { display:none; }
@@ -296,14 +296,6 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 /* Status belongs in the application grid, never over the current editor. */
 .unsaved-bar { position:static; transform:none; max-width:100%; width:auto; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:8px 14px; margin:0 0 10px; border:1px solid var(--field-line); border-radius:12px; background:var(--soft); font-size:13px; flex-shrink:0; }
 .notice { position:static; margin:0 0 10px; max-height:130px; overflow:auto; padding:10px 14px; border:1px solid var(--line); border-radius:12px; background:var(--surface); font-size:13px; flex-shrink:0; }
-.login-shell { display:grid; place-items:center; height:100dvh; min-height:0; overflow:auto; padding:24px; background:transparent; }
-.login-card { width:min(440px,100%); padding:30px; border:1px solid var(--line); border-radius:24px; background:var(--surface); backdrop-filter:var(--glass); box-shadow:var(--shadow); }
-.login-brand { display:flex; align-items:center; gap:18px; }
-.login-avatar { width:76px; height:84px; object-fit:contain; object-position:center; border-radius:0; }
-.login-brand h1 span { display:block; font-size:23px; }.login-brand h1 span:first-child { font-size:18px; }
-.login-brand .eyebrow { font-size:12px; margin:0 0 6px; }
-.login-card>p.muted { margin:18px 0; }.login-card #login-form { display:grid; gap:12px; margin-top:20px; }
-.login-card #login-form>label { margin:0; }.login-note { margin:20px 0 0; }
 .mobile-only { display:none; }.drawer-scrim { display:none; }
 @supports not (backdrop-filter:blur(1px)) { .sidebar,.top-actions,.context-nav,.panel { background:var(--raised); } }
 @media (max-width:1100px) {
@@ -406,7 +398,7 @@ details.disclosure:not([open])>:not(summary) { display:none; }
 .top-actions { max-height:22dvh; overflow:auto; scrollbar-width:thin; }
 .rule-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:10px; }
 body::before { content:''; position:fixed; inset:0; pointer-events:none; background:linear-gradient(125deg,transparent 20%,#2688ff08 20.2%,transparent 38%),radial-gradient(ellipse at 0 110%,#2688ff16,transparent 60%); }
-.app-shell,.login-shell { position:relative; }
+.app-shell { position:relative; }
 @media(max-height:620px) { .content { overflow:auto; }.page.active-page { min-height:360px; flex-shrink:0; }.topbar { flex-shrink:0; }.app-shell { padding-block:8px; } }
 details:not([open]) > :not(summary) { display:none; }
 @media(max-width:760px) { #plugins .plugin-browser,#plugins .plugin-editor { flex-shrink:0; } }
@@ -463,7 +455,7 @@ details:not([open]) > :not(summary) { display:none; }
 .page-heading h1{margin:0;font-size:19px}
 .page-heading .context-nav{border:0;background:transparent;padding:0;box-shadow:none;min-width:0}
 .top-actions{border:0;background:transparent;padding:0;max-height:none;overflow:visible;flex-shrink:0}
-.brand-avatar,.login-avatar{flex-shrink:0}
+.brand-avatar{flex-shrink:0}
 .ui-icon{overflow:visible;flex-shrink:0}
 .overview-live-grid,.two-col,.rule-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}
 .overview-live-grid>.panel{margin:0;height:100%}
@@ -684,3 +676,4 @@ details:not([open]) > :not(summary) { display:none; }
 .package-card-title{display:flex;align-items:baseline;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;width:100%}
 .package-card-title strong,.package-choice .hint,.capability-overview-card .hint{overflow-wrap:anywhere}
 .package-card-title .package-state{border-radius:6px;padding:2px 6px;background:var(--accent-soft);color:var(--accent);font-size:12px;line-height:1.4}
+
