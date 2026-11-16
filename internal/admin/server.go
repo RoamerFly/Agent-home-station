@@ -86,7 +86,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		mux.HandleFunc("POST /api/login", auth.Login)
 		mux.HandleFunc("POST /api/logout", auth.Protect(auth.Logout))
 		mux.HandleFunc("POST /api/password", auth.Protect(s.changePassword))
-		mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
+		mux.HandleFunc("GET /api/session", s.sessionStatus)
 	}
 	mux.HandleFunc("GET /api/config", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.manager.Config()) }))
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
@@ -272,7 +272,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		}
 		_, _ = w.Write(data)
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -283,7 +283,11 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		} else {
 			mux.ServeHTTP(w, r)
 		}
-	}), nil
+	})
+	if s.autoLogin {
+		return websession.GuardHost(handler, ""), nil
+	}
+	return handler, nil
 }
 
 func respond(w http.ResponseWriter, status int, value any)   { websession.Respond(w, status, value) }
@@ -294,6 +298,16 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 
 func (s *Server) session(r *http.Request) (string, websession.Session, bool) { return s.auth.Lookup(r) }
 func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc           { return s.auth.Protect(next) }
+
+func (s *Server) sessionStatus(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.auth.Lookup(r); !ok && s.autoLogin && s.auth.AutoLogin(w, r) {
+		// Reopening the console or restarting its local service needs no
+		// password form. Protected mutations still require this session's CSRF.
+		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": w.Header().Get("X-CSRF-Token")})
+		return
+	}
+	s.auth.Status(w, r)
+}
 
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var input ConfigInput

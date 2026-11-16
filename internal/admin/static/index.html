@@ -127,7 +127,6 @@
 </nav>
 <div class="sidebar-bottom">
 <button type="button" class="sidebar-refresh" id="sidebar-refresh" aria-label="刷新当前页面" title="刷新当前页面"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.3 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.3 3A7.5 7.5 0 0 0 18.7 16"/></svg><span>刷新</span></button>
-<button class="quiet" id="logout">退出登录</button>
 </div>
 </aside>
 <button aria-label="关闭导航" class="drawer-scrim" hidden="" id="drawer-scrim">
@@ -1508,20 +1507,6 @@
 <div class="round-reading-workspace"><div aria-label="执行回合，最近更新在前；点击回合在弹窗查看完整内容" class="log-list" id="log-list" tabindex="0"></div></div></article>
 </section>
 <section aria-label="后台设置" class="page" id="settings">
-<article class="panel" id="admin-password-panel">
-<h3>管理密码</h3>
-<form id="admin-password-form">
-<label for="admin-current-password">当前密码</label>
-<input autocomplete="current-password" id="admin-current-password" maxlength="128" required="" type="password">
-<label for="admin-new-password">新密码</label>
-<input autocomplete="new-password" id="admin-new-password" maxlength="128" minlength="5" required="" type="password">
-<label for="admin-confirm-password">确认新密码</label>
-<input autocomplete="new-password" id="admin-confirm-password" maxlength="128" minlength="5" required="" type="password">
-<p class="hint">初始密码为 admin。修改后保存在本机，所有管理会话会退出；微信登录不受影响。</p>
-<button class="primary" id="admin-password-save" type="submit">保存密码并重新登录</button>
-<p class="form-error" id="admin-password-state" role="status"></p>
-</form>
-</article>
 <details class="panel" id="storage-panel">
 <summary>存储与归档</summary>
 <div class="inline-actions">
