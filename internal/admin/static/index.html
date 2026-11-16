@@ -1348,6 +1348,16 @@
 <span id="surf-schedule">正在读取…</span>
 <button class="secondary" id="surf-refresh" type="button">刷新活动</button>
 </div>
+<nav aria-label="活动类型" class="surf-tabs" role="tablist">
+<button aria-controls="surf-pane" aria-selected="true" class="active" id="surf-tab" role="tab" type="button">网上冲浪</button>
+<button aria-controls="reminder-pane" aria-selected="false" id="reminder-tab" role="tab" type="button" tabindex="-1">提醒任务</button>
+</nav>
+<section aria-labelledby="reminder-tab" class="panel reminder-pane" id="reminder-pane" role="tabpanel" hidden>
+<div class="section-heading"><div><h2>提醒任务</h2><p class="hint">未到期提醒会在这里保留；到期后进入执行回合。工作站离线导致过期的提醒需要主人手动处理。</p></div><button class="secondary" id="reminder-refresh" type="button">刷新提醒</button></div>
+<p aria-live="polite" class="hint" id="reminder-state" role="status">正在读取提醒任务…</p>
+<div aria-live="polite" class="reminder-list" id="reminder-list"></div>
+</section>
+<div id="surf-pane">
 <details class="panel surf-settings">
 <summary>自主冲浪设置</summary>
 <label class="switch-row">
@@ -1437,6 +1447,7 @@
 <p aria-live="polite" class="form-error" id="surf-error"></p>
 <div aria-label="真实上网活动" class="surf-list" id="surf-list"></div>
 </article>
+</div>
 </section>
 <section aria-labelledby="logs-title" class="page" id="logs">
 <div aria-label="已载入执行概况" class="round-metrics">

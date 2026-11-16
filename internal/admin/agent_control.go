@@ -866,6 +866,26 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if t.ID != r.PathValue("id") {
 				continue
 			}
+			if t.Reminder != nil && in.Action == "resume" {
+				followUpID, err := s.manager.scheduleReminderFollowUp(t)
+				if err != nil {
+					fail(w, 409, err.Error())
+					return
+				}
+				if followUpID == "" {
+					fail(w, 403, "只有主人可以处理此提醒")
+					return
+				}
+				t.Reminder.FollowUpTaskID = followUpID
+				t.State = "completed"
+				t.LastResult = "主人已确认处理，已进入执行回合"
+				if err := s.manager.agent.task(t); err != nil {
+					fail(w, 500, err.Error())
+					return
+				}
+				respond(w, 200, t)
+				return
+			}
 			if t.State == "running" && !(t.PluginJob != nil && in.Action == "cancel") {
 				fail(w, 409, "任务正在运行；暂停Agent后再取消或恢复")
 				return
