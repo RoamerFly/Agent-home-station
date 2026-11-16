@@ -791,7 +791,14 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		localInput.Text = in.Text
 		localInput.OriginalText = in.OriginalText
 		localInput.MessageTime = in.MessageTime
-		return s.localChat.tools(store, localInput)
+		tools := s.localChat.tools(store, localInput)
+		tools.run = companion.NewGuardedToolRun(func(ctx context.Context) error {
+			if run.Blocked() || ctx.Err() != nil || policy.Grants[in.Thread].IsZero() || !s.ownerBoundToWechat(station.connectionID, in.Account, in) {
+				return apphost.ErrObservationForbidden
+			}
+			return nil
+		})
+		return tools
 	}, func(in companion.Input) bool {
 		if run.Blocked() || in.Channel != "wechat" || !in.Directed || in.Preview || in.Surf || in.ReportOnly {
 			return false
