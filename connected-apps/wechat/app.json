@@ -101,7 +101,7 @@
     "adapter/station_worker.go": "2369ae315bfc39ee3e4dc5234af151bd1df0cf7de7237c9daaab6af86ee33eeb",
     "adapter/station_worker_test.go": "3b874e95bd98a8194ce35c6849c5b0168359cc2bc14ba452b98d8c966781840a",
     "adapter/tools.go": "bfaee95d98792e67425c807c7eb11c74647c2531cfd0ce6252dff873b3e2f3b0",
-    "adapter/windows/WechatStationRuntime.cs": "8e53797249b420caee1cdefd95eb3acfc4a3e84bf7eff0ac0a8f01945c72e4e6",
+    "adapter/windows/WechatStationRuntime.cs": "99a760510567776a6560b207563f667f50082069a73624cbad2a5573f64773cc",
     "adapter/worker_checkpoint.go": "6a4072f84328eaa863bed0f8901d4828d4ccfc369c71553f4030bd4bded483c7",
     "adapter/worker_checkpoint_test.go": "e9a3bb1aaa15e49a7b3ee36493b54852156390548a38d38ae7734059977244a8",
     "adapter/worker_checkpoint_windows_test.go": "4bcdf45f600ccb5dc6d793738a1a5b19b739385ba0074d0cf1d90e0ef94c7e51",

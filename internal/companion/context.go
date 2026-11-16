@@ -148,10 +148,77 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 			return false, err
 		}
 		if parsed, validationErr = validateSummary(result); validationErr != nil {
-			if errors.Is(validationErr, ErrSummarySourceMissing) || errors.Is(validationErr, ErrSummarySourceInvalid) {
-				return false, validationErr
+			if errors.Is(validationErr, ErrSummaryInvalid) || errors.Is(validationErr, ErrSummarySourceInvalid) {
+				// Models occasionally carry a source ID from the retained recent
+				// tail into this older compression batch. Drop only claims whose
+				// provenance is outside the verified batch, then bind the remaining
+				// claims normally. Raw events remain untouched and unsupported facts
+				// never become part of the saved summary.
+				if candidate, parseErr := parseContextSummary(result, true); parseErr == nil {
+					known := map[string]bool{}
+					for _, turn := range scope.Messages {
+						if turn.Role == "user" && turn.EventID != "" {
+							known[turn.EventID] = true
+						}
+					}
+					for _, source := range previous.Sources {
+						known[source.EventID] = true
+					}
+					filter := func(ids []string) []string {
+						valid := make([]string, 0, len(ids))
+						for _, id := range ids {
+							if known[id] {
+								valid = append(valid, id)
+							}
+						}
+						return valid
+					}
+					people := candidate.People[:0]
+					for _, item := range candidate.People {
+						item.SourceEventIDs = filter(item.SourceEventIDs)
+						if len(item.SourceEventIDs) > 0 {
+							people = append(people, item)
+						}
+					}
+					candidate.People = people
+					topics := candidate.Topics[:0]
+					for _, item := range candidate.Topics {
+						item.SourceEventIDs = filter(item.SourceEventIDs)
+						if len(item.SourceEventIDs) > 0 {
+							topics = append(topics, item)
+						}
+					}
+					candidate.Topics = topics
+					media := candidate.Media[:0]
+					for _, item := range candidate.Media {
+						item.SourceEventIDs = filter(item.SourceEventIDs)
+						if len(item.SourceEventIDs) > 0 {
+							media = append(media, item)
+						}
+					}
+					candidate.Media = media
+					tasks := candidate.PendingTasks[:0]
+					for _, item := range candidate.PendingTasks {
+						item.SourceEventIDs = filter(item.SourceEventIDs)
+						if len(item.SourceEventIDs) > 0 {
+							tasks = append(tasks, item)
+						}
+					}
+					candidate.PendingTasks = tasks
+					if err := e.bindSummarySources(ctx, in, &candidate, scope.Messages, previous.Sources); err == nil {
+						parsed, validationErr = candidate, nil
+					}
+				}
 			}
-			return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
+			if validationErr == nil {
+				// The repair above kept only claims with verified provenance.
+				// Continue to canonical persistence below without another model call.
+			} else {
+				if errors.Is(validationErr, ErrSummarySourceMissing) || errors.Is(validationErr, ErrSummarySourceInvalid) {
+					return false, validationErr
+				}
+				return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
+			}
 		}
 	}
 	canonical, err := json.Marshal(parsed)

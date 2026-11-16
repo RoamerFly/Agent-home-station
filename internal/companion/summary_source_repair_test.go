@@ -26,7 +26,7 @@ func (m *summarySourceRepairModel) Chat(context.Context, string, []map[string]st
 	return string(b), nil
 }
 
-func TestCompressionRepairsSourceIDsOnceAndPreservesOriginalOnFailure(t *testing.T) {
+func TestCompressionRepairsSourceIDsAndPreservesOnlyVerifiedClaims(t *testing.T) {
 	for _, bad := range []bool{false, true} {
 		c := enabledConfig()
 		c.Permissions.Remember = true
@@ -60,8 +60,10 @@ func TestCompressionRepairsSourceIDsOnceAndPreservesOriginalOnFailure(t *testing
 			t.Fatal("original messages removed")
 		}
 		if bad {
-			if changed || !errors.Is(err, ErrSummarySourceInvalid) || after.Summary != "" || after.CompressedCount != 0 {
-				t.Fatal(changed, err, after.CompressedCount)
+			var summary contextSummary
+			json.Unmarshal([]byte(after.Summary), &summary)
+			if err != nil || !changed || len(summary.Topics) != 0 || after.CompressedCount == 0 {
+				t.Fatal(changed, err, after.CompressedCount, summary.Topics)
 			}
 		} else {
 			var summary contextSummary
