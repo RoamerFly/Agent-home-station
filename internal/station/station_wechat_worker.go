@@ -879,6 +879,15 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		// the existing round/task stores.
 		_ = station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{Event: event, Category: "decision", Origin: "station"})
 	}
+	attachment.shareProgress = func(event, status, reason string) {
+		if event == "" || station.cutoverBlocked.Load() || policy.Grants[attachment.trace.Thread].IsZero() {
+			return
+		}
+		_ = station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{
+			Event: event, Category: "tool", ThreadID: attachment.trace.Thread, MessageID: attachment.trace.TraceID,
+			Tool: "share-reader", ToolStage: "public-media", Status: status, Reason: reason, Origin: "wechat",
+		})
+	}
 	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
 		ProtectQuote: attachment.protectCrossReply,
 		SurfTask: func(now time.Time) (*bot.SurfTask, error) {

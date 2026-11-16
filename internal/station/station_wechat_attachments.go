@@ -260,6 +260,7 @@ type stationAttachmentTools struct {
 	stationLocalAudio  bool
 	localASR           stationLocalASR
 	localVision        stationLocalVision
+	shareProgress      func(string, string, string)
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
