@@ -60,8 +60,8 @@
     "adapter/delivery_journal.go": "e8c0c9b3b0810d765a1e5c2f76a92500261fc3d045b804179b5644ee410bebbe",
     "adapter/entry.json": "feb808a2a4e84a635cfe653fae98872fb98e4b161ae331db81c23f8161bf08cf",
     "adapter/forward.go": "faf7ddf98301f10637fb84803243a1beddcb5c8043dc598c02bc44b20ca478c1",
-    "adapter/group_policy.go": "0413ceb7d8a2af9634c4053df5d289aa506cdbfc703b2ef7e3c348b3ac46e271",
-    "adapter/group_policy_test.go": "659b53d8c3bb296e86979bd33c7ba9aca130b9df3eec6419ccc838ed89b6ff1b",
+    "adapter/group_policy.go": "9e2bdd516a6f25dc3dc5c8198253535dd5c2d3f169accdb5d11b9784461caede",
+    "adapter/group_policy_test.go": "19072ebb08361b6fa6cf96dd8f409fb1e21c8d9e705b04f8c3ab4c61f851cdde",
     "adapter/history.go": "c76bebf7ac904dc11cf3c16ad7d62e961e1df930f9ee34e1e86f7aec73dc0786",
     "adapter/identity.go": "762c785291e14b1c621af751c066943efcc1048de4ce3391e183a9b242cf3bef",
     "adapter/legacy_checkpoint.go": "8705923327b80eee0a5bab90a31ecde79327a3ad40e8fc7c18b806e1407ec994",
@@ -114,3 +114,4 @@
     "workspace/README.md": "0bdb5577b891591f700547835f613ce5fcdc9816b2c5028ed872e624bc5d6640"
   }
 }
+
