@@ -221,6 +221,35 @@ func TestQuotedShareRetainsExactSourceWithoutNeedingCachedAsset(t *testing.T) {
 	}
 }
 
+func TestQuotedShareSelectsOriginalForAnalysisAndMediaProvenance(t *testing.T) {
+	w, _, c, _ := mediaWorker(t)
+	type57 := 57
+	current := fixtureMessage("quoted-share-request", "room@chatroom", "总结一下这个视频", "incoming")
+	current.Type, current.AppMessageType = 49, &type57
+	current.SenderID, current.ServerID = "requester", "request-server"
+	current.Quote = &linuxnative.QuoteReference{ServerID: "share-server", Type: 49}
+	original := fixtureMessage("original-share", current.ThreadID, "", "incoming")
+	original.Type, original.ServerID, original.SenderID = 49, "share-server", "share-sender"
+	original.Link = &linuxnative.LinkCard{Title: "公开视频", Description: "卡片简介", URL: "https://v.kuaishou.com/example"}
+	w.source = &quotedTestSource{fakeSource: &fakeSource{}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: current.ID, ThreadID: current.ThreadID, State: "resolved", Message: &original}}
+	if got := w.readQuoteContext(context.Background(), &current); got == "" || current.ResolvedQuote == nil {
+		t.Fatal("quote was not resolved", got)
+	}
+	analysis, ok := quotedAnalysisMessage(current)
+	if !ok || analysis.ID != original.ID || analysis.Link == nil || analysis.Link.URL != original.Link.URL {
+		t.Fatalf("quoted share was not selected as analysis target: ok=%v analysis=%+v", ok, analysis)
+	}
+	engine, err := companion.New(c.Config, c.Store, &quotedLiteralModel{}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := companion.Input{Channel: "wechat", Account: "test", Thread: current.ThreadID, Sender: current.SenderID, TraceID: current.ID, MessageTime: current.CreatedAt}
+	bindInputSource(&input, current, engine)
+	if len(input.IncomingMedia) != 1 || input.IncomingMedia[0].Source.MessageID != original.ID || input.IncomingMedia[0].Kind != "share" {
+		t.Fatalf("quoted share media provenance lost: %+v", input.IncomingMedia)
+	}
+}
+
 func TestMediaProvenanceSurvivesRuntimeRecovery(t *testing.T) {
 	w, _, c, in := mediaWorker(t)
 	in.Sender, in.SenderName, in.OriginTraceID, in.TaskID = "alice", "小甲", "original-request", "task-1"

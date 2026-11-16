@@ -145,3 +145,18 @@ func quotedPlainBody(m linuxnative.Message) linuxnative.Message {
 	}
 	return m
 }
+
+// quotedAnalysisMessage keeps the user's quoted-reply event as the request
+// identity while selecting the verified original media as the observation
+// target. A type-49/app-57 quote is only a text request; its resolved original
+// card is the share that must enter the media/share reader.
+func quotedAnalysisMessage(m linuxnative.Message) (linuxnative.Message, bool) {
+	if !m.IsQuotedText() || m.ResolvedQuote == nil {
+		return m, false
+	}
+	original := *m.ResolvedQuote
+	if original.Direction != "incoming" || original.IsQuotedText() || original.Type != 49 || original.Link == nil {
+		return m, false
+	}
+	return original, true
+}

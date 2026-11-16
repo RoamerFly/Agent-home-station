@@ -330,11 +330,12 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
+	analysisMessage, _ := quotedAnalysisMessage(message)
 	working := quotedPlainBody(message)
-	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
-	preferredShare := w.preferredGroupShare(message)
+	isMedia := analysisMessage.Type == 34 || analysisMessage.Type == 3 || analysisMessage.Type == 47 || analysisMessage.Type == 43 || analysisMessage.Type == 49 && !analysisMessage.IsQuotedText()
+	preferredShare := w.preferredGroupShare(analysisMessage)
 	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
-	canAnalyze := isMedia && w.mediaAnalyzer(ctx, message) != nil
+	canAnalyze := isMedia && w.mediaAnalyzer(ctx, analysisMessage) != nil
 	if isMedia && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
@@ -403,7 +404,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
-	readMedia := isMedia && w.readMediaBeforeDecision(message)
+	readMedia := isMedia && w.readMediaBeforeDecision(analysisMessage)
 	if canAnalyze && !onDemandAttachment && w.config.Options != nil {
 		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
@@ -412,7 +413,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			analysisCtx = companion.WithReplayNonce(analysisCtx, w.replayNonce(message.ID))
-			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), analysisMessage)
 			mediaObservationEvidence = observationEvidence
 			mediaObservationState = "observed"
 			cancel()
@@ -498,7 +499,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		if w.generation != nil {
 			var analysis *linuxnative.Message
 			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment {
-				copy := message
+				copy := analysisMessage
 				analysis = &copy
 			}
 			w.startGeneration(ctx, character, input, analysis)
