@@ -316,8 +316,11 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 			tools = append(tools, stationWechatForwardTool())
 		}
 	}
+	if t.agentTaskToolAccess(t.trace) {
+		tools = append(tools, stationAgentTaskTools()...)
+	}
 	if t.scopeAllowed(t.trace, t.reads) {
-		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
+		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool(), stationWechatTaskStatusToolSpec())
 		if t.legacyMemoryAvailable(ctx) {
 			tools = append(tools, wechatapp.StationLegacyMemoryTool())
 		}
@@ -420,6 +423,12 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_message_read" {
 		return t.readMessage(ctx, raw)
+	}
+	if name == stationWechatTaskStatusTool {
+		return t.callTaskStatus(ctx, raw)
+	}
+	if name == "agent_task" || name == "agent_tasks" {
+		return t.callAgentTaskTool(ctx, name, raw)
 	}
 	if name == "wechat_read_legacy" {
 		return t.readLegacyMemory(ctx, raw)
