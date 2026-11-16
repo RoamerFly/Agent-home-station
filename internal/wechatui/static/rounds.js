@@ -172,6 +172,7 @@
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
       else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
       else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
+      else if (item.event === 'round_manually_completed' && item.status === 'completed') round.status = 'completed';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
       else if (item.event === 'character_decision' && ['invalid_model_decision','invalid_tool_arguments','tool_unavailable_or_budget_exhausted','tool_budget_exhausted','unverified_model_response','media_unavailable_or_permission_denied'].includes(item.reason)) round.status = 'failed';

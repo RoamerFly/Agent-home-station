@@ -130,18 +130,19 @@ type GroupRule struct {
 	ForceReplyWhenMentioned bool
 }
 type Worker struct {
-	generation       *generationScheduler
-	mediaPreparation *mediaPreparation
-	runtime          *runtimeState
-	replayRequests   chan replayRequest
-	persistErr       error
-	recovering       bool
-	config           Config
-	source           Source
-	model            Model
-	sender           sending.Engine
-	allowed          map[string]bool
-	lastMaintenance  time.Time
+	generation        *generationScheduler
+	mediaPreparation  *mediaPreparation
+	runtime           *runtimeState
+	replayRequests    chan replayRequest
+	manualCompletions chan manualCompletionRequest
+	persistErr        error
+	recovering        bool
+	config            Config
+	source            Source
+	model             Model
+	sender            sending.Engine
+	allowed           map[string]bool
+	lastMaintenance   time.Time
 }
 
 func New(config Config, source Source, model Model, sender sending.Engine) (*Worker, error) {
@@ -176,7 +177,7 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 	if config.Log == nil {
 		config.Log = func(string) {}
 	}
-	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed, replayRequests: make(chan replayRequest, 4)}, nil
+	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed, replayRequests: make(chan replayRequest, 4), manualCompletions: make(chan manualCompletionRequest, 4)}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {

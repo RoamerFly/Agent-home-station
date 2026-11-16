@@ -324,6 +324,9 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	if err := w.drainReplayRequests(ctx); err != nil {
 		return err
 	}
+	if err := w.drainManualCompletions(ctx); err != nil {
+		return err
+	}
 	w.enableGenerations()
 	defer w.closeGenerations()
 	defer w.suspendMedia()
@@ -402,6 +405,9 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	peekedInterruptions := map[string]bool{}
 	for ctx.Err() == nil {
 		if err := w.drainReplayRequests(ctx); err != nil {
+			return err
+		}
+		if err := w.drainManualCompletions(ctx); err != nil {
 			return err
 		}
 		w.applyDeliveryCancellations()
