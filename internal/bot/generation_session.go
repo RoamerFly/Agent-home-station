@@ -34,7 +34,13 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 					var text string
 					var evidence MediaObservationEvidence
 					var err error
-					if w.hasScopedMedia(current) {
+					// Follow-up images, voice and video must stay on the host's
+					// native media path.  The generic analyzer is also used by
+					// share cards, and letting it see a plain image can turn an
+					// image follow-up into share_persisted_source_unavailable.
+					// Keep the old WeChat behavior: resolve the exact message ID,
+					// then dispatch by its native media type.
+					if w.config.ScopedAnalyzer != nil && (current.Type == 3 || current.Type == 34 || current.Type == 43 || current.Type == 47) {
 						text, evidence, err = w.analyzeIncomingMediaEvidence(ctx, current)
 					} else {
 						text, evidence, err = analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)
