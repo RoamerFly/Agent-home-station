@@ -13,23 +13,25 @@ import (
 )
 
 type inboxItem struct {
-	Backlog          bool                              `json:"backlog,omitempty"`
-	BacklogParent    string                            `json:"backlog_parent,omitempty"`
-	FollowupParent   string                            `json:"followup_parent,omitempty"`
-	FollowupConsumed bool                              `json:"followup_consumed,omitempty"`
-	OwnerModelReview bool                              `json:"owner_model_review,omitempty"`
-	ReceivedRecorded bool                              `json:"received_recorded,omitempty"`
-	AggregateUntil   time.Time                         `json:"aggregate_until,omitempty"`
-	CollectedAt      time.Time                         `json:"collected_at,omitempty"`
-	ToolStarted      bool                              `json:"tool_started,omitempty"`
-	Event            linuxnative.Event                 `json:"event"`
-	Phase            string                            `json:"phase"`
-	Updated          time.Time                         `json:"updated"`
-	RetryAfter       time.Time                         `json:"retry_after,omitempty"`
-	RecoveryTools    []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
-	RecoveryEvidence *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
-	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
-	ReplayNonce      string                            `json:"replay_nonce,omitempty"`
+	Backlog           bool                              `json:"backlog,omitempty"`
+	BacklogParent     string                            `json:"backlog_parent,omitempty"`
+	FollowupParent    string                            `json:"followup_parent,omitempty"`
+	FollowupConsumed  bool                              `json:"followup_consumed,omitempty"`
+	OwnerModelReview  bool                              `json:"owner_model_review,omitempty"`
+	ReceivedRecorded  bool                              `json:"received_recorded,omitempty"`
+	AggregateUntil    time.Time                         `json:"aggregate_until,omitempty"`
+	CollectedAt       time.Time                         `json:"collected_at,omitempty"`
+	ToolStarted       bool                              `json:"tool_started,omitempty"`
+	Event             linuxnative.Event                 `json:"event"`
+	Phase             string                            `json:"phase"`
+	Updated           time.Time                         `json:"updated"`
+	RetryAfter        time.Time                         `json:"retry_after,omitempty"`
+	ToolRetryAttempts int                               `json:"tool_retry_attempts,omitempty"`
+	ToolRetryReason   string                            `json:"tool_retry_reason,omitempty"`
+	RecoveryTools     []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
+	RecoveryEvidence  *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
+	RecoveryPrivacy   *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
+	ReplayNonce       string                            `json:"replay_nonce,omitempty"`
 }
 
 func (w *Worker) ownerModelReview(id string) bool {
@@ -264,8 +266,15 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		if time.Now().Before(item.AggregateUntil) {
 			continue
 		}
+		if item.Phase == "waiting_tool_retry" {
+			item.Phase = "retrying_tool"
+			w.activity(Record{Event: "tool_retry_started", Category: "tool", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Tool: "share-reader", ToolStage: "observation", Status: "retrying_tool", Reason: item.ToolRetryReason, RetryAttempts: item.ToolRetryAttempts, Origin: "wechat"})
+			if err := w.saveRuntime(); err != nil {
+				return err
+			}
+		}
 		switch item.Phase {
-		case "received", "processing", "read_pending", "retrying_model":
+		case "received", "processing", "read_pending", "retrying_model", "retrying_tool":
 		default:
 			continue
 		}

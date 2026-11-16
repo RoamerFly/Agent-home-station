@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -19,6 +20,15 @@ func runtimeDeploymentOptions() (pluginruntime.Options, error) {
 	var options pluginruntime.Options
 	raw := os.Getenv("WECHAT_PLUGIN_RUNTIME_CONFIG")
 	if raw == "" {
+		// The desktop host normally injects this JSON. Keep the executable
+		// portable when the legacy admin is launched directly: the runtime is
+		// still accepted only from the package's env directory, never from a
+		// caller-supplied path.
+		if runtime.GOOS == "windows" {
+			if executable, err := os.Executable(); err == nil {
+				options = portableRuntimeOptions(executable)
+			}
+		}
 		return options, nil
 	}
 	d := json.NewDecoder(bytes.NewBufferString(raw))
@@ -27,6 +37,22 @@ func runtimeDeploymentOptions() (pluginruntime.Options, error) {
 		return options, errors.New("plugin runtime deployment configuration invalid")
 	}
 	return options, nil
+}
+
+func portableRuntimeOptions(executable string) pluginruntime.Options {
+	var options pluginruntime.Options
+	packageRuntime := filepath.Dir(filepath.Dir(executable))
+	if filepath.Base(filepath.Dir(executable)) != "windows-x64" {
+		return options
+	}
+	pythonRoot := filepath.Join(packageRuntime, "windows-python-cli")
+	helperRoot := filepath.Join(packageRuntime, "windows-agent-host")
+	options.Python = filepath.Join(pythonRoot, "python.exe")
+	options.Pythonw = filepath.Join(pythonRoot, "pythonw.exe")
+	options.WindowsHelper = filepath.Join(helperRoot, "windows_plugin_host.pyw")
+	options.RuntimeRoots = []string{helperRoot, pythonRoot}
+	options.CatalogDirectory = filepath.Join(filepath.Dir(packageRuntime), "publictools")
+	return options
 }
 
 func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, error) {

@@ -48,7 +48,39 @@ func (w *Worker) readPreparedPreferredGroupShare(ctx context.Context, character 
 		return errors.New("share_group_source_unavailable")
 	}
 	readCtx, cancel := context.WithTimeout(w.modelContext(ctx, m.ThreadID, m.ID), 3*time.Minute)
-	summary, evidence, err := w.config.ReadPreferredGroupShare(readCtx, *in, m)
+	var summary string
+	var evidence MediaObservationEvidence
+	var err error
+	for attempt := 0; ; attempt++ {
+		summary, evidence, err = w.config.ReadPreferredGroupShare(readCtx, *in, m)
+		if err == nil {
+			if attempt > 0 {
+				w.activity(Record{Event: "tool_retry_succeeded", Category: "tool", ThreadID: m.ThreadID, MessageID: m.ID, Tool: "share-reader", ToolStage: "observation", Status: "processing", Reason: "share_reader_recovered", RetryAttempts: attempt, Origin: "wechat"})
+			}
+			break
+		}
+		reason := observationReason(err)
+		if !strings.HasSuffix(m.ThreadID, "@chatroom") || !retryableObservationReason(reason) || attempt >= maxObservationRetries {
+			break
+		}
+		nextAttempt := attempt + 1
+		delay := observationRetryDelay(nextAttempt)
+		retryAt := time.Now().Add(delay)
+		w.activity(Record{Event: "tool_retry_scheduled", Category: "tool", ThreadID: m.ThreadID, MessageID: m.ID, Tool: "share-reader", ToolStage: "observation", Status: "retrying_tool", Reason: reason, RetryAttempts: nextAttempt, RetryAt: retryAt.UTC().Format(time.RFC3339Nano), Origin: "wechat"})
+		timer := time.NewTimer(delay)
+		select {
+		case <-readCtx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			err = readCtx.Err()
+		case <-timer.C:
+			w.activity(Record{Event: "tool_retry_started", Category: "tool", ThreadID: m.ThreadID, MessageID: m.ID, Tool: "share-reader", ToolStage: "observation", Status: "retrying_tool", Reason: reason, RetryAttempts: nextAttempt, Origin: "wechat"})
+		}
+		if err != nil && readCtx.Err() != nil {
+			break
+		}
+	}
 	cancel()
 	if err != nil {
 		return err

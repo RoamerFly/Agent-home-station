@@ -48,3 +48,32 @@ func TestFailedSharedContentReachesAgentForRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestShareRuntimeRecoveryRetriesBeforeReturning(t *testing.T) {
+	m := fixtureMessage("share-retry", "retry@chatroom", "", "incoming")
+	m.Type = 49
+	calls, retries := 0, 0
+	text, err := readMediaWithRecoveryHook(t.Context(), m, func(context.Context, linuxnative.Message) (string, error) {
+		calls++
+		if calls < 3 {
+			return "", &ObservationUnavailableError{Reason: "share_plugin_runtime_unavailable"}
+		}
+		return "已读取分享内容", nil
+	}, func(int, string, time.Time) { retries++ })
+	if err != nil || text != "已读取分享内容" || calls != 3 || retries != 2 {
+		t.Fatalf("runtime recovery did not retry: text=%q err=%v calls=%d retries=%d", text, err, calls, retries)
+	}
+}
+
+func TestShareRuntimeFailureSchedulesDurableRetry(t *testing.T) {
+	w, _, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent","messages":[]}`, nil
+	}))
+	room := "retry-durable@chatroom"
+	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "share-durable", room, "incoming", "remote"), Phase: "processing", Updated: time.Now()}}
+	w.stopUnreadableTurn(companion.Input{Thread: room, TraceID: "share-durable", IsGroup: true}, &groupObservationFailure{reason: "share_plugin_runtime_unavailable", messageID: "share-durable"})
+	item := w.runtime.Inbox[0]
+	if item.Phase != "waiting_tool_retry" || item.ToolRetryAttempts != 1 || !item.RetryAfter.After(time.Now()) {
+		t.Fatalf("runtime failure was not persisted for retry: %+v", item)
+	}
+}

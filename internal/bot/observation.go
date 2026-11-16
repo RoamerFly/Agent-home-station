@@ -47,17 +47,88 @@ func (w *Worker) readRequiredMedia(ctx context.Context, m linuxnative.Message) (
 
 func (w *Worker) readRequiredMediaWithEvidence(ctx context.Context, m linuxnative.Message) (string, MediaObservationEvidence, error) {
 	var evidence MediaObservationEvidence
-	text, err := readMediaWithRecovery(ctx, m, func(ctx context.Context, current linuxnative.Message) (string, error) {
+	text, err := readMediaWithRecoveryHook(ctx, m, func(ctx context.Context, current linuxnative.Message) (string, error) {
 		text, result, err := w.analyzeIncomingMediaEvidence(ctx, current)
 		if err == nil {
 			evidence = result
 		}
 		return text, err
+	}, func(attempt int, reason string, retryAt time.Time) {
+		tool := "media-understanding"
+		if m.Type == 49 {
+			tool = "share-reader"
+		}
+		w.activity(Record{Event: "tool_retry_scheduled", Category: "tool", ThreadID: m.ThreadID, MessageID: m.ID, Tool: tool, ToolStage: "observation", Status: "retrying_tool", Reason: reason, RetryAttempts: attempt, RetryAt: retryAt.UTC().Format(time.RFC3339Nano), Origin: "wechat"})
 	})
 	return text, evidence, err
 }
 
 func readMediaWithRecovery(ctx context.Context, m linuxnative.Message, analyze func(context.Context, linuxnative.Message) (string, error)) (string, error) {
+	return readMediaWithRecoveryHook(ctx, m, analyze, nil)
+}
+
+const maxObservationRetries = 3
+const maxDurableToolRetries = 6
+
+func retryableObservationReason(reason string) bool {
+	switch reason {
+	case "plugin_cold_start_failed", "share_plugin_runtime_unavailable", "share_plugin_store_unavailable", "share_plugin_start_failed", "share_bridge_unavailable", "share_native_source_unavailable", "incoming_file_download_failed", "incoming_media_download_failed", "media_read_timeout", "media_plugin_runtime_unavailable", "media_plugin_start_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func observationRetryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return time.Second
+	case 2:
+		return 3 * time.Second
+	default:
+		return 8 * time.Second
+	}
+}
+
+func durableToolRetryDelay(attempt int) time.Duration {
+	if attempt <= maxObservationRetries {
+		return observationRetryDelay(attempt)
+	}
+	return time.Duration(1<<(attempt-maxObservationRetries)) * 8 * time.Second
+}
+
+func (w *Worker) scheduleToolRetry(in companion.Input, source, reason string) bool {
+	if w.runtime == nil || !retryableObservationReason(reason) {
+		return false
+	}
+	id := source
+	if id == "" {
+		id = in.TraceID
+	}
+	for i := range w.runtime.Inbox {
+		item := &w.runtime.Inbox[i]
+		if item.Event.Data.MessageID != id {
+			continue
+		}
+		if item.ToolRetryAttempts >= maxDurableToolRetries {
+			return false
+		}
+		item.ToolRetryAttempts++
+		item.ToolRetryReason = reason
+		item.RetryAfter = time.Now().Add(durableToolRetryDelay(item.ToolRetryAttempts))
+		item.Phase = "waiting_tool_retry"
+		item.Updated = time.Now().UTC()
+		w.persistErr = w.saveRuntime()
+		if w.persistErr != nil {
+			return false
+		}
+		w.activity(Record{Event: "tool_retry_scheduled", Category: "tool", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Tool: "share-reader", ToolStage: "observation", Status: "waiting_tool_retry", Reason: reason, RetryAttempts: item.ToolRetryAttempts, RetryAt: item.RetryAfter.UTC().Format(time.RFC3339Nano), Origin: "wechat"})
+		return true
+	}
+	return false
+}
+
+func readMediaWithRecoveryHook(ctx context.Context, m linuxnative.Message, analyze func(context.Context, linuxnative.Message) (string, error), onRetry func(int, string, time.Time)) (string, error) {
 	read := func() (string, error) {
 		text, err := analyze(ctx, m)
 		if err == nil && strings.TrimSpace(text) == "" {
@@ -69,13 +140,28 @@ func readMediaWithRecovery(ctx context.Context, m linuxnative.Message, analyze f
 	if err == nil || !strings.HasSuffix(m.ThreadID, "@chatroom") {
 		return text, err
 	}
-	switch observationReason(err) {
-	case "plugin_cold_start_failed", "share_plugin_start_failed", "incoming_file_download_failed", "incoming_media_download_failed", "media_read_timeout", "share_native_source_unavailable":
+	for attempt := 1; attempt <= maxObservationRetries; attempt++ {
+		reason := observationReason(err)
+		if !retryableObservationReason(reason) {
+			return text, err
+		}
+		delay := observationRetryDelay(attempt)
+		retryAt := time.Now().Add(delay)
+		if onRetry != nil {
+			onRetry(attempt, reason, retryAt)
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return "", ctx.Err()
-		case <-time.After(time.Second):
-			return read()
+		case <-timer.C:
+		}
+		text, err = read()
+		if err == nil {
+			return text, nil
 		}
 	}
 	return text, err
@@ -87,6 +173,12 @@ func (w *Worker) stopUnreadableTurn(in companion.Input, err error) {
 	var failed *groupObservationFailure
 	if errors.As(err, &failed) {
 		source = failed.messageID
+	}
+	if w.scheduleToolRetry(in, source, reason) {
+		return
+	}
+	if retryableObservationReason(reason) {
+		w.activity(Record{Event: "tool_retry_exhausted", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Tool: "share-reader", ToolStage: "observation", Status: "failed", Reason: reason, RetryAttempts: maxObservationRetries, Origin: "wechat"})
 	}
 	report := "本回合有消息未能读取，已停止群回复。读取错误：" + reason
 	event := Record{Event: "group_input_read_failed", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Status: "failed", Reason: reason, Content: report}
