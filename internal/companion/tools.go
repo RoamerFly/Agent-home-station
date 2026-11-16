@@ -126,7 +126,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			// Keep an ordinary turn small.  History retrieval and reading retained
 			// outputs are the only common primitives; all execution, project and
 			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			if t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
