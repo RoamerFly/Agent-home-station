@@ -45,6 +45,21 @@
     if(item.tool) return toolLabels[item.tool]||'调用应用工具';
     return ({received:'收到消息',decision:'判断与准备',sent:'微信接受回复',error:'处理遇到问题'})[item.category]||'处理进度已更新';
   }
+  function detail(item) {
+    const parts=[];
+    if(item.tool) parts.push('工具：'+(toolLabels[item.tool]||item.tool));
+    if(item.event) parts.push('事件：'+item.event);
+    if(item.status) parts.push('状态：'+item.status);
+    const raw=item.raw_content||item.content;
+    if(raw && raw!==description(item)) parts.push(String(raw));
+    const args=item.arguments||item.args||item.query;
+    if(args) parts.push('参数：'+(typeof args==='string'?args:JSON.stringify(args)));
+    const result=item.result||item.output||item.tool_result;
+    if(result) parts.push('结果：'+(typeof result==='string'?result:JSON.stringify(result)));
+    if(item.reason) parts.push('原因：'+item.reason);
+    if(item.retry_at) parts.push('下次重试：'+item.retry_at);
+    return parts.join('\n');
+  }
   let refreshing;
   async function refreshRounds() {
     if(refreshing) return refreshing;
@@ -53,7 +68,7 @@
       do {
         const query=new URLSearchParams({limit:'100'});if(before)query.set('before',before);
         const result=await fetchJSON(endpoint+'/execution-rounds?'+query);
-        for(const item of result.steps||[]) items.push({...item,id:String(item.sequence),time:item.at,thread_id:item.thread,
+        for(const item of result.steps||[]) items.push({...item,raw_content:item.content,id:String(item.sequence),time:item.at,thread_id:item.thread,
           message_id:item.message,related_message_id:item.related_message,send_id:item.receipt,
           source:item.thread?.endsWith('@chatroom')?'群聊':'私聊',source_kind:item.thread?.endsWith('@chatroom')?'group':'private',
           content:description(item)});
@@ -68,7 +83,10 @@
     const popup=window.WechatDialogs.open({title:'回合处理过程',subtitle:'按当前连接的实际记录展示'});
     const list=document.createElement('ol');list.className='bridge-timeline';
     for(const item of round.timeline) {
-      const row=document.createElement('li');row.textContent=new Date(item.time).toLocaleTimeString('zh-CN')+' · '+description(item);list.append(row);
+      const row=document.createElement('li');
+      const head=document.createElement('strong');head.textContent=new Date(item.time).toLocaleTimeString('zh-CN')+' · '+description(item);row.append(head);
+      const text=detail(item);if(text){const body=document.createElement('pre');body.className='bridge-timeline-detail';body.textContent=text;row.append(body)}
+      list.append(row);
     }
     popup.body.append(list);
   }

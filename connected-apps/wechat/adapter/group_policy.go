@@ -166,7 +166,7 @@ func (p GroupPolicy) AllowsShare(thread, timestamp string) bool {
 
 func (p GroupPolicy) ShareCandidate(account string, m linuxnative.Message) bool {
 	return m.AccountID == account && m.Direction == "incoming" && p.AllowsShare(m.ThreadID, m.CreatedAt) &&
-		IsChannelsShare(m)
+		func() bool { _, err := ShareReadCapability(m); return err == nil }()
 }
 
 func (p GroupPolicy) AllowsReply(account string, in companion.Input) bool {

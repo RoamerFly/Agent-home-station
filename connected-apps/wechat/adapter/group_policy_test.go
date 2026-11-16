@@ -53,8 +53,13 @@ func TestGroupSharePolicyNeedsCurrentScopedOptIn(t *testing.T) {
 	}
 	m.CreatedAt = now.Format(time.RFC3339Nano)
 	kind = 5
+	m.Link = &linuxnative.LinkCard{URL: "https://www.kuaishou.com/short-video/3xsynthetic12345"}
+	if !policy.ShareCandidate("one", m) {
+		t.Fatal("public Kuaishou share was not admitted for automatic summary")
+	}
+	m.Link = nil
 	if policy.ShareCandidate("one", m) {
-		t.Fatal("ordinary link treated as a supported video")
+		t.Fatal("ordinary link without a public URL was treated as a supported share")
 	}
 	if (GroupPolicy{Replies: replies, Attachments: map[string]time.Time{room: now.Add(time.Second)}, Rules: rules}).
 		AllowsShare(room, now.Add(2*time.Second).Format(time.RFC3339Nano)) {

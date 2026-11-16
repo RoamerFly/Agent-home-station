@@ -19,6 +19,7 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 const (
@@ -48,12 +49,45 @@ func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in 
 	if !ok {
 		return "", companion.MediaObservationEvidence{}, errors.New("share_auto_summary_tools_unavailable")
 	}
+	if !wechatapp.IsChannelsShare(m) {
+		return tools.readPublicGroupShareEvidence(ctx, m)
+	}
 	tools.SetTrace(canonical)
 	text, evidence, err := tools.readAutomaticVideoEvidence(ctx, m.ID, stationGroupShareAudioBudget, true, true)
 	if err != nil {
 		return "", companion.MediaObservationEvidence{}, err
 	}
 	return "[微信视频号实际内容观察]\n" + text, evidence, nil
+}
+
+// readPublicGroupShareEvidence handles ordinary public cards (including
+// Kuaishou and other non-Channels links) through the same credential-free
+// public reader used by the interactive share tool.  Page text is firsthand
+// evidence and is therefore safe to feed into the normal memory/round path;
+// a video-only response remains explicit instead of being mistaken for a
+// watched video.
+func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Context, m linuxnative.Message) (string, companion.MediaObservationEvidence, error) {
+	if m.Link == nil || wechatapp.PublicShareURL(m.Link.URL) == "" {
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_url_unavailable")
+	}
+	videoRequired := m.AppMessageType != nil && *m.AppMessageType == 4
+	share, err := mcptools.ReadPublicShare(ctx, wechatapp.PublicShareURL(m.Link.URL), 64<<20, videoRequired)
+	if err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	if strings.TrimSpace(share.Text) == "" {
+		if share.Title != "" {
+			return "", companion.MediaObservationEvidence{}, errors.New("share_public_video_requires_media_observer")
+		}
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_page_empty")
+	}
+	text := strings.TrimSpace(share.Text)
+	evidence := companion.MediaObservationEvidence{
+		ObservedRange: "公开页面正文",
+		Excerpt:       text,
+		Parts:         []companion.ObservationPart{{Kind: companion.ObservationPageBody, Range: "公开页面正文", Excerpt: text}},
+	}
+	return "[微信公开分享页面正文]\n" + text, evidence, nil
 }
 
 // Both automatic entry points use the same verified original and observation
@@ -126,12 +160,8 @@ func (t *stationAttachmentTools) validateCurrentGroupShare(ctx context.Context, 
 	if ctx.Err() != nil {
 		return companion.Input{}, ctx.Err()
 	}
-	if !wechatapp.IsChannelsShare(m) {
-		// Public/Kuaishou cards can be read only through an explicit, separately
-		// authorized public-share request.  The station has no safe default
-		// original-media resolver for them, so automatic group summaries stop
-		// here rather than fetching an arbitrary URL.
-		return companion.Input{}, errors.New("share_auto_summary_channels_only")
+	if _, err := wechatapp.ShareReadCapability(m); err != nil {
+		return companion.Input{}, err
 	}
 	messageAt, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
 	inputAt, inputTimeErr := time.Parse(time.RFC3339Nano, in.MessageTime)
