@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -214,10 +215,28 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 				// The repair above kept only claims with verified provenance.
 				// Continue to canonical persistence below without another model call.
 			} else {
+				// A provider can return a response that is neither a valid summary
+				// object nor repairable in one retry. Keep compression useful without
+				// inventing facts: build a small summary directly from the verified
+				// user events and their host-attached media observations. This is a
+				// storage fallback only; it never turns assistant text or tool logs
+				// into user claims.
+				fallback := verifiedFallbackSummary(selected)
+				if bindErr := e.bindSummarySources(ctx, in, &fallback, selected, previous.Sources); bindErr == nil {
+					parsed, validationErr = fallback, nil
+				}
+			}
+			if validationErr != nil {
 				if errors.Is(validationErr, ErrSummarySourceMissing) || errors.Is(validationErr, ErrSummarySourceInvalid) {
 					return false, validationErr
 				}
 				return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
+			}
+		}
+		if previous.Version == 1 {
+			mergeVerifiedSummaryHistory(&parsed, previous)
+			if err := e.bindSummarySources(ctx, in, &parsed, selected, previous.Sources); err != nil {
+				return false, err
 			}
 		}
 	}
@@ -248,6 +267,152 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	})
 	return err == nil, err
 }
+
+// verifiedFallbackSummary creates a conservative summary when both model
+// attempts fail schema validation. Every claim is copied from a verified user
+// event or an attached host observation and remains source-bound by
+// bindSummarySources before persistence.
+func verifiedFallbackSummary(selected []Turn) contextSummary {
+	out := contextSummary{
+		Version:      1,
+		People:       []summaryPerson{},
+		Topics:       []summaryTopic{},
+		Media:        []summaryMedia{},
+		PendingTasks: []summaryTask{},
+		Preferences:  []string{},
+		Corrections:  []string{},
+	}
+	for i := len(selected) - 1; i >= 0 && (len(out.Topics) < 20 || len(out.Media) < 20); i-- {
+		turn := selected[i]
+		if turn.Role != "user" || turn.EventID == "" {
+			continue
+		}
+		at := turn.Time.UTC().Format(time.RFC3339Nano)
+		if text := strings.TrimSpace(turn.Text); text != "" && len(out.Topics) < 20 {
+			state := "historical"
+			if turn.Source != nil && turn.Source.Integrity == "verified_import" {
+				state = "verified_import"
+			}
+			out.Topics = append(out.Topics, summaryTopic{SourceEventIDs: []string{turn.EventID}, Text: boundedText(text, 260), State: state, At: at})
+		}
+		for _, media := range turn.IncomingMedia {
+			if len(out.Media) >= 20 || media.ObservationState == "" {
+				break
+			}
+			title := strings.TrimSpace(media.ObservationExcerpt)
+			if title == "" {
+				title = strings.TrimSpace(media.Observation)
+			}
+			if title == "" {
+				title = "历史" + media.Kind + "消息"
+			}
+			out.Media = append(out.Media, summaryMedia{SourceEventIDs: []string{turn.EventID}, Title: boundedText(title, 360), URL: "", AssetID: media.AssetID, State: boundedText(media.ObservationState, 96), At: at})
+		}
+	}
+	// The scan above is newest-first so the most recent verified facts are
+	// retained under the bounded arrays; restore chronological display order.
+	for i, j := 0, len(out.Topics)-1; i < j; i, j = i+1, j-1 {
+		out.Topics[i], out.Topics[j] = out.Topics[j], out.Topics[i]
+	}
+	for i, j := 0, len(out.Media)-1; i < j; i, j = i+1, j-1 {
+		out.Media[i], out.Media[j] = out.Media[j], out.Media[i]
+	}
+	if len(out.Topics) > 0 {
+		out.CurrentFocus = out.Topics[len(out.Topics)-1].Text
+	} else if len(out.Media) > 0 {
+		out.CurrentFocus = out.Media[len(out.Media)-1].Title
+	}
+	return out
+}
+
+// mergeVerifiedSummaryHistory prevents a valid model response for a later
+// batch from silently erasing earlier verified topics or media. The merged
+// packet is still bounded and re-bound to the current store before saving.
+func mergeVerifiedSummaryHistory(dst *contextSummary, previous contextSummary) {
+	mergeTopics := func(old, current []summaryTopic) []summaryTopic {
+		out := append([]summaryTopic{}, old...)
+		seen := map[string]bool{}
+		for _, item := range out {
+			seen[strings.Join(item.SourceEventIDs, "\x00")] = true
+		}
+		for _, item := range current {
+			key := strings.Join(item.SourceEventIDs, "\x00")
+			if !seen[key] {
+				out = append(out, item)
+				seen[key] = true
+			}
+		}
+		if len(out) > 20 {
+			out = out[len(out)-20:]
+		}
+		return out
+	}
+	mergeMedia := func(old, current []summaryMedia) []summaryMedia {
+		out := append([]summaryMedia{}, old...)
+		seen := map[string]bool{}
+		for _, item := range out {
+			seen[strings.Join(item.SourceEventIDs, "\x00")] = true
+		}
+		for _, item := range current {
+			key := strings.Join(item.SourceEventIDs, "\x00")
+			if !seen[key] {
+				out = append(out, item)
+				seen[key] = true
+			}
+		}
+		if len(out) > 20 {
+			out = out[len(out)-20:]
+		}
+		return out
+	}
+	dst.Topics = mergeTopics(previous.Topics, dst.Topics)
+	dst.Media = mergeMedia(previous.Media, dst.Media)
+	if dst.CurrentFocus == "" {
+		dst.CurrentFocus = previous.CurrentFocus
+	}
+	if len(dst.Preferences) == 0 {
+		dst.Preferences = append([]string{}, previous.Preferences...)
+	}
+	if len(dst.Corrections) == 0 {
+		dst.Corrections = append([]string{}, previous.Corrections...)
+	}
+	for summaryJSONLength(*dst) > 3500 || len(summaryJSONBytes(*dst)) > 14000 {
+		if len(dst.Topics) > 8 {
+			dst.Topics = dst.Topics[1:]
+			continue
+		}
+		if len(dst.Media) > 8 {
+			dst.Media = dst.Media[1:]
+			continue
+		}
+		changed := false
+		for i := range dst.Topics {
+			if len(dst.Topics[i].Text) > 180 {
+				dst.Topics[i].Text = boundedText(dst.Topics[i].Text, 180)
+				changed = true
+			}
+		}
+		for i := range dst.Media {
+			if len(dst.Media[i].Title) > 220 {
+				dst.Media[i].Title = boundedText(dst.Media[i].Title, 220)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+}
+
+func summaryJSONBytes(summary contextSummary) []byte {
+	b, _ := json.Marshal(summary)
+	return b
+}
+
+func summaryJSONLength(summary contextSummary) int {
+	return utf8.RuneCount(summaryJSONBytes(summary))
+}
+
 func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 	if len(scope.Messages) == 0 && scope.Summary == "" {
 		return nil

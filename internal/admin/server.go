@@ -146,7 +146,12 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		name := r.URL.Path
-		if s.autoLogin && name == "/" && r.URL.Query().Get("from_station") == "1" {
+		// Desktop mode is already restricted to the loopback listener. Start the
+		// legacy console with its local handoff session directly so users go to
+		// the WeChat account page instead of seeing a second administrator
+		// password form. AutoLogin rechecks the host/origin boundary and the
+		// protected API still requires the same-origin CSRF token.
+		if s.autoLogin && name == "/" {
 			s.auth.AutoLogin(w, r)
 		}
 		if stationui.ServeLegacy(w, r, name) {
