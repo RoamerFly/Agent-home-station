@@ -18,16 +18,17 @@ import (
 // local conversation.  API credentials are intentionally not part of this
 // value: it is safe to return from the local management API.
 type LocalModelSettings struct {
-	Revision        uint64 `json:"revision"`
-	Provider        string `json:"provider"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	MaxTokens       int    `json:"max_tokens"`
-	ThinkingEnabled bool   `json:"thinking_enabled"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	TaskReasoning   string `json:"task_reasoning,omitempty"`
-	Persona         string `json:"persona"`
-	KeyConfigured   bool   `json:"key_configured"`
+	Revision         uint64 `json:"revision"`
+	Provider         string `json:"provider"`
+	BaseURL          string `json:"base_url"`
+	Model            string `json:"model"`
+	MaxTokens        int    `json:"max_tokens"`
+	ThinkingEnabled  bool   `json:"thinking_enabled"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	TaskReasoning    string `json:"task_reasoning,omitempty"`
+	DirectMediaInput bool   `json:"direct_media_input"`
+	Persona          string `json:"persona"`
+	KeyConfigured    bool   `json:"key_configured"`
 }
 
 // LocalModelInput uses Revision as a compare-and-swap precondition.  An empty

@@ -555,6 +555,7 @@
 <label for="reasoning-effort">思考强度</label>
 <select id="reasoning-effort" name="reasoning_effort"><option value="low">低 · 更省 Token</option><option value="high">高</option><option value="max">最高</option></select>
 <p class="hint">以上是日常模型设置；任务可使用下面的临时策略。</p>
+<label class="switch-row" for="direct-image-input"><span>DeepSeek 直接理解图片与文档（关闭后恢复原处理链）</span><input id="direct-image-input" type="checkbox"><span aria-hidden="true" class="switch"></span></label>
 <label for="task-reasoning">任务思考策略</label>
 <select id="task-reasoning"><option value="auto">由 Agent 按需决定</option><option value="inherit">始终沿用日常设置</option><option value="off">本轮任务关闭思考</option><option value="low">本轮任务低强度</option><option value="high">本轮任务高强度</option><option value="max">本轮任务最高强度</option></select>
 <p class="hint">适用于新执行回合。临时调整只作用于当前回合，结束后恢复；人工指定优先于 Agent。</p>

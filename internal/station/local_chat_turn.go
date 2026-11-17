@@ -106,6 +106,9 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 		defer client.CloseIdleConnections()
 	}
 	c := localConversationConfig(settings.Persona)
+	if settings.DirectMediaInput {
+		tools.directMedia, _ = model.(*deepseek.Client)
+	}
 	c.TaskReasoning = settings.TaskReasoning
 	prompt := "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录、已授权的项目工具和已连接的应用。生成本机成品后，把工具实际返回的 artifact_id 告诉主人，界面会显示下载入口。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。"
 	if tools.memoryLinked {

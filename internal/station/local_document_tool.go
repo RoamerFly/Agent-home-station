@@ -72,6 +72,9 @@ func (t *localToolSet) localDocumentTools(ctx context.Context) []mcptools.Tool {
 	tools := []mcptools.Tool{localDocumentTool()}
 	if item.Digest != localDocumentLegacyDigest {
 		tools = append(tools, localDocumentArtifactTools(t.projectTools.pdfRuntimeReady())...)
+		if t.directMedia != nil {
+			tools[1].Description = "将已登记图片、Word、PDF、Excel等原件直接交给DeepSeek，在下一次模型请求中自行理解。include_layout启用图文解析；pages表示重点页，原文件不裁页。按需复查，不在后续步骤自动重复携带。"
+		}
 	}
 	return tools
 }
@@ -135,6 +138,9 @@ func (t *localToolSet) createLocalDocument(ctx context.Context, raw json.RawMess
 }
 
 func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string, raw json.RawMessage) (string, error) {
+	if tool == localDocumentInspectTool && t.directMedia != nil {
+		return t.inspectDirectMedia(ctx, raw)
+	}
 	var in struct {
 		ArtifactID    string `json:"artifact_id"`
 		Pages         []int  `json:"pages,omitempty"`

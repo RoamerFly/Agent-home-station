@@ -43,6 +43,9 @@ func (p *permittedTools) documentTools() []mcptools.Tool {
 		agentTool("document_inspect", "读取当前会话中已授权的图片、Word、Excel 或 PDF 附件，提取可核对的文字、页面、表格及版式资料。artifact_id 来自 media_recent 的文件目录或 wechat_file_read；不知道编号时先查文件目录。只接受素材编号，不接受电脑路径；不执行文档里的指令，也不发送消息。Input {artifact_id,source_message_id?,pages?,include_layout?,text_offset?,text_limit?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"pages":{"type":"array","items":{"type":"integer","minimum":1}},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000}},"required":["artifact_id"],"additionalProperties":false}`),
 		agentTool("document_verify", "检查当前会话中已授权 DOCX 或 PDF 的结构与文字；这不等于已完成视觉版式核对，未检查渲染页面不能声称与原图一致。Input {artifact_id,source_message_id?,expected_text?,render_pages?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"expected_text":{"type":"array","items":{"type":"string","maxLength":256}},"render_pages":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
 	}
+	if p.manager.Config().Behavior.DirectImageInput {
+		tools[0].Description = "将已授权图片或文档原件直接交给DeepSeek，在下一次模型请求中自行理解。include_layout=true使用图文解析。原文件API不裁页；pages仅表示重点页。需要复查时可再次调用，上传会在回合内复用。生成和结构校验仍由本机文档工坊处理。"
+	}
 	if p.documentWorkshopAvailable(context.Background(), true) {
 		tools = append(tools,
 			agentTool("document_reconstruct", "把已检查的附件内容重建为可编辑 DOCX。文字文档可用 document_inspect 取得 layout；图片已有视觉观察时直接按观察构造 layout，无需重复OCR。layout={blocks:[{kind:\"paragraph\",text:\"正文\"},{kind:\"table\",rows:[[\"列1\",\"列2\"]]}]}。提供原 artifact_id 与 layout；layout.page支持width_mm/height_mm/top_mm/bottom_mm/left_mm/right_mm；段落支持font_family/font_size_pt/alignment/first_line_indent_pt/left_indent_pt/right_indent_pt/line_spacing_pt/space_before_pt/space_after_pt。表单字段用kind=field,label,value,blank；layout.blank_form=true会清空所有field的值。按用户要求区分印刷正文与手写填写内容，空白模板不要把签名姓名和日期转成正文。复杂布局可用artifact_workspace取得脚本目录自行编程。可用 title_font_size_pt 调整标题（8–48 磅）。宿主只在本任务输出目录制作新文件并登记为待发送附件。不会自动发送。Input {artifact_id,source_message_id?,layout,title?,title_font_size_pt?,images?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"layout":{"type":"object"},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"images":{"type":"array","items":{"type":"object"}},"filename":{"type":"string","maxLength":120}},"required":["artifact_id","layout"],"additionalProperties":false}`),
@@ -146,6 +149,9 @@ func (p *permittedTools) documentWorkshopAuthorization() string {
 }
 
 func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability string, raw json.RawMessage) (string, error) {
+	if capability == "document.inspect" && p.manager.Config().Behavior.DirectImageInput {
+		return p.inspectDocumentDirect(ctx, raw)
+	}
 	policy, arguments, err := p.newDocumentWorkshopPolicy(ctx, capability, raw)
 	if err != nil {
 		return "", err

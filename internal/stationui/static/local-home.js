@@ -7138,6 +7138,7 @@
     $("#model-max-tokens").value = String(source.max_tokens || 4096);
     $("#model-thinking").checked = source.thinking_enabled !== false;
     $("#model-task-reasoning").value = source.task_reasoning || "auto";
+    $("#model-direct-media").checked = !!source.direct_media_input;
     $("#model-reasoning").value = ["high", "max"].includes(source.reasoning_effort) ? source.reasoning_effort : "max";
     $("#model-reasoning").disabled = !$("#model-thinking").checked;
     $("#model-persona").value = source.persona || "";
@@ -7333,7 +7334,7 @@
   }
   async function saveModel(event) {
     event.preventDefault();
-    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
+    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
     const button = $("#model-save"); button.disabled = true;
     try {
       state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model);

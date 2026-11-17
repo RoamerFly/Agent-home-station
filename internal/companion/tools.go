@@ -34,6 +34,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	}
 	ctx, clearThinking := deepseek.WithThinkingSession(ctx)
 	defer clearThinking()
+	ctx, clearImages := deepseek.WithImageSession(ctx)
+	defer clearImages()
 	returnedTools := []string{}
 	defer func() { runErr = generationPartialError(runErr, returnedTools) }()
 	callEvidence, err := e.captureGenerationEvidence(ctx)

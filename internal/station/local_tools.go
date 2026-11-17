@@ -13,11 +13,13 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationruntime"
 )
 
 type localToolSet struct {
+	directMedia           *deepseek.Client
 	memory                companion.ToolAccess
 	files                 *localWorkspaceFileTools
 	process               *localProcessTools

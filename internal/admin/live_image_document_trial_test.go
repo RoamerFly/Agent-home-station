@@ -48,13 +48,18 @@ func (x *imageDocumentTrial) List(ctx context.Context) ([]mcptools.Tool, error) 
 			out = append(out, v)
 		}
 	}
-	out = append(out, agentTool("inspect_original_image", "Observe the original attached image using the installed visual model. Request text, layout, handwriting or other visible details with prompt. No reference document is available.", `{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"additionalProperties":false}`))
+	if !x.p.manager.Config().Behavior.DirectImageInput {
+		out = append(out, agentTool("inspect_original_image", "Observe the original attached image using the installed visual model. Request text, layout, handwriting or other visible details with prompt. No reference document is available.", `{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"additionalProperties":false}`))
+	}
 	return out, e
 }
 func (x *imageDocumentTrial) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	var result string
 	var err error
 	if name == "inspect_original_image" {
+		if x.p.manager.Config().Behavior.DirectImageInput {
+			return "", fmt.Errorf("legacy image observer disabled")
+		}
 		var in struct {
 			Prompt string `json:"prompt"`
 		}
@@ -159,7 +164,12 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 		t.Fatal(e)
 	}
 	f.manager.config.Enabled = true
+	f.manager.config.APIKey = live.APIKey
+	f.manager.config.BaseURL = live.BaseURL
+	f.manager.config.Model = live.Model
+	f.manager.config.Provider = live.Provider
 	f.manager.config.Behavior.ReadImages = true
+	f.manager.config.Behavior.DirectImageInput = os.Getenv("DOCUMENT_TRIAL_DIRECT_IMAGES") == "1"
 	f.manager.config.Companion.Enabled = true
 	image, e := os.ReadFile(imagePath)
 	if e != nil {
@@ -253,9 +263,28 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Minute)
 	defer cancel()
+	if f.manager.config.Behavior.DirectImageInput {
+		var clear func()
+		ctx, clear = deepseek.WithImageSession(ctx)
+		defer clear()
+		if e = deepseek.AttachImage(ctx, "用户原始图片，未提供参考PDF或预提取文字", deepseek.Image{Data: image, MIME: "image/jpeg"}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	events, e := os.Create(filepath.Join(out, "tool-events.private.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer events.Close()
+	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
+		b, _ := json.Marshal(d)
+		events.Write(append(b, '\n'))
+		events.Sync()
+	})
 	decision, e := engine.Respond(ctx, input)
 	report := map[string]any{"decision": decision, "real_model": true, "real_windows_tools": true, "history_supplied": false, "reference_supplied": false, "native_sends": n.submits.Load(), "visual_acceptance": "requires_independent_review", "transport": "isolated_native_fixture"}
 	report["model_profile"] = map[string]any{"model": live.Model, "thinking": live.ThinkingEnabled, "reasoning_effort": live.ReasoningEffort, "max_tokens": live.MaxTokens}
+	report["direct_images"] = f.manager.config.Behavior.DirectImageInput
 	if e != nil {
 		report["error"] = e.Error()
 	}
