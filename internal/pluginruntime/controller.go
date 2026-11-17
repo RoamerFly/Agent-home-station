@@ -508,7 +508,16 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int, enab
 	c.mu.Unlock()
 	return nil
 }
-func (c *Controller) Stop(ctx context.Context, id string, revision int) (err error) {
+func (c *Controller) Stop(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, true)
+}
+
+// StopSession releases the running session without revoking administrator enable intent.
+func (c *Controller) StopSession(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, false)
+}
+
+func (c *Controller) stop(ctx context.Context, id string, revision int, disable bool) (err error) {
 	if err = c.begin(id); err != nil {
 		return err
 	}
@@ -533,7 +542,9 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 			return err
 		}
 	}
-	_, err = c.store.SetEnabled(ctx, id, revision, false)
+	if disable {
+		_, err = c.store.SetEnabled(ctx, id, revision, false)
+	}
 	if err == nil {
 		c.mu.Lock()
 		delete(c.loaded, id)

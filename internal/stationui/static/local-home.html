@@ -228,7 +228,17 @@
                 <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
               </header>
               <p id="project-tools-feedback" class="project-tools-feedback" role="status"></p>
-              <div id="project-tools-list" class="project-tools-list" aria-busy="false"></div>
+              <div class="project-tool-actions" role="tablist" aria-label="项目工具栏目">
+                <button id="tool-catalog-tab" class="button compact secondary" role="tab" aria-selected="true" aria-controls="project-tools-list" type="button">工具管理</button>
+                <button id="tool-files-tab" class="button compact secondary" role="tab" aria-selected="false" aria-controls="tool-files-panel" tabindex="-1" type="button">工具缓存与产物</button>
+              </div>
+              <section id="tool-files-panel" role="tabpanel" aria-labelledby="tool-files-tab" hidden>
+                <div class="project-tool-actions"><label>搜索文件或来源 <input id="tool-files-query" type="search" placeholder="文件名、路径、任务编号"></label><label>类别 <select id="tool-files-kind"><option value="">全部</option><option>素材</option><option>产物</option></select></label><button id="tool-files-refresh" class="button compact secondary" type="button">查询 / 刷新</button></div>
+                <div class="project-tool-actions"><label><input id="tool-files-select-all" type="checkbox"> 全选已加载文件</label><button id="tool-files-delete" type="button" class="button compact secondary" disabled>删除选中文件</button><span>删除后移至 E:\待删除</span></div>
+                <p id="tool-files-status" role="status"></p><div id="tool-files-list"></div>
+                <button id="tool-files-more" class="button compact secondary" type="button" hidden>加载更多</button>
+              </section>
+              <div id="project-tools-list" role="tabpanel" aria-labelledby="tool-catalog-tab" class="project-tools-list" aria-busy="false"></div>
             </section>
 
             <section id="settings-view" class="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>

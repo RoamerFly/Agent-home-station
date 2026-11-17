@@ -144,7 +144,7 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		if !decode(w, r, &input) {
 			return
 		}
-		if input.Action != "start" && input.Action != "stop" && input.Action != "enable_on_demand" {
+		if input.Action != "start" && input.Action != "stop" && input.Action != "enable_on_demand" && input.Action != "stop_session" && input.Action != "restart" {
 			fail(w, 400, "请选择按需启用、启动或停止")
 			return
 		}
@@ -178,6 +178,13 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			err = h.Start(ctx, id, input.Revision)
 		case "stop":
 			err = h.Stop(ctx, id, input.Revision)
+		case "stop_session":
+			err = h.StopSession(ctx, id, input.Revision)
+		case "restart":
+			err = h.StopSession(ctx, id, input.Revision)
+			if err == nil {
+				err = h.Start(ctx, id, input.Revision)
+			}
 		}
 		if err != nil {
 			var dependency *pluginruntime.DependencyError

@@ -180,3 +180,11 @@ func regularFileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
 }
+
+// Tool registration files have a single location in structured portable homes.
+func stationToolRegistrationPath(dataDir, name string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationPublicToolsDir(dataDir), "registrations", name)
+	}
+	return filepath.Join(dataDir, name)
+}

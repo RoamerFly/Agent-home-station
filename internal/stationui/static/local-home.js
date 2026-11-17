@@ -6692,6 +6692,43 @@
     }
     return panel;
   }
+  let toolFileOffset = 0, toolFilesLoading = false;
+  const selectedToolFiles = new Set();
+  function updateFileSelection(){ $("#tool-files-delete").disabled=toolFilesLoading||!selectedToolFiles.size; $("#tool-files-delete").textContent=`删除选中文件（${selectedToolFiles.size}）`; const boxes=[...$("#tool-files-list").querySelectorAll("input[type=checkbox]")]; $("#tool-files-select-all").checked=boxes.length>0&&boxes.every(x=>x.checked); $("#tool-files-select-all").indeterminate=boxes.some(x=>x.checked)&&!boxes.every(x=>x.checked); }
+  function selectToolPanel(files) {
+    $("#tool-files-panel").hidden = !files; $("#project-tools-list").hidden = files;
+    for (const [id, selected] of [["tool-files-tab", files], ["tool-catalog-tab", !files]]) {
+      $("#" + id).setAttribute("aria-selected", String(selected)); $("#" + id).tabIndex = selected ? 0 : -1;
+    }
+    if (files) void loadToolFiles(false);
+  }
+  async function loadToolFiles(append) {
+    if (toolFilesLoading) return; toolFilesLoading = true;
+    const status = $("#tool-files-status"), list = $("#tool-files-list");
+    $("#tool-files-refresh").disabled = true; $("#tool-files-more").disabled = true; status.textContent = "正在读取本机文件…";
+    try {
+      const params = new URLSearchParams({ q: $("#tool-files-query").value, kind: $("#tool-files-kind").value, offset: String(append ? toolFileOffset : 0), limit: "100" });
+      const data = await request("/api/local/tool-files?" + params);
+      if (!append) {list.replaceChildren();selectedToolFiles.clear();}
+      for (const file of data.files) {
+        const row = appElement("article", "", "tool-file-row");
+        const selection=document.createElement("input"); selection.type="checkbox"; selection.className="tool-file-check"; selection.dataset.fileId=file.id; selection.setAttribute("aria-label","选择 "+file.name);
+        selection.addEventListener("change",()=>{if(selection.checked)selectedToolFiles.add(file.id);else selectedToolFiles.delete(file.id);row.classList.toggle("is-selected",selection.checked);updateFileSelection();});row.append(selection);
+        const content=appElement("div","","tool-file-content");
+        const heading=appElement("div","","tool-file-heading");heading.append(appElement("strong",file.name),appElement("span",`${file.kind} · ${(file.bytes/1048576).toFixed(2)} MB · ${new Date(file.modified).toLocaleString()}`,"tool-file-meta"));content.append(heading);
+        const source=appElement("p",`来源：${file.source}`,"tool-file-source");source.title=file.source;content.append(source);
+        if(file.job_id)content.append(appElement("p",`任务：${file.job_id}${file.state ? " · "+file.state : ""}`,"tool-file-meta"));
+        const storedName=file.path.split(/[\\/]/).pop();
+        if(storedName!==file.name)content.append(appElement("p",`磁盘文件名：${storedName}（按内容哈希存储，原始名称如上）`,"tool-file-meta"));
+        content.append(appElement("p",file.path,"tool-file-path"));row.append(content);
+        const open=appElement("button","定位文件","button compact secondary tool-file-locate");open.type="button";open.title="在文件资源管理器中选中实际文件";
+        open.addEventListener("click",async()=>{open.disabled=true;try{await request("/api/local/tool-files/open",{method:"POST",body:JSON.stringify({id:file.id})});}catch(error){status.textContent=error.message;}finally{open.disabled=false;}});
+        row.append(open);list.append(row);
+      }
+      toolFileOffset = data.next_offset; $("#tool-files-more").hidden = toolFileOffset < 0;
+      status.textContent = `${data.total} 个文件 · ${(data.bytes / 1073741824).toFixed(2)} GB。仅显示正式素材与产物；任务临时文件不在此列。${data.warnings.length ? "部分目录不可读，清单不完整。" : ""}`;
+    } catch(error) {status.textContent=error.message;} finally {toolFilesLoading=false;$("#tool-files-refresh").disabled=false;$("#tool-files-more").disabled=false;updateFileSelection();}
+  }
   function renderProjectTools() {
     const list = $("#project-tools-list"), current = projectTools;
     list.setAttribute("aria-busy", String(current.loading || Boolean(current.applying)));
@@ -6827,11 +6864,12 @@
         button.type = "button"; button.disabled = controlsDisabled || (action === "enable" && !ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
-        if (tool.id === "audio-cpp" && tool.enabled) {
-          const restart = appElement("button", busy ? "正在处理…" : "重启服务", "button compact secondary");
-          restart.type = "button"; restart.disabled = controlsDisabled;
-          restart.addEventListener("click", () => updateProjectTool(tool, "restart", false));
-          controls.append(restart);
+        if (tool.enabled) {
+          for (const [action, label] of [["start", "启动"], ["stop", "停止"], ["restart", "重启"]]) {
+            const control = appElement("button", label, "button compact secondary");
+            control.type = "button"; control.disabled = controlsDisabled || (action !== "stop" && !tool.runtime_ready);
+            control.addEventListener("click", () => updateProjectTool(tool, action, false)); controls.append(control);
+          }
         }
         if (tool.update_available) {
           if (tool.enabled) {
@@ -7314,7 +7352,7 @@
   }
   async function logout() {
     if (state.busy) return; setBusy(true);
-    try { await request("/api/logout", { method: "POST" }); state.csrf = ""; showLogin(); showMessage("已退出登录。", "success"); }
+    try { await request("/api/logout", { method: "POST" }); state.csrf = ""; selectedToolFiles.clear(); $("#tool-files-list").replaceChildren(); updateFileSelection(); showLogin(); showMessage("已退出登录。", "success"); }
     catch (_) { showMessage("退出登录未完成，请重试。", "error"); } finally { setBusy(false); }
   }
   $("#login-form").addEventListener("submit", async (event) => {
@@ -7420,6 +7458,21 @@
       (button || $("#apps-search")).focus({ preventScroll: true });
     }
   });
+  $("#tool-files-select-all").addEventListener("change",()=>{for(const box of $("#tool-files-list").querySelectorAll("input[type=checkbox]")){box.checked=$("#tool-files-select-all").checked;box.closest(".tool-file-row").classList.toggle("is-selected",box.checked);if(box.checked)selectedToolFiles.add(box.dataset.fileId);else selectedToolFiles.delete(box.dataset.fileId);}updateFileSelection();});
+  $("#tool-files-delete").addEventListener("click",async()=>{
+    if(!selectedToolFiles.size||!window.confirm(`将选中的 ${selectedToolFiles.size} 个文件移至 E:\\待删除？`))return;
+    $("#tool-files-delete").disabled=true;
+    try{const result=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids:[...selectedToolFiles]})});await loadToolFiles(false);$("#tool-files-status").textContent=`已移动 ${result.moved.length} 个文件至待删除目录。${result.failed.length ? "部分未移动："+result.failed.map(x=>x.reason).join("；") : ""}`;}
+    catch(error){$("#tool-files-status").textContent=error.message;}finally{updateFileSelection();}
+  });
+  $("#tool-files-tab").addEventListener("click", () => selectToolPanel(true));
+  $("#tool-catalog-tab").addEventListener("click", () => selectToolPanel(false));
+  for (const id of ["tool-files-tab", "tool-catalog-tab"]) $("#"+id).addEventListener("keydown", (event) => {
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const files = event.key === "End" || (event.key !== "Home" && id === "tool-catalog-tab"); selectToolPanel(files); $(files ? "#tool-files-tab" : "#tool-catalog-tab").focus(); }
+  });
+  $("#tool-files-refresh").addEventListener("click", () => loadToolFiles(false));
+  $("#tool-files-more").addEventListener("click", () => loadToolFiles(true));
+  $("#tool-files-query").addEventListener("keydown", (event) => { if (event.key === "Enter") loadToolFiles(false); });
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel);

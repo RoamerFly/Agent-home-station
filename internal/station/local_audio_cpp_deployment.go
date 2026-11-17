@@ -48,9 +48,13 @@ func (s *localProjectTools) audioCppDeployment(w http.ResponseWriter, r *http.Re
 			websession.Fail(w, http.StatusConflict, "audio.cpp 登记文件不可读")
 			return
 		}
-		path := filepath.Join(s.home.dataDir, localAudioCppRegistrationFile)
+		path := stationToolRegistrationPath(s.home.dataDir, localAudioCppRegistrationFile)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			websession.Fail(w, 503, "登记目录不可写")
+			return
+		}
 		old, oldErr := os.ReadFile(path)
-		tmp, writeErr := os.CreateTemp(s.home.dataDir, "audio-cpp-registration-")
+		tmp, writeErr := os.CreateTemp(filepath.Dir(path), "audio-cpp-registration-")
 		if writeErr != nil {
 			websession.Fail(w, http.StatusServiceUnavailable, "audio.cpp 登记暂存目录不可用")
 			return

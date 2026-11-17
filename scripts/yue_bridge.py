@@ -24,6 +24,40 @@ import wave
 from urllib.parse import parse_qs, urlsplit
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
+def archive_completed_intermediates(state, jid, job, pending_root=None):
+    """Only reclaim this completed job's scratch, after durable final output exists."""
+    if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid):
+        return []
+    state = Path(state).absolute()
+    if state.resolve() != state or state.is_symlink():
+        return []
+    filename = job.get('file', '')
+    if not filename or Path(filename).name != filename:
+        return []
+    final = state / filename
+    if not final.is_file() or final.is_symlink() or final.stat().st_size != job.get('bytes'):
+        return []
+    # Original downloaded assets and final audio/metadata are never candidates.
+    names = [jid+'-source.audio', jid+'-rvc-voice-work', jid+'-character-voice-voice-work']
+    moved = []
+    root = Path(pending_root) if pending_root is not None else Path(r'E:\待删除')
+    if os.name != 'nt' and pending_root is None:
+        return []
+    batch = root / ('music-temp-'+jid+'-'+secrets.token_hex(4))
+    for name in names:
+        source = state / name
+        if not source.exists() or source.is_symlink() or source.resolve() != source:
+            continue
+        try:
+            batch.mkdir(parents=True, exist_ok=True)
+            if batch.resolve() != batch.absolute():
+                continue
+            source.rename(batch / name)
+            moved.append(name)
+        except OSError:
+            pass  # A locked scratch file remains; never change a successful job to failed.
+    return moved
+
 def singing_profile(config_path,expected_sha256=None):
     if not config_path:return None
     path=Path(config_path)
@@ -253,7 +287,7 @@ def station_ready_file(value,nonce,token_path,scope):
     # tool directory. Older builds used a root-level token, so derive the
     # sibling directory from the actual token parent instead of hard-coding a
     # second legacy name.
-    if parent!=token_path.parent/'ready':
+    if parent!=token_path.parent/'station-rvc-ready':
         raise ValueError('station_rvc_ready_path_invalid')
     return parent/path.name
 
@@ -377,6 +411,8 @@ def main():
             job.update(state='needs_review',reason='bridge_restarted_no_replay')
             if station:job['phase']='needs_review'
     save()
+    for key,job in jobs.items():
+        archive_completed_intermediates(state,key,job)
     def api(route,body=None,timeout=20):
         req=urllib.request.Request(comfy_url+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
         with comfy_open(req,timeout=timeout) as r:
@@ -440,6 +476,7 @@ def main():
                         api('/free',{'unload_models':True,'free_memory':True})
                         output=convert_singing_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'),sandbox=sandbox)
                     with lock:jobs[jid].update(state='completed',phase='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
+                    archive_completed_intermediates(state,jid,jobs[jid])
                     return
                 time.sleep(1)
             raise ValueError('generation_deadline')
@@ -496,6 +533,7 @@ def main():
                     persist_job(jid,{**output,'state':'completed','phase':'completed'})
                 else:
                     jobs[jid].update(output,state='completed',phase='completed');save()
+            archive_completed_intermediates(state,jid,jobs[jid])
         except Exception as error:
             with lock:
                 if station and jobs[jid]['state']=='cancelling':
@@ -809,3 +847,4 @@ def main():
         state_lease.close()
 
 if __name__=='__main__':main()
+

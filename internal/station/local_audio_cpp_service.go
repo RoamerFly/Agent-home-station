@@ -396,7 +396,7 @@ func (s *localAudioCppService) loadRegistration(ctx context.Context) (localAudio
 	if err := ctx.Err(); err != nil {
 		return localAudioCppRegistration{}, nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(s.dataDir, localAudioCppRegistrationFile))
+	data, err := os.ReadFile(stationToolRegistrationPath(s.dataDir, localAudioCppRegistrationFile))
 	if err != nil || len(data) == 0 || len(data) > localAudioCppMaxConfig {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_not_installed_or_authorized")
 	}

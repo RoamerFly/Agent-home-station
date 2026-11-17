@@ -218,6 +218,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         k.ResumeThread(pi.hThread);k.CloseHandle(pi.hThread)
         process = SandboxedProcess(k,pi.hProcess,job,pi.dwProcessId)
         process.package_sid = package_sid
+        process.scratch_sink = Path(env["TMP"]) / ("null-" + str(pi.dwProcessId) + ".tmp")
         return process
     finally:
         os.set_handle_inheritable(handle, False)
@@ -293,6 +294,15 @@ class SandboxedProcess:
         if code.value!=259:
             self.returncode=code.value;self.k.CloseHandle(self.handle);self.handle=None
             self.k.CloseHandle(self.job);self.job=None
+            sink = getattr(self, "scratch_sink", None)
+            if sink is not None and sink.is_file() and not sink.is_symlink():
+                try:
+                    target = Path(r"E:\待删除") / ("process-scratch-"+str(time.time_ns()))
+                    target.mkdir(parents=True, exist_ok=True)
+                    if sink.resolve() == sink.absolute() and target.resolve() == target.absolute():
+                        sink.rename(target / sink.name)
+                except OSError:
+                    pass
         return self.returncode
     def wait(self,timeout=None):
         started=time.monotonic()

@@ -1752,3 +1752,20 @@ body.local-home-page { background:var(--bg); color:var(--text); }
   .is-home-ready .chat-conversations { display: none; }
 }
 
+
+.tool-file-row { border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: var(--s-4); margin-block: var(--s-3); display: grid; gap: var(--s-2); }
+.tool-file-row p { margin: 0; } .tool-file-path { overflow-wrap: anywhere; color: var(--text-muted); } .tool-file-row button { justify-self: start; }
+#project-tools-list[hidden], #tool-files-panel[hidden] { display: none; }
+
+/* Keep file selection in a stable left column; override global form input sizing. */
+.tool-file-row { grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 16px; margin-block: 10px; }
+#tool-files-panel input[type="checkbox"] { width: 18px; height: 18px; min-width: 18px; min-height: 18px; margin: 3px 0 0; padding: 0; accent-color: #2563eb; }
+.tool-file-content { min-width: 0; display: grid; gap: 7px; }
+.tool-file-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+.tool-file-heading strong { overflow-wrap: anywhere; }
+.tool-file-meta { color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
+.tool-file-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.tool-file-path { font-size: 12px; overflow-wrap: anywhere; }
+.tool-file-row.is-selected { background: #edf3ff; border-color: #7ea6ee; }
+#tool-files-panel .project-tool-actions > label:has(input[type="checkbox"]) { display: inline-flex; align-items: center; gap: 8px; }
+@media(max-width: 760px) { .tool-file-row { grid-template-columns: 22px minmax(0,1fr); } .tool-file-locate { grid-column: 2; } }

@@ -385,7 +385,7 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	if err := ctx.Err(); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
-	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+	data, err := readLocalComputeRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
 	if err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}

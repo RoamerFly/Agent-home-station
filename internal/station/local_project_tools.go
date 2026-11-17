@@ -27,6 +27,9 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
+	legacyMu        sync.Mutex
+	legacyAt        time.Time
+	legacyViews     map[string]localProjectToolView
 	home            *localHomeService
 	options         pluginruntime.Options
 	mu              sync.Mutex
@@ -53,6 +56,7 @@ type localProjectToolHost struct {
 }
 
 type localProjectToolView struct {
+	Host             string                   `json:"host,omitempty"`
 	ID               string                   `json:"id"`
 	Name             string                   `json:"name"`
 	CatalogAvailable bool                     `json:"catalog_available"`
@@ -238,6 +242,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		if host != nil && s.comfy != nil {
 			info, workflows, err := s.comfySetup(ctx, host.store.Account())
 			view.RuntimeReady = err == nil
+			backendRunning = err == nil && info.Running
 			backendBusy = err == nil && info.Busy
 			view.Workflows = localComfyWorkflowViews(workflows)
 			if errors.Is(err, errLocalComfyWorkflowSetup) {
@@ -285,6 +290,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 					}
 				}
 				view.RuntimeReady, view.Reason, backendBusy = ready, "", info.Busy
+				backendRunning = info.Running
 				if !ready {
 					view.Reason = "audio_cpp_model_missing"
 				}
@@ -309,6 +315,9 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	}
 	item, err := host.store.Installed(ctx, view.ID)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && item.Removed {
+		if legacy, ok := s.legacyToolViews(ctx)[id]; ok {
+			return legacy, nil
+		}
 		return view, nil
 	}
 	if err != nil {
@@ -325,7 +334,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	}
 	contract, err := catalog.ContractFor(id)
 	if err != nil {
-		return view, err
+		view.CatalogAvailable = false
 	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
 	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
@@ -345,7 +354,43 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	return view, nil
 }
 
+func (s *localProjectTools) packages(ctx context.Context, host *localProjectToolHost) []struct{ ID, Name string } {
+	out := append([]struct{ ID, Name string }{}, localProjectPackages...)
+	seen := map[string]bool{}
+	for _, p := range out {
+		seen[p.ID] = true
+	}
+	if items, err := catalog.List(); err == nil {
+		for _, p := range items {
+			if p.ID != "mobile-control" && !seen[p.ID] {
+				out = append(out, struct{ ID, Name string }{p.ID, p.Name})
+				seen[p.ID] = true
+			}
+		}
+	}
+	if host != nil {
+		if items, err := host.store.List(ctx); err == nil {
+			for _, p := range items {
+				if !p.Removed && p.Package.ID != "mobile-control" && !seen[p.Package.ID] {
+					out = append(out, struct{ ID, Name string }{p.Package.ID, p.Package.Name})
+					seen[p.Package.ID] = true
+				}
+			}
+		}
+	}
+	if s.home != nil {
+		for id, v := range s.legacyToolViews(ctx) {
+			if !seen[id] {
+				out = append(out, struct{ ID, Name string }{id, v.Name})
+				seen[id] = true
+			}
+		}
+	}
+	return out
+}
+
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
+	s.toolFileRoutes(owner, mux)
 	s.visionConfigurationRoutes(owner, mux)
 	s.comfyDeploymentRoutes(owner, mux)
 	s.yueDeploymentRoutes(owner, mux)
@@ -365,7 +410,7 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 			}
 		}
 		views := make([]localProjectToolView, 0, len(localProjectPackages))
-		for _, pkg := range localProjectPackages {
+		for _, pkg := range s.packages(r.Context(), host) {
 			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name)
 			if err != nil {
 				websession.Fail(w, 503, "项目工具安装状态不可读")
@@ -376,11 +421,30 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 		w.Header().Set("Cache-Control", "no-store")
 		websession.Respond(w, 200, map[string]any{"tools": views})
 	}))
-	for _, pkg := range localProjectPackages {
-		mux.HandleFunc("PUT /api/local/project-tools/"+pkg.ID, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-			s.changeProjectTool(w, r, pkg.ID, pkg.Name)
-		}))
-	}
+	mux.HandleFunc("PUT /api/local/project-tools/{id}", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		record, err := s.home.identity.Read()
+		if err != nil {
+			websession.Fail(w, 409, "身份不可读")
+			return
+		}
+		host, err := s.forFish(record.FishID)
+		if err != nil {
+			websession.Fail(w, 503, "工具目录不可读")
+			return
+		}
+		for _, p := range s.packages(r.Context(), host) {
+			if p.ID == id {
+				if view, e := s.projectView(r.Context(), host, id, p.Name); e == nil && view.Host == "legacy" {
+					s.changeLegacyTool(w, r, view)
+					return
+				}
+				s.changeProjectTool(w, r, id, p.Name)
+				return
+			}
+		}
+		websession.Fail(w, 404, "工具未登记")
+	}))
 	preview := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		s.obsPreview(owner, w, r)
 	})
@@ -465,12 +529,12 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
-			prepared, prepareErr := host.store.Prepare(ctx, packageDir)
+			prepared, prepareErr := host.store.PrepareCatalog(ctx, packageDir, contract.ManifestSHA256)
 			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != contract.ManifestSHA256 {
 				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
-			grants := []string{"artifact.read", "artifact.write"}
+			grants := append([]string{}, contract.Package.Permissions...)
 			if id == localasr.PluginID {
 				grants = []string{"artifact.read", "artifact.write", "model.invoke"}
 			}
@@ -503,7 +567,9 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			websession.Fail(w, 409, "请先启用该项目工具")
 			return
 		}
-		if id == localOBSPackage {
+		if in.Action == "start" || in.Action == "stop" || in.Action == "restart" {
+			err = s.changeLifecycle(ctx, host, id, current.Revision, in.Action)
+		} else if id == localOBSPackage {
 			if in.Action == "enable" {
 				config, checkErr := localOBSConfiguration(ctx, host)
 				if checkErr != nil || !config.Configured {

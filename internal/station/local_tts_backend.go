@@ -353,7 +353,7 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 	if err := ctx.Err(); err != nil {
 		return localTTSRegistration{}, err
 	}
-	data, err := localTTSReadRegular(filepath.Join(s.dataDir, localTTSRegistrationFile), localTTSRegistrationMax)
+	data, err := localTTSReadRegular(stationToolRegistrationPath(s.dataDir, localTTSRegistrationFile), localTTSRegistrationMax)
 	if err != nil || len(data) == 0 {
 		return localTTSRegistration{}, errors.New("station_speech_not_installed_or_authorized")
 	}
