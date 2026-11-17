@@ -1023,3 +1023,22 @@ func TestScopedMediaStopDuringUploadDiscardsLateStaging(t *testing.T) {
 		t.Fatal("stopping during staging submitted a native job", n.sends, n.cancels, w.runtime.Media[0].State)
 	}
 }
+
+func TestAcknowledgedCancellationDoesNotBlockUnrelatedMedia(t *testing.T) {
+	w, _, _, _ := mediaWorker(t)
+	old := &mediaDelivery{Trace: "old-file", Input: companion.Input{Thread: "filehelper"}, State: "cancelling", Status: linuxnative.ToolStatus{State: "needs_review", CancelRequested: true}}
+	next := &mediaDelivery{Trace: "new-video", Input: companion.Input{Thread: "filehelper"}, State: "prepared"}
+	w.runtime.Media = []*mediaDelivery{old, next}
+	if _, blocked := w.mediaPredecessor(1, next); blocked {
+		t.Fatal("cancel receipt froze unrelated transfer")
+	}
+	next.Trace = old.Trace
+	if _, blocked := w.mediaPredecessor(1, next); !blocked {
+		t.Fatal("uncertain same batch overtaken")
+	}
+	next.Trace = "new-video"
+	old.Status.CancelRequested = false
+	if _, blocked := w.mediaPredecessor(1, next); !blocked {
+		t.Fatal("live upload was overtaken")
+	}
+}

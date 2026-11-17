@@ -135,7 +135,12 @@ func (e *Engine) groundingScope(in Input) Scope {
 	return scope
 }
 func (e *Engine) ValidateReplyContext(ctx context.Context, in Input, r ReplyContext) error {
-	if r.EvidenceEpoch != "" {
+	// A protected console action chooses exact assets and destinations, without
+	// a model decision based on recalled conversation text. Unrelated memory
+	// updates must not cancel an upload. Authorization, route, asset integrity
+	// and the original context fingerprint are still checked below/by the host.
+	consoleAction := in.Mode == "admin_action" && in.SourceOnlyContext && in.Source == nil && in.QuotedSource == nil && len(r.SourceEventIDs) == 0 && r.State == "system_context"
+	if r.EvidenceEpoch != "" && !consoleAction {
 		if e.Store == nil {
 			return errors.New("reply_evidence_epoch_unavailable")
 		}

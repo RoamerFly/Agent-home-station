@@ -112,7 +112,7 @@ func (d *mediaDelivery) unconfirmedVoiceParts() bool {
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
 func awaitingMediaReceipt(d *mediaDelivery) bool {
-	return d.State == "checking_receipt" || (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+	return d.State == "checking_receipt" || (d.State == "cancelling" && d.Status.CancelRequested && d.Status.State == "needs_review") || (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
 }
 
 // mediaStatusConfirmed is the terminal-delivery gate. A native job-level

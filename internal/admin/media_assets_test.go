@@ -208,3 +208,27 @@ func TestAssetSynthesisScriptIsNotReattributedOnReuse(t *testing.T) {
 		t.Fatal("converted voice inherited full-original script", text, ok)
 	}
 }
+
+func TestCachedVideoOriginalCanPrepareVideoWithoutDownload(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &fakeTools{fakeNative: f.native}
+	f.manager.config.Companion.Permissions.SendVideo = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-video"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic cached video"), MIME: "video/mp4", Filename: "video.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.SetTrace(in)
+	result, err := access.reuseAsset(t.Context(), a.ID, "video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, ok := access.Media(a.ID + "-video")
+	if !ok || media.Kind != "video" || media.SourceID == "" || !bytes.Contains([]byte(result), []byte(`"network_downloads":0`)) {
+		t.Fatal("cached original not staged", result)
+	}
+}
