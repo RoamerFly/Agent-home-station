@@ -844,11 +844,12 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/tasks/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Action string `json:"action"`
+			RunAt  string `json:"run_at"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if in.Action != "resume" && in.Action != "cancel" {
+		if in.Action != "resume" && in.Action != "cancel" && in.Action != "update" {
 			fail(w, 400, "操作无效")
 			return
 		}
@@ -865,6 +866,19 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		for _, t := range s.manager.agent.list(s.manager.native.Account(), "") {
 			if t.ID != r.PathValue("id") {
 				continue
+			}
+			if in.Action == "update" {
+				due, err := time.Parse(time.RFC3339, in.RunAt)
+				if err != nil {
+					fail(w, 400, "run_at需包含时区")
+					return
+				}
+				if err := s.manager.rescheduleTask(t, due); err != nil {
+					fail(w, 409, err.Error())
+					return
+				}
+				respond(w, 200, map[string]any{"id": t.ID, "due_at": due, "updated_existing": true})
+				return
 			}
 			if t.Reminder != nil && in.Action == "resume" {
 				followUpID, err := s.manager.scheduleReminderFollowUp(t)

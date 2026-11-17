@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -108,6 +108,14 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    if($sourceHash -ne $targetHash){throw ('WeChat runtime copy hash mismatch: '+$relative)}
    $hashes[$relative]=$targetHash
   }
+  # The console is our source-built component; native dependencies above
+  # remain verified against their original bundle manifest.
+  Push-Location $workspace
+  try {
+   & go build -buildvcs=false -trimpath -o (Join-Path $staging 'wechat-admin.exe') ./cmd/wechat-admin
+   if($LASTEXITCODE -ne 0){throw 'Failed to build the current WeChat console.'}
+  } finally { Pop-Location }
+  $hashes['wechat-admin.exe']=(Get-FileHash -LiteralPath (Join-Path $staging 'wechat-admin.exe') -Algorithm SHA256).Hash.ToLower()
   if($hashes['wx.exe'] -ne $wxHash){throw 'The staged wx.exe hash is not the validated native hash.'}
   $record=[ordered]@{
    schema_version=1
@@ -118,7 +126,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    native_patch_sha256=$sourceManifest.native_patch_sha256
    native_license_commit=$sourceManifest.native_license_commit
    native_sha256=$wxHash
-   admin_sha256=$(if($sourceManifest.admin_sha256){$sourceManifest.admin_sha256.ToLower()}else{''})
+   admin_sha256=$hashes['wechat-admin.exe']
    files=$hashes
    live_login_verified=$false
    live_delivery_verified=$false

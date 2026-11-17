@@ -310,3 +310,35 @@ func TestMemberReminderPrivateTargetIsOnlyRequester(t *testing.T) {
 		t.Fatal("reminder granted account-wide access")
 	}
 }
+
+func TestReminderUpdatePreservesIdentityAndPersists(t *testing.T) {
+	f, p, n := memberReminder(t)
+	original := createReminder(t, p, 7200)
+	due := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	args, _ := json.Marshal(map[string]any{"action": "update", "id": original.ID, "run_at": due.Format(time.RFC3339)})
+	if _, err := p.Call(context.Background(), "agent_reminder", args); err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := f.manager.agent.lookupTask(original.ID, original.Account, original.Thread)
+	if !ok || !saved.Next.Equal(due) || !saved.Reminder.Due.Equal(due) || saved.RequestedText != original.RequestedText || saved.Reminder.Target != original.Reminder.Target {
+		t.Fatal("update lost original identity or schedule")
+	}
+	raw, err := os.ReadFile(filepath.Join(f.manager.agent.dir, "reminders", original.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk agentTask
+	if json.Unmarshal(raw, &disk) != nil || !disk.Reminder.Due.Equal(due) {
+		t.Fatal("reminder file not updated")
+	}
+	if len(n.requests) != 0 {
+		t.Fatal("reschedule sent a message")
+	}
+	if err := f.manager.rescheduleTask(original, due.Add(time.Hour)); err == nil {
+		t.Fatal("stale update accepted")
+	}
+	p.trace.Sender = "wxid_other"
+	if _, err := p.callReminder(context.Background(), args); err == nil {
+		t.Fatal("other sender changed reminder")
+	}
+}

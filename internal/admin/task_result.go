@@ -60,8 +60,17 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	}
 	t.Updated = time.Now().UTC()
 	a.data.Tasks[t.ID] = copyTask(t)
+	if t.Reminder != nil {
+		if err := a.writeReminderFile(t); err != nil {
+			a.data.Tasks[t.ID] = current
+			return false, err
+		}
+	}
 	if err := a.persist(); err != nil {
 		a.data.Tasks[t.ID] = current
+		if t.Reminder != nil {
+			_ = a.writeReminderFile(current)
+		}
 		return false, err
 	}
 	return true, nil

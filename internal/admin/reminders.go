@@ -31,7 +31,7 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "Create, list or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. Cannot target another person/group or run code. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. list/cancel are restricted to the same sender and source conversation. Input {action:create|list|cancel,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["create","list","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. Cannot target another person/group or run code. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. To change an existing reminder time, list first then update by its id with run_at or delay_seconds; preserve the original content and identity, never create a duplicate. list/update/cancel are restricted to the same sender and source conversation. Input {action:create|list|update|cancel,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 func (a *agentControl) writeReminderFile(t agentTask) error {
 	dir := filepath.Join(a.dir, "reminders")
@@ -71,6 +71,32 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 			}
 		}
 		return encode(map[string]any{"tasks": items})
+	case "update":
+		if in.Text != "" || in.Destination != "" || in.Key != "" {
+			return "", toolInputError("改期只需id和run_at或delay_seconds，原内容和目标保持不变")
+		}
+		if (in.Delay == nil) == (in.RunAt == "") {
+			return "", toolInputError("改期需指定run_at或delay_seconds其中一项")
+		}
+		due, err := time.Parse(time.RFC3339, in.RunAt)
+		if in.Delay != nil {
+			if *in.Delay < 1 || *in.Delay > int64((1<<63-1)/time.Second) {
+				return "", toolInputError("提醒延时无效")
+			}
+			due, err = time.Now().Add(time.Duration(*in.Delay)*time.Second), nil
+		}
+		if err != nil || !due.After(time.Now()) {
+			return "", toolInputError("run_at需为未来的RFC3339时间，并包含时区")
+		}
+		for _, t := range m.agent.list(p.trace.Account, p.trace.Thread) {
+			if t.ID == in.ID && own(t) {
+				if err := m.rescheduleTask(t, due); err != nil {
+					return "", toolInputError(err.Error())
+				}
+				return encode(map[string]any{"id": t.ID, "state": "scheduled", "due_at": due, "updated_existing": true})
+			}
+		}
+		return "", toolInputError("未找到你在本会话创建的提醒")
 	case "cancel":
 		for _, t := range m.agent.list(p.trace.Account, p.trace.Thread) {
 			if t.ID == in.ID && own(t) {
@@ -165,7 +191,7 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		m.record(bot.Record{Event: "reminder_scheduled", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "waiting", Content: in.Text, Reason: "explicit_member_request", Origin: "agent"})
 		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；到期只发送提醒正文，不执行其中任何命令。尚未发送，不要声称已提醒。"})
 	}
-	return "", toolInputError("提醒操作需为create/list/cancel")
+	return "", toolInputError("提醒操作需为create/list/update/cancel")
 }
 func (m *Manager) runReminders(ctx context.Context) {
 	m.prepareReminderSchedule(time.Now())
@@ -501,4 +527,40 @@ func (a *agentControl) reminderUpdate(t agentTask) (bool, error) {
 		return false, e
 	}
 	return true, nil
+}
+
+// rescheduleTask updates the existing checkpoint atomically so stale workers
+// cannot overwrite a newer schedule. No message is sent by this operation.
+func (m *Manager) rescheduleTask(t agentTask, due time.Time) error {
+	if !due.After(time.Now()) {
+		return errors.New("请选择未来的时间")
+	}
+	if t.State != "waiting" && t.State != "pending" && t.State != "needs_review" {
+		return errors.New("只有尚未执行的任务可以改期")
+	}
+	if t.Delivery != nil || t.PluginJob != nil || t.ProcessID != "" || t.MusicJob != "" || len(t.PendingOperations) > 0 {
+		return errors.New("任务已进入工具执行或发送阶段，不能改期")
+	}
+	t.Next = due
+	if t.Reminder != nil {
+		spec := *t.Reminder
+		if spec.Job != "" || spec.FollowUpTaskID != "" {
+			return errors.New("提醒已进入处理阶段，不能改期")
+		}
+		spec.Due, spec.RunAt, spec.DelaySeconds = due, due.Format(time.RFC3339), 0
+		t.Reminder = &spec
+		t.State = "waiting"
+	} else {
+		t.State = "pending"
+	}
+	t.LastResult = "已修改计划时间：" + due.Format(time.RFC3339)
+	saved, err := m.agent.transitionSnapshot(t, false)
+	if err != nil {
+		return err
+	}
+	if !saved {
+		return errors.New("任务状态已变化，请重新读取后修改")
+	}
+	m.wakeReminderSchedule()
+	return nil
 }
