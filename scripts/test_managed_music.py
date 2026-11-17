@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -10,11 +11,37 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
 from managed_music_runner import command, managed_public_root
-from managed_music_service import comfy_memory_arguments, external_comfy_url
+from managed_music_service import comfy_memory_arguments, external_comfy_url, registered_comfy_command
 from music_unix_client import open_request
 
 
 class MusicMemoryPolicyTests(unittest.TestCase):
+    def test_registered_child_uses_pinned_runtime_and_private_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            runtime = root / 'runtime'; runtime.mkdir()
+            for name in ('python.exe', 'main.py'):
+                (runtime / name).write_bytes(b'synthetic')
+            (runtime / 'frontend').mkdir(); (root / 'models').mkdir()
+            manifest = {'schema_version': 1, 'policy': 'station-yue-v1',
+                        'files': {name: hashlib.sha256(b'synthetic').hexdigest() for name in ('python.exe', 'main.py')}}
+            (runtime / 'manifest.json').write_text(json.dumps(manifest))
+            config = {'schema_version': 1, 'enabled': True, 'runtime': str(runtime),
+                      'python': 'python.exe', 'entry': 'main.py', 'frontend': 'frontend',
+                      'manifest': 'manifest.json', 'models': str(root / 'models'), 'device': 'cpu'}
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(config))
+            argv = registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            self.assertEqual(argv[argv.index('--port') + 1], '6193')
+            self.assertEqual(argv[argv.index('--output-directory') + 1], str(root / 'private/output'))
+            self.assertIn('--cpu', argv)
+            (runtime / 'main.py').write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'digest_changed'):
+                registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            config['entry'] = '../outside.py'; registration.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, 'path_invalid'):
+                registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+
     def test_registered_public_tool_root_is_accepted(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'rvc-换声'

@@ -38,7 +38,7 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 				s.ttsCancel()
 			}
 		case localOBSPackage:
-			s.obs.stop()
+			err = s.stopOBSProcess(ctx)
 		default:
 			err = host.controller.StopSession(ctx, id, revision)
 		}
@@ -111,6 +111,12 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 		var password string
 		if json.Unmarshal(config.Values["password"], &password) != nil {
 			return errors.New("OBS 凭据不可读")
+		}
+		if err := s.ensureOBSProcess(ctx, view.Port, password); err != nil {
+			return err
+		}
+		if s.obs.status(view).Active {
+			return nil
 		}
 		session, err := s.obs.claim("start", s.obs.ticket())
 		if err != nil {

@@ -9,6 +9,8 @@ import time
 import urllib.request
 import urllib.parse
 import threading
+import hashlib
+import socket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -53,6 +55,42 @@ def external_comfy_url(value):
     return f'http://127.0.0.1:{port}'
 
 
+def registered_comfy_command(config_file, url, state):
+    """Start an explicitly registered backend as this music service's child."""
+    from managed_music_runner import canonical
+    config = json.loads(canonical(config_file).read_text(encoding="utf-8-sig"))
+    if config.get("schema_version") != 1 or not config.get("enabled"):
+        raise ValueError("music_comfy_registration_disabled")
+    runtime = canonical(config["runtime"])
+    def member(name):
+        relative = Path(config[name])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("music_comfy_registration_path_invalid")
+        path = canonical(runtime / relative)
+        if not path.is_relative_to(runtime):
+            raise ValueError("music_comfy_registration_path_invalid")
+        return path
+    python, entry, frontend = member("python"), member("entry"), member("frontend")
+    manifest_path = Path(config["manifest"])
+    if not manifest_path.is_absolute(): manifest_path = runtime / manifest_path
+    manifest = json.loads(canonical(manifest_path).read_text(encoding="utf-8-sig"))
+    if manifest.get("schema_version") != 1 or manifest.get("policy") not in ("station-yue-v1", "station-comfyui-v1"):
+        raise ValueError("music_comfy_manifest_invalid")
+    files = manifest.get("files", {})
+    for name, path in (("python",python),("entry",entry)):
+        expected = files.get(config[name]) or files.get(config[name].replace("\\", "/"))
+        if not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise ValueError("music_comfy_registration_digest_changed")
+    port = urllib.parse.urlsplit(external_comfy_url(url)).port
+    device = config.get("device")
+    if device not in ("cpu","cuda"): raise ValueError("music_comfy_device_invalid")
+    return [str(python), "-s", "-B", str(entry), "--listen", "127.0.0.1", "--port", str(port),
+            "--base-directory", str(state/"base"), "--models-directory", str(canonical(config["models"])),
+            "--input-directory", str(state/"input"), "--output-directory", str(state/"output"),
+            "--user-directory", str(state/"user"), "--front-end-root", str(frontend),
+            "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-auto-launch", "--disable-metadata",
+            *(["--cpu"] if device=="cpu" else ["--cuda-device",str(int(config.get("cuda_device",0)))])]
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -76,6 +114,7 @@ def main():
                         help='reuse a separately managed loopback ComfyUI endpoint')
     parser.add_argument('--comfy-input', default=os.environ.get('MUSIC_COMFY_INPUT'),
                         help='input directory shared with an external ComfyUI endpoint')
+    parser.add_argument("--comfy-registration", help="owner-pinned backend registration; own the Comfy child lifecycle")
     parser.add_argument('--desktop', action='store_true', help='stop when the owning control pipe closes')
     args = parser.parse_args()
     memory_arguments = comfy_memory_arguments(args.vram_mode)
@@ -139,6 +178,17 @@ def main():
     try:
         lease = AccountIPC(args.ipc, public, private)
         ipc, sock = lease.directory, lease.socket
+        if args.comfy_registration:
+            if not comfy_url: raise ValueError("music_comfy_registration_url_required")
+            child_argv = registered_comfy_command(args.comfy_registration, comfy_url, state)
+            # Never adopt an unrelated listener as this service's child.
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                if hasattr(socket,"SO_EXCLUSIVEADDRUSE"): probe.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
+                probe.bind(("127.0.0.1",urllib.parse.urlsplit(comfy_url).port))
+            finally: probe.close()
+            children.append(subprocess.Popen(child_argv, cwd=str(Path(child_argv[3]).parent),
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0))
         if comfy_url is None:
             if sys.platform == "win32":
                 argv[argv.index("--socket") + 1] = str(sock)
@@ -161,12 +211,14 @@ def main():
             else:
                 raise RuntimeError("isolated_comfy_start_timeout")
         else:
-            # A Station-owned Comfy process is started and stopped by Station;
-            # this supervisor owns only the authenticated legacy bridge.
+            # A registered child belongs to this supervisor; an explicit URL
+            # without registration retains the externally managed behavior.
             request = urllib.request.Request(comfy_url + '/system_stats')
             for _ in range(args.startup_timeout):
                 if stopping.is_set():
                     return
+                if children and children[0].poll() is not None:
+                    raise RuntimeError("registered_comfy_exited")
                 try:
                     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=2) as reply:
                         json.load(reply)

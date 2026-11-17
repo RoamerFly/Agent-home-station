@@ -746,15 +746,24 @@ func localRVCControlManifest(control string) (map[string]string, error) {
 		Policy        string            `json:"policy"`
 		Files         map[string]string `json:"files"`
 	}
-	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Platform != "windows-x64" || manifest.Policy != "station-rvc-v1" || len(manifest.Files) != len(localRVCControlFiles) {
+	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Platform != "windows-x64" || manifest.Policy != "station-rvc-v1" {
 		return nil, errors.New("station_rvc_control_invalid")
 	}
 	// This directory is shared with the legacy music supervisor and its
 	// workflows/cache. Verify every required executable module below, rather
 	// than treating adjacent runtime data as a changed executable.
+	allowed := map[string]bool{}
 	for _, name := range localRVCControlFiles {
-		expected, exists := manifest.Files[name]
-		if !exists || !localRVCRequestPattern.MatchString(expected) {
+		allowed[name] = true
+		if _, exists := manifest.Files[name]; !exists {
+			return nil, errors.New("station_rvc_control_invalid")
+		}
+	}
+	for _, name := range localMusicControlFiles {
+		allowed[name] = true
+	}
+	for name, expected := range manifest.Files {
+		if !allowed[name] || !localRVCRequestPattern.MatchString(expected) {
 			return nil, errors.New("station_rvc_control_invalid")
 		}
 		path := filepath.Join(control, name)
@@ -777,6 +786,13 @@ func localRVCControlManifest(control string) (map[string]string, error) {
 
 var localRVCControlFiles = []string{
 	"managed_music_runner.py", "music_account_scope.py", "process_window.py", "rvc_backend.py", "rvc_cover.py", "rvc_pitch.py", "rvc_profiles.py", "rvc_recovery.py", "rvc_voice.py", "rvc_windows.py", "singing_config.py", "singing_voice.py", "station_rvc.py", "windows_lpac.py", "yue_bridge.py", "yue_recovery.py", "yue_sampling.py",
+}
+
+// Optional legacy music modules share the control directory with standalone
+// RVC. Older RVC-only bundles remain valid; every supplied module is verified.
+var localMusicControlFiles = []string{
+	"managed_music_service.py", "managed_music_ipc.py", "music_unix_client.py",
+	"workflows/audio_yue2_music_cover.json", "workflows/audio_yue2_pure_music.json", "workflows/audio_yue2_text_to_music.json",
 }
 
 func validateLocalRVCRequest(method, path, key string, body []byte) error {

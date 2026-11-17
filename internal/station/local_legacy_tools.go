@@ -14,79 +14,111 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/websession"
 )
 
 type legacyToolClient struct {
-	client *http.Client
-	csrf   string
+	client   *http.Client
+	csrf     string
+	base     string
+	password func() ([]byte, error)
+	mu       sync.Mutex
 }
 
 const legacyToolBase = "http://127.0.0.1:8080"
 
 func (s *localProjectTools) legacyToolClient(ctx context.Context) (*legacyToolClient, error) {
-	dir := filepath.Join(s.home.dataDir, "applications", "wechat", "legacy-admin")
-	var password []byte
-	for _, name := range []string{"admin-password", "admin-token"} {
-		b, e := os.ReadFile(filepath.Join(dir, name))
-		if e == nil {
-			password = b
-			break
-		}
+	s.legacyClientMu.Lock()
+	defer s.legacyClientMu.Unlock()
+	if s.legacyClient != nil {
+		return s.legacyClient, nil
 	}
-	if len(password) == 0 || len(password) > 1024 {
+	dir := filepath.Join(s.home.dataDir, "applications", "wechat", "legacy-admin")
+	jar, _ := cookiejar.New(nil)
+	c := &legacyToolClient{base: legacyToolBase, client: &http.Client{Jar: jar, Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	c.password = func() ([]byte, error) {
+		for _, name := range []string{"admin-password", "admin-token"} {
+			b, e := os.ReadFile(filepath.Join(dir, name))
+			if e == nil && len(b) > 0 && len(b) <= 1024 {
+				return b, nil
+			}
+		}
 		return nil, errors.New("旧工具宿主未接入")
 	}
-	jar, _ := cookiejar.New(nil)
-	c := &legacyToolClient{client: &http.Client{Jar: jar, Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	raw, err := c.request(ctx, "POST", "/api/login", map[string]string{"password": strings.TrimSpace(string(password))})
-	if err != nil {
+	if err := c.login(ctx); err != nil {
 		return nil, err
+	}
+	s.legacyClient = c
+	return c, nil
+}
+func (c *legacyToolClient) login(ctx context.Context) error {
+	password, err := c.password()
+	if err != nil {
+		return err
+	}
+	raw, _, err := c.send(ctx, http.MethodPost, "/api/login", map[string]string{"password": strings.TrimSpace(string(password))})
+	if err != nil {
+		return err
 	}
 	var login struct {
 		Authenticated bool   `json:"authenticated"`
 		CSRF          string `json:"csrf"`
 	}
 	if json.Unmarshal(raw, &login) != nil || !login.Authenticated || login.CSRF == "" {
-		return nil, errors.New("旧工具宿主认证不可用")
+		return errors.New("旧工具宿主认证不可用")
 	}
 	c.csrf = login.CSRF
-	return c, nil
+	return nil
 }
 func (c *legacyToolClient) request(ctx context.Context, method, path string, value any) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	raw, status, err := c.send(ctx, method, path, value)
+	// An authentication rejection happens before execution. Never replay timeout,
+	// transport failure or a server error: a mutation may already be committed.
+	if status == http.StatusUnauthorized {
+		if e := c.login(ctx); e != nil {
+			return nil, e
+		}
+		raw, _, err = c.send(ctx, method, path, value)
+	}
+	return raw, err
+}
+func (c *legacyToolClient) send(ctx context.Context, method, path string, value any) ([]byte, int, error) {
 	var body []byte
 	if value != nil {
 		body, _ = json.Marshal(value)
 	}
-	r, err := http.NewRequestWithContext(ctx, method, legacyToolBase+path, bytes.NewReader(body))
+	r, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	r.Header.Set("Origin", legacyToolBase)
+	r.Header.Set("Origin", c.base)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-CSRF-Token", c.csrf)
 	response, err := c.client.Do(r)
 	if err != nil {
-		return nil, errors.New("旧工具宿主离线")
+		return nil, 0, errors.New("旧工具宿主离线")
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
 	if err != nil {
-		return nil, err
+		return nil, response.StatusCode, err
 	}
-	if response.StatusCode != 200 {
+	if response.StatusCode != http.StatusOK {
 		var failure struct {
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &failure)
 		if failure.Error != "" {
-			return nil, errors.New(failure.Error)
+			return nil, response.StatusCode, errors.New(failure.Error)
 		}
-		return nil, errors.New("旧工具宿主请求失败")
+		return nil, response.StatusCode, errors.New("旧工具宿主请求失败")
 	}
-	return raw, nil
+	return raw, response.StatusCode, nil
 }
 func (s *localProjectTools) legacyToolViews(ctx context.Context) map[string]localProjectToolView {
 	s.legacyMu.Lock()

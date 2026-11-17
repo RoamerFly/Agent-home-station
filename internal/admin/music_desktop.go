@@ -32,7 +32,8 @@ type windowsMusicConfig struct {
 	IPC                string `json:"ipc"`
 	// ComfyURL optionally points at a separately managed Station Comfy
 	// process. Empty keeps the private child-process behavior.
-	ComfyURL string `json:"comfy_url,omitempty"`
+	ComfyURL          string `json:"comfy_url,omitempty"`
+	ComfyRegistration string `json:"comfy_registration,omitempty"`
 	// ComfyInput is the shared input folder used by an external Comfy process
 	// for cover references. It is ignored when ComfyURL is empty.
 	ComfyInput string `json:"comfy_input,omitempty"`
@@ -260,6 +261,11 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if err != nil || len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
 		return "", toolInputError("windows_music_not_installed_or_authorized")
 	}
+	if config.ComfyRegistration != "" {
+		if !filepath.IsAbs(config.ComfyRegistration) || regularMusicPath(config.ComfyRegistration, false) != nil || config.ComfyURL == "" {
+			return "", toolInputError("windows_music_comfy_registration_invalid")
+		}
+	}
 	comfyURL, err := registeredComfyURL(config.ComfyURL)
 	if err != nil {
 		return "", err
@@ -383,6 +389,9 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	if voiceConfig != "" {
 		arguments = append(arguments, "--singing-voice-config", voiceConfig)
+	}
+	if config.ComfyRegistration != "" {
+		arguments = append(arguments, "--comfy-registration", config.ComfyRegistration)
 	}
 	if comfyURL != "" {
 		arguments = append(arguments, "--comfy-url", comfyURL)

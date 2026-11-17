@@ -411,10 +411,17 @@ foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_ho
 if($WithRVCBackend){
  $control=Join-Path $OutputDirectory 'env\windows-station-rvc'
  $files=[ordered]@{}
- foreach($name in @('managed_music_runner.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
+ foreach($name in @('managed_music_runner.py','managed_music_service.py','managed_music_ipc.py','music_unix_client.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
                     'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
                     'singing_voice.py','station_rvc.py','windows_lpac.py','yue_bridge.py','yue_recovery.py','yue_sampling.py')){
   $files[$name]=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+ }
+ $sources=@{}
+ foreach($name in $files.Keys){$sources[$name]=Join-Path $PSScriptRoot $name}
+ foreach($workflow in Get-ChildItem -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -File -Filter '*.json'){
+  $name='workflows/'+$workflow.Name
+  $sources[$name]=$workflow.FullName
+  $files[$name]=(Get-FileHash -LiteralPath $workflow.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
  }
  $manifest=([ordered]@{schema_version=1;platform='windows-x64';policy='station-rvc-v1';files=$files}|ConvertTo-Json -Depth 4)
  Assert-NoReparsePointAncestor $control
@@ -424,7 +431,7 @@ if($WithRVCBackend){
   if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf) -or [IO.File]::ReadAllText($manifestPath) -cne $manifest){
    throw 'Existing standalone RVC control package differs; use a fresh output directory.'
   }
-  if(@(Get-ChildItem -LiteralPath $control -Force).Count -ne ($files.Count+1)){throw 'Unexpected files in the standalone RVC control package.'}
+  if(@(Get-ChildItem -LiteralPath $control -Recurse -File -Force).Count -ne ($files.Count+1)){throw 'Unexpected files in the standalone RVC control package.'}
   foreach($name in $files.Keys){
    $staged=Join-Path $control $name
    Assert-NoReparsePointAncestor $staged
@@ -434,7 +441,8 @@ if($WithRVCBackend){
   New-Item -ItemType Directory -Path $control | Out-Null
   foreach($name in $files.Keys){
    $staged=Join-Path $control $name
-   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $staged
+   New-Item -ItemType Directory -Force -Path (Split-Path $staged -Parent) | Out-Null
+   Copy-Item -LiteralPath $sources[$name] -Destination $staged
    if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
   }
   [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))

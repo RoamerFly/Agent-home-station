@@ -27,6 +27,8 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
+	legacyClientMu  sync.Mutex
+	legacyClient    *legacyToolClient
 	legacyMu        sync.Mutex
 	legacyAt        time.Time
 	legacyViews     map[string]localProjectToolView
@@ -43,6 +45,7 @@ type localProjectTools struct {
 	tts             localTTSBackend
 	audio           localAudioCppBackend
 	obs             localOBSPreview
+	obsProcesses    pluginruntime.ManagedServices
 	ttsCancel       context.CancelFunc           // protected by update
 	ttsJobID        string                       // protected by update
 	visionPost      pluginruntime.RouteTransport // host-only transport; tests use an offline substitute
@@ -154,6 +157,9 @@ func (s *localProjectTools) close() error {
 	defer s.mu.Unlock()
 	s.closed = true
 	var err error
+	obsCtx, obsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = s.obsProcesses.Close(obsCtx)
+	obsCancel()
 	if s.rvc != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		err = s.rvc.Close(ctx)
@@ -216,6 +222,15 @@ func (s *localProjectTools) isActive(id string) bool {
 
 func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
 	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+	// A catalog migration placeholder is not an executable tool. Keep it visible
+	// with an actionable reason instead of reporting a ready Python runtime.
+	if contract, err := catalog.ContractFor(id); err == nil && contract.Package.Runtime.Transport == "unbound" {
+		view.RuntimeReady = false
+		view.Reason = "该工具包尚未绑定执行后端；图像工作流请使用 ComfyUI 创作。"
+		view.State = "not_available"
+		return view, nil
+	}
+
 	var backendBusy bool
 	var backendRunning bool
 	if s.options.CatalogDirectory != "" {
@@ -307,6 +322,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 				view.RuntimeReady = true
 				view.Reason = ""
 				backendBusy = s.obs.status(config).Active
+				backendRunning = s.obsProcesses.Status("preview").Running
 			}
 		}
 	}
@@ -578,7 +594,10 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				}
 			}
 			if in.Action == "disable" {
-				s.obs.stop()
+				if err := s.stopOBSProcess(ctx); err != nil {
+					websession.Fail(w, 409, err.Error())
+					return
+				}
 			}
 			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
 		} else if id == localAudioCppPackage {
