@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "document-workshop",
   "name": "文档工坊",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -20,19 +20,19 @@
   "dependencies": [],
   "files": {
     "capabilities.json": "4a89876c3f0e1371a0167a223d53059eaf62f45cf0b7e3694c6074fea2eeeeda",
-    "CHANGELOG.md": "73c1e251bbf7cb1a716153103d4fa88fdf74a95ead7931715afca50520322b98",
+    "CHANGELOG.md": "0f4edce4620978d5880d749dbbf6d814217206a4c07b1cc86d3de067997ecdd8",
     "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
     "MIGRATION.md": "809fa1d68357b47545e548d3593bd00bb72416d55c5b8777b6e57964944d7fbe",
     "PERMISSIONS.md": "1b3b72511b2fc0ccce80780092cf33a210912d8b85306d20ea8fad9cca7c2d04",
     "README.md": "c1e8d1514b8a1a7a6f8e787f0820b34636f3907dc6702d08920c3c2fea7e9b2b",
-    "runtime/document_logic.py": "eebdd31fe664d56e5db52b4824f26652a15dcc5c24d818f677491e8146f96d1a",
+    "runtime/document_logic.py": "bde577cbd36c84aa53acead30fb5ab3cfbfc5cfde605b6b522db6d46e044cae8",
     "runtime/document_runtime.py": "dc0ab5c541640c32dd51d8278d43888dbfde65e2fc50b1f99699e06b390821e9",
     "runtime/main.py": "2fe7e132bc402d59f4a5b72711eb206fa7340c2eb5f7a0c2c9184d9d75bf3077",
-    "runtime/native_pdf.py": "28948a0f49975b9930e1a92763ed3b1c9bf85fc7cab8715156aafa72dee2252a",
-    "runtime/README.md": "4e13619e9d275d512ebbf0f0bb082de19ce74fa33e65ae20bf19e9cdcdcdf04c",
+    "runtime/native_pdf.py": "180ccc538a58ecaeb6de7e8b714538ad99cb557b960059e02170d4fa1fa33ed6",
+    "runtime/README.md": "d0fbefb574a06f00bb5a7b4a3792bba52e5512b2e676458747b726ee07defc72",
     "runtime/reportlab_image.py": "1d0ce754bed0007c2a8fea999e6bdc387d81ff926573501490682b6a521599b8",
     "tests/fixtures/layout.json": "852d9f67c2e10e8af6e3a11f2acabacff619c5003ab9fa4a6c40e434a7d2be25",
-    "tests/test_document_workshop.py": "b2c1926c0550bbccf4a841797c780302187bdb25fd7be83235e7421765ab9377",
+    "tests/test_document_workshop.py": "6e959a0df4249c9705c513d7379cd0fe2e8db981df11f762cf4f19bc6bd44b65",
     "ui.schema.json": "e604275d64bb3d977d18729c3130286e4aca8179a15b7b1c3f98d1ed615e05ac"
   }
 }

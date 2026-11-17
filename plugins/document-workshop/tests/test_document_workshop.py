@@ -20,6 +20,24 @@ from reportlab_image import EmbeddedImageError, decode_png
 
 
 class DocumentWorkshopTests(unittest.TestCase):
+    def test_blank_form_and_explicit_page_geometry(self):
+        import native_pdf
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = {"blank_form": True, "page": {"left_mm": 18, "top_mm": 20}, "blocks": [
+                {"kind": "paragraph", "text": "Synthetic form", "alignment": "center", "font_size_pt": 20, "line_spacing_pt": 28},
+                {"kind": "field", "label": "Signature: ", "value": "MUST_NOT_COPY", "alignment": "right"}]}
+            product = logic.reconstruct(layout, Path(tmp), "form.docx")
+            path = Path(product["path"])
+            self.assertNotIn("MUST_NOT_COPY", logic.text_content(path))
+            self.assertIn("________________", logic.text_content(path))
+            with zipfile.ZipFile(path) as z:
+                xml = z.read("word/document.xml").decode()
+            self.assertIn('w:jc w:val="center"', xml)
+            self.assertIn('w:line="560"', xml)
+            self.assertFalse(logic.basic_verify(path)["visual_layout_checked"])
+            self.assertAlmostEqual(native_pdf._page_geometry(path)["leftMargin"], 18 * 72 / 25.4, places=1)
+            self.assertEqual(native_pdf._blocks(path)[0][3]["alignment"], 1)
+
     def test_xlsx_cells_formulas_and_continuation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.xlsx"

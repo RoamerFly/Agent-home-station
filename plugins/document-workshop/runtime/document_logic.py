@@ -423,12 +423,44 @@ def _xml(value: str) -> str:
     return html.escape(value, quote=False)
 
 
-def _paragraph(text: str, style: str = "", font_size_pt: float | None = None) -> str:
-    ppr = "<w:pPr><w:pStyle w:val=\"%s\"/></w:pPr>" % style if style else ""
+def _paragraph(text: str, style: str = "", font_size_pt: float | None = None, formatting=None) -> str:
+    f = formatting or {}
+    props = '<w:pStyle w:val="%s"/>' % style if style else ''
+    align = f.get("alignment")
+    if align is not None:
+        if align not in ("left", "center", "right", "both"):
+            raise DocumentError("document_alignment_invalid")
+        props += '<w:jc w:val="%s"/>' % align
+    attrs = []
+    for key, attr in (("first_line_indent_pt", "firstLine"), ("left_indent_pt", "left"), ("right_indent_pt", "right")):
+        if key in f:
+            value = f[key]
+            if type(value) not in (int, float) or not 0 <= value <= 400:
+                raise DocumentError("document_indent_invalid")
+            attrs.append('w:%s="%d"' % (attr, round(value*20)))
+    if attrs: props += '<w:ind %s/>' % ' '.join(attrs)
+    attrs = []
+    for key, attr in (("space_before_pt", "before"), ("space_after_pt", "after"), ("line_spacing_pt", "line")):
+        if key in f:
+            value = f[key]
+            if type(value) not in (int, float) or not 0 <= value <= 200 or key == "line_spacing_pt" and value < 1:
+                raise DocumentError("document_spacing_invalid")
+            attrs.append('w:%s="%d"' % (attr, round(value*20)))
+    if "line_spacing_pt" in f: attrs.append('w:lineRule="exact"')
+    if attrs: props += '<w:spacing %s/>' % ' '.join(attrs)
+    if f.get("page_break_before"): props += '<w:pageBreakBefore/>'
+    ppr = '<w:pPr>%s</w:pPr>' % props if props else ''
+    rpr = '<w:sz w:val="%d"/>' % round(font_size_pt*2) if font_size_pt is not None else ''
+    font = f.get("font_family")
+    if font:
+        if not isinstance(font, str) or len(font)>100: raise DocumentError("document_font_invalid")
+        font = html.escape(font, quote=True)
+        rpr += '<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>' % (font,font,font)
+    if f.get("bold"): rpr += '<w:b/>'
+    rpr = '<w:rPr>%s</w:rPr>' % rpr if rpr else ''
     chunks = text.split("\n") or [""]
-    size = "<w:rPr><w:sz w:val=\"%d\"/></w:rPr>" % round(font_size_pt * 2) if font_size_pt is not None else ""
-    runs = "".join("<w:r>%s<w:t xml:space=\"preserve\">%s</w:t></w:r>" % (size, _xml(chunk)) + ("<w:r><w:br/></w:r>" if i < len(chunks)-1 else "") for i, chunk in enumerate(chunks))
-    return "<w:p>%s%s</w:p>" % (ppr, runs)
+    runs = ''.join('<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>' % (rpr,_xml(chunk)) + ('<w:r><w:br/></w:r>' if i<len(chunks)-1 else '') for i,chunk in enumerate(chunks))
+    return '<w:p>%s%s</w:p>' % (ppr,runs)
 
 
 def _table_coverage(rows, merges) -> dict:
@@ -504,9 +536,17 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             raise DocumentError("document_font_size_invalid")
         body.append(_paragraph(title[:256], "Title", title_font_size_pt))
     for block in blocks:
-        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges", "borderless"}:
+        if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges", "borderless", "alignment", "first_line_indent_pt", "left_indent_pt", "right_indent_pt", "space_before_pt", "space_after_pt", "line_spacing_pt", "font_family", "bold", "page_break_before", "label", "value", "blank"}:
             raise DocumentError("document_layout_invalid")
         kind = block.get("kind")
+        if kind == "field":
+            label, value = block.get("label", ""), block.get("value", "")
+            if not isinstance(label, str) or not isinstance(value, str): raise DocumentError("document_field_invalid")
+            text = label + ("________________" if layout.get("blank_form") or block.get("blank", False) else value)
+            size = block.get("font_size_pt", 12)
+            if type(size) not in (int, float) or not 8 <= size <= 48: raise DocumentError("document_font_size_invalid")
+            body.append(_paragraph(text, font_size_pt=size, formatting=block))
+            continue
         if kind in ("paragraph", "heading", "title"):
             text = block.get("text")
             if not isinstance(text, str) or len(text) > 20_000:
@@ -518,7 +558,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
             size = block.get("font_size_pt")
             if size is not None and (type(size) not in (int, float) or not 8 <= size <= 48):
                 raise DocumentError("document_font_size_invalid")
-            body.append(_paragraph(text, style, size))
+            body.append(_paragraph(text, style, size, block))
         elif kind == "table":
             rows = block.get("rows")
             if not isinstance(rows, list) or len(rows) > 200:
@@ -545,6 +585,14 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_dir / safe_filename(filename, ".docx")
     document = """<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"%s\"><w:body>%s<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>""" % (WORD_NS, "".join(body))
+    page = layout.get("page", {})
+    if not isinstance(page, dict): raise DocumentError("document_page_invalid")
+    for key, default, low, high in (("width_mm",210,50,1000),("height_mm",297,50,1000),("top_mm",25.4,0,100),("bottom_mm",25.4,0,100),("left_mm",25.4,0,100),("right_mm",25.4,0,100)):
+        value = page.get(key,default)
+        if type(value) not in (int,float) or not low <= value <= high: raise DocumentError("document_page_invalid")
+    if page.get("left_mm",25.4)+page.get("right_mm",25.4)>=page.get("width_mm",210) or page.get("top_mm",25.4)+page.get("bottom_mm",25.4)>=page.get("height_mm",297): raise DocumentError("document_page_invalid")
+    section = '<w:sectPr><w:pgSz w:w="%d" w:h="%d"/><w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d"/></w:sectPr>' % tuple(round(page.get(k,d)*1440/25.4) for k,d in (("width_mm",210),("height_mm",297),("top_mm",25.4),("right_mm",25.4),("bottom_mm",25.4),("left_mm",25.4)))
+    document = re.sub(r'<w:sectPr>.*?</w:sectPr>',section,document)
     types = """<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpg\" ContentType=\"image/jpeg\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>"""
     rels = """<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"%s\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>""" % REL_NS
     styles = """<?xml version=\"1.0\" encoding=\"UTF-8\"?><w:styles xmlns:w=\"%s\"><w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style><w:style w:type=\"paragraph\" w:styleId=\"Title\"><w:name w:val=\"Title\"/><w:rPr><w:b/><w:sz w:val=\"36\"/></w:rPr></w:style>%s</w:styles>""" % (WORD_NS, "".join("<w:style w:type=\"paragraph\" w:styleId=\"Heading%d\"><w:name w:val=\"heading %d\"/><w:rPr><w:b/></w:rPr></w:style>" % (i, i) for i in range(1, 10)))
@@ -563,7 +611,7 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
 
 def basic_verify(path: Path, expected_text=None) -> dict:
     suffix = path.suffix.lower()
-    result = {"sha256": file_digest(path), "bytes": path.stat().st_size, "quality_failures": []}
+    result = {"sha256": file_digest(path), "bytes": path.stat().st_size, "quality_failures": [], "visual_layout_checked": False}
     if suffix == ".docx":
         text = text_content(path)
         result.update({"format": "docx", "editable": True, "text_characters": len(text)})

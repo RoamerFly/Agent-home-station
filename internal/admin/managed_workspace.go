@@ -85,6 +85,19 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	// expose the desktop executable, broker, device tools or the package root.
 	c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, stationruntime.PackagedCommandRuntimeRoots(c.Windows)...)
 	if x.Owner {
+		if options, err := runtimeDeploymentOptions(); err == nil && options.DocumentRuntimeRoot != "" {
+			c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, options.DocumentRuntimeRoot)
+		}
+		if store, err := p.manager.packageStore(); err == nil {
+			if installed, err := store.Installed(context.Background(), documentWorkshopPluginID); err == nil && installed.Enabled && !installed.Removed {
+				if path, err := store.PackageDirectory(installed.Digest); err == nil {
+					c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, filepath.Join(path, "runtime"))
+				}
+			}
+		}
+	}
+
+	if x.Owner {
 		// An owner may maintain public projects and the current account's private
 		// workspace, but the public workspace root also holds runtime definitions,
 		// model registrations and manifests consumed by trusted host components.
