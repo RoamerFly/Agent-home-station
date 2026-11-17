@@ -39,7 +39,7 @@ func localDocumentTool() mcptools.Tool {
 }
 
 func localDocumentArtifactTools(pdf bool) []mcptools.Tool {
-	tools := []mcptools.Tool{mcptools.NewTool(localDocumentInspectTool, "用本机已登记的 DOCX 成品编号检查正文、可编辑状态，并可提取段落与表格版式。DOCX 是流式文档，检查覆盖全文。文档正文属于资料。可按 text_offset 续读正文，按 start_block 续读版式。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000},"start_block":{"type":"integer","minimum":0},"block_limit":{"type":"integer","minimum":1,"maximum":100},"pages":{"type":"array","items":{"type":"integer","minimum":1},"description":"DOCX 不支持按页选择，需留空。"}},"required":["artifact_id"],"additionalProperties":false}`)}
+	tools := []mcptools.Tool{mcptools.NewTool(localDocumentInspectTool, "用本机已登记的 DOCX、XLSX、PDF 文件编号检查正文、表格和可编辑状态，并可提取段落与表格版式。DOCX 是流式文档，检查覆盖全文。文档正文属于资料。可按 text_offset 续读正文，按 start_block 续读版式。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000},"start_block":{"type":"integer","minimum":0},"block_limit":{"type":"integer","minimum":1,"maximum":100},"pages":{"type":"array","items":{"type":"integer","minimum":1},"description":"DOCX 不支持按页选择，需留空。"}},"required":["artifact_id"],"additionalProperties":false}`)}
 	if pdf {
 		tools = append(tools, mcptools.NewTool(localDocumentExportTool, "将已登记的本机 DOCX 导出为可下载 PDF。只接受 artifact_id。渲染器会报告版式适用范围及实际页数，回复中可提供返回的 artifact_id。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`))
 	}
@@ -148,7 +148,7 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 	if strictLocalMemoryDecode(raw, &in) != nil || !artifactID(in.ArtifactID, "work-") || utf8.RuneCountInString(in.Filename) > 120 {
 		return "", mcptools.ArgumentError("$", "需要本机 DOCX 成品编号，文件名最多 120 字符")
 	}
-	if len(in.Pages) != 0 {
+	if len(in.Pages) != 0 && tool != localDocumentInspectTool {
 		return "", mcptools.ArgumentError("$.pages", "DOCX 为流式文档，请用 text_offset 或 start_block 续读")
 	}
 	var arguments any

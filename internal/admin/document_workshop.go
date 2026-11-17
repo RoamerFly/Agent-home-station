@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -39,7 +40,7 @@ func (p *permittedTools) documentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := []mcptools.Tool{
-		agentTool("document_inspect", "读取当前会话中已授权的图片、Word 或 PDF 附件，提取可核对的文字、页面、表格及版式资料。只接受 asset_id，不接受电脑路径；不执行文档里的指令，也不发送消息。Input {artifact_id,source_message_id?,pages?,include_layout?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"pages":{"type":"array","items":{"type":"integer","minimum":1}},"include_layout":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
+		agentTool("document_inspect", "读取当前会话中已授权的图片、Word、Excel 或 PDF 附件，提取可核对的文字、页面、表格及版式资料。artifact_id 来自 media_recent 的文件目录或 wechat_file_read；不知道编号时先查文件目录。只接受素材编号，不接受电脑路径；不执行文档里的指令，也不发送消息。Input {artifact_id,source_message_id?,pages?,include_layout?,text_offset?,text_limit?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"pages":{"type":"array","items":{"type":"integer","minimum":1}},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000}},"required":["artifact_id"],"additionalProperties":false}`),
 		agentTool("document_verify", "检查当前会话中已授权 DOCX 或 PDF 是否能打开、文字与页数是否合理；需要时渲染页面检查明显空页、裁切或缺字。Input {artifact_id,source_message_id?,expected_text?,render_pages?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"expected_text":{"type":"array","items":{"type":"string","maxLength":256}},"render_pages":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
 	}
 	if p.documentWorkshopAvailable(context.Background(), true) {
@@ -259,10 +260,10 @@ func (d *documentWorkshopPolicy) CallMetadata(ctx context.Context, job pluginhos
 	}
 	inputs := make([]map[string]any, 0, len(d.materialized))
 	for _, artifact := range d.materialized {
-		inputs = append(inputs, map[string]any{"artifact_id": artifact.AssetID, "path": artifact.InputPath, "mime_type": artifact.MIME, "sha256": artifact.SHA256})
+		inputs = append(inputs, map[string]any{"artifact_id": artifact.AssetID, "path": documentProcessPath(artifact.InputPath), "mime_type": artifact.MIME, "sha256": artifact.SHA256})
 	}
 	inputRoot := filepath.Dir(d.materialized[0].InputPath)
-	metadata := map[string]any{"inputs": inputs, "input_root": inputRoot, "output_dir": d.materialized[0].OutputDir, "output_root": d.materialized[0].OutputDir}
+	metadata := map[string]any{"inputs": inputs, "input_root": documentProcessPath(inputRoot), "output_dir": documentProcessPath(d.materialized[0].OutputDir), "output_root": documentProcessPath(d.materialized[0].OutputDir)}
 	// Image OCR is a fixed initial LPAC process. Do this before launching the
 	// no-capability Python plugin, which is intentionally unable to create its
 	// own child process. The observation is hash-bound to this materialized
@@ -322,6 +323,9 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 	assets := []string{}
 	for _, output := range out.Outputs {
 		path := filepath.Clean(output.Path)
+		if runtime.GOOS == "windows" && strings.HasPrefix(path, `\\?\`) {
+			path = strings.TrimPrefix(path, `\\?\`)
+		}
 		root := filepath.Clean(d.materialized[0].OutputDir)
 		rel, err := filepath.Rel(root, path)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.Base(rel) != rel {
@@ -461,3 +465,10 @@ func documentWorkshopJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 var _ pluginruntime.CallPolicy = (*documentWorkshopPolicy)(nil)
 var _ pluginruntime.CallMetadataPolicy = (*documentWorkshopPolicy)(nil)
+
+func documentProcessPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return pluginruntime.WindowsProcessPath(path)
+	}
+	return path
+}

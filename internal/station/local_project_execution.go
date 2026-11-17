@@ -115,7 +115,12 @@ func (t *localToolSet) invokeLocalProjectTool(ctx context.Context, tool string, 
 			return "", err
 		}
 		artifact := input.artifact
-		if !strings.EqualFold(filepath.Ext(artifact.Name), operation.inputExt) || artifact.Bytes > operation.inputLimit {
+		ext := strings.ToLower(filepath.Ext(artifact.Name))
+		validExt := strings.EqualFold(ext, operation.inputExt)
+		if capability == localDocumentInspect {
+			validExt = ext == ".docx" || ext == ".xlsx" || ext == ".pdf"
+		}
+		if !validExt || artifact.Bytes > operation.inputLimit {
 			return "", mcptools.ArgumentError("$.artifact_id", fmt.Sprintf("需要不超过 %d MiB 的已登记 %s 成品", operation.inputLimit>>20, operation.inputExt))
 		}
 		if artifact.Source != nil {

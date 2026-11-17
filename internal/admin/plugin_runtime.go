@@ -51,6 +51,7 @@ func portableRuntimeOptions(executable string) pluginruntime.Options {
 	options.Pythonw = filepath.Join(pythonRoot, "pythonw.exe")
 	options.WindowsHelper = filepath.Join(helperRoot, "windows_plugin_host.pyw")
 	options.RuntimeRoots = []string{helperRoot, pythonRoot}
+	options.DocumentRuntimeRoot = filepath.Join(packageRuntime, "document-workshop")
 	options.CatalogDirectory = filepath.Join(filepath.Dir(packageRuntime), "publictools")
 	return options
 }

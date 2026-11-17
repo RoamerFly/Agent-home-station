@@ -20,7 +20,7 @@ _RUNTIME_DIR = str(Path(__file__).resolve().parent)
 if _RUNTIME_DIR not in sys.path:
     sys.path.insert(0, _RUNTIME_DIR)
 
-from document_logic import DocumentError, basic_verify, inspect, reconstruct, revise_title
+from document_logic import DocumentError, basic_verify, file_digest, inspect, reconstruct, revise_title
 
 FRAME_LIMIT = 4 * 1024 * 1024
 TOOLS = [
@@ -161,7 +161,7 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
     if name == "document.inspect":
         path, item = _input(document, arguments)
         mime_type = str(item.get("mime_type", ""))
-        if path.suffix.lower() == ".docx":
+        if path.suffix.lower() in (".docx", ".xlsx"):
             return {"ok": True, "summary": "document_inspected", "evidence": inspect(
                 path,
                 mime_type,
@@ -178,6 +178,8 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         runtime = _runtime("inspect", {"input_root": input_root, "output_root": output_root, "input_path": str(path), "output_dir": str(output), "mime_type": mime_type, "pages": arguments.get("pages", []), "include_layout": bool(arguments.get("include_layout")), "host_ocr": document.get("ocr_observation")})
         if runtime.get("ok") is not True:
             raise DocumentError(runtime.get("code", "document_runtime_inspection_failed"))
+        runtime["sha256"] = file_digest(path)
+        runtime["bytes"] = path.stat().st_size
         return {"ok": True, "summary": "document_inspected", "evidence": runtime, "outputs": []}
     if name == "document.reconstruct":
         if set(arguments) - {"layout", "title", "title_font_size_pt", "images", "filename"}:

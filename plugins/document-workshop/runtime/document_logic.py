@@ -303,6 +303,50 @@ def _verify_docx_container(zf: zipfile.ZipFile) -> None:
             raise DocumentError("document_external_link_not_allowed")
 
 
+def _whole_xlsx_text(path: Path) -> str:
+    """Read sheet names, cell addresses and stored values; never execute formulas."""
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    def xml(zf, name):
+        raw = zf.read(name)
+        if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+            raise DocumentError("document_xlsx_invalid")
+        return ET.fromstring(raw)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            _verify_docx_container(zf)
+            strings = []
+            if "xl/sharedStrings.xml" in zf.namelist():
+                strings = ["".join(n.itertext()) for n in xml(zf, "xl/sharedStrings.xml")]
+            relationships = {n.get("Id"): n.get("Target", "") for n in xml(zf, "xl/_rels/workbook.xml.rels")}
+            lines = []
+            for sheet in xml(zf, "xl/workbook.xml").findall(ns + "sheets/" + ns + "sheet"):
+                target = relationships.get(sheet.get(rel), "")
+                member = target.lstrip("/") if target.startswith("/") else "xl/" + target
+                if ".." in member.split("/") or not member.startswith("xl/"):
+                    raise DocumentError("document_xlsx_invalid")
+                lines.append("[Sheet: " + sheet.get("name", "") + "]")
+                for cell in xml(zf, member).iter(ns + "c"):
+                    value = cell.findtext(ns + "v", "")
+                    kind = cell.get("t", "")
+                    if kind == "s":
+                        index = int(value)
+                        if index < 0 or index >= len(strings):
+                            raise DocumentError("document_xlsx_invalid")
+                        value = strings[index]
+                    elif kind == "inlineStr":
+                        value = "".join(n.text or "" for n in cell.iter(ns + "t"))
+                    formula = cell.findtext(ns + "f")
+                    if formula is not None:
+                        value = "formula=" + formula + "; cached_value=" + (value or "unavailable")
+                    lines.append(cell.get("r", "?") + "=" + value)
+            return "\n".join(lines)
+    except (KeyError, ValueError, ET.ParseError, zipfile.BadZipFile) as exc:
+        if isinstance(exc, DocumentError):
+            raise
+        raise DocumentError("document_xlsx_invalid") from exc
+
+
 def png_size(path: Path):
     with path.open("rb") as source:
         raw = source.read(24)
@@ -314,14 +358,14 @@ def png_size(path: Path):
 def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False, text_offset=None, text_limit=None, start_block=None, block_limit=None) -> dict:
     suffix = path.suffix.lower()
     result = {
-        "kind": {".docx": "docx", ".pdf": "pdf"}.get(suffix, "image" if mime_type.startswith("image/") else "unknown"),
+        "kind": {".docx": "docx", ".xlsx": "xlsx", ".pdf": "pdf"}.get(suffix, "image" if mime_type.startswith("image/") else "unknown"),
         "sha256": file_digest(path), "bytes": path.stat().st_size,
         "evidence": [{"source": "artifact", "sha256": file_digest(path), "range": "whole_file"}],
         "untrusted_document_content": True,
     }
     if result["bytes"] > MAX_FILE_BYTES:
         raise DocumentError("document_too_large")
-    if suffix == ".docx":
+    if suffix in (".docx", ".xlsx"):
         # DOCX stores a continuous flow.  Stable pages are known only after a
         # particular renderer lays it out, so accepting this parameter here
         # would falsely imply that a page range was honored.
@@ -331,7 +375,7 @@ def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False, t
         limit = _nonnegative_int(text_limit, DEFAULT_TEXT_LIMIT, MAX_TEXT_LIMIT, "document_text_limit_invalid")
         if limit == 0:
             raise DocumentError("document_text_limit_invalid")
-        whole_text = _whole_docx_text(path)
+        whole_text = _whole_docx_text(path) if suffix == ".docx" else _whole_xlsx_text(path)
         if offset > len(whole_text):
             raise DocumentError("document_text_offset_invalid")
         text = whole_text[offset:offset + limit]
@@ -346,6 +390,9 @@ def inspect(path: Path, mime_type: str = "", pages=None, include_layout=False, t
         })
         if not result["text_eof"]:
             result["next_text_offset"] = offset + len(text)
+        if suffix == ".xlsx":
+            result["formula_values"] = "stored_cache_only_not_recalculated"
+            return result
         with zipfile.ZipFile(path) as zf:
             _verify_docx_container(zf)
             names = zf.namelist()

@@ -20,6 +20,43 @@ from reportlab_image import EmbeddedImageError, decode_png
 
 
 class DocumentWorkshopTests(unittest.TestCase):
+    def test_xlsx_cells_formulas_and_continuation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.xlsx"
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr("xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Amounts" r:id="r1"/></sheets></workbook>')
+                z.writestr("xl/_rels/workbook.xml.rels", '<Relationships><Relationship Id="r1" Target="worksheets/sheet1.xml"/></Relationships>')
+                z.writestr("xl/sharedStrings.xml", '<sst><si><t>Apple</t></si></sst>')
+                z.writestr("xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" t="s"><v>0</v></c><c r="B1"><v>6</v></c><c r="C1"><v>3</v></c><c r="D1"><f>B1*C1</f><v>18</v></c><c r="E1"><f>NOW()</f></c></row></sheetData></worksheet>')
+            full = logic.inspect(path, text_limit=1000)
+            self.assertIn("A1=Apple", full["text"])
+            self.assertIn("cached_value=18", full["text"])
+            self.assertIn("cached_value=unavailable", full["text"])
+            self.assertEqual(full["kind"], "xlsx")
+            parts, offset = [], 0
+            while True:
+                page = logic.inspect(path, text_offset=offset, text_limit=17)
+                parts.append(page["text"])
+                if page["text_eof"]:
+                    break
+                offset = page["next_text_offset"]
+            self.assertEqual("".join(parts), full["text"])
+            with zipfile.ZipFile(path, "a") as z:
+                z.writestr("_rels/.rels", '<Relationships><Relationship TargetMode="External" Target="https://example.com"/></Relationships>')
+            with self.assertRaisesRegex(logic.DocumentError, "external_link"):
+                logic.inspect(path)
+
+    def test_pdf_runtime_result_binds_source_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.pdf"
+            source.write_bytes(b"%PDF-1.7 synthetic")
+            meta = {"wechat/context": dict(account="a", thread="t", requester="r", purpose="test", request_key="key"), "wechat/document": {"inputs": [{"artifact_id": "pdf", "path": str(source)}], "input_root": str(root), "output_dir": str(root / "output"), "output_root": str(root / "output")}}
+            with patch.object(main, "_runtime", return_value={"ok": True, "text": "synthetic"}):
+                result = main.call("document.inspect", {"artifact_id": "pdf"}, meta)
+            self.assertEqual(result["evidence"]["sha256"], logic.file_digest(source))
+            self.assertEqual(result["evidence"]["bytes"], source.stat().st_size)
+
     def fixture(self):
         return json.loads((ROOT / "tests" / "fixtures" / "layout.json").read_text(encoding="utf8"))
 

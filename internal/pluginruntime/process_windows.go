@@ -39,7 +39,15 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	for i, path := range readonly {
 		readonly[i] = WindowsProcessPath(path)
 	}
-	doc := map[string]any{"argv": processArgs, "cwd": WindowsProcessPath(s.DataDir), "writable": []string{WindowsProcessPath(s.DataDir)}, "read_only": readonly, "parent_pid": os.Getpid()}
+	// CreateProcessW rejects a long lpCurrentDirectory even with the extended
+	// path prefix. Document tasks use absolute host-bound input/output paths;
+	// their working directory can be the already mounted interpreter directory.
+	// Keep the task output as the sole writable mount and TEMP location.
+	cwd := s.DataDir
+	if s.Environment["DOCUMENT_RUNTIME_ROOT"] != "" {
+		cwd = filepath.Dir(s.Python)
+	}
+	doc := map[string]any{"argv": processArgs, "cwd": WindowsProcessPath(cwd), "writable": []string{WindowsProcessPath(s.DataDir)}, "read_only": readonly, "parent_pid": os.Getpid()}
 	// Older brokers validate this exact envelope. Extend it only when the
 	// plugin actually needs a host-supplied environment (e.g. documents).
 	if len(s.Environment) > 0 {

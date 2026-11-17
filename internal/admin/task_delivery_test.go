@@ -64,3 +64,20 @@ func TestTaskWaitsForFullDeliveryAndRetainsUnknownOutcome(t *testing.T) {
 		t.Fatal("resume replayed an existing delivery", code)
 	}
 }
+
+func TestSilentDocumentRetryWithNoDeliveryCanResume(t *testing.T) {
+	f := setup(t)
+	task := agentTask{ID: "document-read", Account: "test", Thread: "filehelper", Sender: "owner", State: "waiting", Delivery: &bot.TaskDelivery{Trace: "empty", State: "waiting_delivery"}}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	f.login()
+	code, body, _ := f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "resume"}, true, true)
+	if code != 200 {
+		t.Fatalf("empty plan blocked retry: %d %s", code, body)
+	}
+	got := f.manager.agent.list("test", "filehelper")[0]
+	if got.Delivery != nil || got.State != "pending" {
+		t.Fatal(got)
+	}
+}
