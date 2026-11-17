@@ -373,6 +373,12 @@ func (p *permittedTools) artifactWorkspace(ctx context.Context, raw json.RawMess
 	options, e := runtimeDeploymentOptions()
 	if e == nil {
 		result["python"] = options.Python
+		scriptPath := filepath.Join(filepath.Dir(output), "generate.py")
+		if runtime.GOOS == "windows" {
+			scriptPath = `\\?\` + scriptPath
+		}
+		result["script_execution"] = map[string]any{"tool": "server_windows_process", "arguments": map[string]any{"action": "start", "path": filepath.Dir(output), "argv": []string{options.Python, "-I", scriptPath}, "request_key": "generate-" + task}, "script_io": "Use pathlib.Path(__file__).parent / 'output' inside the script; __file__ preserves the Windows extended path. Use argv rather than a shell command for Python."}
+
 		if options.DocumentRuntimeRoot != "" {
 			result["python_packages"] = filepath.Join(options.DocumentRuntimeRoot, "python-packages")
 			result["fonts_dir"] = filepath.Join(options.DocumentRuntimeRoot, "fonts")
