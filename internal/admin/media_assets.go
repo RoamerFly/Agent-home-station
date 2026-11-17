@@ -20,6 +20,7 @@ import (
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/documentmemory"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
@@ -56,11 +57,12 @@ type assetFormat struct {
 	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
-	StorageName   string `json:"stored_filename,omitempty"`
-	VoiceID       string `json:"voice_id,omitempty"`
-	VoiceEngine   string `json:"voice_engine,omitempty"`
-	VoiceProfile  string `json:"voice_profile_id,omitempty"`
-	SynthesisText string `json:"synthesis_text,omitempty"`
+	DocumentMemory *documentmemory.Note `json:"document_memory,omitempty"`
+	StorageName    string               `json:"stored_filename,omitempty"`
+	VoiceID        string               `json:"voice_id,omitempty"`
+	VoiceEngine    string               `json:"voice_engine,omitempty"`
+	VoiceProfile   string               `json:"voice_profile_id,omitempty"`
+	SynthesisText  string               `json:"synthesis_text,omitempty"`
 	// False means the bytes have no unambiguous, verified speech input. Do
 	// not guess it from titles, requests, captions, or old model prose.
 	SynthesisTextKnown bool                   `json:"synthesis_text_known,omitempty"`
@@ -298,6 +300,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	}
 	if index >= 0 {
 		a.StorageName = items[index].StorageName
+		a.DocumentMemory = items[index].DocumentMemory
 		if a.VoiceID == "" {
 			a.VoiceID = items[index].VoiceID
 			a.VoiceEngine = items[index].VoiceEngine

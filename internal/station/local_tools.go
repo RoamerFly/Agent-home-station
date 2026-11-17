@@ -248,6 +248,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	if name == localDocumentToolName {
 		return t.createLocalDocument(ctx, raw)
 	}
+	if name == "project_document_memory" {
+		return t.documentMemory(ctx, raw)
+	}
 	if name == localDocumentInspectTool || name == localDocumentExportTool {
 		return t.useLocalDocumentArtifact(ctx, name, raw)
 	}

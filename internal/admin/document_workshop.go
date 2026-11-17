@@ -361,6 +361,22 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 			return pluginruntime.VerifiedResult{}, errors.New("document_workshop_output_asset_unavailable")
 		}
 		media := published.Media[0]
+		// Preserve host-verified lineage independently of a model's notes.
+		d.p.manager.assetMu.Lock()
+		items, linkErr := d.p.manager.loadAssets()
+		if linkErr == nil {
+			for i := range items {
+				if items[i].ID == media.AssetID && items[i].ParentAssetID == "" && items[i].ID != d.materialized[0].AssetID {
+					items[i].ParentAssetID = d.materialized[0].AssetID
+				}
+			}
+			linkErr = d.p.manager.saveAssets(items)
+		}
+		d.p.manager.assetMu.Unlock()
+		if linkErr != nil {
+			return pluginruntime.VerifiedResult{}, linkErr
+		}
+		result["document_memory_instruction"] = "原件关系已保存。请用artifact_document_memory保存当前成品的简短处理摘要、要求与修改点；以返回的asset_id标识版本，不把模型完成判断写成用户认可。"
 		// asset_id is durable input for the next document_* operation; the
 		// separate media id is only for this reply's eventual built-in WeChat
 		// delivery. Never make a later export depend on a one-turn upload ID.

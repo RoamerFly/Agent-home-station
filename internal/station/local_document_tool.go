@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"wechat-bot/internal/documentmemory"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -76,6 +77,7 @@ func (t *localToolSet) localDocumentTools(ctx context.Context) []mcptools.Tool {
 			tools[1].Description = "将已登记图片、Word、PDF、Excel等原件直接交给DeepSeek，在下一次模型请求中自行理解。include_layout启用图文解析；pages表示重点页，原文件不裁页。按需复查，不在后续步骤自动重复携带。"
 		}
 	}
+	tools = append(tools, documentmemory.Tool("project_document_memory"))
 	return tools
 }
 

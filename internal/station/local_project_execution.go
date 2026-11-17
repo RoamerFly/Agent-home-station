@@ -222,6 +222,9 @@ func (t *localToolSet) localProjectResult(ctx context.Context, tool string, job 
 			file.Close()
 			view = artifact.view()
 			view["tool"], view["task_id"] = tool, job.ID
+			if documentToolCapability(tool) != "" {
+				view["document_memory_instruction"] = "请用project_document_memory保存当前成品的简短处理摘要、要求和版本关联，方便后续修改；不要把模型完成判断写成用户认可。"
+			}
 			if tool == localDocumentExportTool || tool == localAudioToolName {
 				view["verification"] = json.RawMessage(job.Result)
 			}
