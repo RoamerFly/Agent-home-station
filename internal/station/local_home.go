@@ -12,6 +12,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/stationauth"
 	"wechat-bot/internal/stationhost"
 	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
@@ -120,6 +121,7 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 		}
 	}
 	mux := http.NewServeMux()
+	stationauth.RegisterPassword(mux, auth, AuthorityRoot(dir))
 	home := &localHomeService{identity: fishidentity.New(stationAuthorityDir(dir)), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
 		toolPackages: toolPackagesDirectory, appCatalog: applicationPackagesDirectory}
 	home.registerHomeRoutes(auth, mux)

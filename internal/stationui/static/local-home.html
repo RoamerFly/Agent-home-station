@@ -46,7 +46,7 @@
             <p>登录后才能准备、暂停或恢复大肥鱼的家。</p>
           </div>
           <form id="login-form" class="login-form">
-            <label for="login-password">管理密码</label>
+            <label for="login-password">管理密码</label><p>默认密码：admin。修改后使用新密码。</p>
             <div class="input-row">
               <input id="login-password" name="password" type="password" autocomplete="current-password" required>
               <button id="login-submit" class="button primary" type="submit">进入</button>
@@ -309,7 +309,13 @@
                 </div>
                 <p id="logs-state" class="app-scope-note"></p>
               </details>
-              <div class="settings-actions home-controls">
+              <form id="change-password-form" class="settings-group">
+<h4>管理密码</h4><p>初始密码为 admin。修改后需重新登录。</p>
+<label for="current-password">当前密码</label><input id="current-password" type="password" autocomplete="current-password" required>
+<label for="new-password">新密码（5至128字节）</label><input id="new-password" type="password" autocomplete="new-password" minlength="5" required>
+<label for="confirm-password">确认新密码</label><input id="confirm-password" type="password" autocomplete="new-password" required>
+<button class="button secondary" type="submit">修改密码</button><p id="password-feedback" role="status"></p>
+</form><div class="settings-actions home-controls">
                 <button id="back-to-chat-button" class="button quiet" type="button">返回聊天</button>
                 <button id="settings-access-button" class="button secondary" type="button"></button>
                 <button id="settings-logout-button" class="button quiet" type="button">退出登录</button>

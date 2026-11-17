@@ -6996,6 +6996,17 @@
     document.body.classList.remove("is-home-ready");
     localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
   }
+  $("#change-password-form").addEventListener("submit", async event => {
+ event.preventDefault();
+ const form = event.currentTarget, button = form.querySelector("button"), feedback = $("#password-feedback");
+ if ($("#new-password").value !== $("#confirm-password").value) { feedback.textContent = "两次新密码不一致。"; return; }
+ button.disabled = true;
+ try {
+ await request("/api/password", { method: "POST", body: JSON.stringify({ current_password: $("#current-password").value, new_password: $("#new-password").value }) });
+ form.reset(); window.location.reload();
+ } catch (error) { feedback.textContent = error.message || "密码修改失败。"; }
+ finally { button.disabled = false; }
+ });
   function shortId(id, fallback) { const value = String(id || ""); return value ? `${value.slice(0, 11)}…${value.slice(-6)}` : fallback; }
   function showHome(home) {
     state.home = home; loginView.hidden = true; homeView.hidden = false;

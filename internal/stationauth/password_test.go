@@ -25,35 +25,26 @@ func TestPasswordPrecedenceAndCompatibility(t *testing.T) {
 	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
 		t.Fatalf("environment override wrote a credential: %v", err)
 	}
-	// A first start must not publish a fixed password, and repeated starts
-	// must keep the same generated value.
-	first, err := Password(dir, "")
-	if err != nil {
-		t.Fatalf("bootstrap credential failed: %v", err)
+	check("", DefaultPassword)
+	check("", DefaultPassword)
+	write("admin-token", "admin\r\n")
+	check("", DefaultPassword)
+	if err := SavePassword(dir, "synthetic-new-password"); err != nil {
+		t.Fatal(err)
 	}
-	if first == legacyDefaultPassword || len(first) < 32 {
-		t.Fatalf("bootstrap credential is not random")
+	check("", "synthetic-new-password")
+	if err := SavePassword(dir, "admin"); err != nil {
+		t.Fatal(err)
 	}
-	if again, err := Password(dir, ""); err != nil || again != first {
-		t.Fatalf("bootstrap credential was not stable: %v", err)
+	check("", "admin")
+	if err := SavePassword(dir, "bad"); err == nil {
+		t.Fatal("invalid password saved")
 	}
-	// A legacy fixed token is rotated exactly once without touching the old
-	// file, so older readers keep working.
-	write("admin-token", legacyDefaultPassword+"\r\n")
-	rotated, err := Password(dir, "")
-	if err != nil || rotated == legacyDefaultPassword || rotated == first {
-		t.Fatalf("legacy default credential was not rotated: %v", err)
-	}
-	if again, err := Password(dir, ""); err != nil || again != rotated {
-		t.Fatalf("rotated credential was not stable: %v", err)
-	}
-	if raw, err := os.ReadFile(filepath.Join(dir, "admin-token")); err != nil || string(raw) != legacyDefaultPassword+"\r\n" {
-		t.Fatalf("legacy token file was modified: %v", err)
-	}
-	const oldToken = "synthetic-legacy-token\r\n"
+	check("", "admin")
 	if err := os.Remove(filepath.Join(dir, "admin-password")); err != nil {
 		t.Fatal(err)
 	}
+	const oldToken = "synthetic-legacy-token\r\n"
 	write("admin-token", oldToken)
 	check("", "synthetic-legacy-token")
 	check("synthetic-explicit", "synthetic-explicit")

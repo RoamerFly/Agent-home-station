@@ -15,10 +15,7 @@ import (
 
 const maxPasswordFile = 1024
 
-// legacyDefaultPassword is the fixed bootstrap value written by earlier
-// builds. It is rotated on sight: a published default cannot stay valid on a
-// loopback service that any local user (or a rebound DNS name) can reach.
-const legacyDefaultPassword = "admin"
+const DefaultPassword = "admin"
 
 // Password uses the established station filenames and precedence. Existing
 // files are read in place, and an environment override is never persisted.
@@ -39,14 +36,6 @@ func Password(dir, explicit string) (string, error) {
 		return explicit, nil
 	}
 	if password, found, err := readPassword(root, "admin-token"); found || err != nil {
-		if err == nil && password == legacyDefaultPassword {
-			// Keep the legacy file untouched for older readers and write the
-			// rotating value to the higher-precedence managed credential.
-			if rotated, rotateErr := writeCredential(root, "admin-password"); rotateErr == nil {
-				return rotated, nil
-			}
-			return password, nil
-		}
 		return password, err
 	}
 	if rotated, err := writeCredential(root, "admin-token"); err == nil {
@@ -84,11 +73,11 @@ func readPassword(root *os.Root, name string) (string, bool, error) {
 	return password, true, nil
 }
 
-// writeCredential creates name with a fresh random password. The temporary
+// writeCredential creates name with a default password. The temporary
 // file and rename keep concurrent first starts from observing a partial file.
 func writeCredential(root *os.Root, name string) (string, error) {
 	unavailable := errors.New("无法保存本机主人初始凭据")
-	password := rand.Text() + rand.Text()
+	password := DefaultPassword
 	if !websession.ValidPassword(password) {
 		return "", unavailable
 	}
@@ -113,4 +102,31 @@ func writeCredential(root *os.Root, name string) (string, error) {
 		return "", unavailable
 	}
 	return password, nil
+}
+
+func SavePassword(dir, password string) error {
+	if !websession.ValidPassword(password) {
+		return websession.ErrPassword
+	}
+	root, err := workspacefs.EnsurePath(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if _, _, err := readPassword(root, "admin-password"); err != nil {
+		return err
+	}
+	temp := ".owner-" + rand.Text()
+	file, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(temp)
+	_, writeErr := io.WriteString(file, password+"\n")
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return err
+	}
+	return root.Rename(temp, "admin-password")
 }
