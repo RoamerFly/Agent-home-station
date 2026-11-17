@@ -137,3 +137,36 @@ func writeLocalRVCControlFixture(t *testing.T, executable string) {
 		t.Fatal(err)
 	}
 }
+
+func TestStationMediaRuntimeUsesReleaseEnvironment(t *testing.T) {
+	release := t.TempDir()
+	env := filepath.Join(release, "env")
+	if err := os.Mkdir(env, 0700); err != nil {
+		t.Fatal(err)
+	}
+	service := filepath.Join(release, "data", "main_setting", "runtime")
+	if got := stationPackageRuntimeRoot(service); got != env {
+		t.Fatalf("media runtime = %s, want %s", got, env)
+	}
+}
+
+func TestRVCSharedRuntimeStillVerifiesControlCode(t *testing.T) {
+	root := t.TempDir()
+	writeLocalRVCControlFixture(t, root)
+	control := filepath.Join(root, "runtimes", "windows-station-rvc")
+	if err := os.Mkdir(filepath.Join(control, "workflows"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(control, "__pycache__"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(control, "rvc_voice.py"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err == nil {
+		t.Fatal("changed control code accepted")
+	}
+}

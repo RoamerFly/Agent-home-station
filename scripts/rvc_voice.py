@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import subprocess
 from types import SimpleNamespace
 

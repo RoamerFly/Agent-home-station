@@ -28,6 +28,7 @@ import (
 
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/stationruntime"
 )
 
 const (
@@ -137,11 +138,8 @@ func newLocalRVCServiceAt(dataDir, editableRoot, executableDir string) *localRVC
 }
 
 func stationPackageRuntimeRoot(executableDir string) string {
-	env := filepath.Join(executableDir, "env")
-	if info, err := os.Stat(env); err == nil && info.IsDir() {
-		return env
-	}
-	return filepath.Join(executableDir, "runtimes")
+	options := stationruntime.PackagedToolOptionsAt(executableDir)
+	return filepath.Dir(filepath.Dir(options.Python))
 }
 
 func (s *localRVCService) Info(ctx context.Context, fish string) (localRVCDeployment, error) {
@@ -751,10 +749,9 @@ func localRVCControlManifest(control string) (map[string]string, error) {
 	if json.Unmarshal(data, &manifest) != nil || manifest.SchemaVersion != 1 || manifest.Platform != "windows-x64" || manifest.Policy != "station-rvc-v1" || len(manifest.Files) != len(localRVCControlFiles) {
 		return nil, errors.New("station_rvc_control_invalid")
 	}
-	entries, err := os.ReadDir(control)
-	if err != nil || len(entries) != len(localRVCControlFiles)+1 {
-		return nil, errors.New("station_rvc_control_invalid")
-	}
+	// This directory is shared with the legacy music supervisor and its
+	// workflows/cache. Verify every required executable module below, rather
+	// than treating adjacent runtime data as a changed executable.
 	for _, name := range localRVCControlFiles {
 		expected, exists := manifest.Files[name]
 		if !exists || !localRVCRequestPattern.MatchString(expected) {

@@ -4,6 +4,10 @@ Run with the managed audio Python, a private JSON config and explicit paths.
 Supported engines are pinned Seed-VC and an explicitly trained/pinned RVC voice.
 Weights remain in the managed cache; inference never retrains a speaker model.
 """
+import sys
+from pathlib import Path
+# Embedded Windows Python does not add the executed script's directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from process_window import no_console_options
 from singing_config import load_singing_config
 import argparse
