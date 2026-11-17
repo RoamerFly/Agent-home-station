@@ -103,6 +103,9 @@ func taskDeliveryThread(t agentTask) string {
 	return t.Thread
 }
 func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
+	in.NotificationText = t.NotificationText
+	in.SilentExecution = t.NotificationText == "" && !t.ReportOnly && !t.OwnerRequest && t.RecoveryMessageID == ""
+
 	// A retryable model failure may occur after an authorized read completed.
 	// Carry only the task's own persisted checkpoint into the resumed input;
 	// the bot validates its evidence again before exposing it to the model.

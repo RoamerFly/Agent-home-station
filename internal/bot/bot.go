@@ -73,6 +73,7 @@ type Config struct {
 	AgentTaskRetry          func(companion.Input, time.Duration, string)
 	AgentTaskDelivery       func(companion.Input, TaskDelivery) error
 	AgentTaskActive         func(companion.Input) bool
+	AgentTaskReplyReady     func(companion.Input, companion.Decision) bool
 	Draining                func() bool
 	MediaSeedAllowed        func(MediaSeed) bool
 	MediaSeedKnown          func(MediaSeed) bool
@@ -658,7 +659,7 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 	})
 	toolStarted := false
 	progressDelivered := false
-	if !input.Surf && input.Mode != "proactive" {
+	if !input.SilentExecution && !input.Surf && input.Mode != "proactive" {
 		handler := w.toolProgress(character, input)
 		modelCtx = companion.WithProgress(modelCtx, func(ctx context.Context, text string) (bool, error) {
 			toolStarted = true
@@ -682,6 +683,11 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if err == nil && input.SilentExecution && w.config.AgentTaskReplyReady != nil && !w.config.AgentTaskReplyReady(input, decision) {
+		w.activity(Record{Event: "task_execution_waiting", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "waiting", Reason: "silent_execution_pending", Origin: "agent"})
+		return
+	}
+
 	ctx = companion.WithDecisionGenerationEvidence(ctx, decision)
 	var changed *companion.GenerationEvidenceChangedError
 	if errors.As(err, &changed) {

@@ -136,6 +136,7 @@ type agentTask struct {
 	PendingOperations  []string          `json:"pending_operations,omitempty"`
 	WorkCompleted      bool              `json:"work_completed,omitempty"`
 	Reminder           *reminderSpec     `json:"reminder,omitempty"`
+	NotificationText   string            `json:"notification_text,omitempty"`
 	ReminderDue        bool              `json:"reminder_due,omitempty"`
 	OwnerRequest       bool              `json:"owner_request,omitempty"`
 	ParentID           string            `json:"parent_task_id,omitempty"`
@@ -564,6 +565,8 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				continue
 			}
 			ownerContinuation = true
+		} else if t.NotificationText != "" {
+			ownerContinuation = true
 		} else if t.OwnerRequested {
 			access := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}
 			if !access.privileged() {
@@ -661,6 +664,13 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
 		if t.ID == in.TaskID && t.State == "running" {
+			if t.NotificationText != "" && state == "reply" {
+				t.State = "completed"
+				t.LastResult = "提醒正文已交给发送链，实际发送状态以回执为准"
+				_ = m.agent.task(t)
+				return
+			}
+
 			if state == "yielded_to_message" {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))

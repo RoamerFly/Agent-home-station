@@ -13,6 +13,8 @@ import (
 )
 
 type Input struct {
+	SilentExecution  bool   `json:"silent_execution,omitempty"`
+	NotificationText string `json:"notification_text,omitempty"`
 	// ReplayNonce is host-issued for a bounded, read-only administrator retry
 	// of an original native source. It never authorizes delivery or mutation.
 	ReplayNonce string `json:"-"`
@@ -289,6 +291,9 @@ func silent(reason string) Decision {
 	return Decision{Action: "silent", Messages: []string{}, Reason: reason}
 }
 func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, resultErr error) {
+	if input.SilentExecution {
+		ctx = WithProgress(ctx, nil)
+	}
 	ctx, clearThinking := deepseek.WithThinkingSession(ctx)
 	defer clearThinking()
 	e.clearPreparedContext()
@@ -310,6 +315,9 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	}
 	if input.Mode != "direct" && input.Mode != "social" && input.Mode != "proactive" {
 		return blocked("unsupported_mode"), nil
+	}
+	if input.NotificationText != "" {
+		return Decision{Action: "reply", Messages: []string{input.NotificationText}, Reason: "scheduled_notification"}, nil
 	}
 	if input.Mode == "social" && (!c.Permissions.ObserveGroups || !c.Permissions.AutonomousGroups) {
 		return blocked("group_observation_or_social_permission_denied"), nil

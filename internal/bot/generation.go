@@ -350,7 +350,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		})
 	})
 	progress := false
-	if !input.Surf && input.Mode != "proactive" {
+	if !input.SilentExecution && !input.Surf && input.Mode != "proactive" {
 		modelCtx = companion.WithProgress(modelCtx, func(callCtx context.Context, text string) (bool, error) {
 			sent, e := w.generationProgress(callCtx, s, fork, input, text)
 			progress = progress || sent
@@ -901,6 +901,10 @@ func (t *generationTools) ReviewSurf(ctx context.Context, d companion.Decision) 
 }
 
 func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler, c *companion.Engine, in companion.Input, text string) (bool, error) {
+	if in.SilentExecution {
+		return false, nil
+	}
+
 	allowed := false
 	err := s.call(ctx, func() error {
 		if j := s.jobs[in.Thread]; j != nil {
