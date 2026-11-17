@@ -170,6 +170,11 @@ func (s *localProjectTools) changeLegacyTool(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	c, err := s.legacyToolClient(r.Context())
+	// Service control itself runs through the music package. Stop its backend
+	// before closing that package's executor, so stop/disable can complete.
+	if err == nil && view.ID == "music" && (in.Action == "stop" || in.Action == "disable" || in.Action == "restart") {
+		_, err = c.request(r.Context(), "POST", "/api/speech/music-service/stop", map[string]any{})
+	}
 	if err == nil {
 		action := in.Action
 		if action == "enable" {
@@ -187,13 +192,8 @@ func (s *localProjectTools) changeLegacyTool(w http.ResponseWriter, r *http.Requ
 		switch in.Action {
 		case "start":
 			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/start", map[string]any{})
-		case "stop", "disable":
-			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/stop", map[string]any{})
 		case "restart":
-			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/stop", map[string]any{})
-			if err == nil {
-				_, err = c.request(r.Context(), "POST", "/api/speech/music-service/start", map[string]any{})
-			}
+			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/start", map[string]any{})
 		}
 	}
 	if err != nil {
