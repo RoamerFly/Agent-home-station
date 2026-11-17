@@ -182,3 +182,23 @@ func TestRoleFolderKeepsVoiceIDsAndOwnerDownloadsStable(t *testing.T) {
 		t.Fatal("foreign role path accepted")
 	}
 }
+
+func TestRegisteredVoiceLibraryDirectory(t *testing.T) {
+	f, p, _, _ := voiceAgentFixture(t)
+	old := f.manager.privateVoiceLibrary()
+	target := filepath.Join(t.TempDir(), "tool-models")
+	if err := os.Rename(old, target); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(f.manager.privateWorkspaceFor(f.manager.native.Account()), "voice-library-root")
+	if err := os.WriteFile(marker, []byte(target), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if f.manager.privateVoiceLibrary() != target {
+		t.Fatal("registration ignored")
+	}
+	voices, err := p.accessibleVoices()
+	if err != nil || len(voices) != 2 {
+		t.Fatal("migrated catalogue unavailable", err, len(voices))
+	}
+}

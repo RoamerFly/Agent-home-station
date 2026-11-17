@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+
 	"regexp"
 	"wechat-bot/internal/workspacefs"
 )
@@ -25,7 +25,7 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/voice-library", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		path := s.manager.privateVoiceLibrary()
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
-			value, mergeErr := mergeVoiceCatalogue(map[string]any{"items": []any{}}, filepath.Join(s.manager.managedRoot(), "public_workspace", "models", "voice-library"))
+			value, mergeErr := mergeVoiceCatalogue(map[string]any{"items": []any{}}, s.manager.publicVoiceLibrary())
 			if mergeErr != nil {
 				fail(w, 500, "公共语音库索引不可读")
 				return
@@ -55,7 +55,7 @@ func (s *Server) voiceLibraryRoutes(mux *http.ServeMux) {
 			fail(w, 500, "语音库索引无效")
 			return
 		}
-		value, err = mergeVoiceCatalogue(value, filepath.Join(s.manager.managedRoot(), "public_workspace", "models", "voice-library"))
+		value, err = mergeVoiceCatalogue(value, s.manager.publicVoiceLibrary())
 		if err != nil {
 			fail(w, 500, "公共语音库索引不可读")
 			return

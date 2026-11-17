@@ -13,7 +13,15 @@ def resolve(public, default, body, private=None):
     personal=identity.startswith('private-')
     if personal and not private or not personal and not public:
         raise ValueError('rvc_voice_profile_not_registered')
-    root = (Path(private)/'voice-library' if personal else Path(public)).resolve(strict=True)
+    root = Path(private)/'voice-library' if personal else Path(public)
+    if personal:
+        marker = Path(private)/'voice-library-root'
+        if marker.is_file() and not marker.is_symlink():
+            registered = Path(marker.read_text(encoding='utf-8-sig').strip())
+            if not registered.is_absolute() or registered.is_symlink():
+                raise ValueError('rvc_voice_library_registration_invalid')
+            root = registered
+    root = root.resolve(strict=True)
     manifest = root / 'manifests' / (identity + '.json')
     if manifest.is_symlink() or not manifest.resolve(strict=True).is_relative_to(root):
         raise ValueError('rvc_voice_manifest_outside_public')

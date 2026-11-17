@@ -85,7 +85,7 @@ func (m *Manager) voiceLibraryObject(name string) (string, string, error) {
 
 func (m *Manager) voiceLibraryObjectMetadata(name string) (string, string, *voiceFile, error) {
 	private := m.privateVoiceLibrary()
-	public := filepath.Join(m.managedRoot(), "public_workspace", "models", "voice-library")
+	public := m.publicVoiceLibrary()
 	for _, source := range []struct {
 		directory string
 		shared    bool

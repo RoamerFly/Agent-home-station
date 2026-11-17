@@ -172,3 +172,20 @@ func TestOwnerMediaQueueToNonReplyGroupRemainsTargetBoundAndRevocable(t *testing
 		t.Fatal("revoked owner authority continued")
 	}
 }
+
+func TestOwnerDirectoryReadIndependentOfCrossConversationSending(t *testing.T) {
+	f, p := globalSearchFixture(t)
+	f.manager.native = &accountDirectoryNative{Native: f.manager.native}
+	f.manager.agent.mu.Lock()
+	f.manager.agent.settings.CrossConversation = false
+	f.manager.agent.settings.ReadConversations = true
+	f.manager.agent.mu.Unlock()
+	result, err := p.listAccountConversations(context.Background(), json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(result, "group-directory@chatroom") {
+		t.Fatal(result, err)
+	}
+	p.trace.Sender = "wxid_not_owner"
+	if _, err = p.listAccountConversations(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Fatal("untrusted caller read directory")
+	}
+}

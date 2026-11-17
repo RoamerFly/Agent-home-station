@@ -181,8 +181,11 @@ func (p *permittedTools) listAccountConversations(ctx context.Context, raw json.
 	if json.Unmarshal(raw, &in) != nil || in.Offset < 0 || in.Limit < 0 {
 		return "", toolInputError("invalid conversation page")
 	}
-	if !p.privileged() || !p.manager.agent.config().CrossConversation {
+	if !p.privileged() {
 		return "", toolInputError("account directory requires the trusted owner")
+	}
+	if !p.manager.agent.config().ReadConversations {
+		return "", toolInputError("会话目录读取已关闭，请在Agent权限中开启读取会话；这不表示账号没有加入该群")
 	}
 	m := p.manager
 	names, err := m.storedAccountConversations()

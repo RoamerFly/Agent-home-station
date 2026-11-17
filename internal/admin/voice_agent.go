@@ -46,7 +46,7 @@ func readVoiceEntries(dir string) ([]voiceEntry, error) {
 }
 
 func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
-	public, err := readVoiceEntries(filepath.Join(p.executionContext().Public, "models", "voice-library"))
+	public, err := readVoiceEntries(p.manager.publicVoiceLibrary())
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 		// mount. Verify and return its canonical files instead of duplicating
 		// hundreds of MB for every prepare call. Legacy control archives still
 		// need an explicit verified copy into the global workspace.
-		canonical := !v.Public && p.manager.privateVoiceLibrary() == filepath.Join(p.executionContext().Private, "voice-library")
+		canonical := !v.Public && (p.manager.privateVoiceLibrary() == filepath.Join(p.executionContext().Private, "voice-library") || voiceLibraryPath(p.executionContext().Private, "") != "")
 		if canonical {
 			dest = p.manager.privateVoiceLibrary()
 		}
@@ -267,7 +267,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 				return "", e
 			}
 			if v.Public {
-				sourceDir = filepath.Join(p.executionContext().Public, "models", "voice-library")
+				sourceDir = p.manager.publicVoiceLibrary()
 				relative, e = publicVoiceRelative(sourceDir, f)
 				if e != nil {
 					return "", toolInputError("public_voice_path_outside_models")
