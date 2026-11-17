@@ -22,6 +22,7 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
+	TaskReasoning  string                `json:"task_reasoning,omitempty"`
 	Grounding      *GroundingSettings    `json:"grounding,omitempty"`
 	Memory         *MemorySettings       `json:"memory,omitempty"`
 	Context        *ContextSettings      `json:"context,omitempty"`
@@ -89,6 +90,9 @@ func Normalize(c Config) Config {
 	return c
 }
 func Validate(c Config) error {
+	if err := ValidateTaskReasoningMode(c.TaskReasoning); err != nil {
+		return err
+	}
 	if _, err := c.GroundingOptions(); err != nil {
 		return err
 	}

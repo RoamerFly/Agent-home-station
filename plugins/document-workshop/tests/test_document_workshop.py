@@ -20,6 +20,21 @@ from reportlab_image import EmbeddedImageError, decode_png
 
 
 class DocumentWorkshopTests(unittest.TestCase):
+    def test_title_and_form_spaces_survive_docx_export(self):
+        import native_pdf
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = {"blocks": [{"kind": "paragraph", "text": "Name:        ID:        Phone:", "alignment": "justify"}]}
+            product = logic.reconstruct(layout, Path(tmp), "form.docx", title="Synthetic form")
+            blocks = native_pdf._blocks(Path(product["path"]))
+            self.assertEqual(blocks[0][3]["alignment"], 1)
+            self.assertEqual(blocks[1][3]["alignment"], 4)
+            self.assertIn("&#160;" * 8, native_pdf._markup(blocks[1][1]))
+            layout["blocks"].insert(0, {"kind": "paragraph", "text": "Synthetic form", "alignment": "right"})
+            product = logic.reconstruct(layout, Path(tmp), "explicit.docx", title="Synthetic form")
+            blocks = native_pdf._blocks(Path(product["path"]))
+            self.assertEqual(len(blocks), 2)
+            self.assertEqual(blocks[0][3]["alignment"], 2)
+
     def test_blank_form_and_explicit_page_geometry(self):
         import native_pdf
         with tempfile.TemporaryDirectory() as tmp:

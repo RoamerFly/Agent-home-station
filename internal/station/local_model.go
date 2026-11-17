@@ -25,6 +25,7 @@ type LocalModelSettings struct {
 	MaxTokens       int    `json:"max_tokens"`
 	ThinkingEnabled bool   `json:"thinking_enabled"`
 	ReasoningEffort string `json:"reasoning_effort"`
+	TaskReasoning   string `json:"task_reasoning,omitempty"`
 	Persona         string `json:"persona"`
 	KeyConfigured   bool   `json:"key_configured"`
 }
@@ -188,6 +189,9 @@ func localModelView(record localModelRecord) LocalModelSettings {
 }
 
 func validateLocalModelRecord(record localModelRecord) error {
+	if err := companion.ValidateTaskReasoningMode(record.TaskReasoning); err != nil {
+		return err
+	}
 	if record.Provider != "deepseek" && record.Provider != "openai-compatible" {
 		return errors.New("请选择支持的本机聊天 API 服务商类型")
 	}

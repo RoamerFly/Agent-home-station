@@ -148,6 +148,11 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 // Chat accepts only text user/assistant turns. The caller supplies a separate
 // trusted system policy; historical group messages cannot become system roles.
 func (c *Client) Chat(ctx context.Context, system string, messages []map[string]string) (string, error) {
+	var err error
+	c, err = c.taskReasoningClient(ctx)
+	if err != nil {
+		return "", err
+	}
 	return c.chat(ctx, system, messages, false)
 }
 

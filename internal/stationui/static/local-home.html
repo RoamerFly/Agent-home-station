@@ -289,6 +289,17 @@
                   <input id="model-thinking" name="thinking_enabled" type="checkbox" checked>
                   <span><strong>开启思考</strong><small>让她在回复前多做一步判断。</small></span>
                 </label>
+                <label>任务思考策略
+                  <select id="model-task-reasoning" name="task_reasoning">
+                    <option value="auto">由 Agent 按需决定</option>
+                    <option value="inherit">始终沿用日常设置</option>
+                    <option value="off">本轮任务关闭思考</option>
+                    <option value="low">本轮任务低强度</option>
+                    <option value="high">本轮任务高强度</option>
+                    <option value="max">本轮任务最高强度</option>
+                  </select>
+                  <small>适用于新执行回合。临时调整只影响当前回合；人工指定优先于 Agent。</small>
+                </label>
                 <label>API 密钥
                   <input id="model-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="填写后保存；已有密钥可留空">
                 </label>

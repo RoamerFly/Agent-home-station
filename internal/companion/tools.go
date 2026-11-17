@@ -28,6 +28,10 @@ type surfReviewer interface {
 const nativeToolDiscoveryPolicy = "先从本轮已列出的schema选择工具。需要的能力未列出时，用discover_tools按动作、资源或目标关键词发现，再严格按返回schema调用。工具失败先依据实际错误修正参数、续读位置或来源，不能重复同一调用碰运气；已取得的素材、任务和回执先查询或复用，不重新提交。"
 
 func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string]string) (decision Decision, runErr error) {
+	ctx, automaticReasoning, reasoningErr := e.taskReasoningContext(ctx)
+	if reasoningErr != nil {
+		return Decision{}, reasoningErr
+	}
 	ctx, clearThinking := deepseek.WithThinkingSession(ctx)
 	defer clearThinking()
 	returnedTools := []string{}
@@ -71,6 +75,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		if err == nil || len(available) > 0 {
 			tools = available
 		}
+	}
+	if automaticReasoning {
+		tools = append(tools, taskReasoningTool)
 	}
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	bounded := []mcptools.Tool{}
@@ -126,7 +133,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			// Keep an ordinary turn small.  History retrieval and reading retained
 			// outputs are the only common primitives; all execution, project and
 			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -764,7 +771,34 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 				return Decision{}, err
 			}
-			if nativeFunctions && response.Tool == "discover_tools" {
+			if automaticReasoning && response.Tool == "task_reasoning" {
+				result, callErr = observedToolCall(toolCtx, func(context.Context) (string, error) {
+					var request struct {
+						deepseek.TaskReasoning
+						Reason string `json:"reason"`
+					}
+					if err := json.Unmarshal(args, &request); err != nil {
+						return "", err
+					}
+					next, err := deepseek.WithTaskReasoning(ctx, request.TaskReasoning)
+					if err != nil {
+						return "", err
+					}
+					ctx = next
+					status := map[string]any{"mode": request.Mode, "requested_max_tokens": request.MaxTokens, "scope": "current_run", "saved_settings_changed": false, "effective_from": "next_model_request", "reason": request.Reason}
+					if provider, ok := e.model.(interface {
+						TaskReasoningSettings(context.Context) (deepseek.TaskReasoning, error)
+					}); ok {
+						effective, err := provider.TaskReasoningSettings(ctx)
+						if err != nil {
+							return "", err
+						}
+						status["effective"] = effective
+					}
+					b, _ := json.Marshal(status)
+					return string(b), nil
+				})
+			} else if nativeFunctions && response.Tool == "discover_tools" {
 				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
 				invocation.attempt++
 				emitToolDiagnostic(toolCtx, ToolDiagnostic{Event: "tool_started", Status: "running", Stage: "invocation"})

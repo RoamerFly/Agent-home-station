@@ -14,6 +14,11 @@ import (
 // application transcript remains replay-safe; only actual executed calls have
 // matching tool results. Failed/unexecuted decisions stay ordinary text.
 func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
+	var err error
+	c, err = c.taskReasoningClient(ctx)
+	if err != nil {
+		return "", err
+	}
 	messages := []map[string]any{{"role": "system", "content": system}}
 	total := len(system)
 	for i := 0; i < len(turns); i++ {

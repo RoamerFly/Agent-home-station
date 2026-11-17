@@ -427,6 +427,8 @@ def _paragraph(text: str, style: str = "", font_size_pt: float | None = None, fo
     f = formatting or {}
     props = '<w:pStyle w:val="%s"/>' % style if style else ''
     align = f.get("alignment")
+    if align == "justify":
+        align = "both"
     if align is not None:
         if align not in ("left", "center", "right", "both"):
             raise DocumentError("document_alignment_invalid")
@@ -534,7 +536,8 @@ def reconstruct(layout: dict, output_dir: Path, filename: str = "document.docx",
     if title:
         if title_font_size_pt is not None and (type(title_font_size_pt) not in (int, float) or not 8 <= title_font_size_pt <= 48):
             raise DocumentError("document_font_size_invalid")
-        body.append(_paragraph(title[:256], "Title", title_font_size_pt))
+        if not blocks or not isinstance(blocks[0], dict) or blocks[0].get("text") != title:
+            body.append(_paragraph(title[:256], "Title", title_font_size_pt, {"alignment": "center", "font_family": "宋体"}))
     for block in blocks:
         if not isinstance(block, dict) or set(block) - {"kind", "text", "rows", "level", "image_index", "caption", "font_size_pt", "merges", "borderless", "alignment", "first_line_indent_pt", "left_indent_pt", "right_indent_pt", "space_before_pt", "space_after_pt", "line_spacing_pt", "font_family", "bold", "page_break_before", "label", "value", "blank"}:
             raise DocumentError("document_layout_invalid")

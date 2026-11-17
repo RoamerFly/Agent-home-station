@@ -8,6 +8,7 @@ of being silently reflowed or sent to Office/LibreOffice.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -76,6 +77,13 @@ def _text(node):
     return "".join(value.text or "" for value in node.findall(".//{%s}t" % WORD))
 
 
+def _markup(text):
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;")
+    # Paragraph's HTML parser otherwise collapses the actual Word form blanks.
+    escaped = re.sub(r" {2,}", lambda match: "&#160;" * len(match.group()), escaped)
+    return escaped.replace("\n", "<br/>")
+
+
 def _font_size(node):
     value = node.find(".//{%s}rPr/{%s}sz" % (WORD, WORD))
     try:
@@ -98,6 +106,8 @@ def _relations(archive):
 def _paragraph_format(node):
     p = node.find('{%s}pPr' % WORD)
     result = {}
+    face = node.find('.//{%s}rFonts'%WORD)
+    if face is not None: result['font_family'] = face.get('{%s}eastAsia'%WORD) or face.get('{%s}ascii'%WORD)
     if p is None: return result
     align = p.find('{%s}jc' % WORD)
     if align is not None: result['alignment'] = {'left':0,'center':1,'right':2,'both':4}.get(align.get('{%s}val'%WORD),0)
@@ -206,7 +216,7 @@ def export_docx(docx: Path, pdf: Path, chinese_font: Path) -> dict:
     styles = {
         "paragraph": api["ParagraphStyle"]("Body", fontName=font, fontSize=10.5, leading=17, alignment=api["TA_LEFT"], wordWrap="CJK"),
         "heading": api["ParagraphStyle"]("Heading", fontName=font, fontSize=15, leading=22, spaceBefore=8, spaceAfter=6, wordWrap="CJK"),
-        "title": api["ParagraphStyle"]("Title", fontName=font, fontSize=21, leading=28, alignment=api["TA_CENTER"], spaceAfter=14, wordWrap="CJK"),
+        "title": api["ParagraphStyle"]("Title", fontName=font, fontSize=18, leading=28, alignment=api["TA_LEFT"], spaceAfter=14, wordWrap="CJK"),
     }
     for kind, *values in blocks:
         if kind in styles:
@@ -215,12 +225,18 @@ def export_docx(docx: Path, pdf: Path, chinese_font: Path) -> dict:
             if requested_size is not None:
                 style = api["ParagraphStyle"](kind + "Custom", parent=style, fontSize=requested_size, leading=max(requested_size * 1.45, style.leading))
             formatting = dict(formatting)
+            family = formatting.pop('font_family', None)
+            if family in ('宋体', 'SimSun'):
+                local_font = chinese_font.parent / 'SimSun-local.ttf'
+                if local_font.is_file():
+                    api['pdfmetrics'].registerFont(api['TTFont']('DocumentSimSun', str(local_font), subfontIndex=0))
+                    formatting['fontName'] = 'DocumentSimSun'
             if formatting.pop('page_break',False):body.append(api['PageBreak']())
             if formatting: style = api['ParagraphStyle'](kind+'Layout',parent=style,**formatting)
-            body.extend([api["Paragraph"](text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), style), api["Spacer"](1, 0 if formatting else 4)])
+            body.extend([api["Paragraph"](_markup(text), style), api["Spacer"](1, 0 if formatting else 4)])
         elif kind == "table":
             rows, merges, borderless = values
-            data = [[api["Paragraph"](str(cell).replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), styles["paragraph"]) for cell in row] for row in rows]
+            data = [[api["Paragraph"](_markup(str(cell)), styles["paragraph"]) for cell in row] for row in rows]
             repeat = 0 if any(m["row"] == 0 and m["row_span"] > 1 for m in merges) else 1
             table = api["Table"](data, repeatRows=repeat, hAlign="LEFT")
             spans = [("SPAN", (m["column"], m["row"]),
