@@ -26,6 +26,7 @@ import (
 )
 
 type assetOriginal struct {
+	parentAssetID       string // Host-verified lineage, committed with the first index entry.
 	InboundMessage      *linuxnative.Message
 	VoiceID             string
 	VoiceEngine         string
@@ -238,7 +239,7 @@ func (m *Manager) rememberAsset(in companion.Input, original assetOriginal, kind
 // Commit every upload material of a format together, so concurrent requests
 // never see a half-prepared replacement bundle.
 func (m *Manager) rememberAssetFormats(in companion.Input, original assetOriginal, uploads []stagedUpload) (mediaAsset, error) {
-	parentID := ""
+	parentID := original.parentAssetID
 	if original.Parent != nil {
 		parent := *original.Parent
 		parent.Parent = nil // A conversion carries one verified parent, not recursion.
@@ -257,6 +258,18 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	items, e := m.loadAssets()
 	if e != nil {
 		return zero, e
+	}
+	if parentID != "" {
+		found := false
+		for _, candidate := range items {
+			if candidate.ID == parentID && candidate.Scope == assetScope(in) && candidate.Account == in.Account {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return zero, errors.New("artifact_parent_not_in_conversation")
+		}
 	}
 	hash := sha256.Sum256(original.Data)
 	digest := hex.EncodeToString(hash[:])

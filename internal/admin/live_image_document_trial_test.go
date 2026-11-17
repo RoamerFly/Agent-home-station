@@ -23,18 +23,27 @@ import (
 // The reference document is deliberately not a parameter.
 type trialImageNative struct {
 	*fakeTools
-	msg linuxnative.Message
+	msg      linuxnative.Message
+	messages map[string]linuxnative.Message
 }
 
-func (n *trialImageNative) Message(context.Context, string) (linuxnative.Message, error) {
-	return n.msg, nil
+func (n *trialImageNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
+	if id == n.msg.ID {
+		return n.msg, nil
+	}
+	if m, ok := n.messages[id]; ok {
+		return m, nil
+	}
+	return linuxnative.Message{}, fmt.Errorf("isolated message not found: %s", id)
 }
 
 type imageDocumentTrial struct {
+	*permittedTools
 	p     *permittedTools
 	image []byte
 	msg   linuxnative.Message
 	log   *os.File
+	turn  int
 }
 
 func (x *imageDocumentTrial) SetTrace(in companion.Input)             { x.p.SetTrace(in) }
@@ -80,7 +89,7 @@ func (x *imageDocumentTrial) Call(ctx context.Context, name string, raw json.Raw
 		}
 		result, err = x.p.Call(ctx, name, raw)
 	}
-	record := map[string]any{"at": time.Now(), "tool": name, "arguments": json.RawMessage(raw), "result": result}
+	record := map[string]any{"turn": x.turn, "at": time.Now(), "tool": name, "arguments": json.RawMessage(raw), "result": result}
 	if err != nil {
 		record["error"] = err.Error()
 	}
@@ -100,7 +109,7 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 		t.Fatal(e)
 	}
 	if os.Getenv("DOCUMENT_TRIAL_THINKING") == "1" {
-		live.ThinkingEnabled, live.ReasoningEffort, live.MaxTokens = true, "high", 8192
+		live.ThinkingEnabled, live.ReasoningEffort, live.MaxTokens = true, "high", 32768
 	}
 	f, p := trustedAgent(t)
 	n := &fakeTools{fakeNative: f.native}
@@ -180,11 +189,13 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 		t.Fatal(e)
 	}
 	msg := linuxnative.Message{ID: "image-only-original", AccountID: "test", ThreadID: "wxid_owner", SenderID: "wxid_owner", ServerID: "image-only-source", Type: 3, Direction: "incoming", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	f.manager.native = &trialImageNative{fakeTools: n, msg: msg}
+	native := &trialImageNative{fakeTools: n, msg: msg, messages: map[string]linuxnative.Message{}}
+	f.manager.native = native
 	input := companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "image-only-request", TaskID: "image-only-document", Mode: "direct", Directed: true, Text: string(request)}
 	input.MessageTime = msg.CreatedAt
 	input.OriginalText = &input.Text
 	input.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: input.TraceID, ServerID: "image-only-request-server", Account: input.Account, Thread: input.Thread, Sender: input.Sender, MessageType: 1, OccurredAt: msg.CreatedAt, Revision: 1}
+	native.messages[input.TraceID] = linuxnative.Message{ID: input.TraceID, ServerID: input.Source.ServerID, AccountID: input.Account, ThreadID: input.Thread, SenderID: input.Sender, Type: 1, Direction: "incoming", CreatedAt: input.MessageTime, Body: input.Text}
 	if e = f.manager.agent.task(agentTask{ID: input.TaskID, Account: input.Account, Thread: input.Thread, Sender: input.Sender, State: "running", OwnerRequested: true, RequestedText: input.Text}); e != nil {
 		t.Fatal(e)
 	}
@@ -220,7 +231,7 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer log.Close()
-	engine.Tools = &imageDocumentTrial{p: p, image: image, msg: msg, log: log}
+	engine.Tools = &imageDocumentTrial{permittedTools: p, p: p, image: image, msg: msg, log: log, turn: 1}
 	engine.MaxToolCalls = 60
 	// Save generated files before fixture cleanup, including failed attempts.
 	defer func() {
@@ -261,8 +272,9 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 			t.Error("isolated acceptance unexpectedly submitted a native message")
 		}
 	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 24*time.Minute)
 	defer cancel()
+	freshBase := ctx
 	if f.manager.config.Behavior.DirectImageInput {
 		var clear func()
 		ctx, clear = deepseek.WithImageSession(ctx)
@@ -282,7 +294,52 @@ func TestLiveImageOnlyDocumentTrial(t *testing.T) {
 		events.Sync()
 	})
 	decision, e := engine.Respond(ctx, input)
-	report := map[string]any{"decision": decision, "real_model": true, "real_windows_tools": true, "history_supplied": false, "reference_supplied": false, "native_sends": n.submits.Load(), "visual_acceptance": "requires_independent_review", "transport": "isolated_native_fixture"}
+
+	turns := []any{map[string]any{"turn": 1, "request": input.Text, "decision": decision}}
+	if path := os.Getenv("DOCUMENT_TRIAL_FOLLOWUPS"); path != "" && e == nil {
+		var requests []string
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = json.Unmarshal(raw, &requests); err != nil {
+			t.Fatal(err)
+		}
+		for i, request := range requests {
+			// Local simulated transcript; never a native receipt or send.
+			if err = engine.Accepted(input, strings.Join(decision.Messages, "\n")); err != nil {
+				t.Fatal(err)
+			}
+			input.Text = request
+			input.TraceID = fmt.Sprintf("followup-%d", i+2)
+			input.TaskID = input.TraceID
+			input.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+			input.OriginalText = &input.Text
+			input.Source = &companion.SourceRef{InstanceID: f.manager.memory.SourceInstanceID(), MessageID: input.TraceID, ServerID: input.TraceID, Account: input.Account, Thread: input.Thread, Sender: input.Sender, MessageType: 1, OccurredAt: input.MessageTime, Revision: 1}
+			native.messages[input.TraceID] = linuxnative.Message{ID: input.TraceID, ServerID: input.Source.ServerID, AccountID: input.Account, ThreadID: input.Thread, SenderID: input.Sender, Type: 1, Direction: "incoming", CreatedAt: input.MessageTime, Body: input.Text}
+			if err = f.manager.memory.Observe(input, c, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err = f.manager.agent.task(agentTask{ID: input.TaskID, Account: input.Account, Thread: input.Thread, Sender: input.Sender, State: "running", OwnerRequested: true, RequestedText: request}); err != nil {
+				t.Fatal(err)
+			}
+			p.SetTrace(input)
+			engine, err = companion.New(c, f.manager.memory, model, live.SystemPrompt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine.Tools = &imageDocumentTrial{permittedTools: p, p: p, image: image, msg: msg, log: log, turn: i + 2}
+			engine.MaxToolCalls = 60
+			fresh, clear := deepseek.WithImageSession(freshBase)
+			decision, e = engine.Respond(fresh, input)
+			clear()
+			turns = append(turns, map[string]any{"turn": i + 2, "request": request, "decision": decision})
+			if e != nil {
+				break
+			}
+		}
+	}
+	report := map[string]any{"turns": turns, "local_receipts": "synthetic transcript only", "decision": decision, "real_model": true, "real_windows_tools": true, "history_supplied": false, "reference_supplied": false, "native_sends": n.submits.Load(), "visual_acceptance": "requires_independent_review", "transport": "isolated_native_fixture"}
 	report["model_profile"] = map[string]any{"model": live.Model, "thinking": live.ThinkingEnabled, "reasoning_effort": live.ReasoningEffort, "max_tokens": live.MaxTokens}
 	report["direct_images"] = f.manager.config.Behavior.DirectImageInput
 	if e != nil {

@@ -27,7 +27,7 @@ func TestHostFilePermissionsAndRootBoundary(t *testing.T) {
 		t.Fatal("disabled allowed")
 	}
 	h.Config.Mode = "read"
-	path := filepath.Join(root, "note.txt")
+	path := filepath.Join(root, "learning", "writing", "note.md")
 	if _, err := invoke(t, h, "server_write", map[string]string{"path": path, "content": "hello"}); err == nil {
 		t.Fatal("read wrote")
 	}

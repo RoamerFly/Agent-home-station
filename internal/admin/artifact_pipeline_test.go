@@ -308,3 +308,24 @@ func TestArtifactScriptRealWindowsExecution(t *testing.T) {
 		t.Fatal("unexpected WeChat send")
 	}
 }
+
+func TestLearningDirectoryStableAcrossTasks(t *testing.T) {
+	_, p, _, _ := artifactPipelineFixture(t)
+	p.trace.TaskID = "learn-first"
+	first, err := p.artifactWorkspace(t.Context(), json.RawMessage(`{"task_id":"learn-first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.trace.TaskID = "apply-later"
+	second, err := p.artifactWorkspace(t.Context(), json.RawMessage(`{"task_id":"apply-later"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b map[string]any
+	if json.Unmarshal([]byte(first), &a) != nil || json.Unmarshal([]byte(second), &b) != nil {
+		t.Fatal("invalid workspace")
+	}
+	if a["learning_dir"] == nil || a["learning_dir"] != b["learning_dir"] || a["output_dir"] == b["output_dir"] {
+		t.Fatalf("learning must persist while outputs are task specific: %v %v", a, b)
+	}
+}
