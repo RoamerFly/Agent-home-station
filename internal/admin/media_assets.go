@@ -494,6 +494,8 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		kind = "file"
 		if strings.HasPrefix(a.MIME, "video/") {
 			kind = "video"
+		} else if strings.HasPrefix(a.MIME, "image/") {
+			kind = "image"
 		}
 	}
 	if err := conversion.validate(kind); err != nil {
@@ -552,7 +554,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		source = format.Sources[0]
 	}
 	if source == "" {
-		if (kind != "file" && !(kind == "video" && strings.HasPrefix(a.MIME, "video/"))) || len(a.Hash) != 64 {
+		if (kind != "file" && !(kind == "video" && strings.HasPrefix(a.MIME, "video/")) && !(kind == "image" && strings.HasPrefix(a.MIME, "image/"))) || len(a.Hash) != 64 {
 			if a.ParentAssetID != "" {
 				for _, parent := range items {
 					if parent.ID == a.ParentAssetID && parent.Account == p.trace.Account && parent.Scope == assetScope(p.trace) {

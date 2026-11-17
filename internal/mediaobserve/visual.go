@@ -51,6 +51,7 @@ type Visual struct {
 	tokens, configRevision         int
 	thinking, requested            bool
 	providerReply                  json.RawMessage
+	providerError                  error
 	arguments                      json.RawMessage
 }
 
@@ -293,15 +294,31 @@ func (p *Visual) Service(ctx context.Context, j pluginhost.Job, cap pluginhost.C
 		if post == nil {
 			post = mcptools.PostPluginModel
 		}
-		reply, err := post(ctx, endpoint, headers, body, limit, timeout)
-		// Bill the actual HTTP attempt even if its result is later rejected/forgotten.
-		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
-		usage.Model = p.model
-		usage.Purpose = "plugin_media_observation"
-		c := billing.ModelConfig{Provider: p.backend, BaseURL: strings.TrimSuffix(endpoint, "/chat/completions"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
-		if p.binding.Billing == nil || p.binding.Billing.Record(c, usage) != nil {
-			return nil, errors.New("media_usage_record_failed")
+		var reply json.RawMessage
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			if err = p.Check(ctx, j, cap); err != nil {
+				return nil, err
+			}
+			reply, err = post(ctx, endpoint, headers, body, limit, timeout)
+			usage := deepseek.ReportedUsage(reply, time.Now().UTC())
+			usage.Model, usage.Purpose = p.model, "plugin_media_observation"
+			c := billing.ModelConfig{Provider: p.backend, BaseURL: strings.TrimSuffix(endpoint, "/chat/completions"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
+			if p.binding.Billing == nil || p.binding.Billing.Record(c, usage) != nil {
+				return nil, errors.New("media_usage_record_failed")
+			}
+			if err == nil || !retryableVisualTransport(err) || attempt == 2 {
+				break
+			}
+			timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
 		}
+		p.providerError = err
 		if err != nil {
 			return nil, err
 		}
@@ -412,6 +429,9 @@ func (p *Visual) Observe(ctx context.Context) (string, error) {
 		return "", errors.New("media_plugin_observation_needs_review")
 	}
 	if call.Job.State != "completed" {
+		if p.providerError != nil {
+			return "", p.providerError
+		}
 		var failure struct {
 			Error string `json:"error"`
 		}
@@ -444,4 +464,13 @@ func (p *Visual) CheckCompleted(ctx context.Context) error {
 		return errors.New("media_plugin_result_unavailable")
 	}
 	return p.Check(ctx, p.completedJob, pluginhost.Capability{})
+}
+
+// Only retry read-only visual inference on transient transport/provider failures.
+func retryableVisualTransport(err error) bool {
+	var e *mcptools.WebError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Code == "plugin_route_network_failed" || e.Code == "plugin_route_response_failed" || e.Code == "plugin_route_http_rejected" && (e.Status == 429 || e.Status >= 500 && e.Status <= 599)
 }

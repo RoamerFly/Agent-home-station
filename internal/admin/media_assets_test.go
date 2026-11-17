@@ -283,3 +283,27 @@ func TestCachedVideoDefaultHonorsVideoPermission(t *testing.T) {
 		t.Fatalf("explicit file not preserved: %+v", media)
 	}
 }
+
+func TestCachedImageDefaultsToNativeImageWithoutDownload(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &fakeTools{fakeNative: f.native}
+	f.manager.config.Companion.Permissions.SendImage = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-image"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic cached image"), MIME: "image/png", Filename: "image.png"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.SetTrace(in)
+	result, err := access.reuseAsset(t.Context(), a.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, ok := access.Media(a.ID + "-image")
+	if !ok || media.Kind != "image" || media.SourceID == "" || !bytes.Contains([]byte(result), []byte(`"network_downloads":0`)) {
+		t.Fatal("cached original not staged", result)
+	}
+}

@@ -34,6 +34,17 @@ func (m *Manager) newMediaPluginPolicy(ctx context.Context, message linuxnative.
 	}
 	p.receivedSharePolicy = base
 	base.requestSuffix = agentID(string(p.Arguments()), strconv.Itoa(p.ConfigRevision()))
+	// Failed read-only observations are retryable on a later processing round.
+	// Preserve successful/running jobs and every previous failed attempt.
+	for {
+		inv := base.invocation()
+		job, lookupErr := base.store.JobByRequest(ctx, "media-understanding", inv.Thread, inv.RequestKey)
+		if lookupErr != nil || job.State != "failed" || job.CancelRequested {
+			break
+		}
+		base.requestSuffix = agentID(base.requestSuffix, "retry-observation", job.ID)
+	}
+
 	m.bindVisualPolicy(p, base.invocation, base.Check)
 	return p, nil
 }
@@ -70,7 +81,11 @@ func (a mediaUnderstanding) observeImages(ctx context.Context, message linuxnati
 	if err := a.manager.mediaImageObservationReady(ctx); err != nil {
 		return "", err
 	}
-	policy, err := a.manager.newMediaPluginPolicy(ctx, message, prompt, images, 0)
+	tokens := 0
+	if message.Type == 3 {
+		tokens = 4096
+	}
+	policy, err := a.manager.newMediaPluginPolicy(ctx, message, prompt, images, tokens)
 	if err != nil {
 		return "", err
 	}
