@@ -124,6 +124,9 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	stationauth.RegisterPassword(mux, auth, AuthorityRoot(dir))
 	home := &localHomeService{identity: fishidentity.New(stationAuthorityDir(dir)), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
 		toolPackages: toolPackagesDirectory, appCatalog: applicationPackagesDirectory}
+	if err := home.migrateSingleHome(); err != nil {
+		return nil, err
+	}
 	home.registerHomeRoutes(auth, mux)
 	chat := newLocalChatService(home)
 	chat.windows = runner
@@ -173,7 +176,7 @@ func (h *localHomeService) directory(record fishidentity.Record) (string, error)
 	}
 	// The home is a sibling of the legacy account-private subtree, never its
 	// parent. No account or WeChat requester is part of this grant's identity.
-	home := filepath.Join(h.root, "fish_home", record.FishID, "home")
+	home := filepath.Join(h.root, "home")
 	rel, err := filepath.Rel(home, h.dataDir)
 	// A workspace on a different Windows volume cannot contain the private
 	// settings directory; filepath.Rel quite correctly cannot represent it.
@@ -184,6 +187,63 @@ func (h *localHomeService) directory(record fishidentity.Record) (string, error)
 		return "", errors.New("家目录不能包含宿主私有配置")
 	}
 	return home, nil
+}
+
+// Keep the durable identity, but do not encode it in a single resident's path.
+// Rename only a complete old home; conflicting destinations retain both trees.
+func (h *localHomeService) migrateSingleHome() error {
+	record, err := h.identity.Read()
+	if err != nil || record.LocalOwner == nil {
+		return err
+	}
+	oldCatalog := filepath.Join(stationPublicToolsDir(h.dataDir), record.FishID)
+	newCatalog := filepath.Join(stationPublicToolsDir(h.dataDir), "catalog")
+	if _, err := os.Lstat(oldCatalog); err == nil {
+		if _, err := os.Lstat(newCatalog); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("新旧工具登记目录同时存在，请先合并")
+		}
+		check, err := workspacefs.EnsurePath(oldCatalog)
+		if err != nil {
+			return err
+		}
+		if err := check.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(oldCatalog, newCatalog); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	destination, err := h.directory(record)
+	if err != nil {
+		return err
+	}
+	old := filepath.Join(h.root, "fish_home", record.FishID, "home")
+	if _, err := os.Lstat(old); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return errors.New("新旧家目录同时存在，请先合并内容")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Validate all existing ancestors before moving a private workspace.
+	check, err := workspacefs.EnsurePath(old)
+	if err != nil {
+		return err
+	}
+	if err := check.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(old, destination); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Dir(old)) // Empty containers only; never recursive.
+	_ = os.Remove(filepath.Dir(filepath.Dir(old)))
+	return nil
 }
 
 func (h *localHomeService) ensureDirectory(record fishidentity.Record) error {

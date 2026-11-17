@@ -39,6 +39,14 @@ func PackagedToolOptionsAt(packageDir string) pluginruntime.Options {
 }
 
 func packagedRuntimeRoot(packageDir string) string {
+	// The service lives under data/main_setting/runtime; tools belong to the release.
+	if filepath.Base(packageDir) == "runtime" && filepath.Base(filepath.Dir(packageDir)) == "main_setting" && filepath.Base(filepath.Dir(filepath.Dir(packageDir))) == "data" {
+		release := filepath.Dir(filepath.Dir(filepath.Dir(packageDir)))
+		if info, err := os.Stat(filepath.Join(release, "env")); err == nil && info.IsDir() {
+			return filepath.Join(release, "env")
+		}
+	}
+
 	env := filepath.Join(packageDir, "env")
 	if info, err := os.Stat(env); err == nil && info.IsDir() {
 		return env

@@ -21,8 +21,8 @@ const runnerConfigLimit = 64 << 10
 func LoadWindowsRunner(packageDir, privateDir, workspace, configFile string) (*agenthost.WindowsConfig, error) {
 	var cfg agenthost.WindowsConfig
 	if configFile == "" {
-		cfg.Pythonw = filepath.Join(packageDir, "runtimes", "windows-python-cli", "pythonw.exe")
-		cfg.Helper = filepath.Join(packageDir, "runtimes", "windows-agent-host", "windows_agent_host.pyw")
+		cfg.Pythonw = filepath.Join(packagedRuntimeRoot(packageDir), "windows-python-cli", "pythonw.exe")
+		cfg.Helper = filepath.Join(packagedRuntimeRoot(packageDir), "windows-agent-host", "windows_agent_host.pyw")
 		for _, path := range []string{cfg.Pythonw, cfg.Helper} {
 			if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 				return nil, nil

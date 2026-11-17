@@ -32,7 +32,7 @@ func (h *localHomeService) stationDocumentToolRelease(ctx context.Context, opera
 	if err != nil || identity.LocalOwner == nil {
 		return "", false
 	}
-	if _, err := os.Stat(filepath.Join(stationPublicToolsDir(h.dataDir), identity.FishID)); err != nil {
+	if _, err := os.Stat(filepath.Join(stationPublicToolsDir(h.dataDir), "catalog")); err != nil {
 		return "", false
 	}
 	host, err := h.projectTools.forFish(identity.FishID)

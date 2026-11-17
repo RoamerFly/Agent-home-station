@@ -117,7 +117,7 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 		}
 		return s.host, nil
 	}
-	dir := filepath.Join(stationPublicToolsDir(s.home.dataDir), fish)
+	dir := filepath.Join(stationPublicToolsDir(s.home.dataDir), "catalog")
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return nil, err

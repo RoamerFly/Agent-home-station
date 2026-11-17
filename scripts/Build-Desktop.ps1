@@ -296,6 +296,23 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
  if($LocalStation -and $WithWeChatApp){$catalogArgs+=@('--package','web-search')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
+ if($LocalStation){
+  # Package IDs stay stable; only the human-facing directory has a purpose suffix.
+  $purposes=@{'audio-cpp'='语音识别与生成';'audio-workshop'='音频处理';'comfyui'='图像生成';'document-workshop'='文档处理';'external-tools'='外部工具';'media-understanding'='媒体理解';'music'='音乐生成与投递';'obs-preview'='直播预览';'project-development'='项目开发';'rvc'='换声';'share-reader'='分享内容读取';'speech'='语音处理';'station-speech'='站内语音';'visual-generation'='视觉生成';'web-search'='网络搜索';'yue'='作曲'}
+  $publicRoot=Join-Path $OutputDirectory 'publictools'
+  New-Item -ItemType Directory -Force -Path $publicRoot | Out-Null
+  $stagedRoot=(Resolve-Path -LiteralPath (Join-Path $OutputDirectory 'plugins')).ProviderPath
+  foreach($package in Get-ChildItem -LiteralPath $stagedRoot -Directory){
+   $suffix=$purposes[$package.Name]
+   if(-not $suffix){$suffix='公共工具'}
+   $destination=Join-Path $publicRoot ($package.Name+'-'+$suffix)
+   if(Test-Path -LiteralPath $destination){throw 'Use a fresh build directory; do not merge live tool packages during build.'}
+   if($package.Parent.FullName -ne $stagedRoot){throw 'Unexpected tool source path.'}
+   Move-Item -LiteralPath $package.FullName -Destination $destination
+  }
+  Remove-Item -LiteralPath $stagedRoot # Empty staging container only.
+ }
+
 }
 # Adding application source does not connect an account or enable its runtime.
 $appIDs=@()

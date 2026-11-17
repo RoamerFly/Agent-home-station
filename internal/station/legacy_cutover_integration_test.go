@@ -67,7 +67,7 @@ func prepareLegacyCutover(t *testing.T, base, data, workspace string) (fishident
 	}
 
 	home, err := PreviewLegacyHome(ctx, data, workspace, legacyProject, "projects/imported-project", 1<<20)
-	if err != nil || home.FishID != identity.FishID || !bytes.HasPrefix([]byte(home.Target), []byte(filepath.Join(workspace, "fish_home"))) {
+	if err != nil || home.FishID != identity.FishID || !bytes.HasPrefix([]byte(home.Target), []byte(filepath.Join(workspace, "home"))) {
 		t.Fatalf("home preview: %#v, %v", home, err)
 	}
 	if _, err = ImportLegacyHome(ctx, data, workspace, legacyProject, "projects/imported-project", 1<<20, home.Digest); err != nil {

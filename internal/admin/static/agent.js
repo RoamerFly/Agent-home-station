@@ -7,7 +7,19 @@
  const labels={submitting:'提交中',pending:'待执行',waiting:'等待中',running:'执行中',waiting_delivery:'交付中',completed:'已完成',stopped:'已结束',cancelled:'已取消',needs_review:'续办已停止',failed:'执行失败'};
  const lines=id=>$(id).value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
  function hostDescription(){const mode=$('#agent-host-mode').value;for(const id of ['agent-host-roots'])$('#'+id).parentElement.hidden=mode==='disabled';$('#agent-host-description').textContent=mode==='full'?'程序在系统隔离环境运行，只能访问当前账号及会话授权的工作区。Windows 使用 LPAC，Linux 使用 Bubblewrap；隔离不可用时拒绝执行，不回退宿主权限。':mode==='disabled'?'未开放服务器能力。微信收发、联网与普通任务仍可独立使用。':'文件工具限制在授权目录内，阻止路径与符号链接越界；修改已有文件必须提供读取时的版本校验，冲突时保留原文件。';}
- function fill(c,workspace){state.settings=c;if(workspace)state.workspace=workspace;for(const [key,id]of Object.entries(ids)){const el=$('#'+id);if(el.type==='checkbox')el.checked=!!c[key];else el.value=c[key]}
+
+ async function renderOwnerNames(ids){
+  const box=$('#agent-owner-names');box.textContent='正在读取主人与可信用户名称…';
+  const found=new Map();let cursor='';
+  try{do{
+   const page=await api('/api/catalog?kind=contacts'+(cursor?'&cursor='+encodeURIComponent(cursor):''));
+   for(const item of page.items||[]){const id=item.id||item.username;if(ids.includes(id))found.set(id,item)}
+   const next=page.next_cursor||'';if(next===cursor)break;cursor=next;
+  }while(cursor&&found.size<ids.length)}catch{}
+  const names=ids.map(id=>{const item=found.get(id);return item?(item.remark||item.nickname||item.displayName||'未命名联系人')+(item.alias?' · 微信号：'+item.alias:''):window.WechatNames.display(id)+'（通讯录暂未提供微信号）'});
+  if(JSON.stringify(state.settings?.owner_ids||[])===JSON.stringify(ids))box.textContent='主人 / 可信用户：'+(names.join('；')||'尚未设置');
+ }
+ function fill(c,workspace){state.settings=c;renderOwnerNames(c.owner_ids||[]);if(workspace)state.workspace=workspace;for(const [key,id]of Object.entries(ids)){const el=$('#'+id);if(el.type==='checkbox')el.checked=!!c[key];else el.value=c[key]}
  $('#agent-plugin-idle').value=c.service_retention?.plugin_idle_minutes??10;
  $('#agent-music-idle').value=c.service_retention?.music_idle_minutes??15;
  $('#agent-owner-ids').value=(c.owner_ids||[]).join('\n');$('#agent-owner-all-threads').checked=(c.privileged_threads||[]).includes('*');$('#agent-privileged-threads').value=(c.privileged_threads||[]).filter(id=>id!=='*').join('\n');$('#agent-privileged-threads').disabled=$('#agent-owner-all-threads').checked;$('#agent-host-mode').value=c.host.mode;$('#agent-host-roots').value=[state.workspace?.private_workspace,state.workspace?.public_workspace].filter(Boolean).join('\n');$('#agent-host-roots').readOnly=true;
