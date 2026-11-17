@@ -160,7 +160,7 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
 	d.Key = "bot-" + messageHash(input.Thread + "|" + input.TraceID + fmt.Sprint(bubble))[:48]
-	if (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && input.QuoteServerID != "" && input.TraceID != "" {
+	if bubble <= 0 && (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && input.QuoteServerID != "" && input.TraceID != "" {
 		d.Quote = replyQuote(input)
 	}
 	w.runtime.Deliveries = append(w.runtime.Deliveries, d)

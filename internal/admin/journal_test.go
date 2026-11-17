@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"wechat-bot/internal/bot"
@@ -89,5 +90,44 @@ func TestModelAttemptDiagnosticsPersistThroughJournalAPIAndRestart(t *testing.T)
 	code, data, _ := f.request("GET", "/api/logs", nil, false, false)
 	if code != 200 || !bytes.Contains(data, []byte(`"model_attempts":2`)) || !bytes.Contains(data, []byte(`"model_http_status":503`)) {
 		t.Fatal("API stripped request diagnostics", code)
+	}
+}
+
+func TestFullExecutionContentSurvivesRestartAndArchive(t *testing.T) {
+	f := setup(t)
+	f.login()
+	f.manager.config.APIKey = "synthetic-secret"
+	body := strings.Repeat("画面观察与语音转录完整内容。", 1000) + "最后一句 synthetic-secret"
+	want := strings.ReplaceAll(body, "synthetic-secret", "[已隐藏密钥]")
+	f.manager.record(bot.Record{Event: "tool_completed", Content: body, MessageID: "synthetic-full"})
+	if f.manager.storageError != "" {
+		t.Fatal(f.manager.storageError)
+	}
+	if f.manager.journal[0].ContentRef == "" {
+		t.Fatal("full body was not persisted")
+	}
+	copy, err := NewManager(f.dir, "", f.native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copy.Close()
+	if got := copy.Logs()[0].Content; got != want {
+		t.Fatal("restart lost full content")
+	}
+	code, data, _ := f.request("GET", "/api/logs", nil, false, false)
+	if code != 200 || !bytes.Contains(data, []byte("最后一句 [已隐藏密钥]")) {
+		t.Fatal("API truncated full content", code)
+	}
+	if err := copy.commitJournalArchive(nil, copy.journal); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(f.dir, "archive", "activity", activityScope(), "*.json.gz"))
+	if len(matches) != 1 {
+		t.Fatal("missing archive", matches)
+	}
+	id := strings.TrimSuffix(filepath.Base(matches[0]), ".json.gz")
+	rows, err := copy.archiveLogs(id)
+	if err != nil || len(rows) != 1 || rows[0].Content != want {
+		t.Fatal("archive lost full body", err)
 	}
 }

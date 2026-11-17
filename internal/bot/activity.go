@@ -99,13 +99,7 @@ func messageSummary(m linuxnative.Message) string {
 	if !utf8.ValidString(body) {
 		return "[正文编码无效]"
 	}
-	if len(body) > 4096 {
-		body = body[:4096]
-		for !utf8.ValidString(body) {
-			body = body[:len(body)-1]
-		}
-		body += "…[截断]"
-	}
+
 	return body
 }
 func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {

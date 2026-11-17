@@ -394,3 +394,26 @@ func TestWrongConversationReceiptCannotSettleOrResend(t *testing.T) {
 		t.Fatal("late correct receipt lost", d)
 	}
 }
+
+func TestSegmentedReplyOnlyQuotesFirstAcrossRestart(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}, acceptRetry: true}
+	w := durableWorker(t, n)
+	in := companion.Input{Thread: "room@chatroom", TraceID: "synthetic-segments", QuoteServerID: "77", QuoteSharedMessage: true, Mode: "social"}
+	for bubble := 0; bubble < 3; bubble++ {
+		w.runtime.SendGates = nil
+		_, _ = w.sendText(context.Background(), in, bubble, "合成回复")
+		if len(n.submissions) != bubble+1 {
+			t.Fatalf("bubble %d missing", bubble)
+		}
+		if (n.submissions[bubble].Quote != nil) != (bubble == 0) {
+			t.Fatalf("wrong quote for bubble %d", bubble)
+		}
+		if err := w.loadRuntime("server-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _ = w.sendText(context.Background(), in, 0, "合成回复")
+	if len(n.submissions) != 3 {
+		t.Fatal("restart duplicated first segment")
+	}
+}

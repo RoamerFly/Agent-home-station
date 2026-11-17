@@ -71,5 +71,8 @@ func (m *Manager) archiveLogs(id string) ([]LogEntry, error) {
 	if json.Unmarshal(batch.Data, &items) != nil || len(items) > 128 {
 		return nil, errors.New("日志归档内容无效")
 	}
+	for i := range items {
+		m.restoreLogContent(&items[i])
+	}
 	return items, nil
 }

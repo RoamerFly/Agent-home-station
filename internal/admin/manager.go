@@ -43,6 +43,7 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	ContentRef             string                   `json:"content_ref,omitempty"`
 	MessageTime            string                   `json:"message_time,omitempty"`
 	SenderName             string                   `json:"sender_name,omitempty"`
 	RelatedMessageID       string                   `json:"related_message_id,omitempty"`
