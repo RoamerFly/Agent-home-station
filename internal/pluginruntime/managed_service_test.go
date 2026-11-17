@@ -89,6 +89,10 @@ func TestManagedServiceOwnedLifecycleBusyAndConfiguration(t *testing.T) {
 		{`{"a":{"state":"unknown"}}`, true}, {`{"a":{"state":"completed"}}`, false},
 		{`{"a":{"state":"cancelled"}}`, false}, {`invalid`, true}, {`null`, true},
 		{`{"a":null}`, true}, {`{"a":{}}`, true},
+		{`{"a":{"state":"needs_review","engine":"rvc","reason":"bridge_restarted_no_replay"}}`, false},
+		{`{"a":{"state":"needs_review","engine":"rvc","reason":"station_rvc_stopped_no_replay"}}`, false},
+		{`{"a":{"state":"needs_review","engine":"yue","reason":"bridge_restarted_no_replay"}}`, true},
+		{`{"a":{"state":"needs_review","engine":"rvc","reason":"provider_result_unknown"}}`, true},
 	} {
 		if err := os.WriteFile(spec.PendingJobsPath, []byte(item.data), 0600); err != nil {
 			t.Fatal(err)
