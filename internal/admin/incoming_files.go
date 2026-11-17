@@ -59,7 +59,10 @@ func (m *Manager) assetDirectory() string {
 	return filepath.Join(m.privateWorkspaceFor(m.native.Account()), "assets", "objects")
 }
 func (m *Manager) assetPath(hash string) string {
-	path := filepath.Join(m.assetDirectory(), hash)
+	path := filepath.Join(m.assetDirectory(), m.storedAssetName(hash))
+	if _, e := os.Stat(path); os.IsNotExist(e) {
+		path = filepath.Join(m.assetDirectory(), hash)
+	}
 	if _, e := os.Stat(path); os.IsNotExist(e) {
 		return filepath.Join(m.dir, "media-assets", hash)
 	}
@@ -342,7 +345,10 @@ func (m *Manager) openAsset(hash string) (*os.File, error) {
 	}
 	accountRoot, e := os.OpenRoot(m.privateWorkspaceFor(m.native.Account()))
 	if e == nil {
-		f, err := accountRoot.Open(filepath.Join("assets", "objects", hash))
+		f, err := accountRoot.Open(filepath.Join("assets", "objects", m.storedAssetName(hash)))
+		if os.IsNotExist(err) {
+			f, err = accountRoot.Open(filepath.Join("assets", "objects", hash))
+		}
 		accountRoot.Close()
 		if err == nil {
 			return f, nil

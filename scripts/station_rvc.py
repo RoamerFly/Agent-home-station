@@ -395,7 +395,10 @@ def verify_output(state, jid, output, profile):
         _fail("station_rvc_output_invalid")
     expected_name = jid + "-rvc.wav"
     if output.get("file") not in (None, expected_name):
-        _fail("station_rvc_output_invalid")
+        supplied=output.get("file")
+        if not isinstance(supplied,str) or Path(supplied).name!=supplied or not supplied.endswith("-"+jid[:8]+".wav"):
+            _fail("station_rvc_output_invalid")
+        expected_name=supplied
     wav = _regular(state / expected_name, "station_rvc_output_invalid", _MAX_WAV)
     sidecar, voice = _json_object(state / (jid + "-rvc.voice.json"), _MAX_SIDECAR, "station_rvc_output_invalid")
     if voice.get("profile") != expected["profile"] or str(voice.get("engine", "")).lower() != "rvc":
@@ -460,7 +463,7 @@ def read_output(state, jid, job):
     verified = verify_output(state, jid, output, profile)
     if job.get("bytes") != verified["bytes"] or job.get("sha256") != verified["sha256"]:
         _fail("station_rvc_output_invalid")
-    wav = _regular(_directory(state, "station_rvc_output_invalid") / (jid + "-rvc.wav"), "station_rvc_output_invalid", _MAX_WAV)
+    wav = _regular(_directory(state, "station_rvc_output_invalid") / verified["file"], "station_rvc_output_invalid", _MAX_WAV)
     try:
         with wav.open("rb") as source:
             data = source.read(_MAX_WAV + 1)

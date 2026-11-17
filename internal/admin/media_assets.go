@@ -56,6 +56,7 @@ type assetFormat struct {
 	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
+	StorageName   string `json:"stored_filename,omitempty"`
 	VoiceID       string `json:"voice_id,omitempty"`
 	VoiceEngine   string `json:"voice_engine,omitempty"`
 	VoiceProfile  string `json:"voice_profile_id,omitempty"`
@@ -122,6 +123,11 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 	return items, err
 }
 func (m *Manager) saveAssets(items []mediaAsset) error {
+	var namingErr error
+	items, namingErr = m.nameAssetFiles(items)
+	if namingErr != nil {
+		return namingErr
+	}
 	// History is committed first. An interrupted index replacement can retain
 	// extra verified associations, but must never erase an older association.
 	compact := append([]mediaAsset{}, items...)
@@ -142,6 +148,9 @@ func (m *Manager) saveAssets(items []mediaAsset) error {
 	}
 	if e = writePrivate(filepath.Join(m.dir, "media-assets.json"), b); e != nil {
 		return e
+	}
+	if err := m.publishAssetNames(items); err != nil {
+		return err
 	}
 	return m.indexMemoryAssets(items)
 }
@@ -288,6 +297,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		a.URL = u.String()
 	}
 	if index >= 0 {
+		a.StorageName = items[index].StorageName
 		if a.VoiceID == "" {
 			a.VoiceID = items[index].VoiceID
 			a.VoiceEngine = items[index].VoiceEngine
@@ -361,6 +371,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	}
 
 	if index >= 0 {
+		a.StorageName = items[index].StorageName
 		items[index] = a
 	} else {
 		items = append(items, a)

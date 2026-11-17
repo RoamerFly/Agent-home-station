@@ -1,48 +1,48 @@
 package station
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"wechat-bot/internal/websession"
 )
 
-func quarantineToolFile(file toolFile, dataRoot, pendingRoot string) (string, error) {
-	root, err := filepath.Abs(dataRoot)
-	if err != nil {
-		return "", err
-	}
-	source, err := filepath.EvalSymlinks(file.Path)
-	if err != nil || !strings.EqualFold(source, filepath.Clean(file.Path)) {
+func regularToolDigest(f toolFile, dataRoot string) (string, error) {
+	resolved, e := filepath.EvalSymlinks(f.Path)
+	if e != nil || !strings.EqualFold(resolved, filepath.Clean(f.Path)) {
 		return "", errors.New("文件路径已变化")
 	}
-	relative, err := filepath.Rel(root, source)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("文件不在工作站数据目录")
+	rel, e := filepath.Rel(dataRoot, resolved)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("文件不在数据目录")
 	}
-	target := filepath.Join(pendingRoot, relative)
-	if err = os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-		return "", err
+	file, e := os.Open(resolved)
+	if e != nil {
+		return "", e
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(target))
-	if err != nil || !strings.EqualFold(parent, filepath.Dir(target)) {
-		return "", errors.New("待删除目录包含链接")
+	defer file.Close()
+	info, e := file.Stat()
+	if e != nil || !info.Mode().IsRegular() {
+		return "", errors.New("文件不是普通文件")
 	}
-	if _, err = os.Lstat(target); !os.IsNotExist(err) {
-		return "", errors.New("待删除目录已有同名文件")
+	h := sha256.New()
+	_, e = io.Copy(h, file)
+	if e != nil {
+		return "", e
 	}
-	if err = os.Rename(source, target); err != nil {
-		return "", errors.New("文件正在使用、无权移动或目标不在同一磁盘；原文件保留")
-	}
-	return target, nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 func (s *localProjectTools) toolFileDeleteRoute(owner *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/local/tool-files/delete", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			IDs []string `json:"ids"`
+			IDs     []string `json:"ids"`
+			Preview bool     `json:"preview"`
 		}
 		if !websession.Decode(w, r, &in) {
 			return
@@ -52,17 +52,12 @@ func (s *localProjectTools) toolFileDeleteRoute(owner *websession.Store, mux *ht
 			return
 		}
 		files, warnings := s.toolFiles(r.Context())
-		if r.Context().Err() != nil {
-			return
-		}
 		byID := map[string]toolFile{}
 		for _, f := range files {
 			byID[f.ID] = f
 		}
-		// One unique batch prevents overwriting prior user-deleted artifacts.
-		batch := filepath.Join(`E:\待删除`, "tool-files-"+time.Now().Format("20060102-150405.000000000"))
-		moved := []map[string]string{}
-		failed := []map[string]string{}
+		hashes := []string{}
+		locals := []toolFile{}
 		seen := map[string]bool{}
 		for _, id := range in.IDs {
 			if seen[id] {
@@ -71,20 +66,62 @@ func (s *localProjectTools) toolFileDeleteRoute(owner *websession.Store, mux *ht
 			seen[id] = true
 			f, ok := byID[id]
 			if !ok {
-				failed = append(failed, map[string]string{"id": id, "reason": "文件已变化或不在正式文件列表，请刷新"})
-				continue
+				websession.Fail(w, 409, "文件已变化，请刷新后重新选择")
+				return
 			}
 			if f.State == "running" || f.State == "queued" {
-				failed = append(failed, map[string]string{"id": id, "reason": "任务仍在运行"})
-				continue
+				websession.Fail(w, 409, "任务仍在运行，请先停止")
+				return
 			}
-			path, err := quarantineToolFile(f, s.home.dataDir, batch)
-			if err != nil {
-				failed = append(failed, map[string]string{"id": id, "reason": err.Error()})
-				continue
+			h, e := regularToolDigest(f, s.home.dataDir)
+			if e != nil {
+				websession.Fail(w, 409, e.Error())
+				return
 			}
-			moved = append(moved, map[string]string{"id": id, "from": f.Path, "to": path})
+			hashes = append(hashes, h)
+			if !strings.Contains(filepath.ToSlash(f.Path), "/applications/wechat/legacy-admin/") {
+				locals = append(locals, f)
+			}
 		}
-		websession.Respond(w, 200, map[string]any{"moved": moved, "failed": failed, "warnings": warnings})
+		out := struct {
+			Files    []string `json:"files"`
+			Deleted  []string `json:"deleted"`
+			Failures []string `json:"failures"`
+			Warnings []string `json:"warnings"`
+		}{Files: []string{}, Deleted: []string{}, Failures: []string{}, Warnings: warnings}
+		if !in.Preview {
+			for _, f := range locals {
+				var e error
+				p := filepath.ToSlash(f.Path)
+				if strings.Contains(p, "/publictools/rvc/") && s.rvc != nil {
+					e = s.rvc.Stop(r.Context())
+				}
+				if strings.Contains(p, "/publictools/yue/") && s.yue != nil {
+					e = s.yue.Stop(r.Context())
+				}
+				if e != nil {
+					websession.Fail(w, 409, e.Error())
+					return
+				}
+			}
+		}
+		if len(hashes) > 0 {
+			client, e := s.legacyToolClient(r.Context())
+			if e != nil {
+				websession.Fail(w, 503, e.Error())
+				return
+			}
+			raw, e := client.request(r.Context(), "POST", "/api/storage/media-delete", map[string]any{"hashes": hashes, "preview": in.Preview})
+			if e != nil {
+				websession.Fail(w, 409, e.Error())
+				return
+			}
+			if json.Unmarshal(raw, &out) != nil {
+				websession.Fail(w, 502, "删除结果不可读")
+				return
+			}
+		}
+
+		websession.Respond(w, 200, out)
 	}))
 }

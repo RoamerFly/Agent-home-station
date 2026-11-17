@@ -121,6 +121,7 @@ func (m *Manager) storageStatus(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"partial": partial, "areas": areas, "total_bytes": total, "error": lastError, "limits": []map[string]any{{"name": "持续任务", "count": tasks, "limit": 500}, {"name": "操作幂等记录", "count": ops, "limit": 2000}, {"name": "网页发送记录", "count": sends, "limit": 1000}, {"name": "附件暂存记录", "count": uploads, "limit": 1000}, {"name": "活跃日志", "count": journalCount, "limit": 1000}}, "boundary": "仅统计管理端数据和收件状态，不含外部YuE环境、模型、微信原生库及其媒体。归档会增加总占用，不自动删除媒体原件。"}, nil
 }
 func (s *Server) storageRoutes(mux *http.ServeMux) {
+	s.mediaDeletionRoutes(mux)
 	mux.HandleFunc("GET /api/storage", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.manager.storageStatus(r.Context())
 		if err != nil {

@@ -7459,11 +7459,15 @@
     }
   });
   $("#tool-files-select-all").addEventListener("change",()=>{for(const box of $("#tool-files-list").querySelectorAll("input[type=checkbox]")){box.checked=$("#tool-files-select-all").checked;box.closest(".tool-file-row").classList.toggle("is-selected",box.checked);if(box.checked)selectedToolFiles.add(box.dataset.fileId);else selectedToolFiles.delete(box.dataset.fileId);}updateFileSelection();});
-  $("#tool-files-delete").addEventListener("click",async()=>{
-    if(!selectedToolFiles.size||!window.confirm(`将选中的 ${selectedToolFiles.size} 个文件移至 E:\\待删除？`))return;
-    $("#tool-files-delete").disabled=true;
-    try{const result=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids:[...selectedToolFiles]})});await loadToolFiles(false);$("#tool-files-status").textContent=`已移动 ${result.moved.length} 个文件至待删除目录。${result.failed.length ? "部分未移动："+result.failed.map(x=>x.reason).join("；") : ""}`;}
-    catch(error){$("#tool-files-status").textContent=error.message;}finally{updateFileSelection();}
+  $("#tool-files-delete").addEventListener("click", async()=>{
+    if(!selectedToolFiles.size)return;
+    const ids=[...selectedToolFiles];$("#tool-files-delete").disabled=true;
+    try{
+      const preview=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids,preview:true})});
+      if(!window.confirm(`永久删除选中的资源及关联文件，共 ${preview.files.length} 个文件？\n素材索引和任务输出引用也会清理，此操作不可恢复。\n\n${preview.files.join("\n")}`))return;
+      const result=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids})});
+      await loadToolFiles(false);$("#tool-files-status").textContent=`已永久删除 ${result.deleted.length} 个文件。${result.failures.length ? "未删除："+result.failures.join("；") : "关联索引已更新。"}`;
+    }catch(error){$("#tool-files-status").textContent=error.message;}finally{updateFileSelection();}
   });
   $("#tool-files-tab").addEventListener("click", () => selectToolPanel(true));
   $("#tool-catalog-tab").addEventListener("click", () => selectToolPanel(false));

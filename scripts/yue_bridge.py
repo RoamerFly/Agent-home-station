@@ -24,6 +24,28 @@ import wave
 from urllib.parse import parse_qs, urlsplit
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
+def publish_readable_output(state, jid, job, save):
+    if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid): return
+    filename=job.get('file','')
+    if not filename or Path(filename).name!=filename: return
+    source=Path(state)/filename
+    if not source.is_file() or source.is_symlink(): return
+    recipe=job.get('recipe') or {}
+    title=recipe.get('title') or '音乐作品'
+    title=re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', title).strip(' .')[:90] or '音乐作品'
+    name=title+'-'+jid[:8]+source.suffix.lower()
+    if filename==name:return
+    target=source.with_name(name)
+    if target.exists():return
+    previous=copy.deepcopy(job)
+    source.rename(target)
+    job['file']=name
+    for key in ('output','result'):
+        if isinstance(job.get(key),dict) and job[key].get('file')==filename:job[key]['file']=name
+    try:save()
+    except Exception:
+        job.clear();job.update(previous);target.rename(source);raise
+
 def archive_completed_intermediates(state, jid, job, pending_root=None):
     """Only reclaim this completed job's scratch, after durable final output exists."""
     if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid):
@@ -412,6 +434,7 @@ def main():
             if station:job['phase']='needs_review'
     save()
     for key,job in jobs.items():
+        publish_readable_output(state,key,job,save)
         archive_completed_intermediates(state,key,job)
     def api(route,body=None,timeout=20):
         req=urllib.request.Request(comfy_url+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
@@ -476,6 +499,7 @@ def main():
                         api('/free',{'unload_models':True,'free_memory':True})
                         output=convert_singing_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'),sandbox=sandbox)
                     with lock:jobs[jid].update(state='completed',phase='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
+                    with lock:publish_readable_output(state,jid,jobs[jid],save)
                     archive_completed_intermediates(state,jid,jobs[jid])
                     return
                 time.sleep(1)
@@ -533,6 +557,7 @@ def main():
                     persist_job(jid,{**output,'state':'completed','phase':'completed'})
                 else:
                     jobs[jid].update(output,state='completed',phase='completed');save()
+            with lock:publish_readable_output(state,jid,jobs[jid],save)
             archive_completed_intermediates(state,jid,jobs[jid])
         except Exception as error:
             with lock:
@@ -604,6 +629,7 @@ def main():
             with lock:job=dict(jobs.get(jid,{}))
             if not job:return self.reply(404,{'error':'not_found'})
             if len(parts)==3 and parts[2]=='audio':
+                if job.get('output_deleted'):return self.reply(410,{'error':'output_deleted_by_owner'})
                 if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
                 file=state/job['file'];data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','audio/flac' if file.suffix=='.flac' else 'audio/wav');self.send_header('Content-Length',str(len(data)))
                 if bound_account:self.send_header(ACCOUNT_HEADER,bound_account)
@@ -636,6 +662,7 @@ def main():
             with lock:job=dict(jobs.get(jid,{}))
             if not job:return self.reply(404,{'error':'not_found'})
             if not match[2]:return self.reply(200,self.job_view(job))
+            if job.get('output_deleted'):return self.reply(410,{'error':'output_deleted_by_owner'})
             if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
             try:data=station_rvc.read_output(state,jid,job)
             except (OSError,ValueError):

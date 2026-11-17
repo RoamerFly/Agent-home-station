@@ -294,7 +294,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	// derived media search records. A copied SQLite database may legitimately
 	// arrive before its media-assets manifest during recovery.
 	if assets, err := m.loadAssetsSnapshot(); err == nil && assets != nil {
-		if err = m.indexMemoryAssets(assets); err != nil {
+		if err = m.saveAssets(assets); err != nil {
 			return nil, err
 		}
 		sources := map[string]map[string]companion.MediaMemory{}

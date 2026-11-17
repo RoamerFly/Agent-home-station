@@ -139,6 +139,7 @@ func (s *localProjectTools) toolFiles(ctx context.Context) ([]toolFile, []string
 	// Read private provenance on demand; never copy conversation metadata into public packages.
 	var assets []struct {
 		Hash, Title, Filename string
+		StorageName           string `json:"stored_filename"`
 		FirstRequest          *struct {
 			Name string `json:"requester_name"`
 			Text string `json:"request"`
@@ -155,6 +156,9 @@ func (s *localProjectTools) toolFiles(ctx context.Context) ([]toolFile, []string
 	for i, a := range assets {
 		if a.Hash != "" {
 			byHash[a.Hash] = i
+			if a.StorageName != "" {
+				byHash[a.StorageName] = i
+			}
 		}
 	}
 	for i := range out {
@@ -163,6 +167,9 @@ func (s *localProjectTools) toolFiles(ctx context.Context) ([]toolFile, []string
 			item := assets[a]
 			if item.Filename != "" {
 				f.Name = item.Filename
+				if item.StorageName != "" {
+					f.Name = item.StorageName
+				}
 			}
 			if item.FirstRequest != nil {
 				f.Source = "微信请求 · " + item.FirstRequest.Name + " · " + item.FirstRequest.Text
@@ -186,10 +193,13 @@ func (s *localProjectTools) toolFiles(ctx context.Context) ([]toolFile, []string
 			ledgers[ledger] = jobs
 		}
 		for id, job := range jobs {
+			if job.File != "" && strings.HasPrefix(filepath.Base(item.Path), id) && filepath.Base(job.File) != filepath.Base(item.Path) {
+				item.Kind = ""
+			}
 			if job.File != "" && (filepath.Clean(job.File) == item.Path || filepath.Base(job.File) == item.Name) {
 				item.JobID = id
 				item.State = job.State
-				if strings.HasPrefix(job.Recipe.Title, "本机目录验证-") || strings.HasPrefix(job.Recipe.Title, "bridge-smoke") {
+				if strings.HasPrefix(job.Recipe.Title, "本机目录验证-") || strings.HasPrefix(job.Recipe.Title, "目录迁移本机验证") || strings.HasPrefix(job.Recipe.Title, "bridge-smoke") {
 					item.Kind = ""
 				}
 				break

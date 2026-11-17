@@ -58,28 +58,6 @@ func TestLifecycleCatalogIncludesAllOfficialTools(t *testing.T) {
 	}
 }
 
-func TestQuarantineFilePreservesBytesAndRejectsOutside(t *testing.T) {
-	root := t.TempDir()
-	pending := t.TempDir()
-	p := filepath.Join(root, "song.wav")
-	os.WriteFile(p, []byte("song"), 0600)
-	target, err := quarantineToolFile(toolFile{Path: p}, root, pending)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(target)
-	if string(b) != "song" {
-		t.Fatal("bytes lost")
-	}
-	if _, err = os.Stat(p); !os.IsNotExist(err) {
-		t.Fatal("source not moved")
-	}
-	outside := filepath.Join(t.TempDir(), "outside.wav")
-	os.WriteFile(outside, []byte("keep"), 0600)
-	if _, err = quarantineToolFile(toolFile{Path: outside}, root, pending); err == nil {
-		t.Fatal("outside data root moved")
-	}
-}
 func TestFormalToolFilesHideScratchAndValidation(t *testing.T) {
 	for _, p := range []string{"/data/a/null-1.tmp", "/data/music/x-voice-work/vocals.wav", "/data/validation-20261117/mom.wav", "/data/music/input/source.wav"} {
 		if toolFileKind(p) != "" {

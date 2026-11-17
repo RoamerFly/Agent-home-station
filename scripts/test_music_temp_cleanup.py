@@ -1,7 +1,7 @@
 import sys,unittest,tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from yue_bridge import archive_completed_intermediates
+from yue_bridge import archive_completed_intermediates, publish_readable_output
 class CleanupTests(unittest.TestCase):
  def test_completed_keeps_final_and_download(self):
   with tempfile.TemporaryDirectory() as d:
@@ -14,6 +14,13 @@ class CleanupTests(unittest.TestCase):
    job['state']='completed';self.assertEqual(len(archive_completed_intermediates(state,jid,job,root/'pending')),2)
    self.assertTrue(final.exists());self.assertTrue((state/'download.mp3').exists());self.assertFalse(work.exists())
    self.assertEqual(archive_completed_intermediates(state,jid,job,root/'pending'),[])
+ def test_readable_output_updates_job_and_survives_restart(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);jid='c'*32;source=root/(jid+'-rvc.wav');source.write_bytes(b'final')
+   job={'state':'completed','file':source.name,'recipe':{'title':'夜曲-大肥鱼翻唱'},'output':{'file':source.name}}
+   saved=[];publish_readable_output(root,jid,job,lambda:saved.append(dict(job)))
+   self.assertTrue((root/job['file']).is_file());self.assertEqual(job['output']['file'],job['file']);self.assertIn('夜曲-大肥鱼翻唱',job['file']);self.assertFalse(source.exists());self.assertEqual(len(saved),1)
+   publish_readable_output(root,jid,job,lambda:saved.append(dict(job)));self.assertEqual(len(saved),1)
  def test_missing_or_changed_final_keeps_scratch(self):
   with tempfile.TemporaryDirectory() as d:
    state=Path(d);jid='b'*32;work=state/(jid+'-rvc-voice-work');work.mkdir()
