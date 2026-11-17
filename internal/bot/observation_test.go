@@ -11,6 +11,15 @@ import (
 
 type unavailableShareAnalyzer struct{}
 
+func TestPublicShareTransportFailureCanRetryButBrowserChallengeCannot(t *testing.T) {
+	if !retryableObservationReason("share_public_read_failed") {
+		t.Fatal("transient public read lost recovery")
+	}
+	if retryableObservationReason("share_requires_browser") {
+		t.Fatal("browser requirement must not spin HTTP retries")
+	}
+}
+
 func (unavailableShareAnalyzer) Analyze(context.Context, linuxnative.Message) (string, error) {
 	return "", &ObservationUnavailableError{Observation: "未能读取视频，需要浏览器", Reason: "shared_video_share_requires_browser"}
 }

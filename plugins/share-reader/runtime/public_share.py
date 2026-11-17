@@ -316,8 +316,15 @@ class ShareHTML(HTMLParser):
         self.base, self.hidden, self.title_depth = base, 0, 0
         self.title, self.parts, self.media = [], [], []
         self.video_depth = 0
+        self.structured_depth = 0
+        self.structured_parts = []
+        self.structured = []
 
     def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "script" and values.get("type", "").lower().split(";", 1)[0].strip() == "application/ld+json":
+            self.structured_depth = 1
+            self.structured_parts = []
         if tag in ("script", "style", "template", "noscript"):
             self.hidden += 1
         if self.hidden:
@@ -346,6 +353,12 @@ class ShareHTML(HTMLParser):
                     pass
 
     def handle_endtag(self, tag):
+        if tag == "script" and self.structured_depth:
+            try:
+                self.structured.append(json.loads("".join(self.structured_parts)))
+            except (ValueError, RecursionError):
+                pass
+            self.structured_depth = 0
         if tag in ("script", "style", "template", "noscript"):
             self.hidden = max(0, self.hidden - 1)
         if tag == "title":
@@ -354,8 +367,42 @@ class ShareHTML(HTMLParser):
             self.video_depth = max(0, self.video_depth - 1)
 
     def handle_data(self, text):
+        if self.structured_depth:
+            self.structured_parts.append(text)
         if not self.hidden:
             (self.title if self.title_depth else self.parts).append(text)
+
+    def structured_media(self):
+        # Only VideoObject contentUrl is a media locator. embedUrl is a page,
+        # thumbnails and arbitrary script URLs are not video observations.
+        def walk(value, depth=0):
+            if depth > 32:
+                return
+            if isinstance(value, dict):
+                types = value.get("@type", [])
+                if isinstance(types, str):
+                    types = [types]
+                if "VideoObject" in types:
+                    urls = value.get("contentUrl", [])
+                    if isinstance(urls, str):
+                        urls = [urls]
+                    if isinstance(urls, list):
+                        for raw in urls:
+                            try:
+                                if not isinstance(raw, str) or not raw:
+                                    continue
+                                locator = public_url(urljoin(self.base, raw))
+                                if locator not in self.media:
+                                    self.media.append(locator)
+                            except ValueError:
+                                pass
+                for child in value.values():
+                    walk(child, depth + 1)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child, depth + 1)
+        for value in self.structured:
+            walk(value)
 
 
 def resolve(args, get):
@@ -433,6 +480,10 @@ def resolve(args, get):
                     raise ValueError("host_response_exceeds_requested_bytes")
                 title, duration, locators = kuaishou_photo(content.decode("utf8", errors="replace"), identity)
                 final = public_url(replacement["url"])
+        elif kind == "text/plain" and not args.get("video_required"):
+            text = decoded.strip()
+            if not text:
+                raise ValueError("share_content_empty")
         else:
             host = urlsplit(final).hostname
             if is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
@@ -441,6 +492,7 @@ def resolve(args, get):
                 raise ValueError("share_platform_adapter_required")
             parser = ShareHTML(final)
             parser.feed(decoded)
+            parser.structured_media()
             title = " ".join(" ".join(parser.title).split())
             text = " ".join(" ".join(parser.parts).split())
             locators = parser.media

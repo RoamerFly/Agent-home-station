@@ -72,6 +72,8 @@ const maxDurableToolRetries = 6
 
 func retryableObservationReason(reason string) bool {
 	switch reason {
+	case "share_public_read_failed":
+		return true
 	case "plugin_cold_start_failed", "share_plugin_runtime_unavailable", "share_plugin_store_unavailable", "share_plugin_start_failed", "share_bridge_unavailable", "share_native_source_unavailable", "incoming_file_download_failed", "incoming_media_download_failed", "media_read_timeout", "media_plugin_runtime_unavailable", "media_plugin_start_failed":
 		return true
 	default:

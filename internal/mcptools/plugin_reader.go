@@ -20,7 +20,8 @@ func ReadPublicPluginShareSource(ctx context.Context, raw string, maxBytes int64
 	// generic tool user-agent. Reuse the existing read-only Kuaishou request
 	// policy so the plugin receives the same public page that the native media
 	// reader accepts; this does not add cookies or authenticated state.
-	if kuaishouPhotoID(raw) != "" {
+	u, _ := url.Parse(raw)
+	if kuaishouPhotoID(raw) != "" || u != nil && u.Hostname() == "v.kuaishou.com" {
 		ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
 	}
 	return ReadPublicPluginPage(context.WithValue(ctx, publicPluginMediaProbeKey{}, true), raw, maxBytes, timeout)

@@ -234,6 +234,26 @@ func TestShareRequestConflictIsSafeDiagnostic(t *testing.T) {
 	}
 }
 
+func TestPublicShareUpgradeChangesReadOnlyRequestIdentity(t *testing.T) {
+	_, p, _, ctx := publicPolicyFixture(t, false, 4)
+	i, err := p.store.Installed(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := p.store.Configuration(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := json.RawMessage(`{"url":"https://public.example/video","video_required":true}`)
+	p.setReadOnlyResolutionSnapshot(args, i, cfg)
+	before := p.invocation().RequestKey
+	i.Digest = strings.Repeat("b", 64)
+	p.setReadOnlyResolutionSnapshot(args, i, cfg)
+	if before == p.invocation().RequestKey {
+		t.Fatal("updated public parser reused old job")
+	}
+}
+
 func TestReceivedMediaReadIdentityIncludesEvidenceEpoch(t *testing.T) {
 	for _, tool := range []string{"media.observe", "media.transcribe", "media.listen"} {
 		p := &receivedSharePolicy{tool: tool, epoch: "one", source: companion.SourceRef{EventID: "source", Revision: 1}, message: linuxnative.Message{AccountID: "account", ThreadID: "thread", SenderID: "member", ID: "message"}, fingerprint: "fingerprint", requestSuffix: "same-binary-input"}

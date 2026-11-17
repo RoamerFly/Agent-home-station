@@ -1,5 +1,12 @@
 # 变更
 
+## 0.1.9（公开链接读取升级）
+
+- 兼容快手短链的轮换落地域名，保持原作品身份。
+- 解析 JSON-LD VideoObject 的真实 contentUrl；不把嵌入页、封面或描述当成视频。
+- 支持短纯文本链接，不再因不足120字拒绝有效文本。
+- 部署后需更新已安装快照并核对摘要，保留既有凭据与启用状态。
+
 ## 0.1.7（来源绑定兼容修复）
 
 - 兼容成功 feed 省略 numeric objectId 的响应：仅在本次 parse 取得的 export 与 feed.sceneInfo.dynamicExportId 精确一致，且宿主已绑定原生对象身份时，延续该原生对象身份。显式 objectId 仍须逐字匹配；缺失或冲突的 export 不放行。

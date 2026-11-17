@@ -253,15 +253,15 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 
 // setReadOnlyResolutionSnapshot makes the request key track every immutable
 // input which the runtime stores in its job fingerprint.  It is intentionally
-// limited to share.resolve_channels: other tools have distinct side-effect and
+// limited to read-only share resolution: other tools have distinct side-effect and
 // replay contracts.  The digest is a one-way identifier, so neither a short
 // link nor private configuration is exposed in the durable request key.
 func (p *receivedSharePolicy) setReadOnlyResolutionSnapshot(raw json.RawMessage, installed pluginhost.InstalledPackage, configuration pluginhost.Configuration) {
-	if p.tool != "share.resolve_channels" {
+	if p.tool != "share.resolve_channels" && p.tool != "share.resolve_public" {
 		return
 	}
 	p.resolutionSnapshotSuffix = "snapshot-" + agentID(
-		"share.resolve_channels.readonly.v1",
+		p.tool+".readonly.v1",
 		p.requestSuffix,
 		string(raw),
 		p.source.EventID,

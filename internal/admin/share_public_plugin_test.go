@@ -225,6 +225,13 @@ func TestPublicShareLocatorEvidenceEscaping(t *testing.T) {
 	}
 }
 
+func TestPublicShareRelativeJSONLocatorEvidence(t *testing.T) {
+	got := publicShareLocations([]byte(`<script type="application/ld+json">{"@type":"VideoObject","contentUrl":"../media/video.mp4"}</script>`), "https://page.example/news/work")
+	if !got["https://page.example/media/video.mp4"] {
+		t.Fatal("relative structured media lost")
+	}
+}
+
 func TestPublicShareDisabledNeverFallsBack(t *testing.T) {
 	f, p, _, ctx := publicPolicyFixture(t, false, 4)
 	i, err := p.store.Installed(ctx, "share-reader")

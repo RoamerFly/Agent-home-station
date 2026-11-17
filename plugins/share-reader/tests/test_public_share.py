@@ -42,6 +42,28 @@ def init_state():
 
 
 class PublicShareTests(unittest.TestCase):
+    def test_jsonld_video_content_url_is_observed_locator_not_description(self):
+        page = 'https://public.example/article'
+        body = '<script type="application/ld+json">'+json.dumps({'@graph':[
+            {'@type':'VideoObject','contentUrl':'/actual.mp4','thumbnailUrl':'/cover.jpg','description':'not observed'},
+            {'@type':'ImageObject','contentUrl':'/wrong.jpg'}]})+'</script>'
+        result = parser.resolve({'url':page,'video_required':True}, lambda *a:response(body,page))
+        self.assertEqual(result['private_media_locators'], ['https://public.example/actual.mp4'])
+        self.assertEqual(result['text'], '')
+        self.assertFalse(result['video_observed'])
+
+    def test_plain_text_short_information_is_not_rejected_by_length(self):
+        page='https://public.example/info.txt'
+        result=parser.resolve({'url':page},lambda *a:response('开放时间：9:00-17:00',page,'text/plain'))
+        self.assertEqual(result['text'],'开放时间：9:00-17:00')
+        self.assertEqual(result['coverage'],'page_text')
+
+    def test_jsonld_embed_page_is_not_a_downloadable_video(self):
+        page='https://public.example/video'
+        body='<script type="application/ld+json">'+json.dumps({'@type':'VideoObject','embedUrl':'/player','thumbnailUrl':'/cover.jpg'})+'</script>'
+        with self.assertRaisesRegex(ValueError,'share_requires_browser'):
+            parser.resolve({'url':page,'video_required':True},lambda *a:response(body,page))
+
     def test_current_init_state_shape_is_parsed_for_exact_work(self):
         result = parser.resolve({"url": PAGE}, lambda *a: response(init_state()))
         self.assertEqual(result["title"], "INIT_STATE 合成视频")

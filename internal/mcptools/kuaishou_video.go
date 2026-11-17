@@ -25,7 +25,7 @@ func kuaishouPhotoID(raw string) string {
 	if err != nil || validPublicURL(raw) != nil || len(raw) > 8192 || u.Port() != "" {
 		return ""
 	}
-	if u.Hostname() != "v.m.chenzhongtech.com" && u.Hostname() != "www.kuaishou.com" && u.Hostname() != "kuaishou.com" {
+	if !isKuaishouPageHost(u.Hostname()) {
 		return ""
 	}
 	m := kuaishouPhotoPath.FindStringSubmatch(u.Path)
@@ -36,6 +36,10 @@ func kuaishouPhotoID(raw string) string {
 		return ""
 	}
 	return m[1]
+}
+
+func isKuaishouPageHost(host string) bool {
+	return host == "www.kuaishou.com" || host == "kuaishou.com" || strings.HasSuffix(host, ".m.chenzhongtech.com")
 }
 
 type kuaishouPhoto struct {

@@ -157,6 +157,9 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 }
 
 func sharedVideoReadReason(err error) string {
+	if err != nil && err.Error() == "share_public_read_failed" {
+		return "share_public_read_failed"
+	}
 	var startup *pluginruntime.EnsureStartedError
 	if errors.As(err, &startup) {
 		return startup.Code

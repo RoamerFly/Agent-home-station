@@ -793,7 +793,7 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 	}
 	if enabled, _ := ctx.Value(kuaishouRequestKey{}).(bool); enabled {
 		host := req.URL.Hostname()
-		if host == "www.kuaishou.com" || host == "kuaishou.com" || host == "v.m.chenzhongtech.com" {
+		if isKuaishouPageHost(host) || host == "v.kuaishou.com" {
 			// Kuaishou's share SSR serves a small {"result":2} shell to
 			// desktop Chrome, while the same public work returns its exact
 			// INIT_STATE to a mobile client. Keep this fixed and credential-free;

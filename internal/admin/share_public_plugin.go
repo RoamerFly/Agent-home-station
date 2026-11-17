@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
@@ -161,6 +162,13 @@ func publicShareLocations(body []byte, base string) map[string]bool {
 		var decoded string
 		if json.Unmarshal([]byte(token), &decoded) == nil {
 			add(decoded)
+			if strings.HasPrefix(decoded, "/") || strings.HasPrefix(decoded, "./") || strings.HasPrefix(decoded, "../") {
+				if baseURL, e := url.Parse(base); e == nil {
+					if relative, e := url.Parse(decoded); e == nil {
+						add(baseURL.ResolveReference(relative).String())
+					}
+				}
+			}
 		}
 	}
 	u, err := url.Parse(base)
@@ -212,7 +220,15 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 	if p.bytes+in.MaxBytes > 32<<20 {
 		return json.Marshal(map[string]any{"ok": false, "error": "share_read_evidence_budget_exhausted"})
 	}
+	started := time.Now()
+	callID := agentID(j.ID, in.URL, strconv.FormatInt(started.UnixNano(), 10))
+	p.manager.record(bot.Record{Event: "tool_started", Category: "tool", ThreadID: p.message.ThreadID, MessageID: p.message.ID, Tool: "share.resolve_public", ToolStage: "read_public_page", CallID: callID, TargetURL: sharePublicURL(in.URL), Status: "running", Origin: "media"})
 	body, kind, final, err := p.read(ctx, in.URL, in.MaxBytes, time.Duration(in.Timeout)*time.Second)
+	state, code := "succeeded", ""
+	if err != nil {
+		state, code = "failed", "share_public_read_failed"
+	}
+	p.manager.record(bot.Record{Event: "tool_completed", Category: "tool", ThreadID: p.message.ThreadID, MessageID: p.message.ID, Tool: "share.resolve_public", ToolStage: "read_public_page", CallID: callID, TargetURL: sharePublicURL(in.URL), Status: state, ToolCode: code, Bytes: int64(len(body)), DurationMS: time.Since(started).Milliseconds(), Origin: "media"})
 	if err != nil {
 		return json.Marshal(map[string]any{"ok": false, "error": "public_read_failed"})
 	}
@@ -324,9 +340,28 @@ func (p *publicSharePolicy) resolve(ctx context.Context) (publicShareObservation
 		return result, j, err
 	}
 	args, _ := json.Marshal(map[string]any{"url": p.requestedURL, "video_required": p.videoRequired})
-	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
+	configuration, err := p.store.Configuration(ctx, j.Plugin)
 	if err != nil {
-		return result, out.Job, errors.New("share_plugin_resolution_incomplete")
+		return result, j, err
+	}
+	p.setReadOnlyResolutionSnapshot(args, i, configuration)
+	j.Context = p.invocation()
+	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
+	// A failed read is not a completed checkpoint. On a subsequent authorized
+	// read, retry transient transport failures with a new immutable job while
+	// retaining the original failure. Successful parses still deduplicate.
+	if err == nil && out.Reused && out.Job.State == "failed" {
+		var failure struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(out.Job.Result, &failure) == nil && failure.Error == "public_read_failed" {
+			p.resolutionSnapshotSuffix += "-retry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+			j.Context = p.invocation()
+			out, err = h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
+		}
+	}
+	if err != nil {
+		return result, out.Job, safeShareResolutionFailure("plugin_invoke", err)
 	}
 	if out.Job.State != "completed" {
 		if out.Job.State == "failed" {
@@ -334,6 +369,9 @@ func (p *publicSharePolicy) resolve(ctx context.Context) (publicShareObservation
 				Error string `json:"error"`
 			}
 			if json.Unmarshal(out.Job.Result, &failure) == nil && publicShareErrorCode.MatchString(failure.Error) {
+				if failure.Error == "public_read_failed" {
+					return result, out.Job, errors.New("share_public_read_failed")
+				}
 				return result, out.Job, errors.New(failure.Error)
 			}
 			return result, out.Job, errors.New("share_plugin_resolution_failed")
