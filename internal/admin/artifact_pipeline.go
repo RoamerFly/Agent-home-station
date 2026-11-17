@@ -50,7 +50,7 @@ func (p *permittedTools) artifactTools() []mcptools.Tool {
 	}
 	tools := []mcptools.Tool{agentTool("artifact_materialize", "Make one verified received attachment available to an authorized installed processor in THIS request. asset_id must come from wechat_file_read/media_recent in this conversation. The host keeps the filesystem location private and copies inputs immutably. It never executes document content or sends a message. Input {asset_id:string,source_message_id?:string,task_id?:string}.", `{"type":"object","properties":{"asset_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["asset_id"],"additionalProperties":false}`)}
 	if p.manager.Config().Companion.Permissions.SendFile {
-		tools = append(tools, agentTool("artifact_publish", "Register one finished regular file already produced by an authorized processor for THIS task and stage it as a file attachment. path is a processor-reported basename, never a filesystem path. This only prepares reply.media_ids; it does NOT send WeChat. Input {path:string,title?:string,task_id?:string}.", `{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512},"title":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["path"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("artifact_publish", "Register one finished regular file already produced by an authorized processor for THIS task and stage it as an attachment: video MIME types default to playable native WeChat video; other files remain file attachments. To explicitly send a video as a file, reuse the returned asset_id with media_reuse(kind=file). path is a processor-reported basename, never a filesystem path. This only prepares reply.media_ids; it does NOT send WeChat. Input {path:string,title?:string,task_id?:string}.", `{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512},"title":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["path"],"additionalProperties":false}`))
 	}
 	return tools
 }
@@ -286,7 +286,11 @@ func (p *permittedTools) PublishArtifactForTask(ctx context.Context, in Artifact
 	if typ == "" {
 		typ = "application/octet-stream"
 	}
-	result, err := p.stageOutputWithAsset(ctx, plugins.Output{Text: "成品文件已准备，尚未发送。", Media: []plugins.MediaResult{{Kind: "file", Data: data, MIMEType: typ, Filename: filename}}}, &assetOriginal{Data: data, MIME: typ, Filename: filename})
+	kind := "file"
+	if strings.HasPrefix(typ, "video/") {
+		kind = "video"
+	}
+	result, err := p.stageOutputWithAsset(ctx, plugins.Output{Text: "成品附件已准备，尚未发送。", Media: []plugins.MediaResult{{Kind: kind, Data: data, MIMEType: typ, Filename: filename}}}, &assetOriginal{Data: data, MIME: typ, Filename: filename})
 	if err != nil {
 		return "", err
 	}

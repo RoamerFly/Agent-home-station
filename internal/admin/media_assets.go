@@ -467,12 +467,6 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 	return p.reuseAssetConverted(ctx, id, kind, nil)
 }
 func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind string, conversion *voiceConversion) (string, error) {
-	if err := conversion.validate(kind); err != nil {
-		return "", err
-	}
-	if p.trace.Preview || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
-		return "", errors.New("media_permission_denied")
-	}
 	m := p.manager
 	m.assetMu.Lock()
 	locked := true
@@ -496,6 +490,18 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		return "", errors.New("当前会话没有该素材")
 	}
 	a := items[index]
+	if kind == "" {
+		kind = "file"
+		if strings.HasPrefix(a.MIME, "video/") {
+			kind = "video"
+		}
+	}
+	if err := conversion.validate(kind); err != nil {
+		return "", err
+	}
+	if p.trace.Preview || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
+		return "", errors.New("media_permission_denied")
+	}
 	synthesisText, synthesisKnown := assetSynthesisForRequest(a, p.trace, kind, conversion)
 	formatKey := kind
 	if conversion != nil {
@@ -550,7 +556,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 			if a.ParentAssetID != "" {
 				for _, parent := range items {
 					if parent.ID == a.ParentAssetID && parent.Account == p.trace.Account && parent.Scope == assetScope(p.trace) {
-						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "没有执行下载或发送；当前素材没有所选格式。父素材已在本会话缓存。若用户要原视频文件，请调用media_reuse(asset_id=parent_asset_id,kind=file)；不要重新下载同一资源。根据用户要求自行选择正确素材和格式。"})
+						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "没有执行下载或发送；当前素材没有所选格式。父素材已在本会话缓存。若用户要原视频文件，请调用media_reuse(asset_id=parent_asset_id,kind=video)；不要重新下载同一资源。根据用户要求自行选择正确素材和格式。"})
 						return string(b), nil
 					}
 				}

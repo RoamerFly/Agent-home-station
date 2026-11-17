@@ -232,3 +232,54 @@ func TestCachedVideoOriginalCanPrepareVideoWithoutDownload(t *testing.T) {
 		t.Fatal("cached original not staged", result)
 	}
 }
+
+func TestCachedVideoDefaultsToNativeVideoWithoutDownload(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &fakeTools{fakeNative: f.native}
+	f.manager.config.Companion.Permissions.SendVideo = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-video"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic cached video"), MIME: "video/mp4", Filename: "video.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.SetTrace(in)
+	result, err := access.reuseAsset(t.Context(), a.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, ok := access.Media(a.ID + "-video")
+	if !ok || media.Kind != "video" || media.SourceID == "" || !bytes.Contains([]byte(result), []byte(`"network_downloads":0`)) {
+		t.Fatal("cached original not staged", result)
+	}
+}
+
+func TestCachedVideoDefaultHonorsVideoPermission(t *testing.T) {
+	f := setup(t)
+	f.manager.native = &fakeTools{fakeNative: f.native}
+	f.manager.config.Companion.Permissions.SendVideo = false
+	f.manager.config.Companion.Permissions.SendFile = true
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-default-video"}
+	a, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic video"), MIME: "video/mp4", Filename: "video.mp4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _, err := f.manager.toolAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.SetTrace(in)
+	if _, err := access.reuseAsset(t.Context(), a.ID, ""); err == nil || err.Error() != "media_permission_denied" {
+		t.Fatalf("default video must require video permission: %v", err)
+	}
+	if _, err := access.reuseAsset(t.Context(), a.ID, "file"); err != nil {
+		t.Fatal(err)
+	}
+	media, ok := access.Media(a.ID + "-file")
+	if !ok || media.Kind != "file" {
+		t.Fatalf("explicit file not preserved: %+v", media)
+	}
+}
