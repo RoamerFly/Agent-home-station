@@ -81,6 +81,7 @@ def _markup(text):
     escaped = text.replace("&", "&amp;").replace("<", "&lt;")
     # Paragraph's HTML parser otherwise collapses the actual Word form blanks.
     escaped = re.sub(r" {2,}", lambda match: "&#160;" * len(match.group()), escaped)
+    escaped = escaped.replace("\u3000", "&#12288;")
     return escaped.replace("\n", "<br/>")
 
 

@@ -29,6 +29,7 @@ class DocumentWorkshopTests(unittest.TestCase):
             self.assertEqual(blocks[0][3]["alignment"], 1)
             self.assertEqual(blocks[1][3]["alignment"], 4)
             self.assertIn("&#160;" * 8, native_pdf._markup(blocks[1][1]))
+            self.assertEqual("A&#12288;&#12288;B", native_pdf._markup("A\u3000\u3000B"))
             layout["blocks"].insert(0, {"kind": "paragraph", "text": "Synthetic form", "alignment": "right"})
             product = logic.reconstruct(layout, Path(tmp), "explicit.docx", title="Synthetic form")
             blocks = native_pdf._blocks(Path(product["path"]))
