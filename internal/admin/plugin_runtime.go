@@ -139,6 +139,7 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		}
 		var input struct {
 			Action         string `json:"action"`
+			IdleOnly       bool   `json:"idle_only"`
 			Revision       int    `json:"revision"`
 			TimeoutSeconds *int   `json:"timeout_seconds"`
 		}
@@ -172,6 +173,10 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 			defer cancel()
 		}
+		stopSession := h.StopSession
+		if input.IdleOnly {
+			stopSession = h.StopIdleSession
+		}
 		switch input.Action {
 		case "enable_on_demand":
 			err = h.EnableOnDemand(ctx, id, input.Revision)
@@ -180,9 +185,9 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		case "stop":
 			err = h.Stop(ctx, id, input.Revision)
 		case "stop_session":
-			err = h.StopSession(ctx, id, input.Revision)
+			err = stopSession(ctx, id, input.Revision)
 		case "restart":
-			err = h.StopSession(ctx, id, input.Revision)
+			err = stopSession(ctx, id, input.Revision)
 			if err == nil {
 				err = h.Start(ctx, id, input.Revision)
 			}

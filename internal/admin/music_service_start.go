@@ -17,7 +17,7 @@ func (p *permittedTools) startMusicServiceHost(ctx context.Context) (string, err
 		if err := authority.valid(ctx, p.manager); err != nil {
 			return "", err
 		}
-	} else if !p.privileged() {
+	} else if !p.privileged() && !p.workspaceExecutionAllowed() {
 		return "", toolInputError("music_service_start_requires_owner")
 	}
 	if runtime.GOOS == "windows" {

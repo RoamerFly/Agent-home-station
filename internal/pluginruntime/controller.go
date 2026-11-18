@@ -517,7 +517,12 @@ func (c *Controller) StopSession(ctx context.Context, id string, revision int) e
 	return c.stop(ctx, id, revision, false)
 }
 
-func (c *Controller) stop(ctx context.Context, id string, revision int, disable bool) (err error) {
+// StopIdleSession cannot cancel pending work or active calls.
+func (c *Controller) StopIdleSession(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, false, true)
+}
+
+func (c *Controller) stop(ctx context.Context, id string, revision int, disable bool, idleOnly ...bool) (err error) {
 	if err = c.begin(id); err != nil {
 		return err
 	}
@@ -532,6 +537,15 @@ func (c *Controller) stop(ctx context.Context, id string, revision int, disable 
 	c.mu.Lock()
 	services := c.services
 	c.mu.Unlock()
+	if len(idleOnly) > 0 && idleOnly[0] {
+		pending, checkErr := c.store.HasUnfinishedJobs(ctx, id)
+		if checkErr != nil {
+			return checkErr
+		}
+		if pending || c.host.Status(id).ActiveCalls > 0 || services != nil && services.OwnerBusy(id) {
+			return errors.New("tool_busy_wait_for_completion")
+		}
+	}
 	if services != nil {
 		if err = services.StopOwner(ctx, id); err != nil {
 			return err

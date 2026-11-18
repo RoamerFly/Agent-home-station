@@ -185,6 +185,7 @@ func (s *localProjectTools) changeLegacyTool(w http.ResponseWriter, r *http.Requ
 		Action   string `json:"action"`
 		Revision int    `json:"revision"`
 		Approve  bool   `json:"approve_artifacts"`
+		IdleOnly bool   `json:"idle_only"`
 	}
 	if !websession.Decode(w, r, &in) {
 		return
@@ -218,7 +219,7 @@ func (s *localProjectTools) changeLegacyTool(w http.ResponseWriter, r *http.Requ
 		if action == "stop" && in.Action == "stop" {
 			action = "stop_session"
 		}
-		_, err = c.request(r.Context(), "POST", "/api/plugin-packages/"+view.ID+"/runtime", map[string]any{"action": action, "revision": view.Revision})
+		_, err = c.request(r.Context(), "POST", "/api/plugin-packages/"+view.ID+"/runtime", map[string]any{"action": action, "revision": view.Revision, "idle_only": in.IdleOnly})
 	}
 	if err == nil && view.ID == "music" {
 		switch in.Action {

@@ -149,8 +149,11 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 }
 
 func (p *permittedTools) callStationTool(ctx context.Context, action string, raw json.RawMessage) (string, error) {
-	if !p.privileged() {
-		return "", toolInputError("station_tool_requires_owner")
+	if action != "status" && action != "start" && action != "stop" && action != "restart" {
+		return "", toolInputError("station_tool_action_invalid")
+	}
+	if !p.privileged() && !p.workspaceExecutionAllowed() {
+		return "", toolInputError("station_tool_not_authorized")
 	}
 	var in struct {
 		ToolID string `json:"tool_id"`
@@ -179,7 +182,8 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 			return "", errors.New("station_tool_status_invalid")
 		}
 		if in.ToolID == "" {
-			return string(data), nil
+			out, _ := json.Marshal(view)
+			return string(out), nil
 		}
 		for _, tool := range view.Tools {
 			if tool.ID == in.ToolID {
@@ -216,7 +220,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 		}
 	}
 	path := "/api/local/project-tools/" + url.PathEscape(id)
-	response, err := p.stationToolRequest(ctx, session, http.MethodPut, path, map[string]any{"action": action, "revision": current.Revision})
+	response, err := p.stationToolRequest(ctx, session, http.MethodPut, path, map[string]any{"action": action, "revision": current.Revision, "idle_only": !p.privileged()})
 	if err != nil {
 		return "", err
 	}

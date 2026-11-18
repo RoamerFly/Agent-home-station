@@ -48,6 +48,7 @@ func (p *permittedTools) executionContext() ExecutionContext {
 	private := p.manager.privateWorkspaceFor(p.trace.Account)
 	return ExecutionContext{Account: p.trace.Account, OriginThread: p.trace.Thread, Requester: p.trace.Sender, Owner: p.privileged(), TaskID: p.trace.TaskID, Private: private, Public: filepath.Join(root, "public_workspace"), Conversation: filepath.Join(private, "conversations", companion.ScopeID("wechat", p.trace.Account, p.trace.Thread))}
 }
+
 func ensureManaged(paths ...string) error {
 	for _, path := range paths {
 		root, e := workspacefs.EnsurePath(path)
@@ -84,7 +85,7 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	// only audited non-control children needed by generic workspace work; never
 	// expose the desktop executable, broker, device tools or the package root.
 	c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, stationruntime.PackagedCommandRuntimeRoots(c.Windows)...)
-	if x.Owner {
+	if p.workspaceExecutionAllowed() {
 		if options, err := runtimeDeploymentOptions(); err == nil && options.DocumentRuntimeRoot != "" {
 			c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, options.DocumentRuntimeRoot)
 		}

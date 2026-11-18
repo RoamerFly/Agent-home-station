@@ -13,9 +13,19 @@ import (
 )
 
 // The same lifecycle implementation serves desktop controls and Agent calls.
-func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProjectToolHost, id string, revision int, action string) error {
+func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProjectToolHost, id string, revision int, action string, idleOnly ...bool) error {
 	if action == "stop" || action == "restart" {
 		var err error
+		idle := len(idleOnly) > 0 && idleOnly[0]
+		if idle {
+			pending, e := host.store.HasUnfinishedJobs(ctx, id)
+			if e != nil {
+				return e
+			}
+			if pending || s.isActive(id) || host.controller.Status(id).ActiveCalls > 0 {
+				return errors.New("工具正在处理任务，请完成后再停止或重启")
+			}
+		}
 		switch id {
 		case localRVCPackage:
 			if s.rvc != nil {
@@ -40,7 +50,11 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 		case localOBSPackage:
 			err = s.stopOBSProcess(ctx)
 		default:
-			err = host.controller.StopSession(ctx, id, revision)
+			if idle {
+				err = host.controller.StopIdleSession(ctx, id, revision)
+			} else {
+				err = host.controller.StopSession(ctx, id, revision)
+			}
 		}
 		if err != nil || action == "stop" {
 			return err

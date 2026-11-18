@@ -40,7 +40,7 @@ func (p *permittedTools) newMusicServiceControlPolicy(ctx context.Context, actio
 		return nil, toolInputError("music_service_action_invalid")
 	}
 	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)
-	if authority == nil && !p.privileged() {
+	if authority == nil && ((!p.privileged() && !p.workspaceExecutionAllowed()) || action == "stop" && !p.privileged()) {
 		return nil, toolInputError("music_service_control_requires_owner")
 	}
 	// A lifecycle operation has the same evidence requirements as a bounded
@@ -59,7 +59,7 @@ func (p *permittedTools) newMusicServiceControlPolicy(ctx context.Context, actio
 }
 
 func (p *musicServiceControlPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
-	if p.base.admin == nil && !p.base.p.privileged() {
+	if p.base.admin == nil && ((!p.base.p.privileged() && !p.base.p.workspaceExecutionAllowed()) || p.action == "stop" && !p.base.p.privileged()) {
 		return errors.New("music_service_owner_authorization_changed")
 	}
 	return p.base.checkBoundCall(ctx, j, cap, musicServiceControlCapability, p.arguments)

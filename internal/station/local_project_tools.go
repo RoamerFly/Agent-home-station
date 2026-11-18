@@ -473,6 +473,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		Action           string `json:"action"`
 		Revision         int    `json:"revision"`
 		ApproveArtifacts bool   `json:"approve_artifacts"`
+		IdleOnly         bool   `json:"idle_only"`
 	}
 	if !websession.Decode(w, r, &in) {
 		return
@@ -584,7 +585,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if in.Action == "start" || in.Action == "stop" || in.Action == "restart" {
-			err = s.changeLifecycle(ctx, host, id, current.Revision, in.Action)
+			err = s.changeLifecycle(ctx, host, id, current.Revision, in.Action, in.IdleOnly)
 		} else if id == localOBSPackage {
 			if in.Action == "enable" {
 				config, checkErr := localOBSConfiguration(ctx, host)

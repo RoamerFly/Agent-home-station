@@ -72,8 +72,8 @@ func validatePreviewDocument(data []byte) error {
 }
 
 func (p *permittedTools) renderArtifactDocument(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !p.privileged() {
-		return "", toolInputError("document_preview_requires_owner")
+	if !p.artifactPipelineAllowed() {
+		return "", toolInputError("document_preview_not_authorized")
 	}
 	if runtime.GOOS != "windows" {
 		return "", errors.New("document_preview_requires_windows_wps")
