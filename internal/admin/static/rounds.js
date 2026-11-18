@@ -78,8 +78,11 @@
     };
     // related_message_id can also mean a quote or cancellation evidence. Only
     // explicit session-followup events establish ownership of another message.
+    // A persisted background continuation is an explicit ownership edge too.
+    // Without it every process-result checkpoint becomes a separate active
+    // round even when it yielded back to the same original message.
     for (const item of entries) {
-      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped'].includes(item.event) && item.related_message_id) {
+      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped', 'background_turn_yielded'].includes(item.event) && item.related_message_id) {
         const child = messageKey(item), parent = messageKey(item, item.related_message_id);
         if (child && parent && find(parent) !== child) parents.set(child, parent);
       }
@@ -173,6 +176,7 @@
       else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
       else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
       else if (item.event === 'round_manually_completed' && item.status === 'completed') round.status = 'completed';
+      else if (item.event === 'task_execution_waiting' && item.status === 'waiting') round.status = 'waiting';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
       else if (item.event === 'character_decision' && ['invalid_model_decision','invalid_tool_arguments','tool_unavailable_or_budget_exhausted','tool_budget_exhausted','unverified_model_response','media_unavailable_or_permission_denied'].includes(item.reason)) round.status = 'failed';

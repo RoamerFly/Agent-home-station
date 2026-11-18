@@ -107,6 +107,39 @@ test('explicit same-session followups merge, cancellation evidence and other thr
   assert.equal(rows.length, 3);
   assert.equal(rows.find(x => x.received.some(m => m.content === '改成文件')).received.length, 2);
 });
+test('background continuations merge only with an explicit source and preserve raw activity', () => {
+  const items = [
+    entry(1, { message_id: 'saved-task', event: 'generation_started', category: 'decision', status: 'running' }),
+    entry(2, { message_id: 'new-message', event: 'message_received', category: 'received', content: '继续处理' }),
+    entry(3, { message_id: 'saved-task', related_message_id: 'new-message', event: 'background_turn_yielded', category: 'decision', status: 'waiting' }),
+    entry(4, { message_id: 'orphan-task', event: 'background_turn_yielded', category: 'decision', status: 'waiting' }),
+    entry(5, { message_id: 'unrelated-task', related_message_id: 'new-message', event: 'generation_stopped', category: 'decision', status: 'stopped' }),
+  ];
+  const before = JSON.stringify(items);
+  const rows = project(items);
+  assert.equal(JSON.stringify(items), before);
+  assert.equal(rows.length, 3);
+  const continued = rows.find(x => x.triggerMessageID === 'new-message');
+  assert(continued);
+  assert.equal(continued.entries.length, 3);
+  assert.equal(continued.received[0].message_id, 'new-message');
+  assert.equal(rows.find(x => x.triggerMessageID === 'orphan-task').entries.length, 1);
+  assert.equal(rows.find(x => x.triggerMessageID === 'unrelated-task').entries.length, 1);
+});
+test('latest task execution evidence moves one round to waiting and later work resumes it', () => {
+  const items = [
+    entry(1, { message_id: 'task', event: 'generation_started', category: 'decision', status: 'running' }),
+    entry(2, { message_id: 'task', event: 'task_execution_waiting', category: 'decision', status: 'waiting', reason: 'silent_execution_pending' }),
+    entry(3, { message_id: 'other-task', event: 'generation_started', category: 'decision', status: 'running' }),
+  ];
+  let rows = project(items);
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').status, 'waiting');
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').group, 'pending');
+  assert.equal(rows.find(x => x.triggerMessageID === 'other-task').status, 'running');
+  rows = project([...items, entry(4, { message_id: 'task', event: 'generation_started', category: 'decision', status: 'running' })]);
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').status, 'running');
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').group, 'active');
+});
 test('no time-based merging; orphan system events form separate system periods', () => {
   const rows = project([
     entry(1, { message_id: '', thread_id: '', event: 'bot_starting', category: 'system' }),
