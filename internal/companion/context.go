@@ -131,8 +131,11 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 		// leaving the session in a retry loop forever.
 		if d, ok := deepseek.ErrorDiagnostics(err); ok && compressionFallbackCode(d.Code) {
 			fallback := verifiedFallbackSummary(selected)
-			fitFallbackSummary(&fallback)
 			persistCtx := context.WithoutCancel(ctx)
+			if bindErr := e.bindSummarySources(persistCtx, in, &fallback, selected, previous.Sources); bindErr != nil {
+				return false, err
+			}
+			fitFallbackSummary(&fallback)
 			if bindErr := e.bindSummarySources(persistCtx, in, &fallback, selected, previous.Sources); bindErr != nil {
 				return false, err
 			}
@@ -283,7 +286,7 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 
 func compressionFallbackCode(code string) bool {
 	switch code {
-	case "model_output_token_limit", "model_response_incomplete", "model_upstream_timeout", "model_deadline_exceeded", "model_network_timeout":
+	case "model_output_token_limit", "model_response_incomplete", "model_response_too_large", "model_upstream_timeout", "model_deadline_exceeded", "model_network_timeout":
 		return true
 	default:
 		return false

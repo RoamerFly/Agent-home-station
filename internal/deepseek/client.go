@@ -357,6 +357,9 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, f
 		} `json:"choices"`
 	}
 	if json.Unmarshal(data, &result) != nil || len(result.Choices) != 1 {
+		if failure := http200ErrorFailure(data); failure != nil {
+			return "", failure
+		}
 		return "", requestFailure("model_invalid_response", "decode", 200, false)
 	}
 	choice := result.Choices[0]
@@ -422,5 +425,38 @@ func safeFinishReason(reason string) string {
 		return reason
 	default:
 		return "unknown"
+	}
+}
+
+// http200ErrorFailure handles gateways that encode an upstream timeout or
+// transient failure in a JSON error envelope while still returning HTTP 200.
+// The provider body is never copied into the returned diagnostic.
+func http200ErrorFailure(data []byte) *RequestError {
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Code    string `json:"code"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return nil
+	}
+	code := strings.ToLower(strings.TrimSpace(envelope.Error.Code + " " + envelope.Error.Type + " " + envelope.Error.Message + " " + envelope.Code + " " + envelope.Type + " " + envelope.Message))
+	if code == "" {
+		return nil
+	}
+	switch {
+	case strings.Contains(code, "timeout"), strings.Contains(code, "timed out"), strings.Contains(code, "deadline"):
+		return requestFailure("model_upstream_timeout", "decode", http.StatusOK, true)
+	case strings.Contains(code, "rate_limit"), strings.Contains(code, "rate limit"), strings.Contains(code, "too many requests"):
+		return requestFailure("model_rate_limited", "decode", http.StatusOK, true)
+	case strings.Contains(code, "service unavailable"), strings.Contains(code, "temporarily unavailable"):
+		return requestFailure("model_service_unavailable", "decode", http.StatusOK, true)
+	default:
+		return nil
 	}
 }

@@ -50,7 +50,10 @@ func (s *Server) contextRoutes(mux *http.ServeMux) {
 			reject(err)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		// Compression has a larger dedicated budget than an ordinary reply. The
+		// request context still cancels when the client disconnects, while a
+		// slow provider response can finish and commit one atomic summary.
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 		defer cancel()
 		changed, err := engine.CompressContext(ctx, companion.Input{Channel: scope.Channel, Account: scope.Account, Thread: scope.Thread}, true)
 		if err != nil {
