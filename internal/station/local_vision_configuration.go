@@ -52,6 +52,7 @@ func defaultLocalVisionConfiguration() localVisionConfiguration {
 }
 
 func (s *localProjectTools) visionConfigurationRoutes(owner *websession.Store, mux *http.ServeMux) {
+	s.aliyunBillingRoutes(owner, mux)
 	mux.HandleFunc("POST "+localVisionConfigurationRoute+"/observe", owner.Protect(s.sharedVisionObserve))
 	for _, method := range []string{"GET", "PUT"} {
 		mux.HandleFunc(method+" "+localVisionConfigurationRoute, owner.Protect(s.visionConfiguration))

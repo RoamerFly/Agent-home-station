@@ -5888,14 +5888,88 @@
             finally { button.disabled = false; }
           });
           balance.append(button, result); record.append(balance);
-        } else if (/^https:\/\/([a-z0-9.-]+\.)?(aliyuncs\.com|maas\.aliyun\.com)$/.test(backend.origin || "")) {
-          const link = appElement("a", "阿里云费用中心"); link.href = "https://usercenter2.aliyun.com/home"; link.target = "_blank"; link.rel = "noopener noreferrer";
-          const balance = appElement("div", "", "tool-balance local-vision-note"); balance.append(document.createTextNode("余额需财务权限"), link); record.append(balance);
+        } else if (showTitle && tool.id === "media-understanding" && /^https:\/\/([a-z0-9.-]+\.)?(aliyuncs\.com|maas\.aliyun\.com)$/.test(backend.origin || "")) {
+          record.append(aliyunBalanceControls());
         } else record.append(appElement("p", "余额由服务商控制台提供", "local-vision-note"));
       }
       grid.append(record);
     }
     section.append(grid);
+    return section;
+  }
+  function aliyunBalanceControls() {
+    const route = "/api/local/project-tools/media-understanding/aliyun-balance";
+    const section = appElement("section", "", "aliyun-balance");
+    const details = appElement("details");
+    const heading = appElement("summary", "财务凭据");
+    const link = appElement("a", "阿里云费用中心");
+    link.href = "https://usercenter2.aliyun.com/home";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const query = appElement("button", "查询余额", "button compact secondary");
+    const save = appElement("button", "保存财务凭据", "button compact secondary");
+    const clear = appElement("button", "清除财务凭据", "button compact secondary");
+    for (const button of [query, save, clear]) button.type = "button";
+    const result = appElement("p", "正在读取财务凭据状态…", "local-vision-note");
+    result.setAttribute("role", "status");
+    const id = document.createElement("input");
+    const secret = document.createElement("input");
+    id.autocomplete = "off";
+    id.spellcheck = false;
+    secret.type = "password";
+    secret.autocomplete = "new-password";
+    function field(label, input) {
+      const element = appElement("label", label);
+      element.append(input);
+      return element;
+    }
+    const actions = appElement("div", "", "tool-balance");
+    const editorActions = appElement("div", "", "tool-balance");
+    editorActions.append(save, clear);
+    details.append(heading, appElement("p", "使用获准查询账户余额的阿里云 RAM 凭据。", "local-vision-note"),
+      field("AccessKey ID", id), field("AccessKey Secret", secret), editorActions);
+    actions.append(query, link);
+    section.append(actions, result, details);
+    let configured = false;
+    function busy(value) {
+      query.disabled = value || !configured;
+      save.disabled = value;
+      clear.disabled = value || !configured;
+    }
+    async function update(clearCredential) {
+      if (!clearCredential && (!id.value.trim() || !secret.value.trim())) {
+        result.textContent = "请填写 AccessKey ID 和 AccessKey Secret。";
+        return;
+      }
+      busy(true);
+      try {
+        const body = clearCredential ? { clear: true } : { access_key_id: id.value.trim(), access_key_secret: secret.value.trim() };
+        const reply = await request(route, { method: "PUT", body: JSON.stringify(body) });
+        configured = reply.configured === true;
+        id.value = ""; secret.value = "";
+        if (configured) details.open = false;
+        result.textContent = configured ? "财务凭据已保存，可以查询余额。" : "财务凭据已清除。";
+      } catch (err) { result.textContent = err.message || "更新财务凭据失败。"; }
+      finally { busy(false); }
+    }
+    save.addEventListener("click", () => update(false));
+    clear.addEventListener("click", () => update(true));
+    query.addEventListener("click", async () => {
+      busy(true);
+      result.textContent = "正在查询阿里云账户余额…";
+      try {
+        const reply = await request(route, { method: "POST", body: "{}" });
+        result.textContent = '现金余额 ' + reply.cash_balance + ' ' + reply.currency + ' · 可用额度 ' + reply.available_amount + ' ' + reply.currency;
+      } catch (err) { result.textContent = err.message || "余额查询暂不可用。"; }
+      finally { busy(false); }
+    });
+    busy(true);
+    request(route).then((reply) => {
+      configured = reply.configured === true;
+      result.textContent = configured ? "财务凭据已保存。" : "展开「财务凭据」后可设置余额查询。";
+    }).catch((err) => {
+      result.textContent = err.message || "财务凭据状态暂不可读。";
+    }).finally(() => busy(false));
     return section;
   }
   function projectToolStatus(tool) {
