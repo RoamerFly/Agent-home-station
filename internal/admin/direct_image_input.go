@@ -84,7 +84,7 @@ func (p *permittedTools) inspectDocumentDirect(ctx context.Context, raw json.Raw
 	var in struct {
 		Asset  string `json:"artifact_id"`
 		Source string `json:"source_message_id"`
-		Layout bool   `json:"include_layout"`
+		Layout *bool  `json:"include_layout"`
 		Pages  []int  `json:"pages"`
 		Offset int    `json:"text_offset"`
 	}
@@ -114,7 +114,11 @@ func (p *permittedTools) inspectDocumentDirect(ctx context.Context, raw json.Raw
 		return "", err
 	}
 	defer model.CloseIdleConnections()
-	reused, err := model.AttachDocument(ctx, a.Filename, data, in.Layout)
+	layout := strings.EqualFold(filepath.Ext(a.Filename), ".xlsx")
+	if in.Layout != nil {
+		layout = *in.Layout
+	}
+	reused, err := model.AttachDocument(ctx, a.Filename, data, layout)
 	if err != nil {
 		return "", err
 	}

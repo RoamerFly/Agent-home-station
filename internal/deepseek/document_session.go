@@ -20,6 +20,30 @@ import (
 // are deduplicated within this run, expire in one hour, and are removed on exit.
 // Only the next successful model request includes them to avoid repeated billing.
 func (c *Client) AttachDocument(ctx context.Context, name string, data []byte, rich bool) (bool, error) {
+	var pictures []workbookPicture
+	if rich && strings.EqualFold(filepath.Ext(name), ".xlsx") {
+		if len(data) > 32<<20 {
+			return false, errors.New("document_provider_size_limit_33554432_bytes")
+		}
+		var err error
+		pictures, err = workbookPictures(data)
+		if err != nil {
+			return false, fmt.Errorf("读取表格图片布局: %w", err)
+		}
+	}
+	reused, err := c.uploadDocument(ctx, name, data, rich)
+	if err != nil {
+		return false, err
+	}
+	for _, pic := range pictures {
+		if err := AttachImage(ctx, name+" · "+pic.label, Image{Data: pic.data}); err != nil {
+			return false, err
+		}
+	}
+	return reused, nil
+}
+
+func (c *Client) uploadDocument(ctx context.Context, name string, data []byte, rich bool) (bool, error) {
 	s, ok := ctx.Value(imageSessionKey{}).(*imageSession)
 	if !ok {
 		return false, errors.New("document_session_unavailable")

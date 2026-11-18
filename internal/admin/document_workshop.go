@@ -44,7 +44,7 @@ func (p *permittedTools) documentTools() []mcptools.Tool {
 		agentTool("document_verify", "检查当前会话中已授权 DOCX 或 PDF 的结构与文字；这不等于已完成视觉版式核对，未检查渲染页面不能声称与原图一致。Input {artifact_id,source_message_id?,expected_text?,render_pages?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"expected_text":{"type":"array","items":{"type":"string","maxLength":256}},"render_pages":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
 	}
 	if p.manager.Config().Behavior.DirectImageInput {
-		tools[0].Description = "将已授权图片或文档原件直接交给DeepSeek，在下一次模型请求中自行理解。include_layout=true使用图文解析。原文件API不裁页；pages仅表示重点页。需要复查时可再次调用，上传会在回合内复用。生成和结构校验仍由本机文档工坊处理。"
+		tools[0].Description = "将已授权图片或文档原件直接交给DeepSeek，在下一次模型请求中自行理解。Excel 工作簿默认同时读取浮动图片及其工作表锚点，纯数据任务可设 include_layout=false；其他文档可设 true 使用图文解析。原文件API不裁页；pages仅表示重点页。需要复查时可再次调用，上传会在回合内复用。生成和结构校验仍由本机文档工坊处理。"
 	}
 	if p.documentWorkshopAvailable(context.Background(), true) {
 		tools = append(tools,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -60,8 +61,11 @@ func AttachImage(ctx context.Context, label string, im Image) error {
 	hash := fmt.Sprintf("%x", sha256.Sum256(im.Data))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, old := range s.items {
+	for i, old := range s.items {
 		if old.digest == hash {
+			if !strings.Contains("\n"+old.label+"\n", "\n"+label+"\n") {
+				s.items[i].label += "\n" + label
+			}
 			return nil
 		}
 	}
