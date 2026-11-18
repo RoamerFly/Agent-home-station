@@ -29,10 +29,9 @@ func TestStructuredReviewInputDoesNotInheritShortChatByteLimit(t *testing.T) {
 		t.Fatal("review failed before HTTP", err, calls)
 	}
 	for _, review := range []bool{false, true} {
-		turns[0]["content"] = input
+		turns[0]["content"] = strings.Repeat("x", (1<<20)+1)
 		var err error
 		if review {
-			turns[0]["content"] = strings.Repeat("x", (1<<20)+1)
 			_, err = c.ChatGrounding(context.Background(), "synthetic review", turns, GroundingOptions{})
 		} else {
 			_, err = c.Chat(context.Background(), "synthetic conversation", turns)
