@@ -495,8 +495,8 @@ def _table(rows, merges=None, borderless=False) -> str:
     borders = "".join("<w:%s %s/>" % (side, style) for side in ("top", "left", "bottom", "right", "insideH", "insideV"))
     parts = ["<w:tbl><w:tblPr><w:tblBorders>%s</w:tblBorders></w:tblPr>" % borders]
     coverage = _table_coverage(rows, merges) if merges is not None else {}
-    if coverage:
-        parts.append("<w:tblGrid>%s</w:tblGrid>" % ("<w:gridCol/>" * len(rows[0])))
+    columns = max((len(row) for row in rows if isinstance(row, list)), default=0)
+    parts.append("<w:tblGrid>%s</w:tblGrid>" % ("<w:gridCol/>" * columns))
     for r, row in enumerate(rows):
         if not isinstance(row, list):
             continue

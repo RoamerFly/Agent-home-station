@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "document-workshop",
   "name": "文档工坊",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -25,7 +25,7 @@
     "MIGRATION.md": "809fa1d68357b47545e548d3593bd00bb72416d55c5b8777b6e57964944d7fbe",
     "PERMISSIONS.md": "1b3b72511b2fc0ccce80780092cf33a210912d8b85306d20ea8fad9cca7c2d04",
     "README.md": "c1e8d1514b8a1a7a6f8e787f0820b34636f3907dc6702d08920c3c2fea7e9b2b",
-    "runtime/document_logic.py": "76f37048bd2bca6df9073986592455b4e051ebc15c15b6a73248e07e76dace7c",
+    "runtime/document_logic.py": "69a92728c382b095982b157727398c5a46ec1f8b54348d43561f3d51c868eb82",
     "runtime/document_runtime.py": "dc0ab5c541640c32dd51d8278d43888dbfde65e2fc50b1f99699e06b390821e9",
     "runtime/main.py": "2fe7e132bc402d59f4a5b72711eb206fa7340c2eb5f7a0c2c9184d9d75bf3077",
     "runtime/native_pdf.py": "2ca36db51f1aac0ed5a9ae13f7c42c0884ab3c99c022ac620ec60d0e6d714bd3",
