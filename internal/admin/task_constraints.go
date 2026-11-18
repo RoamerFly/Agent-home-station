@@ -14,6 +14,10 @@ func (m *Manager) validateTaskSource(t agentTask) error {
 	if t.OwnerRequested && !(&permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender}}).privileged() {
 		return errors.New("task_owner_authorization_revoked: 主人授权已撤销，未继续执行任务")
 	}
+	if t.DeliveryThread != "" && t.DeliveryThread != t.Thread &&
+		(!m.agent.config().CrossConversation || !m.accountThreadKnown(t.DeliveryThread)) {
+		return errors.New("task_delivery_authorization_revoked: 原定投递群已不可用，等待核对")
+	}
 	if t.Constraints == nil || t.Constraints.Source == nil {
 		return nil
 	}
@@ -101,6 +105,35 @@ func taskDeliveryThread(t agentTask) string {
 		return t.DeliveryThread
 	}
 	return t.Thread
+}
+
+func (t agentTask) deliveryInstruction() string {
+	if t.DeliveryThread == "" || t.DeliveryThread == t.Thread {
+		return ""
+	}
+	return "\n已核对的投递群ID为 " + t.DeliveryThread + "。完成后用 wechat_send_media 的 asset_id 或 wechat_send_text 显式投递到该群，继续核对同一发送编号。使用工具投递后最终选择 silent。"
+}
+
+func (p *permittedTools) taskDeliveryAllowed(target string) bool {
+	if p.trace.TaskID != "" {
+		if t, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok &&
+			t.DeliveryThread != "" && t.DeliveryThread != t.Thread {
+			return t.DeliveryThread == target
+		}
+	}
+	return true
+}
+
+func (p *permittedTools) inheritTaskDelivery(t *agentTask) {
+	if p.trace.TaskID == "" {
+		return
+	}
+	if parent, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok &&
+		parent.DeliveryThread != "" && parent.DeliveryThread != parent.Thread {
+		t.DeliveryThread = parent.DeliveryThread
+		t.Constraints.DeliveryThread = parent.DeliveryThread
+		t.QuoteServerID = ""
+	}
 }
 func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
 	in.NotificationText = t.NotificationText

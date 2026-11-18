@@ -136,7 +136,7 @@ func (p *permittedTools) mediaServiceCapabilityAvailable(ctx context.Context, id
 		if id == "media.listen" {
 			return p.manager.mediaAudioObservationConfigured(ctx)
 		}
-		return p.manager.mediaTranscriptionConfigured(ctx)
+		return p.manager.readyStationASR(ctx) != nil || p.manager.mediaTranscriptionConfigured(ctx)
 	}
 	return false
 }
@@ -228,15 +228,16 @@ func (p *permittedTools) callMediaServicePlugin(ctx context.Context, capability,
 		if err != nil {
 			return nil, err
 		}
-		policy, err := p.manager.newMediaTranscriptionPolicy(ctx, message, wav)
+		station := p.manager.readyStationASR(ctx)
+		text, err := p.manager.transcribeNativeAudio(ctx, message, wav, station)
 		if err != nil {
 			return nil, err
 		}
-		text, err := policy.transcribe(ctx)
-		if err != nil {
-			return nil, err
+		backend := "registered_media_plugin"
+		if station != nil {
+			backend = "station_local_asr"
 		}
-		return map[string]any{"source_message_id": message.ID, "operation": "transcribe", "text": text, "coverage": "provided_audio_only"}, nil
+		return map[string]any{"source_message_id": message.ID, "operation": "transcribe", "text": text, "coverage": "provided_audio_only", "backend": backend}, nil
 	case "media.listen":
 		return p.callMediaAudioService(ctx, requestKey, in, message, reader)
 	}

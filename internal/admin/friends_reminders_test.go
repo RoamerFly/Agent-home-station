@@ -239,6 +239,51 @@ func TestReminderDueEntersExecutionRoundWithoutNativeReceipt(t *testing.T) {
 	}
 }
 
+func TestExecuteReminderResolvesNamedGroupAndKeepsOrigin(t *testing.T) {
+	f, p, native := memberReminder(t)
+	cfg := f.manager.agent.config()
+	cfg.OwnerIDs = []string{p.trace.Sender}
+	cfg.PrivilegedThreads = []string{p.trace.Thread}
+	cfg.CrossConversation = true
+	cfg.ReadConversations = true
+	if err := f.manager.agent.save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	native.contacts = []map[string]any{
+		{"roomId": "test-group@chatroom", "displayName": "机器人测试群"},
+		{"roomId": "test-group-2@chatroom", "displayName": "机器人测试群2"},
+	}
+	args := json.RawMessage(`{"action":"create","kind":"execute","text":"做一首歌并发到机器人测试群","request_key":"scheduled-song","delay_seconds":60,"delivery_group":"机器人测试群"}`)
+	out, err := p.Call(t.Context(), "agent_reminder", args)
+	if err != nil || !strings.Contains(out, `"result_group":"test-group@chatroom"`) {
+		t.Fatal(out, err)
+	}
+	tasks := f.manager.agent.list("test", p.trace.Thread)
+	if len(tasks) != 1 {
+		t.Fatal("reminder was not saved once")
+	}
+	reminder := tasks[0]
+	bytes, err := os.ReadFile(filepath.Join(f.manager.agent.dir, "reminders", reminder.ID+".json"))
+	if err != nil || !strings.Contains(string(bytes), "test-group@chatroom") {
+		t.Fatal("group was not persisted in the reminder file", err)
+	}
+	native.contacts = append(native.contacts, map[string]any{"roomId": "duplicate@chatroom", "displayName": "机器人测试群"})
+	if _, err := p.resolveNamedGroup(t.Context(), "机器人测试群"); err == nil {
+		t.Fatal("ambiguous name accepted")
+	}
+	f.manager.processDueReminders(t.Context(), reminder.Next.Add(time.Second), false)
+	in, err := f.manager.claimAgentTask(reminder.Next.Add(time.Second), func(string) bool { return false })
+	if err != nil || in == nil || in.Thread != p.trace.Thread || !in.SilentExecution ||
+		!strings.Contains(in.Text, "test-group@chatroom") || len(native.requests) != 0 {
+		t.Fatal("wrong due execution", in, err)
+	}
+	p.SetTrace(*in)
+	if !p.taskDeliveryAllowed("test-group@chatroom") || p.taskDeliveryAllowed("test-group-2@chatroom") ||
+		f.manager.taskReplyReady(*in, companion.Decision{Action: "reply", Messages: []string{"准备中"}}) {
+		t.Fatal("execution could reply outside the selected group")
+	}
+}
+
 func TestReminderOverdueAtStartupNeedsOwnerDecision(t *testing.T) {
 	f, p, n := memberReminder(t)
 	task := createReminder(t, p, 3600)

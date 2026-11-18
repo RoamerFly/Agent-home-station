@@ -72,7 +72,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, agentTool("agent_clock", "Read current server time, UTC, timezone and Unix seconds before scheduling. Use agent_reminder for harmless user reminders (available to ordinary members). agent_task persists other work/checkpoints on disk. Do not sleep in a shell for reminders. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. Use this for a future multi-step request (for example, make a song and send it to an authorized group on a specified date), after agent_clock has converted the date to delay_seconds. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. source_thread_id and source_message_ids are accepted only after a successful read of those exact messages in this turn; retain their original chronological order for later requests such as ‘第二条再展开’. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. For a request to run tools at a specified time, use agent_reminder kind=execute after agent_clock. Use agent_task for work already underway and its checkpoints. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. The host attaches the current inbound message automatically. Omit source_thread_id and source_message_ids for the current request. Supply source_message_ids only when the task needs additional exact evidence returned by wechat_read; preserve chronological order. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
@@ -317,10 +317,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			sourceThread = p.trace.Thread
 		}
 		if !p.trustedTaskSource(sourceThread) {
-			return "", toolInputError("任务来源必须是本轮已成功读取的会话，不能由模型自行指定")
+			return "", mcptools.ArgumentError("$.source_thread_id", "省略则使用当前会话；其他来源会话须先通过wechat_read读取")
 		}
 		if !p.trustedTaskSourceMessages(sourceThread, in.SourceMessageIDs) {
-			return "", toolInputError("任务消息来源必须来自本轮成功读取的原消息，不能由模型自行填写")
+			return "", mcptools.ArgumentError("$.source_message_ids", "当前请求会自动绑定原消息。需要引用其他消息时，使用wechat_read返回的原消息ID")
+		}
+		if len(in.SourceMessageIDs) == 0 && sourceThread == p.trace.Thread && p.trace.Source != nil && p.trace.Source.MessageID != "" {
+			in.SourceMessageIDs = []string{p.trace.Source.MessageID}
 		}
 		deliveryThread := in.DeliveryThread
 		if deliveryThread == "" {
@@ -333,6 +336,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			return "", toolInputError("任务投递目标未获授权")
 		}
 		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged(), ID: in.ID, Account: p.trace.Account, Thread: deliveryThread, RequestThread: p.trace.Thread, SourceThread: sourceThread, SourceMessageIDs: append([]string(nil), in.SourceMessageIDs...), DeliveryThread: deliveryThread, Sender: p.trace.Sender, Title: in.Title}
+		if sourceThread == p.trace.Thread && p.trace.OriginalText != nil && !p.trace.BackgroundResult {
+			t.RequestedText = *p.trace.OriginalText
+		}
 		t.Constraints = p.taskConstraints("agent_task", "", "", "")
 		t.Constraints.Thread = sourceThread
 		t.Constraints.DeliveryThread = deliveryThread

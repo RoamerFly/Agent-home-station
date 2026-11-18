@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -129,16 +128,14 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 		return "", err
 	}
 	health, _, err := p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
-	if _, code := safeToolFailure(err); code == "yue_bridge_unavailable" && runtime.GOOS == "windows" && p.privileged() && p.manager.windowsMusicRegistered() {
-		// Nothing has been submitted yet. Start the registered backend and
-		// wait for readiness before issuing exactly one conversion request.
-		if _, startErr := p.controlMusicService(ctx, "start"); startErr != nil {
-			// The start path has the actionable reason, such as a missing
-			// registered runtime or a health timeout. Do not hide it behind the
-			// stale initial connection error.
+	if _, code := safeToolFailure(err); code == "yue_bridge_unavailable" {
+		started, startErr := p.recoverMusicDependency(ctx)
+		if startErr != nil {
 			return "", startErr
 		}
-		health, _, err = p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+		if started {
+			health, _, err = p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+		}
 	}
 	if err != nil {
 		return "", err
@@ -185,6 +182,7 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 		task := agentTask{ParentID: p.trace.TaskID, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, MusicSpec: spec, MusicTitle: in.Title, MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID, Title: "RVC翻唱 · " + in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "查询原RVC任务结果，不重写歌词、不重生成旋律、不重复转换", State: "waiting", Next: time.Now().Add(20 * time.Second)}
 		task.OwnerRequested = p.privileged()
 		task.Constraints = p.taskConstraints("rvc_cover", in.VoiceID, in.VoiceProfile, in.Reference)
+		p.inheritTaskDelivery(&task)
 		if err := p.manager.agent.task(task); err != nil {
 			return "", err
 		}

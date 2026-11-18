@@ -10,6 +10,16 @@ import (
 	"runtime"
 )
 
+// Repair a known missing dependency before enqueueing any generation. This
+// never runs after a submission whose outcome may be unknown.
+func (p *permittedTools) recoverMusicDependency(ctx context.Context) (bool, error) {
+	if runtime.GOOS != "windows" || (!p.privileged() && !p.workspaceExecutionAllowed()) || !p.manager.windowsMusicRegistered() {
+		return false, nil
+	}
+	_, err := p.controlMusicService(ctx, "start")
+	return err == nil, err
+}
+
 // Called only by the installed capability's bound host-service callback.
 func (p *permittedTools) startMusicServiceHost(ctx context.Context) (string, error) {
 	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)

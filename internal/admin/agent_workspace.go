@@ -218,7 +218,7 @@ func (p *permittedTools) AgentContext(ctx context.Context) string {
 			break
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"kind": "agent_workspace_index", "workspace_policy": "每个微信账号、群和私聊均独立。普通成员仅当前会话；可信主人可按需读取本账号已授权资料。工作区、项目和执行器都必须通过工具发现，不能搜索宿主磁盘或假定路径。", "requester_is_trusted_owner": p.privileged(), "shared_guide_index": index, "shared_guides_total": len(guides), "shared_guide_has_more": len(guides) > len(index), "instruction": "普通聊天不要读取工作区资料。仅在任务实际需要时：用workspace_read/search读取某份指南或会话笔记；用project_list/project_read定位项目；可信主人先理解跨会话请求，再用agent_global_search或wechat_read按来源会话读取。跨会话内容只用于当前任务；管理员在群内未指定接收地时，已读取的跨会话结果默认私聊回传管理员。需要文件、语音或视频投递时显式指定目标并等待微信回执。执行前读取相关指南，结果以实际输出和回执为准。"})
+	b, _ := json.Marshal(map[string]any{"kind": "agent_workspace_index", "workspace_policy": "每个微信账号、群和私聊均独立。普通成员仅当前会话；可信主人可按需读取本账号已授权资料。工作区、项目和执行器都必须通过工具发现，不能搜索宿主磁盘或假定路径。", "requester_is_trusted_owner": p.privileged(), "wechat_directory_tool": "To identify a named contact or group for an owner request, look up the exact displayed name with wechat_conversations(query=name) before asking for clarification. For a timed action with delivery to a named group, agent_reminder(kind=execute,delivery_group=name) performs that lookup and binds the exact ID.", "shared_guide_index": index, "shared_guides_total": len(guides), "shared_guide_has_more": len(guides) > len(index), "instruction": "普通聊天不要读取工作区资料。仅在任务实际需要时：用workspace_read/search读取某份指南或会话笔记；用project_list/project_read定位项目；可信主人先理解跨会话请求，再用agent_global_search或wechat_read按来源会话读取。跨会话内容只用于当前任务；管理员在群内未指定接收地时，已读取的跨会话结果默认私聊回传管理员。需要文件、语音或视频投递时显式指定目标并等待微信回执。执行前读取相关指南，结果以实际输出和回执为准。"})
 	return string(b)
 }
 func (s *Server) workspaceRoutes(mux *http.ServeMux) {

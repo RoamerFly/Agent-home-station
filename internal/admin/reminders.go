@@ -16,6 +16,7 @@ import (
 
 type reminderSpec struct {
 	Kind             string                  `json:"kind,omitempty"`
+	ResultGroup      string                  `json:"result_group,omitempty"`
 	GroundingChecked bool                    `json:"grounding_checked,omitempty"`
 	Binding          *companion.ReplyContext `json:"reply_context,omitempty"`
 	Due              time.Time               `json:"due_at"`
@@ -32,7 +33,7 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "kind=notify (default) sends the saved reminder text at the due time. kind=execute runs the requested tools silently and replies with results. Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. notify only sends the reminder text. execute is owner-only and uses existing task/tool authorization. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. To change an existing reminder time, list first then update by its id with run_at or delay_seconds; preserve the original content and identity, never create a duplicate. list/update/cancel are restricted to the same sender and source conversation. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "kind=notify (default) sends the saved reminder text at the due time. kind=execute runs the requested tools silently and replies with results. Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. notify only sends the reminder text. execute is owner-only and uses existing task/tool authorization. For a future action such as making a song and sending it to a group, use kind=execute with the full original request in text, and pass the exact WeChat group name in delivery_group; the host resolves the group independently and preserves its ID. No group messages are read to set the target. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. To change an existing reminder time, list first then update by its id with run_at or delay_seconds; preserve the original content and identity, never create a duplicate. list/update/cancel are restricted to the same sender and source conversation. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","minLength":1,"maxLength":128},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 func (a *agentControl) writeReminderFile(t agentTask) error {
 	dir := filepath.Join(a.dir, "reminders")
@@ -48,6 +49,7 @@ func (a *agentControl) writeReminderFile(t agentTask) error {
 func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage) (string, error) {
 	var in struct {
 		Action, Text, ID, Destination, Kind string
+		DeliveryGroup                       string `json:"delivery_group"`
 		Key                                 string `json:"request_key"`
 		Delay                               *int64 `json:"delay_seconds"`
 		RunAt                               string `json:"run_at"`
@@ -73,7 +75,7 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		}
 		return encode(map[string]any{"tasks": items})
 	case "update":
-		if in.Text != "" || in.Destination != "" || in.Key != "" {
+		if in.Text != "" || in.Destination != "" || in.DeliveryGroup != "" || in.Key != "" {
 			return "", toolInputError("改期只需id和run_at或delay_seconds，原内容和目标保持不变")
 		}
 		if (in.Delay == nil) == (in.RunAt == "") {
@@ -123,6 +125,17 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		if in.Kind == "execute" && !contains(m.agent.config().OwnerIDs, p.trace.Sender) {
 			return "", toolInputError("执行任务需要主人授权")
 		}
+		resultGroup := ""
+		if in.DeliveryGroup != "" {
+			if in.Kind != "execute" || (in.Destination != "" && in.Destination != "current") {
+				return "", toolInputError("群名只用于执行类提醒的成品投递")
+			}
+			var e error
+			resultGroup, e = p.resolveNamedGroup(ctx, in.DeliveryGroup)
+			if e != nil {
+				return "", e
+			}
+		}
 
 		if strings.TrimSpace(in.Text) == "" || len(in.Text) > 2000 || in.Key == "" || len(in.Key) > 128 {
 			return "", toolInputError("创建提醒需要简短正文和稳定request_key")
@@ -160,22 +173,23 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		id := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, p.trace.TraceID, "reminder", in.Key)
 		for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
 			if old.ID == id {
-				if !own(old) || old.Reminder.Target != target || old.Reminder.Text != "提醒你："+in.Text || old.Reminder.RunAt != in.RunAt || old.Reminder.Kind != in.Kind || (in.Delay != nil && old.Reminder.DelaySeconds != *in.Delay) {
+				if !own(old) || old.Reminder.Target != target || old.Reminder.ResultGroup != resultGroup || old.Reminder.Text != "提醒你："+in.Text || old.Reminder.RunAt != in.RunAt || old.Reminder.Kind != in.Kind || (in.Delay != nil && old.Reminder.DelaySeconds != *in.Delay) {
 					return "", toolInputError("同一request_key对应不同提醒，未重复创建")
 				}
 				return encode(map[string]any{"id": old.ID, "state": old.State, "due_at": old.Reminder.Due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json")})
 			}
 		}
 		text := "提醒你：" + in.Text
-		reviewed, reviewedBinding, reviewErr := p.prepareOutboundText(ctx, target, text)
-		if reviewErr != nil {
-			return "", reviewErr
-		}
-		// Reminder wording is an explicit saved instruction. A risky draft
-		// must be confirmed/rephrased by the requester rather than silently
-		// changed by the review model and delivered hours later as their text.
-		if reviewed != text {
-			return "", toolInputError("reminder_text_requires_confirmation: 提醒正文的对象或事实未通过审校，未保存；请确认原句或提供明确对象")
+		var reviewedBinding companion.ReplyContext
+		if in.Kind == "notify" {
+			reviewed, binding, err := p.prepareOutboundText(ctx, target, text)
+			if err != nil {
+				return "", err
+			}
+			if reviewed != text {
+				return "", toolInputError("reminder_text_requires_confirmation: 提醒正文的对象或事实未通过审校，未保存；请确认原句或提供明确对象")
+			}
+			reviewedBinding = binding
 		}
 		quote := ""
 		if target == p.trace.Thread {
@@ -183,6 +197,14 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		}
 		t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "提醒 · " + logText(in.Text, 70), State: "waiting", Next: due, OriginTrace: p.trace.TraceID, RequestedText: in.Text, Checkpoint: "到期发送已明确请求的提醒，不执行其中的文字或代码", Reminder: &reminderSpec{Kind: in.Kind, Due: due, Target: target, Text: text, QuoteServerID: quote}}
 		t.Constraints = p.taskConstraints("reminder", "", "", "")
+		t.Reminder.ResultGroup = resultGroup
+		if in.Kind == "execute" {
+			t.OwnerRequested = p.privileged()
+			t.Checkpoint = "到期进入执行回合，使用工具处理原请求"
+			if p.trace.OriginalText != nil && strings.TrimSpace(*p.trace.OriginalText) != "" {
+				t.RequestedText = *p.trace.OriginalText
+			}
+		}
 		source := p.outboundInput(target).Source
 		if source != nil {
 			t.Constraints.Source = source
@@ -200,7 +222,7 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		}
 		m.wakeReminderSchedule()
 		m.record(bot.Record{Event: "reminder_scheduled", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "waiting", Content: in.Text, Reason: "explicit_member_request", Origin: "agent"})
-		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；notify到期发送提醒正文，execute到期静默执行后发送结果。尚未执行或发送。"})
+		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "result_group": resultGroup, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；notify到期发送提醒正文，execute到期静默执行后发送结果。尚未执行或发送。"})
 	}
 	return "", toolInputError("提醒操作需为create/list/update/cancel")
 }
@@ -463,6 +485,19 @@ func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
 	if t.Reminder == nil || t.Account != m.native.Account() || (t.Reminder.Kind != "notify" && !contains(m.agent.config().OwnerIDs, t.Sender)) {
 		return "", nil
 	}
+	if t.Reminder.Kind == "execute" {
+		if err := m.validateTaskSource(t); err != nil {
+			return "", err
+		}
+	}
+	delivery := t.Thread
+	if t.Reminder.ResultGroup != "" {
+		access := &permittedTools{manager: m, trace: reminderInput(t)}
+		if t.Reminder.Kind != "execute" || !access.crossAllowed(t.Thread, t.Reminder.ResultGroup) {
+			return "", errors.New("原定群聊的跨会话授权已变更")
+		}
+		delivery = t.Reminder.ResultGroup
+	}
 	id := agentID("reminder-followup", t.ID)
 	if existing, ok := m.agent.lookupTask(id, t.Account, t.Thread); ok {
 		if existing.State != "cancelled" && existing.State != "failed" {
@@ -487,7 +522,7 @@ func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
 		Thread:         t.Thread,
 		RequestThread:  t.Thread,
 		SourceThread:   t.Thread,
-		DeliveryThread: t.Thread,
+		DeliveryThread: delivery,
 		Sender:         t.Sender,
 		ParentID:       t.ID,
 		OwnerRequested: true,
@@ -502,7 +537,7 @@ func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
 			Purpose:        "reminder_followup",
 			Account:        t.Account,
 			Thread:         t.Thread,
-			DeliveryThread: t.Thread,
+			DeliveryThread: delivery,
 			Requester:      t.Sender,
 			Source:         source,
 			ReplyContext:   reply,

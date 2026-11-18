@@ -119,7 +119,7 @@ func (h wechatTextHost) Invalid(message string) error { return toolInputError(me
 
 func (h wechatTextHost) Allowed(thread string) bool {
 	p := h.p
-	return p.privileged() && p.agentToolEnabled("wechat_send_text") && p.conversationReadAllowed(thread) && p.manager.Config().Companion.Permissions.ReplyText && p.manager.agentTaskActive(p.trace)
+	return p.privileged() && p.agentToolEnabled("wechat_send_text") && p.conversationReadAllowed(thread) && p.taskDeliveryAllowed(thread) && p.manager.Config().Companion.Permissions.ReplyText && p.manager.agentTaskActive(p.trace)
 }
 func (h wechatTextHost) InvalidTextRequest() error {
 	return localAgentError(errors.New("发送目标、正文或request_key无效，或文字发送权限未开启；可发送到当前或其他已授权会话"))

@@ -172,6 +172,52 @@ func (m *Manager) rememberNativeConversations(names map[string]string) error {
 	return writePrivate(filepath.Join(m.dir, "account-conversations.json"), data)
 }
 
+// Resolve the full group name against the live directory and reject homonyms.
+// The selected ID is persisted so a later rename cannot redirect a reminder.
+func (p *permittedTools) resolveNamedGroup(ctx context.Context, name string) (string, error) {
+	settings := p.manager.agent.config()
+	if !p.privileged() || !settings.ReadConversations || !settings.CrossConversation {
+		return "", toolInputError("按群名设置任务投递需要主人及跨会话授权")
+	}
+	reader, ok := p.manager.native.(nativeCatalog)
+	if !ok {
+		return "", toolInputError("当前微信后台暂时无法读取群目录")
+	}
+	name = strings.TrimSpace(name)
+	matches := map[string]string{}
+	cursor := ""
+	seen := map[string]bool{}
+	for {
+		page, err := reader.Catalog(ctx, "groups", "", name, cursor)
+		if err != nil {
+			return "", toolInputError("当前微信后台暂时无法读取群目录")
+		}
+		for id, label := range nativeConversationNames("groups", page) {
+			if name != "" && strings.EqualFold(strings.TrimSpace(label), name) {
+				matches[id] = label
+			}
+		}
+		if page.NextCursor == nil || *page.NextCursor == "" {
+			break
+		}
+		cursor = *page.NextCursor
+		if seen[cursor] {
+			return "", toolInputError("群目录分页未完成，请重试查询")
+		}
+		seen[cursor] = true
+	}
+	if len(matches) != 1 {
+		return "", toolInputError("群目录未找到唯一同名群，请用wechat_conversations核对群名和群ID")
+	}
+	if err := p.manager.rememberNativeConversations(matches); err != nil {
+		return "", err
+	}
+	for id := range matches {
+		return id, nil
+	}
+	return "", toolInputError("群目录没有匹配项")
+}
+
 func (p *permittedTools) listAccountConversations(ctx context.Context, raw json.RawMessage) (string, error) {
 	var in struct {
 		Offset, Limit int
@@ -196,7 +242,9 @@ func (p *permittedTools) listAccountConversations(ctx context.Context, raw json.
 	if in.Refresh == nil || *in.Refresh {
 		found := map[string]string{}
 		if native, ok := m.native.(nativeCatalog); ok {
-			for _, kind := range []string{"groups", "threads", "contacts"} {
+			// The group catalog has the current group names. Read it last so an
+			// old thread label cannot replace the name used in WeChat.
+			for _, kind := range []string{"threads", "contacts", "groups"} {
 				cursor, seen := "", map[string]bool{}
 				for {
 					if err := ctx.Err(); err != nil {
@@ -247,13 +295,20 @@ func (p *permittedTools) listAccountConversations(ctx context.Context, raw json.
 		}
 	}
 	ids := make([]string, 0, len(names))
-	query := strings.ToLower(in.Query)
+	query := strings.ToLower(strings.TrimSpace(in.Query))
 	for id := range names {
 		if query == "" || strings.Contains(strings.ToLower(id+" "+names[id]), query) {
 			ids = append(ids, id)
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool {
+		if query != "" {
+			left := strings.EqualFold(names[ids[i]], query) || strings.EqualFold(ids[i], query)
+			right := strings.EqualFold(names[ids[j]], query) || strings.EqualFold(ids[j], query)
+			if left != right {
+				return left
+			}
+		}
 		if names[ids[i]] != names[ids[j]] {
 			return names[ids[i]] < names[ids[j]]
 		}

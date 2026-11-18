@@ -12,6 +12,11 @@ func (m *Manager) taskReplyReady(in companion.Input, d companion.Decision) bool 
 	if !ok {
 		return false
 	}
+	if t.DeliveryThread != "" && t.DeliveryThread != t.Thread {
+		// This round still owns the source conversation. Delivery uses the
+		// destination-bound tools and their own receipt ledger.
+		return d.Action == "silent"
+	}
 	if t.State == "completed" || t.State == "needs_review" || t.WorkCompleted || len(d.MediaIDs) > 0 || d.ImageID != "" {
 		return true
 	}

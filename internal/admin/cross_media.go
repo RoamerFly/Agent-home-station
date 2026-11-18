@@ -100,7 +100,7 @@ func crossBatchAccepted(batch crossMediaBatch) bool {
 }
 
 func (p *permittedTools) crossAllowed(source, target string) bool {
-	return p.privileged() && p.manager.agent.config().CrossConversation && p.manager.accountThreadKnown(source) && p.manager.accountThreadKnown(target)
+	return p.privileged() && p.manager.agent.config().CrossConversation && p.manager.accountThreadKnown(source) && p.manager.accountThreadKnown(target) && p.taskDeliveryAllowed(target)
 }
 func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (string, error) {
 	return wechatapp.SendMedia(ctx, args, &wechatMediaHost{p: p, raw: slices.Clone(args)})

@@ -212,7 +212,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		autonomous = access.AutonomousActions()
 	}
 	if autonomous {
-		system += "\n行动没有次数配额。每次接到工具反馈后重新思考；同一只读操作初始尝试后最多再作两次有变化的修正，随后换方法、保存续办或如实结束。需要等待用持久任务，当前未完成不标记completed。"
+		system += "\n每次按工具反馈的 execution.error_code 和 recovery 决定下一步。参数错误按 schema 改正，依赖未就绪按 next_tool 核实并恢复，提交不确定时沿用原任务或回执编号核对。只读失败可以换来源或读取方式。需要等待用持久任务，完成以实际产物和回执为依据。"
 	}
 	if max < 0 {
 		max = 0
@@ -1019,7 +1019,7 @@ func deliveryFeedbackTool(name string) bool {
 // separate idempotency and delivery rules.
 func isReadOnlyRecoveryTool(name string) bool {
 	switch name {
-	case "memory_search", "memory_read", "wechat_read", "wechat_read_legacy", "wechat_cross_memory", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "agent_task_status", "agent_tasks":
+	case "memory_search", "memory_read", "wechat_read", "wechat_conversations", "wechat_read_legacy", "wechat_cross_memory", "video_inspect", "web_search", "web_audio_search", "web_fetch", "media_recent", "project_list", "project_read", "tool_output_read", "discover_tools", "plugin_job_status", "music_local_status", "music_service_status", "station_tool_status", "agent_task_status", "agent_tasks":
 		return true
 	}
 	return false

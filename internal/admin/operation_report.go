@@ -54,7 +54,7 @@ func (p *permittedTools) trustedTaskSource(thread string) bool {
 }
 
 func (p *permittedTools) recordCrossSourceMessages(thread string, raw string) {
-	if thread == "" || thread == p.trace.Thread {
+	if thread == "" {
 		return
 	}
 	var page struct {
@@ -85,6 +85,12 @@ func (p *permittedTools) trustedTaskSourceMessages(thread string, ids []string) 
 		return true
 	}
 	available := map[string]bool{}
+	if source := p.trace.Source; source != nil && source.Account == p.trace.Account &&
+		source.Thread == thread && source.Sender == p.trace.Sender &&
+		source.Integrity != "conflicted" && source.Integrity != "quarantined" {
+		available[source.MessageID] = true
+		available[source.EventID] = true
+	}
 	for _, id := range p.crossSourceMessages[thread] {
 		available[id] = true
 	}

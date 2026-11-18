@@ -277,6 +277,15 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
 		health := p.probeYuE(ctx)
+		if health.State == "bridge_unavailable" {
+			started, err := p.recoverMusicDependency(ctx)
+			if err != nil {
+				return "", err
+			}
+			if started {
+				health = p.probeYuE(ctx)
+			}
+		}
 
 		if health.Ready && health.BridgeVersion < 4 && in.SingingVoice != "character" && health.SingingVoiceProfile != "" {
 			return "", yueError("yue_bridge_upgrade_required")
@@ -345,6 +354,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			task := agentTask{ParentID: p.trace.TaskID, MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			task.OwnerRequested = p.privileged()
 			task.Constraints = p.taskConstraints("music", "", spec.VoiceProfile, spec.Reference)
+			p.inheritTaskDelivery(&task)
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
