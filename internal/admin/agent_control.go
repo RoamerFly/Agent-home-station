@@ -253,6 +253,10 @@ func newAgentControl(dir string) (*agentControl, error) {
 	}
 	changed := false
 	for id, t := range a.data.Tasks {
+		if settleCompletedProcessPlaceholder(&t) {
+			a.data.Tasks[id] = t
+			changed = true
+		}
 		if t.Reminder != nil && t.State == "running" {
 			t.State = "waiting_delivery"
 			t.Next = time.Now()
@@ -503,6 +507,14 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	seenProcessOrigins := map[string]bool{}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		if settleCompletedProcessPlaceholder(&t) {
+			if _, err := m.agent.updateSnapshot(t); err != nil {
+				m.log("completed_process_placeholder_settle_failed")
+			} else if err := m.agent.retireSettled(); err != nil {
+				m.log("completed_process_placeholder_archive_failed")
+			}
+			continue
+		}
 		// A pre-existing worker could create several process watcher records for
 		// one source message while a continuation was being interrupted. Keep
 		// the newest watcher and settle older duplicates without starting their

@@ -129,3 +129,69 @@ func TestDuplicateWatcherOnlyClearsZeroCountDelivery(t *testing.T) {
 		t.Fatal("non-empty delivery evidence was cleared")
 	}
 }
+
+func TestStartupSettlesCompletedProcessPlaceholderWithoutTouchingValidWaits(t *testing.T) {
+	f := setup(t)
+	base := func(id string) agentTask {
+		return agentTask{ID: id, Account: "test", Thread: "filehelper", Sender: "owner", Title: "后台程序", ProcessID: "process-" + id, OriginTrace: "source-" + id, State: "waiting_delivery", WorkCompleted: true, Delivery: &bot.TaskDelivery{Trace: "delivery-" + id, State: "waiting_delivery"}}
+	}
+	completed := base("completed-process")
+	validWaiting := base("valid-waiting")
+	validWaiting.State = "waiting"
+	secondWaiting := base("second-valid-waiting")
+	secondWaiting.State = "waiting"
+	secondWaiting.Delivery = nil
+	withReceipt := base("with-receipt")
+	withReceipt.Delivery.Expected = 1
+	withPending := base("with-pending")
+	withPending.PendingOperations = []string{"send-result"}
+	for _, task := range []agentTask{completed, validWaiting, secondWaiting, withReceipt, withPending} {
+		if err := f.manager.agent.task(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reloaded, err := newAgentControl(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.lookupTask(completed.ID, completed.Account, completed.Thread)
+	if !ok || got.State != "completed" || got.Delivery != nil || got.ProcessID != completed.ProcessID || got.OriginTrace != completed.OriginTrace {
+		t.Fatalf("completed process placeholder was not safely archived: %+v", got)
+	}
+	checks := []struct {
+		id                string
+		state             string
+		deliveryNil       bool
+		expected          int
+		pendingOperations int
+	}{
+		{validWaiting.ID, "waiting", false, 0, 0},
+		{secondWaiting.ID, "waiting", true, 0, 0},
+		{withReceipt.ID, "waiting_delivery", false, 1, 0},
+		{withPending.ID, "waiting_delivery", false, 0, 1},
+	}
+	for _, check := range checks {
+		got, ok = reloaded.lookupTask(check.id, "test", "filehelper")
+		if !ok || got.State != check.state || (got.Delivery == nil) != check.deliveryNil || got.Delivery != nil && got.Delivery.Expected != check.expected || len(got.PendingOperations) != check.pendingOperations {
+			t.Fatalf("valid waiting task was changed: %s %+v", check.id, got)
+		}
+	}
+}
+
+func TestClaimSettlesCompletedProcessPlaceholderCreatedAfterStartup(t *testing.T) {
+	f := setup(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.mu.Unlock()
+	task := agentTask{ID: "claim-process", Account: "test", Thread: "filehelper", Sender: "owner", Title: "后台程序", ProcessID: "process-claim", OriginTrace: "source-claim", State: "waiting_delivery", WorkCompleted: true, Delivery: &bot.TaskDelivery{Trace: "delivery-claim", State: "waiting_delivery"}}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.claimAgentTask(time.Now().Add(time.Minute), func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || got.State != "completed" || got.Delivery != nil || got.ProcessID != task.ProcessID {
+		t.Fatalf("claim did not settle completed process placeholder: %+v", got)
+	}
+}

@@ -26,6 +26,19 @@ func clearZeroCountTaskDelivery(t *agentTask) {
 	}
 }
 
+// A process watcher can finish its real work before the reply path creates a
+// delivery plan. Older snapshots may still contain the empty waiting_delivery
+// placeholder. It carries no receipt or pending operation and must not keep a
+// completed watcher active across restart or a later claim pass.
+func settleCompletedProcessPlaceholder(t *agentTask) bool {
+	if t.Title != "后台程序" || t.ProcessID == "" || t.State != "waiting_delivery" || !t.WorkCompleted || !isZeroCountTaskDelivery(t) {
+		return false
+	}
+	t.Delivery = nil
+	t.State = "completed"
+	return true
+}
+
 func isZeroCountTaskDelivery(t *agentTask) bool {
 	d := t.Delivery
 	return d != nil && d.State == "waiting_delivery" && d.Expected == 0 && d.Accepted == 0 && d.TextExpected == 0 && d.TextAccepted == 0 && d.TotalParts == 0 && d.AcceptedParts == 0 && d.PendingJob == "" && d.FailureReason == "" && len(t.PendingOperations) == 0
