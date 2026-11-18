@@ -74,7 +74,11 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		return "", errors.New("incoming_file_identity_mismatch")
 	}
 	record := func(state, reason string) {
-		m.record(bot.Record{Event: "incoming_file_" + state, Category: "received", ThreadID: msg.ThreadID, Sender: msg.SenderID, MessageID: msg.ID, MessageTime: msg.CreatedAt, Content: name, Status: state, Reason: reason, Origin: "media"})
+		event, category := "incoming_file_", "received"
+		if sentConversationFile(msg) {
+			event, category = "sent_file_read_", "tool"
+		}
+		m.record(bot.Record{Event: event + state, Category: category, ThreadID: msg.ThreadID, Sender: msg.SenderID, MessageID: msg.ID, MessageTime: msg.CreatedAt, Content: name, Status: state, Reason: reason, Origin: "media"})
 	}
 	record("identified", "")
 	if !safeMediaFilename(name) {
@@ -131,6 +135,10 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 	asset, e := m.storeStreamAsset(in, pending, name, typ, n, &msg)
 	if e != nil {
 		return "", e
+	}
+	if sentConversationFile(msg) {
+		record("available", asset.ID)
+		return asset.ID, nil
 	}
 	extension := filepath.Ext(name)
 	if len(extension) > 16 {
@@ -223,6 +231,12 @@ func (a mediaUnderstanding) rememberIncomingOriginal(ctx context.Context, msg li
 	return asset, data, nil
 }
 
+// A native outgoing file belongs to the authorized conversation. Its sender
+// is the bot, even when another member asks for a revision later.
+func sentConversationFile(msg linuxnative.Message) bool {
+	return msg.Direction == "outgoing" && msg.ServerID != "" && msg.SenderID != "" && msg.FileAttachmentName() != ""
+}
+
 // resolveInboundArtifact is deliberately narrow.  A follow-up may select an
 // earlier original only when it comes from the same sender, or when the user
 // explicitly quoted that precise message.  Ambient group attachments are not
@@ -238,11 +252,11 @@ func (m *Manager) resolveInboundArtifact(ctx context.Context, in companion.Input
 		return zero, linuxnative.Message{}, errors.New("inbound_artifact_lookup_unavailable")
 	}
 	msg, err := reader.Message(ctx, messageID)
-	if err != nil || msg.ID != messageID || msg.AccountID != in.Account || msg.ThreadID != in.Thread || msg.Direction != "incoming" || msg.IsQuotedText() {
+	if err != nil || msg.ID != messageID || msg.AccountID != in.Account || msg.ThreadID != in.Thread || (msg.Direction != "incoming" && !sentConversationFile(msg)) || msg.IsQuotedText() {
 		return zero, linuxnative.Message{}, errors.New("inbound_artifact_message_unavailable")
 	}
 	quoted := in.QuotedSource != nil && in.QuotedSource.MessageID == messageID
-	if !quoted && (in.Sender == "" || in.Sender != msg.SenderID) {
+	if !sentConversationFile(msg) && !quoted && (in.Sender == "" || in.Sender != msg.SenderID) {
 		return zero, linuxnative.Message{}, errors.New("inbound_artifact_sender_ambiguous")
 	}
 	if msg.Type != 3 && msg.Type != 34 && msg.FileAttachmentName() == "" {

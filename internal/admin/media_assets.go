@@ -41,6 +41,7 @@ type assetOriginal struct {
 	Parent              *assetOriginal
 }
 type assetRequest struct {
+	SentFile           bool      `json:"sent_file,omitempty"`
 	SourceFingerprint  string    `json:"source_fingerprint,omitempty"`
 	MessageTime        string    `json:"message_time,omitempty"`
 	TraceID            string    `json:"trace_id,omitempty"`
@@ -191,6 +192,7 @@ func (a *mediaAsset) noteOriginal(in companion.Input, msg *linuxnative.Message) 
 		return
 	}
 	if msg != nil && msg.ID == r.TraceID && msg.AccountID == in.Account && msg.ThreadID == in.Thread && msg.SenderID == r.RequesterID && msg.CreatedAt == r.MessageTime {
+		r.SentFile = sentConversationFile(*msg)
 		r.SourceMessageType = msg.Type
 		r.SourceFingerprint = inboundFingerprint(*msg)
 	}

@@ -81,7 +81,7 @@ func (h wechatAttachmentHost) DownloadAttachment(ctx context.Context, thread, me
 	in := h.input(thread)
 	quoted := in.QuotedSource != nil && in.QuotedSource.MessageID == message && in.QuotedSource.Account == in.Account && in.QuotedSource.Thread == thread && in.QuotedSource.Sender == msg.SenderID
 	if err != nil || !h.Allowed(ctx, thread) || msg.ID != message || msg.AccountID != in.Account || msg.ThreadID != thread ||
-		msg.Direction != "incoming" || msg.IsQuotedText() || (!quoted && (in.Sender == "" || in.Sender != msg.SenderID)) || msg.FileAttachmentName() == "" {
+		(!sentConversationFile(msg) && (msg.Direction != "incoming" || (!quoted && (in.Sender == "" || in.Sender != msg.SenderID)))) || msg.IsQuotedText() || msg.FileAttachmentName() == "" {
 		return wechatapp.ErrAttachmentDenied
 	}
 	if _, err = (mediaUnderstanding{manager: h.p.manager}).receiveFile(ctx, msg, msg.FileAttachmentName()); err != nil {

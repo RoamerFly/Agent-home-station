@@ -120,6 +120,16 @@ func sameArtifactRequester(a mediaAsset, sender string) bool {
 	return false
 }
 
+// Private conversations can reuse files the bot itself delivered there.
+func hasSentFileSource(a mediaAsset, source string) bool {
+	for _, origin := range a.Requests {
+		if origin.SentFile && (source == "" || origin.TraceID == source) {
+			return true
+		}
+	}
+	return false
+}
+
 func artifactHasSource(a mediaAsset, id string) bool {
 	if id == "" {
 		return true
@@ -151,7 +161,7 @@ func (p *permittedTools) artifactAsset(id, sourceID string) (mediaAsset, error) 
 		}
 		// Members share retained files within the same group. The account and
 		// conversation match above still prevents access across conversations.
-		if !sameArtifactRequester(a, p.trace.Sender) && !strings.HasSuffix(p.trace.Thread, "@chatroom") {
+		if !sameArtifactRequester(a, p.trace.Sender) && !strings.HasSuffix(p.trace.Thread, "@chatroom") && !hasSentFileSource(a, sourceID) {
 			quote := p.trace.QuotedSource
 			if quote == nil || quote.MessageID == "" || quote.Account != p.trace.Account || quote.Thread != p.trace.Thread || (sourceID != "" && sourceID != quote.MessageID) || !artifactHasSource(a, quote.MessageID) {
 				return mediaAsset{}, toolInputError("artifact_requester_not_authorized")
