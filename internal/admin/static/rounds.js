@@ -189,6 +189,21 @@
     }
     return [...groups.values()].map(round => {
       present(round);
+      // A receipt-wait record without an inbound turn, a submitted send, or
+      // any task continuation is an orphan from an interrupted pre-submit
+      // draft. It must not keep the execution-round list in "进行中" forever.
+      // Keep the raw event visible for diagnosis, but settle the projection
+      // so a later restart can no longer resurrect a phantom active task.
+      if (round.status === 'checking_receipt') {
+        const hasInbound = round.entries.some(e => e.event === 'message_received' || e.category === 'received');
+        const hasSend = round.entries.some(e => e.send_id || e.event === 'message_sent' || e.category === 'sent');
+        const hasContinuation = round.entries.some(e => ['generation_started', 'task_delivery_updated', 'agent_task_started', 'agent_task_saved'].includes(e.event));
+        const onlyReceiptWait = round.entries.length > 0 && round.entries.every(e => ['delivery_waiting', 'tool_progress_receipt_waiting'].includes(e.event));
+        if (onlyReceiptWait && !hasInbound && !hasSend && !hasContinuation) {
+          round.status = 'needs_review';
+          round.orphanReceipt = true;
+        }
+      }
       round.group = groupByStatus[round.status] || 'pending';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       round.source_kind ||= round.system ? 'system' : 'private';

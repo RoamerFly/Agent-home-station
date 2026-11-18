@@ -37,6 +37,13 @@ test('only an actual receipt check is shown as Agent work until the receipt arri
  assert.equal(project([wait,update,end,receipt])[0].group,'done');
  assert.equal(project([entry(1,{event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12)}),entry(2,{event:'send_failed',category:'error',status:'failed',reason:'receipt_wait_timeout'})])[0].status,'checking_receipt');
 });
+test('orphan receipt wait without an inbound turn is settled instead of shown as active forever',()=>{
+ const row=entry(1,{thread_id:'wxid-owner',source_kind:'private',source:'主人',event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'未提交的旧草稿'});
+ const [round]=project([row]);
+ assert.equal(round.status,'needs_review');
+ assert.equal(round.group,'done');
+ assert.equal(round.orphanReceipt,true);
+});
 test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
  const items=[];
  for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
