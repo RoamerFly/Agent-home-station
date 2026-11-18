@@ -639,6 +639,12 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			websession.Fail(w, 409, "请先启用该项目工具")
 			return
 		}
+		if externalToolDataID(id) && (in.Action == "enable" || in.Action == "start" || in.Action == "restart") {
+			if err := s.loadExternalToolConfig(ctx, host, current); err != nil {
+				websession.Fail(w, 409, "工具配置暂未加载，请检查 data/publictools/"+id+"/config.json 的必填项、格式，或等待在途任务结束。已有配置保留。")
+				return
+			}
+		}
 		if in.Action == "start" || in.Action == "stop" || in.Action == "restart" {
 			err = s.changeLifecycle(ctx, host, id, current.Revision, in.Action, in.IdleOnly)
 		} else if id == localOBSPackage {

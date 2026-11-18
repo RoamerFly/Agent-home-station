@@ -1,6 +1,9 @@
 package station
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -41,6 +44,8 @@ func TestExtractedToolPackageLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := map[string]any{}
+	schema := []byte(`{"type":"object","additionalProperties":false,"required":["api_key"],"properties":{"label":{"type":"string","default":"initial"},"api_key":{"type":"string","x-secret":true,"x-host-only":true}}}`)
+	schemaDigest := sha256.Sum256(schema)
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() {
 			continue
@@ -54,10 +59,14 @@ func TestExtractedToolPackageLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			manifest["id"] = "drop-in-echo"
+			manifest["files"].(map[string]any)["config.schema.json"] = hex.EncodeToString(schemaDigest[:])
 			data, err = json.Marshal(manifest)
 			if err != nil {
 				t.Fatal(err)
 			}
+		}
+		if entry.Name() == "config.schema.json" {
+			data = schema
 		}
 		if err = os.WriteFile(filepath.Join(dir, entry.Name()), data, 0600); err != nil {
 			t.Fatal(err)
@@ -81,6 +90,23 @@ func TestExtractedToolPackageLifecycle(t *testing.T) {
 	if installed := localProjectToolByID(t, f, id); installed["state"] != "disabled" {
 		t.Fatal(installed)
 	}
+	configPath := filepath.Join(stationPublicToolsDir(f.handler.home.dataDir), id, externalToolConfigFile)
+	if _, err = os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatal("configuration exists before enable", err)
+	}
+	installed := localProjectToolByID(t, f, id)
+	mutate(map[string]any{"action": "enable", "revision": localProjectToolRevision(t, installed)}, 409)
+	initial, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(initial, []byte(`"label": "initial"`)) || bytes.Contains(initial, []byte("api_key")) {
+		t.Fatal("first-run template has wrong defaults")
+	}
+	userConfig := []byte(`{"values":{"label":"owner configuration"},"secrets":{"api_key":"synthetic-owner-secret"}}`)
+	if err = os.WriteFile(configPath, userConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
 	agent := localToolSet{access: &localWorkspaceAccess{home: f.handler.home}, projectTools: tools}
 	for _, step := range []struct{ action, state string }{{"enable", "idle"}, {"start", "running"}, {"stop", "idle"}} {
 		if result, err := agent.callStationLifecycle(t.Context(), "station_tool_"+step.action, json.RawMessage(`{"tool_id":"drop-in-echo"}`)); err != nil {
@@ -89,5 +115,40 @@ func TestExtractedToolPackageLifecycle(t *testing.T) {
 		if current := localProjectToolByID(t, f, id); current["state"] != step.state {
 			t.Fatal(step.action, current)
 		}
+	}
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := tools.forFish(record.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := host.store.ConfigurationForExecution(t.Context(), id)
+	if err != nil || string(loaded.Values["label"]) != `"owner configuration"` || string(loaded.Values["api_key"]) != `"synthetic-owner-secret"` {
+		t.Fatal("owner configuration was not loaded", err)
+	}
+	if raw, err := os.ReadFile(configPath); err != nil || !bytes.Equal(raw, userConfig) {
+		t.Fatal("owner file was overwritten", err)
+	}
+	if raw, _ := json.Marshal(localProjectToolByID(t, f, id)); bytes.Contains(raw, []byte("synthetic-owner-secret")) {
+		t.Fatal("configuration leaked through tool catalog")
+	}
+	mutate(map[string]any{"action": "start", "revision": localProjectToolRevision(t, localProjectToolByID(t, f, id))}, 200)
+	unchanged, err := host.store.ConfigurationForExecution(t.Context(), id)
+	if err != nil || unchanged.Revision != loaded.Revision {
+		t.Fatal("no-op start changed configuration revision", err)
+	}
+	invalid := []byte(`{"values":{"label":13}}`)
+	if err = os.WriteFile(configPath, invalid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	mutate(map[string]any{"action": "restart", "revision": localProjectToolRevision(t, localProjectToolByID(t, f, id))}, 409)
+	retained, err := host.store.ConfigurationForExecution(t.Context(), id)
+	if err != nil || retained.Revision != loaded.Revision {
+		t.Fatal("invalid config replaced accepted revision", err)
+	}
+	if raw, err := os.ReadFile(configPath); err != nil || !bytes.Equal(raw, invalid) {
+		t.Fatal("invalid config was replaced", err)
 	}
 }

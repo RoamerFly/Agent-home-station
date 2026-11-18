@@ -111,7 +111,9 @@ func discoverToolPackages(directory string) map[string]discoveredToolPackage {
 	for id := range duplicates {
 		delete(packages, id)
 	}
-	delete(packages, "mobile-control")
+	for _, id := range []string{"mobile-control", "catalog", "registrations", "validation"} {
+		delete(packages, id)
+	}
 	return packages
 }
 
