@@ -61,7 +61,7 @@
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
-    if (view === "project-tools") loadProjectTools();
+    if (view === "project-tools") refreshProjectToolsPanel();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
     if (view === "settings") void loadToolGrants();
@@ -90,7 +90,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -5835,11 +5835,56 @@
       }
     }
   }
+  function toolBackendKind(backend) {
+    return { local: "本机运行", loopback: "本机服务", api: "上游 API", web: "联网读取", service: "外部服务", package: "按配置运行", unknown: "后端待确认" }[backend.kind] || "后端待确认";
+  }
+  function toolBackendState(backend) {
+    return { configured: "已配置", missing: "未配置", unreadable: "配置不可读", declared: "由工具包设置" }[backend.state] || "配置待确认";
+  }
+  function toolBackendCredential(backend) {
+    const label = { api_key: "API Key", session: "登录凭据", local_token: "服务令牌", local_password: "本机密码" }[backend.credential];
+    return label ? `${label}${backend.key_configured ? "已保存" : "未填写"}` : "无需 API Key";
+  }
+  function toolCardBackends(tool) {
+    const list = appElement("div", "", "tool-card-backends");
+    for (const backend of tool.backends || []) {
+      const row = appElement("div", "", "tool-card-backend");
+      const mode = appElement("span", toolBackendKind(backend), "tool-backend-mode");
+      mode.dataset.kind = backend.kind;
+      const meta = [backend.origin || backend.model, backend.credential ? toolBackendCredential(backend) : toolBackendState(backend)].filter(Boolean);
+      row.append(mode, appElement("span", meta.join(" · "), "tool-card-backend-meta"));
+      list.append(row);
+    }
+    return list;
+  }
+  function toolBackendDetails(tool, showTitle = true) {
+    const section = appElement("section", "", "tool-backend-section");
+    if (showTitle) section.append(appElement("h3", "后端配置 · 工作站"));
+    const grid = appElement("div", "", "tool-backend-grid");
+    for (const backend of tool.backends || []) {
+      const record = appElement("div", "", "tool-backend-record");
+      const heading = appElement("div", "", "tool-backend-heading");
+      const mode = appElement("span", toolBackendKind(backend), "tool-backend-mode");
+      mode.dataset.kind = backend.kind;
+      heading.append(appElement("strong", backend.name), mode);
+      const fields = appElement("dl", "", "tool-backend-fields");
+      const rows = [["配置状态", toolBackendState(backend)]];
+      if (backend.origin || backend.kind === "api") rows.push(["服务地址", backend.origin || "未填写"]);
+      if (backend.model) rows.push(["模型", backend.model]);
+      if (!["package", "unknown"].includes(backend.kind)) rows.push(["凭据", toolBackendCredential(backend)]);
+      for (const [label, value] of rows) fields.append(appElement("dt", label), appElement("dd", value));
+      record.append(heading, fields);
+      grid.append(record);
+    }
+    section.append(grid);
+    return section;
+  }
   function projectToolStatus(tool) {
     if (tool?.external_package && !tool.installed) {
       if (!tool.catalog_available) return ["工具包不可用", tool.reason || "请检查工具包清单。"];
       return ["已发现，待安装", `版本 ${tool.package_version}。确认工具来源和权限后即可安装。`];
     }
+    if (tool?.state === "not_available") return ["暂不可运行", tool.reason || "工具包没有可用的执行后端。"];
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
     if (tool && tool.id === "obs-preview") {
       const preview = projectTools.obsPreview;
@@ -5984,7 +6029,7 @@
   }
   function normalizeLocalVision(configuration) {
     const value = configuration || {};
-    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "max" };
+    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["low", "high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "low" };
   }
   function validLocalVision(view) {
     return view && Number.isSafeInteger(view.revision) && view.revision >= 0 && view.configuration && typeof view.configuration === "object" && typeof view.key_configured === "boolean" && typeof view.ready === "boolean";
@@ -6052,7 +6097,7 @@
     const current = projectTools, vision = current.vision;
     const section = appElement("section", "", "local-vision-settings");
     const heading = appElement("div", "", "local-vision-heading");
-    heading.append(appElement("strong", "视觉观察"), appElement("span", vision.server?.ready ? "已配置 · 按需调用" : vision.server?.reason || "为本机大肥鱼单独配置视觉服务。"));
+    heading.append(appElement("strong", "工作站视觉 API 设置"), appElement("span", vision.server?.ready ? "已保存 · 按需调用" : "配置上游地址、视觉模型和 API Key。"));
     section.append(heading);
     if (vision.error) section.append(appElement("p", vision.error, "local-vision-error"));
     if (vision.notice) section.append(appElement("p", vision.notice, "local-vision-note"));
@@ -6064,9 +6109,9 @@
     const busy = vision.loading || vision.saving;
     const fields = [
       ["接口类型", "backend", { select: [["openai-compatible", "OpenAI 兼容"], ["deepseek", "DeepSeek"]] }],
-      ["视觉模型", "model", {}], ["接口地址", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
+      ["视觉模型", "model", {}], ["上游接口 URL", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
       ["输出上限", "max_tokens", { type: "number", min: 1, inputMode: "numeric" }],
-      ["思考强度", "reasoning_effort", { select: [["high", "高"], ["max", "最高"]] }]
+      ["思考强度", "reasoning_effort", { select: [["low", "低"], ["high", "高"], ["max", "最高"]] }]
     ];
     for (const [label, key, options] of fields) {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: busy || key === "reasoning_effort" && !draft.thinking });
@@ -6075,7 +6120,7 @@
       field.input.addEventListener("input", () => { draft[key] = field.input.value; vision.error = ""; vision.notice = ""; });
       form.append(field.label);
     }
-    const keyLabel = appElement("label", "服务密钥");
+    const keyLabel = appElement("label", "API Key");
     const key = document.createElement("input"); key.type = "password"; key.autocomplete = "new-password"; key.id = "local-vision-key";
     key.value = vision.apiKey; key.placeholder = vision.server.key_configured ? "已配置，留空保留" : "填写此服务的密钥"; key.disabled = busy || vision.clearKey;
     key.addEventListener("input", () => { vision.apiKey = key.value; }); keyLabel.append(key); form.append(keyLabel);
@@ -6703,12 +6748,77 @@
   let toolFileOffset = 0, toolFilesLoading = false;
   const selectedToolFiles = new Set();
   function updateFileSelection(){ $("#tool-files-delete").disabled=toolFilesLoading||!selectedToolFiles.size; $("#tool-files-delete").textContent=`删除选中文件（${selectedToolFiles.size}）`; const boxes=[...$("#tool-files-list").querySelectorAll("input[type=checkbox]")]; $("#tool-files-select-all").checked=boxes.length>0&&boxes.every(x=>x.checked); $("#tool-files-select-all").indeterminate=boxes.some(x=>x.checked)&&!boxes.every(x=>x.checked); }
-  function selectToolPanel(files) {
-    $("#tool-files-panel").hidden = !files; $("#project-tools-list").hidden = files;
-    for (const [id, selected] of [["tool-files-tab", files], ["tool-catalog-tab", !files]]) {
+  function selectToolPanel(panel) {
+    projectTools.panel = panel;
+    if (panel !== "files") projectTools.catalogPanel = panel;
+    $("#project-tool-tabs").hidden = panel === "files";
+    $("#tool-files-panel").hidden = panel !== "files";
+    $("#project-tools-list").hidden = panel !== "public";
+    $("#app-tools-panel").hidden = panel !== "applications";
+    $("#tool-files-tab").textContent = panel === "files" ? "返回工具列表" : "工具缓存与产物";
+    $("#tool-files-tab").setAttribute("aria-expanded", String(panel === "files"));
+    for (const [id, selected] of [["tool-catalog-tab", panel === "public"], ["app-tools-tab", panel === "applications"]]) {
       $("#" + id).setAttribute("aria-selected", String(selected)); $("#" + id).tabIndex = selected ? 0 : -1;
     }
-    if (files) void loadToolFiles(false);
+    refreshProjectToolsPanel();
+  }
+  function refreshProjectToolsPanel() {
+    if (projectTools.panel === "files") return loadToolFiles(false);
+    if (projectTools.panel === "applications") return loadApplicationTools();
+    return loadProjectTools();
+  }
+  async function loadApplicationTools() {
+    const current = projectTools, panel = $("#app-tools-panel");
+    if (current.appToolsLoading || !state.home?.initialized) return;
+    current.appToolsLoading = true;
+    panel.setAttribute("aria-busy", "true");
+    $("#project-tools-refresh").disabled = true;
+    if (!panel.childElementCount) panel.append(appElement("p", "正在读取应用工具…", "project-tools-empty"));
+    const labels = {
+      wechat: ["会话与消息读取", "文字、图片、语音、视频和文件收发", "通讯录与群管理", "视频号账号内解析"],
+      douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
+      bilibili: ["稿件与评论读取", "账号授权与视频发布"]
+    };
+    const wechatLabels = { "media-understanding": "微信媒体理解", "share-reader": "微信分享解析", "music": "微信音乐与投递", "web-search": "微信 Agent 搜索配置" };
+    try {
+      const [catalog, config] = await Promise.allSettled([request("/api/local/apps/catalog"), request("/api/local/project-tools/applications")]);
+      if (current !== projectTools) return;
+      if (catalog.status === "rejected") throw catalog.reason;
+      const cards = (catalog.value.applications || []).map((app) => {
+        const card = appElement("article", "", "app-tool-group");
+        const head = appElement("div", "", "app-tool-group-heading");
+        const manage = appElement("button", app.id === "wechat" ? "管理应用" : "应用中心", "button compact secondary");
+        manage.type = "button";
+        manage.setAttribute("aria-label", app.id === "wechat" ? "管理微信工具" : `在应用中心管理${app.name || app.id}工具`);
+        manage.addEventListener("click", () => {
+          if (app.id === "wechat") openLegacyWechatConsole();
+          else { setActiveView("apps"); $("#apps-tab").focus(); }
+        });
+        head.append(appElement("h3", app.name || app.id), manage);
+        const capabilities = appElement("ul", "", "app-tool-capabilities");
+        for (const label of labels[app.id] || []) capabilities.append(appElement("li", label));
+        card.append(head, capabilities);
+        if (app.id === "wechat" && config.status === "fulfilled") {
+          for (const live of config.value.wechat || []) {
+            if (!wechatLabels[live.id] || !live.backends?.length) continue;
+            const detail = appElement("details", "", "app-tool-settings-summary");
+            detail.append(appElement("summary", wechatLabels[live.id]), toolBackendDetails(live, false));
+            card.append(detail);
+          }
+        }
+        if (app.id === "wechat" && (config.status === "rejected" || !config.value.wechat?.length)) card.append(appElement("p", "微信当前配置暂不可读。", "local-vision-note"));
+        return card;
+      });
+      panel.replaceChildren(...(cards.length ? cards : [appElement("p", "没有可显示的应用工具。", "project-tools-empty")]));
+    } catch (error) {
+      if (current === projectTools) panel.replaceChildren(appElement("p", error.message, "project-tools-empty"));
+    } finally {
+      if (current === projectTools) {
+        current.appToolsLoading = false;
+        panel.setAttribute("aria-busy", "false");
+        if (current.panel === "applications") $("#project-tools-refresh").disabled = false;
+      }
+    }
   }
   async function loadToolFiles(append) {
     if (toolFilesLoading) return; toolFilesLoading = true;
@@ -6743,11 +6853,11 @@
     $("#project-tools-refresh").disabled = current.loading || Boolean(current.applying);
     $("#project-tools-refresh").textContent = current.loading ? "刷新中…" : "刷新";
     if (current.loading && !current.tools.length) {
-      list.replaceChildren(appElement("p", "正在读取项目工具…", "project-tools-empty"));
+      list.replaceChildren(appElement("p", "正在扫描公共工具目录…", "project-tools-empty"));
       return;
     }
     if (!current.tools.length) {
-      list.replaceChildren(appElement("p", "当前没有可管理的项目工具。", "project-tools-empty"));
+      list.replaceChildren(appElement("p", "公共工具目录中没有可显示的工具包。", "project-tools-empty"));
       return;
     }
     list.replaceChildren(...current.tools.map((tool) => {
@@ -6759,7 +6869,9 @@
       const mark = appElement("span", (tool.name || "工").slice(0, 1), "project-tool-mark");
       mark.setAttribute("aria-hidden", "true");
       heading.append(mark, appElement("strong", tool.name || tool.id));
-      card.append(heading, appElement("span", status, "tool-card-status"), appElement("span", "设置与资源", "tool-card-link"));
+      card.append(heading, appElement("span", status, "tool-card-status"));
+      if (tool.backends?.length) card.append(toolCardBackends(tool));
+      card.append(appElement("span", "设置与资源", "tool-card-link"));
       card.addEventListener("click", () => {
         if (current.openID === "obs-preview") invalidateOBSDeploymentView(current);
         current.openID = tool.id; renderProjectToolDialog(tool);
@@ -6803,9 +6915,10 @@
       const [status, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
       const summary = appElement("div", "", "project-tool-permissions");
-      summary.append(appElement("strong", status));
-      if (note && tool.id !== "obs-preview") summary.append(appElement("span", note));
+      summary.append(appElement("strong", `运行状态 · ${status}`));
+      if (note && tool.id !== "obs-preview" && tool.id !== "media-understanding") summary.append(appElement("span", note));
       detail.append(summary);
+      if (tool.backends?.length) detail.append(toolBackendDetails(tool));
       if (tool.id === "media-understanding" && tool.installed) detail.append(renderLocalVision(tool));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
@@ -6904,7 +7017,7 @@
     try {
       const payload = await request("/api/local/project-tools");
       if (current !== projectTools) return;
-      current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string") : [];
+      current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string" && tool.directory_package === true) : [];
       const obs = current.tools.find((tool) => tool.id === "obs-preview");
       if (obs?.obs_preview) applyOBSPreview(obs.obs_preview);
       if (obs?.installed) await loadOBSPreview(current);
@@ -7479,15 +7592,22 @@
       await loadToolFiles(false);$("#tool-files-status").textContent=`已永久删除 ${result.deleted.length} 个文件。${result.failures.length ? "未删除："+result.failures.join("；") : "关联索引已更新。"}`;
     }catch(error){$("#tool-files-status").textContent=error.message;}finally{updateFileSelection();}
   });
-  $("#tool-files-tab").addEventListener("click", () => selectToolPanel(true));
-  $("#tool-catalog-tab").addEventListener("click", () => selectToolPanel(false));
-  for (const id of ["tool-files-tab", "tool-catalog-tab"]) $("#"+id).addEventListener("keydown", (event) => {
-    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const files = event.key === "End" || (event.key !== "Home" && id === "tool-catalog-tab"); selectToolPanel(files); $(files ? "#tool-files-tab" : "#tool-catalog-tab").focus(); }
-  });
+  $("#tool-files-tab").addEventListener("click", () => selectToolPanel(projectTools.panel === "files" ? projectTools.catalogPanel : "files"));
+  for (const [id, panel] of [["tool-catalog-tab", "public"], ["app-tools-tab", "applications"]]) {
+    const tab = $("#" + id);
+    tab.addEventListener("click", () => selectToolPanel(panel));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "public" : event.key === "End" ? "applications" : panel === "public" ? "applications" : "public";
+      selectToolPanel(next);
+      $(next === "public" ? "#tool-catalog-tab" : "#app-tools-tab").focus();
+    });
+  }
   $("#tool-files-refresh").addEventListener("click", () => loadToolFiles(false));
   $("#tool-files-more").addEventListener("click", () => loadToolFiles(true));
   $("#tool-files-query").addEventListener("keydown", (event) => { if (event.key === "Enter") loadToolFiles(false); });
-  $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
+  $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); refreshProjectToolsPanel(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel);
   $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });

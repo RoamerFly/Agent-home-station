@@ -41,7 +41,7 @@ func TestToolFileKindsExcludeModels(t *testing.T) {
 		}
 	}
 }
-func TestLifecycleCatalogIncludesAllOfficialTools(t *testing.T) {
+func TestLifecycleCatalogIncludesPublicTools(t *testing.T) {
 	s := &localProjectTools{}
 	items := s.packages(t.Context(), nil, nil)
 	found := map[string]bool{}
@@ -51,7 +51,10 @@ func TestLifecycleCatalogIncludesAllOfficialTools(t *testing.T) {
 		}
 		found[p.ID] = true
 	}
-	for _, id := range []string{"music", "speech", "share-reader", "web-search", "rvc", "yue", "audio-cpp"} {
+	if found["music"] || found["mobile-control"] {
+		t.Fatal("application-specific package exposed through public lifecycle")
+	}
+	for _, id := range []string{"speech", "share-reader", "web-search", "rvc", "yue", "audio-cpp"} {
 		if !found[id] {
 			t.Fatal("missing", id)
 		}

@@ -239,11 +239,15 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		h, connected, runtimeErr := s.manager.installedPluginRuntime()
 		statuses := map[string]any{}
 		readiness := make(map[string]pluginPackageReadiness, len(installed))
+		backends := make(map[string][]pluginhost.ToolBackendView)
 		for _, item := range installed {
 			if runtimeErr == nil {
 				statuses[item.Package.ID] = h.Status(item.Package.ID)
 			}
 			readiness[item.Package.ID] = pluginReadiness(r.Context(), store, h, item, connected)
+			if views := s.manager.toolBackendViews(r.Context(), store, item.Package.ID); len(views) > 0 {
+				backends[item.Package.ID] = views
+			}
 		}
 		retained := []string{}
 		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && (state.Revision > 0 || hadMobileInstalled) {
@@ -280,7 +284,7 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			"description": "接收会话消息，按账号和会话权限发送文字、图片、语音或视频。",
 			"permissions": []string{"当前账号", "已授权会话"}, "uninstallable": false,
 		})
-		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "readiness": readiness, "retained_ids": retained, "builtins": builtins})
+		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "readiness": readiness, "backends": backends, "retained_ids": retained, "builtins": builtins})
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/prepare", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {

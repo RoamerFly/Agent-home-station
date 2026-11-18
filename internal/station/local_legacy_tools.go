@@ -1,8 +1,7 @@
 package station
 
-// Transitional discovery uses the existing tool host in place: no duplicated
-// package stores, credentials or private configurations. App-specific tools
-// remain in their application; only installed public packages are projected.
+// Read-only projection of existing WeChat tool configurations for the
+// application tools view. Public tool lifecycle never calls this host.
 import (
 	"bytes"
 	"context"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"time"
 	"wechat-bot/internal/pluginhost"
-	"wechat-bot/internal/websession"
 )
 
 type legacyToolClient struct {
@@ -141,8 +139,9 @@ func (s *localProjectTools) legacyToolViews(ctx context.Context) map[string]loca
 		return views
 	}
 	var data struct {
-		Installed []pluginhost.InstalledPackage `json:"installed"`
-		Connected bool                          `json:"runtime_connected"`
+		Installed []pluginhost.InstalledPackage           `json:"installed"`
+		Connected bool                                    `json:"runtime_connected"`
+		Backends  map[string][]pluginhost.ToolBackendView `json:"backends"`
 		Runtimes  map[string]struct {
 			State string `json:"state"`
 		} `json:"runtimes"`
@@ -176,70 +175,11 @@ func (s *localProjectTools) legacyToolViews(ctx context.Context) map[string]loca
 			}
 			v.Reason += r.Message
 		}
+		v.Backends = data.Backends[v.ID]
+		for i := range v.Backends {
+			v.Backends[i].Scope = "微信工具宿主"
+		}
 		views[v.ID] = v
 	}
 	return views
-}
-func (s *localProjectTools) changeLegacyTool(w http.ResponseWriter, r *http.Request, view localProjectToolView) {
-	var in struct {
-		Action   string `json:"action"`
-		Revision int    `json:"revision"`
-		Approve  bool   `json:"approve_artifacts"`
-		IdleOnly bool   `json:"idle_only"`
-	}
-	if !websession.Decode(w, r, &in) {
-		return
-	}
-	if in.Revision != view.Revision {
-		websession.Fail(w, 409, "工具状态已变化，请刷新")
-		return
-	}
-	if in.Action != "enable" && in.Action != "disable" && in.Action != "start" && in.Action != "stop" && in.Action != "restart" {
-		websession.Fail(w, 400, "请在原工具配置中管理安装版本")
-		return
-	}
-	if (in.Action == "start" || in.Action == "restart") && !view.Enabled {
-		websession.Fail(w, 409, "请先启用工具")
-		return
-	}
-	c, err := s.legacyToolClient(r.Context())
-	// Service control itself runs through the music package. Stop its backend
-	// before closing that package's executor, so stop/disable can complete.
-	if err == nil && view.ID == "music" && (in.Action == "stop" || in.Action == "disable" || in.Action == "restart") {
-		_, err = c.request(r.Context(), "POST", "/api/speech/music-service/stop", map[string]any{})
-	}
-	if err == nil {
-		action := in.Action
-		if action == "enable" {
-			action = "enable_on_demand"
-		}
-		if action == "disable" {
-			action = "stop"
-		}
-		if action == "stop" && in.Action == "stop" {
-			action = "stop_session"
-		}
-		_, err = c.request(r.Context(), "POST", "/api/plugin-packages/"+view.ID+"/runtime", map[string]any{"action": action, "revision": view.Revision, "idle_only": in.IdleOnly})
-	}
-	if err == nil && view.ID == "music" {
-		switch in.Action {
-		case "start":
-			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/start", map[string]any{})
-		case "restart":
-			_, err = c.request(r.Context(), "POST", "/api/speech/music-service/start", map[string]any{})
-		}
-	}
-	if err != nil {
-		websession.Fail(w, 409, err.Error())
-		return
-	}
-	s.legacyMu.Lock()
-	s.legacyAt = time.Time{}
-	s.legacyMu.Unlock()
-	v, ok := s.legacyToolViews(r.Context())[view.ID]
-	if !ok {
-		websession.Fail(w, 503, "操作已提交，状态暂不可读")
-		return
-	}
-	websession.Respond(w, 200, map[string]any{"tool": v})
 }

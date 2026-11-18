@@ -225,19 +225,23 @@
                   <h3>项目工具</h3>
 
                 </div>
-                <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
+                <div class="project-tool-actions">
+                  <button id="tool-files-tab" class="button compact secondary" aria-controls="tool-files-panel" aria-expanded="false" type="button">工具缓存与产物</button>
+                  <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
+                </div>
               </header>
               <p id="project-tools-feedback" class="project-tools-feedback" role="status"></p>
-              <div class="project-tool-actions" role="tablist" aria-label="项目工具栏目">
-                <button id="tool-catalog-tab" class="button compact secondary" role="tab" aria-selected="true" aria-controls="project-tools-list" type="button">工具管理</button>
-                <button id="tool-files-tab" class="button compact secondary" role="tab" aria-selected="false" aria-controls="tool-files-panel" tabindex="-1" type="button">工具缓存与产物</button>
+              <div id="project-tool-tabs" class="project-tool-actions project-tool-tabs" role="tablist" aria-label="项目工具栏目">
+                <button id="tool-catalog-tab" class="button compact secondary" role="tab" aria-selected="true" aria-controls="project-tools-list" type="button">公共工具</button>
+                <button id="app-tools-tab" class="button compact secondary" role="tab" aria-selected="false" aria-controls="app-tools-panel" tabindex="-1" type="button">应用内工具</button>
               </div>
-              <section id="tool-files-panel" role="tabpanel" aria-labelledby="tool-files-tab" hidden>
+              <section id="tool-files-panel" aria-labelledby="tool-files-tab" hidden>
                 <div class="project-tool-actions"><label>搜索文件或来源 <input id="tool-files-query" type="search" placeholder="文件名、路径、任务编号"></label><label>类别 <select id="tool-files-kind"><option value="">全部</option><option>素材</option><option>产物</option></select></label><button id="tool-files-refresh" class="button compact secondary" type="button">查询 / 刷新</button></div>
                 <div class="project-tool-actions"><label><input id="tool-files-select-all" type="checkbox"> 全选已加载文件</label><button id="tool-files-delete" type="button" class="button compact secondary" disabled>删除选中文件</button><span>永久删除资源及关联文件，操作前显示影响清单</span></div>
                 <p id="tool-files-status" role="status"></p><div id="tool-files-list"></div>
                 <button id="tool-files-more" class="button compact secondary" type="button" hidden>加载更多</button>
               </section>
+              <div id="app-tools-panel" role="tabpanel" aria-labelledby="app-tools-tab" class="project-tools-list" hidden></div>
               <div id="project-tools-list" role="tabpanel" aria-labelledby="tool-catalog-tab" class="project-tools-list" aria-busy="false"></div>
             </section>
 

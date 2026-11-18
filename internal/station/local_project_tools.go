@@ -60,26 +60,28 @@ type localProjectToolHost struct {
 }
 
 type localProjectToolView struct {
-	PackageVersion     string                   `json:"package_version,omitempty"`
-	PackageDigest      string                   `json:"package_digest,omitempty"`
-	PackagePermissions []string                 `json:"package_permissions,omitempty"`
-	ExternalPackage    bool                     `json:"external_package,omitempty"`
-	Host               string                   `json:"host,omitempty"`
-	ID                 string                   `json:"id"`
-	Name               string                   `json:"name"`
-	CatalogAvailable   bool                     `json:"catalog_available"`
-	RuntimeReady       bool                     `json:"runtime_ready"`
-	PDFReady           bool                     `json:"pdf_ready"`
-	UpdateAvailable    bool                     `json:"update_available"`
-	Installed          bool                     `json:"installed"`
-	Enabled            bool                     `json:"enabled"`
-	Revision           int                      `json:"revision"`
-	State              string                   `json:"state"`
-	Reason             string                   `json:"reason,omitempty"`
-	VoiceProfiles      []localRVCVoice          `json:"voice_profiles,omitempty"`
-	SpeechVoices       []localTTSVoice          `json:"speech_voices,omitempty"`
-	AudioModels        []localAudioCppModelView `json:"audio_models,omitempty"`
-	Workflows          []localComfyWorkflowView `json:"workflows,omitempty"`
+	DirectoryPackage   bool                         `json:"directory_package"`
+	Backends           []pluginhost.ToolBackendView `json:"backends,omitempty"`
+	PackageVersion     string                       `json:"package_version,omitempty"`
+	PackageDigest      string                       `json:"package_digest,omitempty"`
+	PackagePermissions []string                     `json:"package_permissions,omitempty"`
+	ExternalPackage    bool                         `json:"external_package,omitempty"`
+	Host               string                       `json:"host,omitempty"`
+	ID                 string                       `json:"id"`
+	Name               string                       `json:"name"`
+	CatalogAvailable   bool                         `json:"catalog_available"`
+	RuntimeReady       bool                         `json:"runtime_ready"`
+	PDFReady           bool                         `json:"pdf_ready"`
+	UpdateAvailable    bool                         `json:"update_available"`
+	Installed          bool                         `json:"installed"`
+	Enabled            bool                         `json:"enabled"`
+	Revision           int                          `json:"revision"`
+	State              string                       `json:"state"`
+	Reason             string                       `json:"reason,omitempty"`
+	VoiceProfiles      []localRVCVoice              `json:"voice_profiles,omitempty"`
+	SpeechVoices       []localTTSVoice              `json:"speech_voices,omitempty"`
+	AudioModels        []localAudioCppModelView     `json:"audio_models,omitempty"`
+	Workflows          []localComfyWorkflowView     `json:"workflows,omitempty"`
 }
 
 func (s *localProjectTools) runtimeReady() bool {
@@ -196,7 +198,7 @@ func (s *localProjectTools) close() error {
 var localProjectPackages = []struct{ ID, Name string }{
 	{pluginruntime.DocumentWorkshopID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
-	{localasr.PluginID, "本地媒体识别"},
+	{localasr.PluginID, "媒体识别"},
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
@@ -225,8 +227,20 @@ func (s *localProjectTools) isActive(id string) bool {
 	return s.active[id] > 0
 }
 
-func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string, discovered ...map[string]discoveredToolPackage) (localProjectToolView, error) {
-	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string, discovered ...map[string]discoveredToolPackage) (view localProjectToolView, err error) {
+	view = localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+	var sources map[string]discoveredToolPackage
+	if len(discovered) > 0 {
+		sources = discovered[0]
+	} else {
+		sources = discoverToolPackages(s.options.CatalogDirectory)
+	}
+	defer func() {
+		_, view.DirectoryPackage = sources[id]
+		if err == nil {
+			s.populateToolBackends(ctx, host, &view)
+		}
+	}()
 	// A catalog migration placeholder is not an executable tool. Keep it visible
 	// with an actionable reason instead of reporting a ready Python runtime.
 	contract, contractErr := catalog.ContractFor(id)
@@ -333,12 +347,6 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		}
 	}
 	if contractErr != nil {
-		var sources map[string]discoveredToolPackage
-		if len(discovered) > 0 {
-			sources = discovered[0]
-		} else {
-			sources = discoverToolPackages(s.options.CatalogDirectory)
-		}
 		if source, ok := sources[id]; ok {
 			view.ExternalPackage = true
 			view.PackageVersion, view.PackageDigest = source.Version, source.digest
@@ -355,9 +363,6 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	}
 	item, err := host.store.Installed(ctx, view.ID)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && item.Removed {
-		if legacy, ok := s.legacyToolViews(ctx)[id]; ok {
-			return legacy, nil
-		}
 		return view, nil
 	}
 	if err != nil {
@@ -409,7 +414,7 @@ func (s *localProjectTools) packages(ctx context.Context, host *localProjectTool
 	}
 	if items, err := catalog.List(); err == nil {
 		for _, p := range items {
-			if p.ID != "mobile-control" && !seen[p.ID] {
+			if p.ID != "mobile-control" && p.ID != "music" && !seen[p.ID] {
 				out = append(out, struct{ ID, Name string }{p.ID, p.Name})
 				seen[p.ID] = true
 			}
@@ -418,24 +423,16 @@ func (s *localProjectTools) packages(ctx context.Context, host *localProjectTool
 	if host != nil {
 		if items, err := host.store.List(ctx); err == nil {
 			for _, p := range items {
-				if !p.Removed && p.Package.ID != "mobile-control" && !seen[p.Package.ID] {
+				if !p.Removed && p.Package.ID != "mobile-control" && p.Package.ID != "music" && !seen[p.Package.ID] {
 					out = append(out, struct{ ID, Name string }{p.Package.ID, p.Package.Name})
 					seen[p.Package.ID] = true
 				}
 			}
 		}
 	}
-	if s.home != nil {
-		for id, v := range s.legacyToolViews(ctx) {
-			if !seen[id] {
-				out = append(out, struct{ ID, Name string }{id, v.Name})
-				seen[id] = true
-			}
-		}
-	}
 	ids := make([]string, 0, len(sources))
 	for id := range sources {
-		if !seen[id] {
+		if id != "music" && !seen[id] {
 			ids = append(ids, id)
 		}
 	}
@@ -452,6 +449,15 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 	s.comfyDeploymentRoutes(owner, mux)
 	s.yueDeploymentRoutes(owner, mux)
 	s.audioCppDeploymentRoutes(owner, mux)
+	mux.HandleFunc("GET /api/local/project-tools/applications", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		rows := make([]localProjectToolView, 0)
+		for _, v := range s.legacyToolViews(r.Context()) {
+			rows = append(rows, v)
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+		w.Header().Set("Cache-Control", "no-store")
+		websession.Respond(w, 200, map[string]any{"wechat": rows})
+	}))
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.Read()
 		if err != nil {
@@ -494,10 +500,6 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 		sources := discoverToolPackages(s.options.CatalogDirectory)
 		for _, p := range s.packages(r.Context(), host, sources) {
 			if p.ID == id {
-				if view, e := s.projectView(r.Context(), host, id, p.Name, sources); e == nil && view.Host == "legacy" {
-					s.changeLegacyTool(w, r, view)
-					return
-				}
 				s.changeProjectTool(w, r, id, p.Name)
 				return
 			}

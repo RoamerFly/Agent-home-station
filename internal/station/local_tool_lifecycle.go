@@ -201,18 +201,14 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 	if in.ToolID == "" || len(views) != 1 {
 		return "", errors.New("工具未登记，请先查看状态")
 	}
-	if action == "enable" && (!views[0].Installed || !views[0].ExternalPackage || views[0].Host == "legacy") {
+	if action == "enable" && (!views[0].Installed || !views[0].ExternalPackage) {
 		return "", errors.New("请由主人在项目工具中安装并授权该工具")
 	}
 	payload, _ := json.Marshal(map[string]any{"action": action, "revision": views[0].Revision})
 	request := httptest.NewRequest(http.MethodPut, "/", bytes.NewReader(payload)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
-	if views[0].Host == "legacy" {
-		s.changeLegacyTool(response, request, views[0])
-	} else {
-		s.changeProjectTool(response, request, views[0].ID, views[0].Name)
-	}
+	s.changeProjectTool(response, request, views[0].ID, views[0].Name)
 	if response.Code != 200 {
 		return "", errors.New(strings.TrimSpace(response.Body.String()))
 	}
