@@ -231,16 +231,30 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 						}
 					}
 					candidate.PendingTasks = tasks
-					if err := e.bindSummarySources(ctx, in, &candidate, scope.Messages, previous.Sources); err == nil {
+					if err := e.bindSummarySources(ctx, in, &candidate, scope.Messages, previous.Sources); err == nil && len(candidate.Sources) > 0 {
 						parsed, validationErr = candidate, nil
+					} else {
+						validationErr = ErrSummarySourceInvalid
 					}
 				}
 			}
 			if validationErr != nil {
 				if errors.Is(validationErr, ErrSummarySourceMissing) || errors.Is(validationErr, ErrSummarySourceInvalid) {
-					return false, validationErr
+					// A model can keep inventing a source ID even after the
+					// read-only repair call. The verified local fallback still
+					// represents this batch and lets compression finish without
+					// weakening provenance checks or overwriting the old summary.
+					fallback := verifiedFallbackSummary(selected)
+					fitFallbackSummary(&fallback)
+					if bindErr := e.bindSummarySources(context.WithoutCancel(ctx), in, &fallback, selected, previous.Sources); bindErr == nil {
+						parsed, validationErr = fallback, nil
+					} else {
+						return false, validationErr
+					}
 				}
-				return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
+				if validationErr != nil {
+					return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
+				}
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package companion
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -107,5 +108,34 @@ func TestCompressionFailureReleasesInProgressStateForRetry(t *testing.T) {
 	model.out = repairedSummary
 	if changed, err := engine.CompressContext(context.Background(), in, true); !changed || err != nil {
 		t.Fatalf("retry remained blocked after failure: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestCompressionUnknownSourcesFallsBackToVerifiedBatch(t *testing.T) {
+	cfg, store, in := compressionFixture(t)
+	model := &compressionFailureModel{out: `{"version":1,"people":[],"topics":[{"source_event_ids":["unknown-event"],"text":"模型编造的来源","state":"active","at":"2026-11-18T00:00:00Z"}],"current_focus":"","media":[],"pending_tasks":[],"preferences":[],"corrections":[]}`}
+	engine, err := New(cfg, store, model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := engine.CompressContext(context.Background(), in, true)
+	if err != nil || !changed {
+		t.Fatalf("unknown source did not fall back to verified batch: changed=%v err=%v", changed, err)
+	}
+	scope, err := store.Read(ScopeID(in.Channel, in.Account, in.Thread), cfg, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary contextSummary
+	if err := json.Unmarshal([]byte(scope.Summary), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Sources) == 0 || scope.CompressedCount != 20 {
+		t.Fatalf("fallback did not save verified summary: sources=%d compressed=%d", len(summary.Sources), scope.CompressedCount)
+	}
+	for _, source := range summary.Sources {
+		if source.EventID == "unknown-event" {
+			t.Fatal("fallback retained model-invented source")
+		}
 	}
 }

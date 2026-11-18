@@ -62,8 +62,15 @@ func TestCompressionRepairsSourceIDsAndPreservesOnlyVerifiedClaims(t *testing.T)
 		if bad {
 			var summary contextSummary
 			json.Unmarshal([]byte(after.Summary), &summary)
-			if err != nil || !changed || len(summary.Topics) != 0 || after.CompressedCount == 0 {
+			if err != nil || !changed || after.CompressedCount == 0 {
 				t.Fatal(changed, err, after.CompressedCount, summary.Topics)
+			}
+			for _, topic := range summary.Topics {
+				for _, source := range topic.SourceEventIDs {
+					if source == "invented-unseen-source" {
+						t.Fatal("fallback retained an invented source")
+					}
+				}
 			}
 		} else {
 			var summary contextSummary
