@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -59,22 +60,26 @@ type localProjectToolHost struct {
 }
 
 type localProjectToolView struct {
-	Host             string                   `json:"host,omitempty"`
-	ID               string                   `json:"id"`
-	Name             string                   `json:"name"`
-	CatalogAvailable bool                     `json:"catalog_available"`
-	RuntimeReady     bool                     `json:"runtime_ready"`
-	PDFReady         bool                     `json:"pdf_ready"`
-	UpdateAvailable  bool                     `json:"update_available"`
-	Installed        bool                     `json:"installed"`
-	Enabled          bool                     `json:"enabled"`
-	Revision         int                      `json:"revision"`
-	State            string                   `json:"state"`
-	Reason           string                   `json:"reason,omitempty"`
-	VoiceProfiles    []localRVCVoice          `json:"voice_profiles,omitempty"`
-	SpeechVoices     []localTTSVoice          `json:"speech_voices,omitempty"`
-	AudioModels      []localAudioCppModelView `json:"audio_models,omitempty"`
-	Workflows        []localComfyWorkflowView `json:"workflows,omitempty"`
+	PackageVersion     string                   `json:"package_version,omitempty"`
+	PackageDigest      string                   `json:"package_digest,omitempty"`
+	PackagePermissions []string                 `json:"package_permissions,omitempty"`
+	ExternalPackage    bool                     `json:"external_package,omitempty"`
+	Host               string                   `json:"host,omitempty"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	CatalogAvailable   bool                     `json:"catalog_available"`
+	RuntimeReady       bool                     `json:"runtime_ready"`
+	PDFReady           bool                     `json:"pdf_ready"`
+	UpdateAvailable    bool                     `json:"update_available"`
+	Installed          bool                     `json:"installed"`
+	Enabled            bool                     `json:"enabled"`
+	Revision           int                      `json:"revision"`
+	State              string                   `json:"state"`
+	Reason             string                   `json:"reason,omitempty"`
+	VoiceProfiles      []localRVCVoice          `json:"voice_profiles,omitempty"`
+	SpeechVoices       []localTTSVoice          `json:"speech_voices,omitempty"`
+	AudioModels        []localAudioCppModelView `json:"audio_models,omitempty"`
+	Workflows          []localComfyWorkflowView `json:"workflows,omitempty"`
 }
 
 func (s *localProjectTools) runtimeReady() bool {
@@ -220,11 +225,12 @@ func (s *localProjectTools) isActive(id string) bool {
 	return s.active[id] > 0
 }
 
-func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
+func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string, discovered ...map[string]discoveredToolPackage) (localProjectToolView, error) {
 	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
 	// A catalog migration placeholder is not an executable tool. Keep it visible
 	// with an actionable reason instead of reporting a ready Python runtime.
-	if contract, err := catalog.ContractFor(id); err == nil && contract.Package.Runtime.Transport == "unbound" {
+	contract, contractErr := catalog.ContractFor(id)
+	if contractErr == nil && contract.Package.Runtime.Transport == "unbound" {
 		view.RuntimeReady = false
 		view.Reason = "该工具包尚未绑定执行后端；图像工作流请使用 ComfyUI 创作。"
 		view.State = "not_available"
@@ -326,6 +332,24 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			}
 		}
 	}
+	if contractErr != nil {
+		var sources map[string]discoveredToolPackage
+		if len(discovered) > 0 {
+			sources = discovered[0]
+		} else {
+			sources = discoverToolPackages(s.options.CatalogDirectory)
+		}
+		if source, ok := sources[id]; ok {
+			view.ExternalPackage = true
+			view.PackageVersion, view.PackageDigest = source.Version, source.digest
+			view.PackagePermissions = source.Permissions
+			view.CatalogAvailable = source.compatible()
+			if !view.CatalogAvailable {
+				view.State = "not_available"
+				view.Reason = "此工具包的运行协议、入口或平台与当前工作站不兼容。"
+			}
+		}
+	}
 	if host == nil {
 		return view, nil
 	}
@@ -348,11 +372,18 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			}
 		}
 	}
-	contract, err := catalog.ContractFor(id)
-	if err != nil {
-		view.CatalogAvailable = false
+	targetDigest := contract.ManifestSHA256
+	if contractErr != nil {
+		view.CatalogAvailable = view.ExternalPackage && view.CatalogAvailable
+		view.ExternalPackage = true
+		if view.PackageVersion == "" {
+			view.PackageVersion = item.Package.Version
+			view.PackagePermissions = item.Permissions
+		}
+		targetDigest = view.PackageDigest
+		view.Reason = ""
 	}
-	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
+	view.UpdateAvailable = view.CatalogAvailable && item.Digest != targetDigest
 	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
@@ -370,7 +401,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	return view, nil
 }
 
-func (s *localProjectTools) packages(ctx context.Context, host *localProjectToolHost) []struct{ ID, Name string } {
+func (s *localProjectTools) packages(ctx context.Context, host *localProjectToolHost, sources map[string]discoveredToolPackage) []struct{ ID, Name string } {
 	out := append([]struct{ ID, Name string }{}, localProjectPackages...)
 	seen := map[string]bool{}
 	for _, p := range out {
@@ -402,6 +433,16 @@ func (s *localProjectTools) packages(ctx context.Context, host *localProjectTool
 			}
 		}
 	}
+	ids := make([]string, 0, len(sources))
+	for id := range sources {
+		if !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		out = append(out, struct{ ID, Name string }{id, sources[id].Name})
+	}
 	return out
 }
 
@@ -426,8 +467,9 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 			}
 		}
 		views := make([]localProjectToolView, 0, len(localProjectPackages))
-		for _, pkg := range s.packages(r.Context(), host) {
-			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name)
+		sources := discoverToolPackages(s.options.CatalogDirectory)
+		for _, pkg := range s.packages(r.Context(), host, sources) {
+			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name, sources)
 			if err != nil {
 				websession.Fail(w, 503, "项目工具安装状态不可读")
 				return
@@ -449,9 +491,10 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 			websession.Fail(w, 503, "工具目录不可读")
 			return
 		}
-		for _, p := range s.packages(r.Context(), host) {
+		sources := discoverToolPackages(s.options.CatalogDirectory)
+		for _, p := range s.packages(r.Context(), host, sources) {
 			if p.ID == id {
-				if view, e := s.projectView(r.Context(), host, id, p.Name); e == nil && view.Host == "legacy" {
+				if view, e := s.projectView(r.Context(), host, id, p.Name, sources); e == nil && view.Host == "legacy" {
 					s.changeLegacyTool(w, r, view)
 					return
 				}
@@ -473,6 +516,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		Action           string `json:"action"`
 		Revision         int    `json:"revision"`
 		ApproveArtifacts bool   `json:"approve_artifacts"`
+		PackageDigest    string `json:"package_digest"`
 		IdleOnly         bool   `json:"idle_only"`
 	}
 	if !websession.Decode(w, r, &in) {
@@ -529,14 +573,25 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		}
 		contract, contractErr := catalog.ContractFor(id)
 		if contractErr != nil {
-			websession.Fail(w, 503, "官方工具声明不可读")
-			return
-		}
-		if in.Action == "install" && !missing && current.Digest != contract.ManifestSHA256 {
+			source, ok := discoverToolPackages(s.options.CatalogDirectory)[id]
+			if !ok || !source.compatible() || in.PackageDigest != source.digest {
+				websession.Fail(w, 409, "工具包未就绪或版本已变化，请刷新并重新确认")
+				return
+			}
+			if in.Action == "install" && !missing {
+				websession.Fail(w, 409, "工具已安装，请使用更新操作")
+				return
+			}
+			prepared, prepareErr := host.store.PrepareCatalog(ctx, source.directory, source.digest)
+			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != source.digest {
+				websession.Fail(w, 409, "工具包校验失败，请检查解压是否完整以及清单内的文件摘要")
+				return
+			}
+			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, prepared.Package.Permissions)
+		} else if in.Action == "install" && !missing && current.Digest != contract.ManifestSHA256 {
 			websession.Fail(w, 409, "已安装版本需要单独升级")
 			return
-		}
-		if missing || current.Digest != contract.ManifestSHA256 {
+		} else if missing || current.Digest != contract.ManifestSHA256 {
 			if s.options.CatalogDirectory == "" {
 				websession.Fail(w, 409, "当前发行包未提供该项目工具")
 				return

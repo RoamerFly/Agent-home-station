@@ -5836,6 +5836,10 @@
     }
   }
   function projectToolStatus(tool) {
+    if (tool?.external_package && !tool.installed) {
+      if (!tool.catalog_available) return ["工具包不可用", tool.reason || "请检查工具包清单。"];
+      return ["已发现，待安装", `版本 ${tool.package_version}。确认工具来源和权限后即可安装。`];
+    }
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
     if (tool && tool.id === "obs-preview") {
       const preview = projectTools.obsPreview;
@@ -6382,6 +6386,10 @@
     return section;
   }
   function projectToolApprovalCopy(tool) {
+    if (tool?.external_package) {
+      const permissions = (tool.package_permissions || []).join("、") || "无额外权限";
+      return `确认安装 ${tool.package_version || "当前版本"}，授予包声明的权限（${permissions}）`;
+    }
     if (tool?.id === "obs-preview") return "确认仅访问本机 OBS WebSocket";
     if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
     if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
@@ -6912,7 +6920,7 @@
     if (current.loading || current.applying || !tool || !/^[a-z0-9-]+$/.test(tool.id)) return;
     current.applying = tool.id; projectToolsFeedback(""); renderProjectTools();
     try {
-      const result = await request("/api/local/project-tools/" + encodeURIComponent(tool.id), { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts) }) });
+      const result = await request("/api/local/project-tools/" + encodeURIComponent(tool.id), { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts), package_digest: tool.package_digest || "" }) });
       if (current !== projectTools) return;
       const updated = result && result.tool;
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);

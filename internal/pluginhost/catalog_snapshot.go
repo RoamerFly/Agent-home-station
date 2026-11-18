@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +41,7 @@ func snapshotCatalog(ctx context.Context, source, destination, digest string) er
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if !fs.ValidPath(name) || name == "plugin.json" || strings.Contains(name, "\\") {
+		if !safePath(name) || name == "plugin.json" {
 			return errors.New("invalid catalog member")
 		}
 		parts := strings.Split(name, "/")

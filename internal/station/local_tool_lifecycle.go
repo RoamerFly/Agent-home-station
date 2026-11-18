@@ -146,12 +146,12 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 
 func stationLifecycleTools() []mcptools.Tool {
 	out := []mcptools.Tool{}
-	for _, action := range []string{"status", "start", "stop", "restart"} {
+	for _, action := range []string{"status", "enable", "start", "stop", "restart"} {
 		schema := `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`
 		if action != "status" {
 			schema = `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`
 		}
-		out = append(out, mcptools.NewTool("station_tool_"+action, "工作站公共工具生命周期："+action+"。status 可列出全部工具及未就绪原因；启动/停止/重启已启用工具，不改变授权、不生成内容、不发送应用消息。按次执行的工具启动时检查就绪状态。", schema))
+		out = append(out, mcptools.NewTool("station_tool_"+action, "工作站公共工具生命周期："+action+"。status 列出工具和未就绪原因；enable 使主人已授权安装的外部工具按需待命；启动、停止和重启用于已启用工具。按次执行的工具启动时检查就绪状态。", schema))
 	}
 	return out
 }
@@ -180,11 +180,12 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 	}
 	action := strings.TrimPrefix(name, "station_tool_")
 	views := []localProjectToolView{}
-	for _, p := range s.packages(ctx, host) {
+	sources := discoverToolPackages(s.options.CatalogDirectory)
+	for _, p := range s.packages(ctx, host, sources) {
 		if in.ToolID != "" && in.ToolID != p.ID {
 			continue
 		}
-		v, err := s.projectView(ctx, host, p.ID, p.Name)
+		v, err := s.projectView(ctx, host, p.ID, p.Name, sources)
 		if err != nil {
 			return "", err
 		}
@@ -194,14 +195,18 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		out, _ := json.Marshal(map[string]any{"tools": views})
 		return string(out), nil
 	}
-	if action != "start" && action != "stop" && action != "restart" {
+	if action != "enable" && action != "start" && action != "stop" && action != "restart" {
 		return "", errors.New("未知工具操作")
 	}
 	if in.ToolID == "" || len(views) != 1 {
 		return "", errors.New("工具未登记，请先查看状态")
 	}
+	if action == "enable" && (!views[0].Installed || !views[0].ExternalPackage || views[0].Host == "legacy") {
+		return "", errors.New("请由主人在项目工具中安装并授权该工具")
+	}
 	payload, _ := json.Marshal(map[string]any{"action": action, "revision": views[0].Revision})
 	request := httptest.NewRequest(http.MethodPut, "/", bytes.NewReader(payload)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	if views[0].Host == "legacy" {
 		s.changeLegacyTool(response, request, views[0])

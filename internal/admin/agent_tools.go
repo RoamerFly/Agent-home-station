@@ -41,7 +41,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
-		tools = append(tools, diagnosticsTool())
+		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable on demand an external Station package the owner has already installed and approved. Owner only. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand for an authorized conversation. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))

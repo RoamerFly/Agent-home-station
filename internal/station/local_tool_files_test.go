@@ -43,7 +43,7 @@ func TestToolFileKindsExcludeModels(t *testing.T) {
 }
 func TestLifecycleCatalogIncludesAllOfficialTools(t *testing.T) {
 	s := &localProjectTools{}
-	items := s.packages(t.Context(), nil)
+	items := s.packages(t.Context(), nil, nil)
 	found := map[string]bool{}
 	for _, p := range items {
 		if found[p.ID] {

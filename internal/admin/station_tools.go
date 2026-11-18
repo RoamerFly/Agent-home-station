@@ -19,15 +19,16 @@ import (
 // view. It keeps paths, tokens and implementation details out of the Agent
 // conversation while allowing future tools to appear without a Go enum.
 type stationToolView struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Installed     bool   `json:"installed"`
-	Enabled       bool   `json:"enabled"`
-	Revision      int    `json:"revision"`
-	State         string `json:"state"`
-	RuntimeReady  bool   `json:"runtime_ready"`
-	Reason        string `json:"reason,omitempty"`
-	VoiceProfiles any    `json:"voice_profiles,omitempty"`
+	ExternalPackage bool   `json:"external_package,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Installed       bool   `json:"installed"`
+	Enabled         bool   `json:"enabled"`
+	Revision        int    `json:"revision"`
+	State           string `json:"state"`
+	RuntimeReady    bool   `json:"runtime_ready"`
+	Reason          string `json:"reason,omitempty"`
+	VoiceProfiles   any    `json:"voice_profiles,omitempty"`
 }
 
 type stationToolSession struct {
@@ -149,10 +150,10 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 }
 
 func (p *permittedTools) callStationTool(ctx context.Context, action string, raw json.RawMessage) (string, error) {
-	if action != "status" && action != "start" && action != "stop" && action != "restart" {
+	if action != "status" && action != "enable" && action != "start" && action != "stop" && action != "restart" {
 		return "", toolInputError("station_tool_action_invalid")
 	}
-	if !p.privileged() && !p.workspaceExecutionAllowed() {
+	if !p.privileged() && (action == "enable" || !p.workspaceExecutionAllowed()) {
 		return "", toolInputError("station_tool_not_authorized")
 	}
 	var in struct {
@@ -213,6 +214,9 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 	}
 	if current == nil {
 		return "", errors.New("station_tool_not_found")
+	}
+	if action == "enable" && (!current.ExternalPackage || !current.Installed) {
+		return "", errors.New("station_tool_owner_install_required")
 	}
 	if action == "start" || action == "restart" {
 		if !current.Enabled {
