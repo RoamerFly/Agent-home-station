@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"wechat-bot/internal/hostfile"
@@ -355,13 +356,21 @@ func (s *localAudioCppService) Transcribe(ctx context.Context, fish, binding str
 	if _, latestRaw, latestErr := s.loadRegistration(ctx); latestErr != nil || localAudioCppBinding(latestRaw) != binding {
 		return "", errors.New("audio_cpp_deployment_changed")
 	}
+	return decodeAudioCppTranscript(data)
+}
+
+func decodeAudioCppTranscript(data []byte) (string, error) {
 	var response struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
-	if json.Unmarshal(data, &response) != nil || strings.TrimSpace(response.Text) == "" || !utf8.ValidString(response.Text) {
+	if !utf8.Valid(data) || json.Unmarshal(data, &response) != nil || response.Text == nil {
 		return "", errors.New("audio_cpp_transcription_invalid")
 	}
-	return strings.TrimSpace(response.Text), nil
+	text := strings.TrimSpace(*response.Text)
+	if !strings.ContainsFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
+		return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+	}
+	return text, nil
 }
 
 func (s *localAudioCppService) do(ctx context.Context, r localAudioCppRegistration, binding, method, route, contentType string, body io.Reader, accept string) ([]byte, error) {

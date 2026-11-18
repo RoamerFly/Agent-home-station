@@ -8,7 +8,23 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"wechat-bot/internal/mediaspec"
 )
+
+func TestAudioCppTranscriptRequiresRecognizedWords(t *testing.T) {
+	for _, input := range []string{`{"text":" 。…？！ "}`, `{"text":""}`} {
+		if text, err := decodeAudioCppTranscript([]byte(input)); text != "" || !mediaspec.IsNoSpeech(err) {
+			t.Fatalf("empty speech outcome: %q, %v", text, err)
+		}
+	}
+	if _, err := decodeAudioCppTranscript([]byte(`{}`)); err == nil || mediaspec.IsNoSpeech(err) {
+		t.Fatalf("missing field: %v", err)
+	}
+	if text, err := decodeAudioCppTranscript([]byte(`{"text":" 走。 "}`)); text != "走。" || err != nil {
+		t.Fatalf("valid short utterance: %q, %v", text, err)
+	}
+}
 
 func TestLocalAudioCppRegistrationInfoAndPermissionFence(t *testing.T) {
 	data, root := t.TempDir(), t.TempDir()

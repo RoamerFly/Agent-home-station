@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 )
 
 // Parameters are attached to the generated asset, not a global most-recent song.
@@ -110,18 +112,27 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 			return "", err
 		}
 		text, backend, check, err := p.transcribeReference(ctx, a, wav, input.Offset, seconds)
-		if err != nil {
+		noSpeech := mediaspec.IsNoSpeech(err)
+		if err != nil && !noSpeech {
 			return "", err
 		}
-		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
+		out["offset_seconds"], out["window_seconds"] = input.Offset, seconds
 		out["transcription_backend"] = backend
 		if duration, e := wavDuration(wav); e == nil {
 			out["actual_window_seconds"] = duration
 		}
-		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
 		if err = check(ctx); err != nil {
 			return "", err
 		}
+		if noSpeech {
+			out["transcription_status"] = "no_recognizable_speech"
+			out["transcript_warning"] = "本段未识别到可辨歌词。可选另一段演唱音频，或先分离人声再转写。"
+			b, _ := json.Marshal(out)
+			return string(b), nil
+		}
+		out["transcript"] = text
+		out["transcription_status"] = "transcribed"
+		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
 		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
 		if err != nil {
 			return "", err

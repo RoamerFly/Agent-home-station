@@ -7,7 +7,7 @@
  let serial=0,frame=0,entries=[];const known=new WeakSet();
  const isSave=button=>/^保存|^确认保存/.test(button.textContent.trim());
  function register(button){
-  if(known.has(button)||!isSave(button))return;known.add(button);
+  if(known.has(button)||button.hasAttribute('data-inline-save')||!isSave(button))return;known.add(button);
   const form=button.form;if(form){if(!form.id)form.id='save-form-'+(++serial);button.setAttribute('form',form.id)}
   const marker=document.createComment('save action '+(button.id||++serial));button.before(marker);entries.push({button,marker});
  }

@@ -88,6 +88,7 @@
   const actions = node(form, 'div', undefined, 'inline-actions');
   const save = node(actions, 'button', '保存修改', 'primary');
   save.type = 'submit';
+   save.dataset.inlineSave = '';
   const cancel = node(actions, 'button', '取消', 'secondary');
   cancel.type = 'button';
   function closeEditor() {
@@ -134,7 +135,20 @@
   });
  }
  async function changeReminder(id,action,button){button.disabled=true;try{await api('/api/agent/tasks/'+encodeURIComponent(id),{method:'POST',json:{action}});await refreshReminders()}catch(e){$('#reminder-state').textContent='操作失败：'+e.message;button.disabled=false}}
- async function refreshReminders(){if(state.reminderBusy||$('#reminder-list form')||!window.WechatAdmin?.isAuthenticated())return;state.reminderBusy=true;try{const data=await api('/api/agent');state.reminders=(data.tasks||[]).filter(x=>x.reminder||x.reminder_due||(x.owner_requested&&x.next&&!x.plugin_job&&!x.delivery));renderReminders()}catch(e){$('#reminder-state').textContent='读取失败：'+e.message}finally{state.reminderBusy=false}}
+ async function refreshReminders() {
+  if (state.reminderBusy || $('#reminder-list form') || !window.WechatAdmin?.isAuthenticated()) return;
+  state.reminderBusy = true;
+  try {
+   const data = await api('/api/agent');
+   if ($('#reminder-list form')) return;
+   state.reminders = (data.tasks || []).filter(x => x.reminder || x.reminder_due || (x.owner_requested && x.next && !x.plugin_job && !x.delivery));
+   renderReminders();
+  } catch (err) {
+   $('#reminder-state').textContent = '读取失败：' + err.message;
+  } finally {
+   state.reminderBusy = false;
+  }
+ }
  function selectSurfTab(name){const reminders=name==='reminders';$('#surf').classList.toggle('reminder-tab-active',reminders);$('#surf-pane').hidden=reminders;$('#reminder-pane').hidden=!reminders;for(const [id,selected] of [['surf-tab',!reminders],['reminder-tab',reminders]]){$('#'+id).classList.toggle('active',selected);$('#'+id).setAttribute('aria-selected',String(selected));$('#'+id).tabIndex=selected?0:-1}if(reminders)refreshReminders()} function dirty(){state.dirty=true;state.version++;$('#surf-save-state').textContent='有未保存的冲浪设置。'}
  function renderTargets(){const box=$('#surf-targets'),query=$('#surf-target-search').value.trim().toLowerCase();box.replaceChildren();const ids=new Set([...state.allowed,...state.selected]);let matches=0;
   for(const [kind,title] of [['group','群聊'],['friend','好友私信'],['filehelper','文件传输助手'],['revoked','已失去回复授权的目标']]){
