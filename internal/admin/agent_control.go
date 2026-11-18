@@ -501,7 +501,24 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	if !c.Enabled || !c.TasksEnabled || !cfg.Companion.Enabled {
 		return nil, nil
 	}
+	seenProcessOrigins := map[string]bool{}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		// A pre-existing worker could create several process watcher records for
+		// one source message while a continuation was being interrupted. Keep
+		// the newest watcher and settle older duplicates without starting their
+		// process result generation again. The process records and outputs stay
+		// available for inspection.
+		if t.Title == "后台程序" && t.ProcessID != "" && t.OriginTrace != "" {
+			key := t.Account + "\x00" + t.Thread + "\x00" + t.OriginTrace
+			if seenProcessOrigins[key] {
+				t.State = "completed"
+				t.WorkCompleted = true
+				t.LastResult = "同一原始消息的重复进程观察任务已收敛，保留最新任务和原进程记录"
+				_, _ = m.agent.updateSnapshot(t)
+				continue
+			}
+			seenProcessOrigins[key] = true
+		}
 		if m.mobileRetired && t.DeviceTask != "" {
 			continue
 		}

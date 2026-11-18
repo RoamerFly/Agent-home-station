@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
+	"path/filepath"
 	"testing"
 	"wechat-bot/internal/deepseek"
 )
@@ -38,5 +39,16 @@ func TestDirectImageToolChecksActualSourceAndMode(t *testing.T) {
 	}
 	if n.submits.Load() != 0 {
 		t.Fatal("read-only image route sent a message")
+	}
+}
+
+func TestArtifactPreviewPathAcceptsOnlyCurrentOutputDirectory(t *testing.T) {
+	out := t.TempDir()
+	path, name, err := artifactPreviewPath(out, filepath.Join(out, "preview.png"))
+	if err != nil || path != filepath.Join(out, "preview.png") || name != "preview.png" {
+		t.Fatalf("absolute output path was not normalized: path=%q name=%q err=%v", path, name, err)
+	}
+	if _, _, err = artifactPreviewPath(out, filepath.Join(filepath.Dir(out), "outside.png")); err == nil {
+		t.Fatal("absolute path outside the current task output was accepted")
 	}
 }

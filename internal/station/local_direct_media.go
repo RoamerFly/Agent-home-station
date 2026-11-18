@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"wechat-bot/internal/deepseek"
 )
@@ -49,7 +50,11 @@ func (t *localToolSet) inspectDirectMedia(ctx context.Context, raw json.RawMessa
 	if strings.HasPrefix(http.DetectContentType(data), "image/") {
 		err = deepseek.AttachImage(ctx, bound.artifact.Name, deepseek.Image{Data: data})
 	} else {
-		reused, err = t.directMedia.AttachDocument(ctx, bound.artifact.Name, data, in.Layout)
+		// XLSX pictures are part of the workbook's visual content.  Always use
+		// the rich path for workbooks so an ordinary document read cannot silently
+		// omit embedded product images when the model did not request layout mode.
+		rich := in.Layout || strings.EqualFold(filepath.Ext(bound.artifact.Name), ".xlsx")
+		reused, err = t.directMedia.AttachDocument(ctx, bound.artifact.Name, data, rich)
 	}
 	if err != nil {
 		return "", err

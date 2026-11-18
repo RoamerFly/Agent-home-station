@@ -18,14 +18,20 @@ import (
 // Only the event loop owns Worker and runtimeState. Background jobs return
 // immutable results or request a short, serialized state transition here.
 type generationScheduler struct {
-	wg            sync.WaitGroup
-	ready         []generationResult
-	readyReviews  []planReviewResult
-	jobs          map[string]*generationJob
-	reviews       map[string]context.CancelFunc
-	reviewResults chan planReviewResult
-	requests      chan generationRequest
-	results       chan generationResult
+	wg           sync.WaitGroup
+	ready        []generationResult
+	readyReviews []planReviewResult
+	jobs         map[string]*generationJob
+	// yieldedMessages remembers a foreground message that already caused a
+	// persistent task to yield. A task continuation gets a new generation job
+	// after the yield, so keeping this boundary on the scheduler prevents that
+	// same still-unconsumed message from cancelling every continuation in a
+	// loop.
+	yieldedMessages map[string]struct{}
+	reviews         map[string]context.CancelFunc
+	reviewResults   chan planReviewResult
+	requests        chan generationRequest
+	results         chan generationResult
 }
 type generationRequest struct {
 	state *atomic.Int32
@@ -73,7 +79,7 @@ func (w *Worker) enableGenerations() {
 			return
 		}
 	}
-	w.generation = &generationScheduler{jobs: map[string]*generationJob{}, reviews: map[string]context.CancelFunc{}, reviewResults: make(chan planReviewResult, 4), requests: make(chan generationRequest, 64), results: make(chan generationResult, 4)}
+	w.generation = &generationScheduler{jobs: map[string]*generationJob{}, yieldedMessages: map[string]struct{}{}, reviews: map[string]context.CancelFunc{}, reviewResults: make(chan planReviewResult, 4), requests: make(chan generationRequest, 64), results: make(chan generationResult, 4)}
 }
 func (w *Worker) closeGenerations() {
 	if w.generation == nil {
@@ -201,13 +207,24 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		return
 	}
 	j := w.generation.jobs[m.ThreadID]
-	if j == nil || j.input.TraceID == m.ID {
+	if j == nil || j.input.TraceID == m.ID || j.input.OriginTraceID == m.ID {
+		return
+	}
+	if j.input.Source != nil && j.input.Source.MessageID == m.ID {
 		return
 	}
 	// A saved worker result is background work, not the live user's turn.
 	// Yield at a tool boundary instead of keeping a new question queued for
 	// the entire repair/tool loop. The actual external process is untouched.
 	if j.input.TaskID != "" && eligible {
+		if w.generation.yieldedMessages == nil {
+			w.generation.yieldedMessages = map[string]struct{}{}
+		}
+		boundary := j.input.TaskID + "\x00" + m.ID
+		if _, seen := w.generation.yieldedMessages[boundary]; seen {
+			return
+		}
+		w.generation.yieldedMessages[boundary] = struct{}{}
 		if !j.yieldRequested {
 			j.yieldRequested, j.yieldMessageID = true, m.ID
 			w.activity(Record{Event: "background_turn_yield_requested", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, RelatedMessageID: j.input.TraceID, Reason: "new_message_has_priority", Status: "queued"})

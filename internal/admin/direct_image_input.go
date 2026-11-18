@@ -11,6 +11,41 @@ import (
 	"wechat-bot/internal/deepseek"
 )
 
+// artifactPreviewPath accepts the basename exposed by artifact_workspace and
+// also the canonical absolute output path that the Windows process tool
+// reports. Absolute paths remain confined to the current task output folder.
+func artifactPreviewPath(outputDir, raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", toolInputError("artifact_output_path_must_be_a_relative_filename")
+	}
+	path := raw
+	if !filepath.IsAbs(path) {
+		name, err := artifactOutputName(path)
+		if err != nil {
+			return "", "", err
+		}
+		return filepath.Join(outputDir, name), name, nil
+	}
+	base, err := filepath.Abs(outputDir)
+	if err != nil {
+		return "", "", toolInputError("artifact_output_path_must_be_a_relative_filename")
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", "", toolInputError("artifact_output_path_must_be_a_relative_filename")
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", "", toolInputError("artifact_output_path_must_be_a_relative_filename")
+	}
+	name, err := artifactOutputName(rel)
+	if err != nil {
+		return "", "", err
+	}
+	return path, name, nil
+}
+
 func (m *Manager) directImageInputReady() error {
 	c := m.Config()
 	if c.Provider != "deepseek" || c.Model != "deepseek-flash" {
@@ -52,10 +87,6 @@ func (p *permittedTools) viewArtifactImage(ctx context.Context, raw json.RawMess
 		defer f.Close()
 		data, err = io.ReadAll(io.LimitReader(f, (32<<20)+1))
 	} else {
-		name, e := artifactOutputName(in.Path)
-		if e != nil {
-			return "", e
-		}
 		task, e := p.artifactTaskKey("")
 		if e != nil {
 			return "", e
@@ -64,7 +95,11 @@ func (p *permittedTools) viewArtifactImage(ctx context.Context, raw json.RawMess
 		if e != nil {
 			return "", e
 		}
-		data, _, err = fileBytesAndHash(ctx, filepath.Join(out, name), 32<<20)
+		path, name, e := artifactPreviewPath(out, in.Path)
+		if e != nil {
+			return "", e
+		}
+		data, _, err = fileBytesAndHash(ctx, path, 32<<20)
 		label = "当前任务生成图片/成品预览 " + name
 	}
 	if err != nil {

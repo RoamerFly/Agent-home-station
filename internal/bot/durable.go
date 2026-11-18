@@ -342,7 +342,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 			w.activity(Record{Event: "tool_task_interrupted", Category: "error", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Reason: "tool_task_interrupted_not_replayed", Status: "interrupted"})
 			continue
 		}
-		if item.Phase == "model_running" {
+		// A process crash can persist processing before the generation actor
+		// records whether a tool was entered.  Leave no such item stranded in
+		// the UI.  Without a tool checkpoint it is safe to replay the model from
+		// the durable incoming message.  With one, the branch above preserves
+		// the no-replay boundary.
+		if item.Phase == "processing" || item.Phase == "model_running" {
 			item.Phase = "received"
 		}
 		if item.Phase != "sending" {

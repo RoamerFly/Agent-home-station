@@ -134,6 +134,47 @@ func TestUndirectedMessageDoesNotYieldBackgroundTask(t *testing.T) {
 	delete(w.generation.jobs, "filehelper")
 }
 
+func TestBackgroundTaskDoesNotYieldToItsOriginMessage(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent"}`, nil
+	}))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	cancelled := false
+	job := &generationJob{input: companion.Input{Thread: "room@chatroom", TaskID: "saved-task", OriginTraceID: "origin-message", TraceID: "task-run"}, engine: c, cancel: func() { cancelled = true }}
+	w.generation.jobs[job.input.Thread] = job
+	origin := fixtureMessage("origin-message", job.input.Thread, "原始请求", "incoming")
+	origin.SenderID = "person"
+	w.noticeGenerationMessage(origin, true)
+	if cancelled || job.yieldRequested {
+		t.Fatal("persistent task was interrupted by its own origin message")
+	}
+}
+
+func TestBackgroundTaskDoesNotYieldSameMessageAfterContinuationRestart(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent"}`, nil
+	}))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	message := fixtureMessage("foreground", "room@chatroom", "继续处理", "incoming")
+	message.SenderID = "person"
+	firstCancelled := false
+	first := &generationJob{input: companion.Input{Thread: message.ThreadID, TaskID: "saved-task", TraceID: "task-run-1"}, engine: c, cancel: func() { firstCancelled = true }}
+	w.generation.jobs[message.ThreadID] = first
+	w.noticeGenerationMessage(message, true)
+	if !firstCancelled || !first.yieldRequested {
+		t.Fatal("first foreground message did not yield the persistent task")
+	}
+	secondCancelled := false
+	second := &generationJob{input: companion.Input{Thread: message.ThreadID, TaskID: "saved-task", TraceID: "task-run-2"}, engine: c, cancel: func() { secondCancelled = true }}
+	w.generation.jobs[message.ThreadID] = second
+	w.noticeGenerationMessage(message, true)
+	if secondCancelled || second.yieldRequested {
+		t.Fatal("same unconsumed message repeatedly cancelled a restarted continuation")
+	}
+}
+
 func TestDirectedBackgroundTaskMaySendModelAuthoredProgress(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(map[bool]string{false: "synchronous", true: "generation"}[background], func(t *testing.T) {

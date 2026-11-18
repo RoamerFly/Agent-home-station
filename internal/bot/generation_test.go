@@ -406,38 +406,40 @@ func TestMediaCaptionJoinsInterruptiblePlanOnlyAfterAttachmentReceipt(t *testing
 }
 
 func TestGenerationRestartReevaluatesPureModelButNeverReplaysStartedTools(t *testing.T) {
-	for _, toolStarted := range []bool{false, true} {
-		t.Run(map[bool]string{false: "pure-model", true: "started-tool"}[toolStarted], func(t *testing.T) {
-			var calls atomic.Int32
-			w, _, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
-				calls.Add(1)
-				return `{"action":"reply","messages":["recovered"]}`, nil
-			}))
-			w.source = &fakeSource{messages: map[string]linuxnative.Message{"restart": fixtureMessage("restart", "filehelper", "/ai restart-request", "incoming")}}
-			w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "restart", "filehelper", "incoming", "remote"), Phase: "model_running", ToolStarted: toolStarted}}
-			if err := w.saveRuntime(); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			w.config.Record = func(r Record) {
-				if r.Event == "message_sent" || r.Event == "tool_task_interrupted" {
-					cancel()
+	for _, phase := range []string{"model_running", "processing"} {
+		for _, toolStarted := range []bool{false, true} {
+			t.Run(phase+"/"+map[bool]string{false: "pure-model", true: "started-tool"}[toolStarted], func(t *testing.T) {
+				var calls atomic.Int32
+				w, _, n := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+					calls.Add(1)
+					return `{"action":"reply","messages":["recovered"]}`, nil
+				}))
+				w.source = &fakeSource{messages: map[string]linuxnative.Message{"restart": fixtureMessage("restart", "filehelper", "/ai restart-request", "incoming")}}
+				w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "restart", "filehelper", "incoming", "remote"), Phase: phase, ToolStarted: toolStarted}}
+				if err := w.saveRuntime(); err != nil {
+					t.Fatal(err)
 				}
-			}
-			if err := w.runDurable(ctx, filepath.Join(w.config.StateDir, "checkpoint.json"), checkpoint{Version: 1, ServerID: "server-1", Account: "test", Cursor: "1"}); err != nil {
-				t.Fatal(err)
-			}
-			if toolStarted {
-				if calls.Load() != 0 || len(n.submissions) != 0 || w.runtime.Inbox[0].Phase != "interrupted" {
-					t.Fatal("started tool was replayed")
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				w.config.Record = func(r Record) {
+					if r.Event == "message_sent" || r.Event == "tool_task_interrupted" {
+						cancel()
+					}
 				}
-			} else {
-				if calls.Load() != 1 || len(n.submissions) != 1 {
-					t.Fatal("pure generation was lost instead of reevaluated")
+				if err := w.runDurable(ctx, filepath.Join(w.config.StateDir, "checkpoint.json"), checkpoint{Version: 1, ServerID: "server-1", Account: "test", Cursor: "1"}); err != nil {
+					t.Fatal(err)
 				}
-			}
-		})
+				if toolStarted {
+					if calls.Load() != 0 || len(n.submissions) != 0 || w.runtime.Inbox[0].Phase != "interrupted" {
+						t.Fatal("started tool was replayed")
+					}
+				} else {
+					if calls.Load() != 1 || len(n.submissions) != 1 {
+						t.Fatal("pure generation was lost instead of reevaluated")
+					}
+				}
+			})
+		}
 	}
 }
 
