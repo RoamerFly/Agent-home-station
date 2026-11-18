@@ -511,10 +511,18 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if t.Title == "后台程序" && t.ProcessID != "" && t.OriginTrace != "" {
 			key := t.Account + "\x00" + t.Thread + "\x00" + t.OriginTrace
 			if seenProcessOrigins[key] {
+				// A duplicate watcher can inherit the zero-count placeholder that
+				// finishAgentTask used before a real delivery plan existed. It has
+				// no receipt to reconcile and must not block archival of the
+				// duplicate process record. Keep any non-empty delivery evidence.
+				clearZeroCountTaskDelivery(&t)
 				t.State = "completed"
 				t.WorkCompleted = true
 				t.LastResult = "同一原始消息的重复进程观察任务已收敛，保留最新任务和原进程记录"
 				_, _ = m.agent.updateSnapshot(t)
+				if err := m.agent.retireSettled(); err != nil {
+					m.log("duplicate_process_task_archive_failed")
+				}
 				continue
 			}
 			seenProcessOrigins[key] = true
@@ -679,7 +687,11 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 	}
 	if state == "reply" {
 		for _, task := range m.agent.active(in.Account, in.Thread) {
-			if task.ID == in.TaskID && task.Delivery == nil {
+			// A task can remain active while its completion checkpoint is being
+			// finalized. Once WorkCompleted is already true, there is no new
+			// delivery plan for this turn. Do not attach a zero-count placeholder
+			// that would keep the task in waiting_delivery forever.
+			if task.ID == in.TaskID && task.State == "running" && task.Delivery == nil && !task.WorkCompleted {
 				task.Delivery = &bot.TaskDelivery{Trace: in.TraceID, State: "waiting_delivery"}
 				if err := m.agent.task(task); err != nil {
 					m.log("task_delivery_binding_failed")

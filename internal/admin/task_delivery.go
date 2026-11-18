@@ -10,12 +10,25 @@ import (
 // The delivery worker owns these checkpoints. Never schedule a fresh
 // generation to find out whether the original side effect succeeded.
 func clearEmptyTaskDelivery(t *agentTask) {
-	d := t.Delivery
 	// A silent tool retry can checkpoint a plan before it has any messages.
 	// That is not a submitted delivery; retain every non-empty/uncertain receipt.
-	if d != nil && d.State == "waiting_delivery" && d.Expected == 0 && d.Accepted == 0 && d.TextExpected == 0 && d.TextAccepted == 0 && d.TotalParts == 0 && d.AcceptedParts == 0 && d.PendingJob == "" && d.FailureReason == "" && len(t.PendingOperations) == 0 && !t.WorkCompleted {
+	if isZeroCountTaskDelivery(t) && !t.WorkCompleted {
 		t.Delivery = nil
 	}
+}
+
+// clearZeroCountTaskDelivery is reserved for duplicate process watchers. A
+// watcher has already been proven redundant by origin identity, so an empty
+// delivery placeholder cannot represent a receipt that still needs recovery.
+func clearZeroCountTaskDelivery(t *agentTask) {
+	if isZeroCountTaskDelivery(t) {
+		t.Delivery = nil
+	}
+}
+
+func isZeroCountTaskDelivery(t *agentTask) bool {
+	d := t.Delivery
+	return d != nil && d.State == "waiting_delivery" && d.Expected == 0 && d.Accepted == 0 && d.TextExpected == 0 && d.TextAccepted == 0 && d.TotalParts == 0 && d.AcceptedParts == 0 && d.PendingJob == "" && d.FailureReason == "" && len(t.PendingOperations) == 0
 }
 
 func settleFromDelivery(t *agentTask, roundReplied bool) bool {

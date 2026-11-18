@@ -81,3 +81,51 @@ func TestSilentDocumentRetryWithNoDeliveryCanResume(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestCompletedTaskDoesNotGetZeroCountDeliveryPlaceholder(t *testing.T) {
+	f := setup(t)
+	task := agentTask{ID: "completed-without-delivery", Account: "test", Thread: "filehelper", Sender: "owner", State: "running", WorkCompleted: true}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.finishAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, TaskID: task.ID, TraceID: "late-reply"}, "reply")
+	got := f.manager.agent.list(task.Account, task.Thread)[0]
+	if got.Delivery != nil || got.State == "waiting_delivery" {
+		t.Fatalf("completed task acquired a fictitious delivery checkpoint: %+v", got)
+	}
+}
+
+func TestCompletedTaskWithoutWorkCompletedDoesNotGetDeliveryPlaceholder(t *testing.T) {
+	f := setup(t)
+	task := agentTask{ID: "completed-without-work-flag", Account: "test", Thread: "filehelper", Sender: "owner", State: "completed"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.agent.mu.Lock()
+	saved := f.manager.agent.data.Tasks[task.ID]
+	saved.WorkCompleted = false
+	f.manager.agent.data.Tasks[task.ID] = saved
+	if err := f.manager.agent.persist(); err != nil {
+		f.manager.agent.mu.Unlock()
+		t.Fatal(err)
+	}
+	f.manager.agent.mu.Unlock()
+	f.manager.finishAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, TaskID: task.ID, TraceID: "late-completed-reply"}, "reply")
+	got := f.manager.agent.list(task.Account, task.Thread)[0]
+	if got.Delivery != nil || got.State == "waiting_delivery" {
+		t.Fatalf("completed task without work flag acquired a fictitious delivery checkpoint: %+v", got)
+	}
+}
+
+func TestDuplicateWatcherOnlyClearsZeroCountDelivery(t *testing.T) {
+	empty := agentTask{Delivery: &bot.TaskDelivery{State: "waiting_delivery"}}
+	clearZeroCountTaskDelivery(&empty)
+	if empty.Delivery != nil {
+		t.Fatalf("zero-count duplicate placeholder was retained: %+v", empty.Delivery)
+	}
+	withReceipt := agentTask{Delivery: &bot.TaskDelivery{State: "waiting_delivery", Expected: 1}}
+	clearZeroCountTaskDelivery(&withReceipt)
+	if withReceipt.Delivery == nil {
+		t.Fatal("non-empty delivery evidence was cleared")
+	}
+}
