@@ -90,7 +90,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, aliyunBalance: null, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -5898,6 +5898,7 @@
     return section;
   }
   function aliyunBalanceControls() {
+    if (projectTools.aliyunBalance) return projectTools.aliyunBalance.section;
     const route = "/api/local/project-tools/media-understanding/aliyun-balance";
     const section = appElement("section", "", "aliyun-balance");
     const details = appElement("details");
@@ -5906,11 +5907,10 @@
     link.href = "https://usercenter2.aliyun.com/home";
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    const query = appElement("button", "查询余额", "button compact secondary");
     const save = appElement("button", "保存财务凭据", "button compact secondary");
     const clear = appElement("button", "清除财务凭据", "button compact secondary");
-    for (const button of [query, save, clear]) button.type = "button";
-    const result = appElement("p", "正在读取财务凭据状态…", "local-vision-note");
+    for (const button of [save, clear]) button.type = "button";
+    const result = appElement("p", "正在读取阿里云账户余额…");
     result.setAttribute("role", "status");
     const id = document.createElement("input");
     const secret = document.createElement("input");
@@ -5923,18 +5923,33 @@
       element.append(input);
       return element;
     }
-    const actions = appElement("div", "", "tool-balance");
     const editorActions = appElement("div", "", "tool-balance");
     editorActions.append(save, clear);
     details.append(heading, appElement("p", "使用获准查询账户余额的阿里云 RAM 凭据。", "local-vision-note"),
       field("AccessKey ID", id), field("AccessKey Secret", secret), editorActions);
-    actions.append(query, link);
-    section.append(actions, result, details);
+    section.append(result, link, details);
     let configured = false;
+    let pending = false;
     function busy(value) {
-      query.disabled = value || !configured;
+      pending = value;
       save.disabled = value;
       clear.disabled = value || !configured;
+    }
+    async function readBalance() {
+      result.textContent = "正在读取阿里云账户余额…";
+      const reply = await request(route, { method: "POST", body: "{}" });
+      result.textContent = `现金余额 ${reply.cash_balance} ${reply.currency} · 可用额度 ${reply.available_amount} ${reply.currency}`;
+    }
+    async function refresh() {
+      if (pending) return;
+      busy(true);
+      try {
+        const status = await request(route);
+        configured = status.configured === true;
+        if (configured) await readBalance();
+        else result.textContent = "展开「财务凭据」后可显示余额。";
+      } catch (err) { result.textContent = err.message || "余额暂不可读。"; }
+      finally { busy(false); }
     }
     async function update(clearCredential) {
       if (!clearCredential && (!id.value.trim() || !secret.value.trim())) {
@@ -5947,29 +5962,18 @@
         const reply = await request(route, { method: "PUT", body: JSON.stringify(body) });
         configured = reply.configured === true;
         id.value = ""; secret.value = "";
-        if (configured) details.open = false;
-        result.textContent = configured ? "财务凭据已保存，可以查询余额。" : "财务凭据已清除。";
+        if (configured) {
+          details.open = false;
+          try { await readBalance(); }
+          catch (err) { result.textContent = "财务凭据已保存。" + (err.message || "余额暂不可读。"); }
+        } else result.textContent = "财务凭据已清除。";
       } catch (err) { result.textContent = err.message || "更新财务凭据失败。"; }
       finally { busy(false); }
     }
     save.addEventListener("click", () => update(false));
     clear.addEventListener("click", () => update(true));
-    query.addEventListener("click", async () => {
-      busy(true);
-      result.textContent = "正在查询阿里云账户余额…";
-      try {
-        const reply = await request(route, { method: "POST", body: "{}" });
-        result.textContent = '现金余额 ' + reply.cash_balance + ' ' + reply.currency + ' · 可用额度 ' + reply.available_amount + ' ' + reply.currency;
-      } catch (err) { result.textContent = err.message || "余额查询暂不可用。"; }
-      finally { busy(false); }
-    });
-    busy(true);
-    request(route).then((reply) => {
-      configured = reply.configured === true;
-      result.textContent = configured ? "财务凭据已保存。" : "展开「财务凭据」后可设置余额查询。";
-    }).catch((err) => {
-      result.textContent = err.message || "财务凭据状态暂不可读。";
-    }).finally(() => busy(false));
+    projectTools.aliyunBalance = { section, refresh };
+    void refresh();
     return section;
   }
   function projectToolStatus(tool) {
@@ -7585,11 +7589,24 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { clearWechatRelocation(apps); appFeedback(""); loadApps(); });
-  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); if (projectTools.openID === "obs-preview") void loadOBSDeployment(projectTools, true); });
+  $("#tool-dialog-refresh").addEventListener("click", () => {
+    projectToolsFeedback("");
+    loadProjectTools();
+    const id = projectTools.openID;
+    if (id === "media-understanding") {
+      void loadLocalVision();
+      void projectTools.aliyunBalance?.refresh();
+    }
+    if (deploymentDescriptor(id)) void loadDeployment(id);
+    if (id === "obs-preview") void loadOBSDeployment(projectTools, true);
+  });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
     const id = projectTools.openID;
-    if (id === "media-understanding") { projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false; }
+    if (id === "media-understanding") {
+      projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false;
+      projectTools.aliyunBalance = null;
+    }
     const spec = deploymentDescriptor(id);
     if (spec) { projectTools[spec.state].generation += 1; projectTools[spec.state].approved = false; }
     if (id === "obs-preview") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }

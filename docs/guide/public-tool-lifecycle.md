@@ -33,7 +33,7 @@
 
 工作站的公共媒体识别首次接续微信旧宿主已经保存的视觉配置。已有工作站配置优先。桌面微信处理图片和视频画面时，在自身检查会话及来源后调用工作站公共视觉宿主，微信工具页面从公共工具栏目进入工作站设置。账号内的视频号登录及投递留在应用内。
 
-公共工具详情可向 DeepSeek 官方查询余额。阿里云视觉详情中的「财务凭据」接受同一计费账号下获准执行 `bssapi:QueryAccountBalance` 的 RAM AccessKey。财务凭据单独保存在 `data/publictools/media-understanding/aliyun-billing.json`，由工作站宿主持有。「查询余额」读取阿里云账户的现金余额和可用额度，保存或清除设置时不发起查询，也不会调用模型。费用中心链接可直接查看账户财务信息。
+公共工具详情可向 DeepSeek 官方查询余额。阿里云视觉详情中的「财务凭据」接受同一计费账号下获准执行 `bssapi:QueryAccountBalance` 的 RAM AccessKey。财务凭据单独保存在 `data/publictools/media-understanding/aliyun-billing.json`，由工作站宿主持有。打开详情、刷新详情或保存财务凭据时自动读取现金余额和可用额度，不调用模型。费用中心链接可直接查看账户财务信息。
 
 ## 独立 OBS 本机预览
 
