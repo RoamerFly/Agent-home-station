@@ -13,22 +13,26 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/pluginhost"
 )
 
 // stationToolView is deliberately a projection of the Station public tool
 // view. It keeps paths, tokens and implementation details out of the Agent
 // conversation while allowing future tools to appear without a Go enum.
 type stationToolView struct {
-	ExternalPackage bool   `json:"external_package,omitempty"`
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Installed       bool   `json:"installed"`
-	Enabled         bool   `json:"enabled"`
-	Revision        int    `json:"revision"`
-	State           string `json:"state"`
-	RuntimeReady    bool   `json:"runtime_ready"`
-	Reason          string `json:"reason,omitempty"`
-	VoiceProfiles   any    `json:"voice_profiles,omitempty"`
+	DirectoryPackage bool                         `json:"directory_package"`
+	Backends         []pluginhost.ToolBackendView `json:"backends,omitempty"`
+	ExternalPackage  bool                         `json:"external_package,omitempty"`
+	ID               string                       `json:"id"`
+	Name             string                       `json:"name"`
+	Installed        bool                         `json:"installed"`
+	Enabled          bool                         `json:"enabled"`
+	Revision         int                          `json:"revision"`
+	State            string                       `json:"state"`
+	RuntimeReady     bool                         `json:"runtime_ready"`
+	Reason           string                       `json:"reason,omitempty"`
+	VoiceProfiles    any                          `json:"voice_profiles,omitempty"`
 }
 
 type stationToolSession struct {

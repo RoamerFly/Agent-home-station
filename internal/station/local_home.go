@@ -1,12 +1,14 @@
 package station
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/agenthost"
@@ -131,6 +133,13 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	chat := newLocalChatService(home)
 	chat.windows = runner
 	home.projectTools = chat.projectTools
+	if record, e := home.identity.Read(); e == nil && record.LocalOwner != nil && record.LocalOwner.HomeAccess && home.toolPackages != "" {
+		if host, e := chat.projectTools.forFish(record.FishID); e == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			chat.projectTools.refreshDirectoryTools(ctx, host, discoverToolPackages(chat.projectTools.options.CatalogDirectory))
+			cancel()
+		}
+	}
 	mux.HandleFunc("POST /api/logout", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		auth.Logout(w, r)
 		chat.projectTools.obs.stop()

@@ -676,3 +676,7 @@ details:not([open]) > :not(summary) { display:none; }
 .package-card-title{display:flex;align-items:baseline;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;width:100%}
 .package-card-title strong,.package-choice .hint,.capability-overview-card .hint{overflow-wrap:anywhere}
 .package-card-title .package-state{border-radius:6px;padding:2px 6px;background:var(--accent-soft);color:var(--accent);font-size:12px;line-height:1.4}
+
+.package-scope-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+.package-scope-tabs[hidden] { display:none; }
+.package-scope-tabs button[aria-selected="true"] { color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent); }

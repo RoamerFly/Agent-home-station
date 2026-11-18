@@ -445,6 +445,7 @@ func (s *localProjectTools) packages(ctx context.Context, host *localProjectTool
 
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
 	s.toolFileRoutes(owner, mux)
+	mux.HandleFunc("POST /api/local/project-tools/{id}/balance", owner.Protect(s.publicToolBalance))
 	s.visionConfigurationRoutes(owner, mux)
 	s.comfyDeploymentRoutes(owner, mux)
 	s.yueDeploymentRoutes(owner, mux)
@@ -474,11 +475,15 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 		}
 		views := make([]localProjectToolView, 0, len(localProjectPackages))
 		sources := discoverToolPackages(s.options.CatalogDirectory)
+		notes := s.refreshDirectoryTools(r.Context(), host, sources)
 		for _, pkg := range s.packages(r.Context(), host, sources) {
 			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name, sources)
 			if err != nil {
 				websession.Fail(w, 503, "项目工具安装状态不可读")
 				return
+			}
+			if note := notes[pkg.ID]; note != "" {
+				view.Reason = note
 			}
 			views = append(views, view)
 		}
@@ -608,28 +613,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
-			grants := append([]string{}, contract.Package.Permissions...)
-			if id == localasr.PluginID {
-				grants = []string{"artifact.read", "artifact.write", "model.invoke"}
-			}
-			if id == localRVCPackage {
-				grants = localRVCGrants
-			}
-			if id == localComfyPackage {
-				grants = localComfyGrants
-			}
-			if id == localYuEPackage {
-				grants = localYuEGrants
-			}
-			if id == localTTSPackage {
-				grants = localTTSGrants
-			}
-			if id == localAudioCppPackage {
-				grants = localAudioCppGrants
-			}
-			if id == localOBSPackage {
-				grants = []string{"network"}
-			}
+			grants := officialProjectToolGrants(id, contract.Package.Permissions)
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {

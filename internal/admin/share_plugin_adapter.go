@@ -42,6 +42,7 @@ func (m *Manager) installedServiceState(ctx context.Context, id, prefix string) 
 }
 
 type receivedSharePolicy struct {
+	sharedVision       bool
 	manager            *Manager
 	store              *pluginhost.Store
 	message            linuxnative.Message
@@ -298,7 +299,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 		return errors.New("share_request_authorization_changed")
 	}
 	i, err := p.store.Installed(ctx, j.Plugin)
-	if err != nil || !i.Enabled || i.Removed {
+	if !(p.sharedVision && p.tool == "media.observe" && j.PackageDigest == "") && (err != nil || !i.Enabled || i.Removed) {
 		return errors.New("share_plugin_disabled")
 	}
 	// A job created by the plugin runtime has an immutable package/config

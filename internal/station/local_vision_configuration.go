@@ -52,6 +52,7 @@ func defaultLocalVisionConfiguration() localVisionConfiguration {
 }
 
 func (s *localProjectTools) visionConfigurationRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST "+localVisionConfigurationRoute+"/observe", owner.Protect(s.sharedVisionObserve))
 	for _, method := range []string{"GET", "PUT"} {
 		mux.HandleFunc(method+" "+localVisionConfigurationRoute, owner.Protect(s.visionConfiguration))
 	}
@@ -171,6 +172,7 @@ func (s *localProjectTools) visionConfiguration(w http.ResponseWriter, r *http.R
 		websession.Fail(w, 503, "本机媒体工具配置暂不可读取")
 		return
 	}
+	s.importLegacyPublicToolConfig(r.Context(), host, localasr.PluginID)
 	view, err := s.localVisionView(r.Context(), host)
 	if err != nil {
 		websession.Fail(w, 503, "本机视觉配置暂不可读取，原设置保留")

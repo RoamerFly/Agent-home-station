@@ -2,17 +2,31 @@
 (() => {
  'use strict';
  const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={catalog:[],installed:[],connections:[],builtins:[],runtimes:{},readiness:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
+ const state={toolScope:"public",managed:false,publicTools:[],publicError:"",catalog:[],installed:[],connections:[],builtins:[],runtimes:{},readiness:{},retained:new Set(),selected:'',detail:null,epoch:0,busy:false,loadPromise:null,loaded:false,dirty:false,editVersion:0,hostRequest:null};
  const page=$('#plugins'),legacy=page.querySelector('.plugin-workspace'),guide=$('#plugin-guide');
  const el=(tag,text,klass)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(klass)n.className=klass;return n};
  const button=(text,action)=>{const b=el('button',text,'quiet');b.type='button';if(text==='刷新任务')window.WechatRefresh.bind(b,action);else b.addEventListener('click',action);return b};
  const area=el('div',undefined,'package-workspace'),browser=el('aside',undefined,'panel package-browser'),editor=el('article',undefined,'panel package-editor');
  const list=el('div',undefined,'package-list'),status=el('p','选择服务查看配置、权限和任务。','hint');status.setAttribute('role','status');
- const head=el('div',undefined,'section-heading');head.append(el('h3','浏览工具'),button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(area);
+ const head=el('div',undefined,'section-heading');head.append(el('h3','浏览工具'));
+ const scopeTabs=el('div',undefined,'package-scope-tabs');scopeTabs.setAttribute('role','tablist');scopeTabs.setAttribute('aria-label','工具归属');
+ const scopeButtons=new Map();
+ function selectScope(scope,focus=false){
+  if(!discard())return;
+  state.toolScope=scope;state.selected='';state.detail=null;state.epoch++;state.loadPromise=null;dirty(false);renderList();if(focus)(scopeButtons.get(scope))?.focus();
+ }
+ for(const [scope,label] of [['public','公共工具'],['application','应用内工具']]){
+  const tab=button(label,()=>selectScope(scope));tab.setAttribute('role','tab');tab.id='package-scope-'+scope;tab.setAttribute('aria-controls','package-scope-panel');scopeButtons.set(scope,tab);
+  tab.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();selectScope(e.key==='Home'?'public':e.key==='End'?'application':scope==='public'?'application':'public',true)});
+  scopeTabs.append(tab);
+ }
+ editor.id='package-scope-panel';editor.setAttribute('role','tabpanel');
+ function openPublicTools(){if(window.chrome?.webview)window.chrome.webview.postMessage({type:'open-public-tools'});else window.open('http://127.0.0.1:8082/','_blank','noopener')}
+ browser.append(head,list);editor.append(status);area.append(browser,editor);legacy.before(scopeTabs,area);
  // The legacy declaration editor remains mounted for compatibility, but all
  // provider-facing configuration now has one visible home: the package detail
  // or the dedicated Connection & MCP page.
- function showPackages(){area.hidden=false;legacy.hidden=true;if(guide)guide.hidden=true;window.WechatSaveActions?.sync()}
+ function showPackages(){area.hidden=false;scopeTabs.hidden=!state.managed;legacy.hidden=true;if(guide)guide.hidden=true;window.WechatSaveActions?.sync()}
  const account=()=>window.WechatAccountContext?.id||'';
  const context=()=>({id:state.selected,account:account(),epoch:state.epoch});
  const current=scope=>scope.epoch===state.epoch&&scope.id===state.selected&&scope.account===account()&&window.WechatAdmin?.isAuthenticated();
@@ -59,25 +73,44 @@
   for(const builtin of [true,false]){
    const group=el('section',undefined,overview?'capability-overview-group':'package-group');
    const title=el('div',undefined,'package-group-heading'),cards=el('div',undefined,'package-group-cards');
-   title.append(el('h4',builtin?'内置工具':'通用工具'));
+   title.append(el('h4',builtin?'微信内置工具':state.managed?'微信专属配置':'通用工具'));
    if(builtin)for(const item of state.builtins)cards.append(builtinCard(item,cardClass));
    for(const p of all.values()){
     if((p.id==='web-search')!==builtin)continue;
     cards.append(capabilityCard(p,state.installed.find(item=>item.package.id===p.id),cardClass));
    }
-   if(!builtin)for(const item of state.connections){
+   if(!builtin&&!state.managed)for(const item of state.connections){
     const card=button('',()=>manageConnections(item.id));card.className=cardClass;
     card.append(el('strong',item.manifest.name||item.id),el('small',(item.manifest.mcp?'MCP':'HTTP')+' · '+(item.enabled?'已启用':'未启用')));
     cards.append(card);
    }
-   if(!builtin&&overview){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';title.append(connections)}
+   if(!builtin&&overview&&!state.managed){const connections=button('管理 HTTP 与 MCP',()=>window.WechatAdmin.nav('mcp'));connections.className='secondary capability-connections';title.append(connections)}
    group.append(title,cards);
    if(cards.childElementCount||title.childElementCount>1)container.append(group);
   }
  }
+ function renderPublicTools(){
+  const heading=el('div',undefined,'section-heading');heading.append(el('h3','公共工具'),button('前往工作站配置',openPublicTools));
+  const grid=el('div',undefined,'package-group-cards');
+  for(const tool of state.publicTools){
+   const card=el('article',undefined,'capability-overview-card');
+   const stage=tool.enabled?(tool.state==='running'?'运行中':tool.runtime_ready?'按需待命':'等待配置'):tool.installed?'待启用或待配置':'等待目录加载';
+   const title=el('span',undefined,'package-card-title');title.append(el('strong',tool.name||tool.id),el('small',stage,'package-state'));card.append(title);
+   for(const b of tool.backends||[]){
+    const kind={local:'本机运行',loopback:'本机服务',api:'上游 API',web:'联网读取',service:'外部服务',package:'按配置运行'}[b.kind]||'后端待确认';
+    const credential=b.credential==='api_key'?(b.key_configured?'API Key 已保存':'API Key 未填写'):null;
+    card.append(el('small',[b.name,kind,b.origin,b.model,credential].filter(Boolean).join(' · '),'hint'));
+   }
+   grid.append(card);
+  }
+  editor.replaceChildren(heading);
+  if(state.publicError)editor.append(el('p',state.publicError,'hint'));
+  else editor.append(grid);
+  window.WechatSaveActions?.sync();
+ }
  function renderOverview(all){
   if(state.selected)return;
-  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3','工具目录'),el('p','点开工具查看配置与任务；微信收发权限可从内置工具卡片调整。','hint'));const actions=el('div',undefined,'package-overview-actions');actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3',state.managed?'应用内工具':'工具目录'),el('p','在这里管理微信收发权限、视频号登录与投递。','hint'));const actions=el('div',undefined,'package-overview-actions');if(!state.managed)actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
   const grid=el('div',undefined,'capability-overview-grid');
   renderGroups(grid,all,true);
   editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();
@@ -85,13 +118,20 @@
  function dirty(value){state.dirty=value;if(value)state.editVersion++;window.WechatAdmin.pluginPackageDirty=value}
  function discard(){return !state.dirty||confirm('有未保存的工具配置，确定放弃？')}
  function renderList(){
+  scopeTabs.hidden=!state.managed;
+  for(const [scope,tab] of scopeButtons){tab.setAttribute('aria-selected',String(state.toolScope===scope));tab.tabIndex=state.toolScope===scope?0:-1}
+  editor.setAttribute('aria-labelledby','package-scope-'+state.toolScope);
   area.classList.toggle('package-overview',!state.selected);list.replaceChildren();const all=allPackages();
+  if(state.managed&&state.toolScope==='public'){renderPublicTools();return}
+  if(state.managed)for(const id of all.keys())if(!['share-reader','music','mobile-control'].includes(id))all.delete(id);
   renderGroups(list,all,false);
   renderOverview(all);
  }
  async function load(){
   if(!window.WechatAdmin?.isAuthenticated())return;if(state.loadPromise)return state.loadPromise;state.busy=true;const epoch=state.epoch,owner=account();
-  const pending=(async()=>{try{const [data,connections]=await Promise.all([api('/api/plugin-packages'),api('/api/plugins').catch(()=>null)]);if(epoch!==state.epoch||owner!==account())return;state.connections=connections?.installed||[];state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.readiness=data.readiness||{};state.retained=new Set(data.retained_ids||[]);state.loaded=true;renderList()}
+  const pending=(async()=>{try{const [data,connections]=await Promise.all([api('/api/plugin-packages'),api('/api/plugins').catch(()=>null)]);if(epoch!==state.epoch||owner!==account())return;state.connections=connections?.installed||[];state.catalog=data.catalog||[];state.installed=data.installed||[];state.builtins=data.builtins||[];state.runtimes=data.runtimes||{};state.readiness=data.readiness||{};state.retained=new Set(data.retained_ids||[]);state.managed=data.shared_public_tools===true;
+ if(state.managed){try{const publicData=await api('/api/public-tools');if(epoch!==state.epoch||owner!==account())return;state.publicTools=publicData.tools||[];state.publicError=''}catch(error){if(epoch!==state.epoch||owner!==account())return;state.publicError=error.message}}
+ state.loaded=true;renderList()}
   catch(e){if(epoch===state.epoch&&owner===account()){status.textContent='工具目录读取失败：'+e.message;if(!state.selected)editor.prepend(status)}}})();state.loadPromise=pending;try{return await pending}finally{if(state.loadPromise===pending){state.busy=false;state.loadPromise=null}}
  }
  function backToOverview(){
@@ -105,6 +145,8 @@
   return heading;
  }
  async function choose(id){
+  if(state.managed&&!['share-reader','music','mobile-control'].includes(id)){selectScope('public');return}
+  if(state.managed&&state.toolScope!=='application')state.toolScope='application';
   if(id===state.selected&&state.detail)return;if(!discard())return;
   const epoch=++state.epoch,owner=account();state.selected=id;state.detail=null;dirty(false);renderList();editor.replaceChildren(detailHeading(id),status);status.textContent='正在读取工具…';
   const installed=state.installed.find(x=>x.package.id===id),p=installed?.package||state.catalog.find(x=>x.id===id);

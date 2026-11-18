@@ -5874,6 +5874,25 @@
       if (!["package", "unknown"].includes(backend.kind)) rows.push(["凭据", toolBackendCredential(backend)]);
       for (const [label, value] of rows) fields.append(appElement("dt", label), appElement("dd", value));
       record.append(heading, fields);
+      if (backend.credential === "api_key" && backend.key_configured) {
+        if (backend.origin === "https://api.deepseek.com" && ["media-understanding", "web-search"].includes(tool.id) && showTitle) {
+          const balance = appElement("div", "", "tool-balance");
+          const button = appElement("button", "查询余额", "button compact secondary"); button.type = "button";
+          const result = appElement("span", "", "local-vision-note"); result.setAttribute("role", "status");
+          button.addEventListener("click", async () => {
+            button.disabled = true; result.textContent = "正在查询…";
+            try {
+              const reply = await request(`/api/local/project-tools/${encodeURIComponent(tool.id)}/balance`, { method: "POST", body: "{}" });
+              result.textContent = (reply.balance_infos || []).map((v) => `${v.total_balance} ${v.currency}`).join(" · ") || "未返回余额";
+            } catch (err) { result.textContent = err.message || "余额查询暂不可用"; }
+            finally { button.disabled = false; }
+          });
+          balance.append(button, result); record.append(balance);
+        } else if (/^https:\/\/([a-z0-9.-]+\.)?(aliyuncs\.com|maas\.aliyun\.com)$/.test(backend.origin || "")) {
+          const link = appElement("a", "阿里云费用中心"); link.href = "https://usercenter2.aliyun.com/home"; link.target = "_blank"; link.rel = "noopener noreferrer";
+          const balance = appElement("div", "", "tool-balance local-vision-note"); balance.append(document.createTextNode("余额需财务权限"), link); record.append(balance);
+        } else record.append(appElement("p", "余额由服务商控制台提供", "local-vision-note"));
+      }
       grid.append(record);
     }
     section.append(grid);
@@ -6430,19 +6449,6 @@
     section.append(form);
     return section;
   }
-  function projectToolApprovalCopy(tool) {
-    if (tool?.external_package) {
-      const permissions = (tool.package_permissions || []).join("、") || "无额外权限";
-      return `确认安装 ${tool.package_version || "当前版本"}，授予包声明的权限（${permissions}）`;
-    }
-    if (tool?.id === "obs-preview") return "确认仅访问本机 OBS WebSocket";
-    if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
-    if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
-    if (tool?.id === "yue") return "确认任务素材读写与本机 GPU";
-    if (tool?.id === "station-speech") return "确认本机语音成品写入与 GPU";
-    if (tool?.id === "audio-cpp") return "确认本机语音模型读取与成品写入";
-    return "确认本机素材读写";
-  }
   function projectToolPDFNote(tool) {
     if (!tool || !tool.installed) return "安装后会检查 DOCX 导出 PDF 所需的本地环境。";
     if (!tool.runtime_ready) return "本地运行环境未就绪，暂不能导出 PDF。";
@@ -6779,7 +6785,7 @@
       douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
       bilibili: ["稿件与评论读取", "账号授权与视频发布"]
     };
-    const wechatLabels = { "media-understanding": "微信媒体理解", "share-reader": "微信分享解析", "music": "微信音乐与投递", "web-search": "微信 Agent 搜索配置" };
+    const wechatLabels = { "share-reader": "微信分享解析", "music": "微信音乐与投递" };
     try {
       const [catalog, config] = await Promise.allSettled([request("/api/local/apps/catalog"), request("/api/local/project-tools/applications")]);
       if (current !== projectTools) return;
@@ -6851,7 +6857,7 @@
     const list = $("#project-tools-list"), current = projectTools;
     list.setAttribute("aria-busy", String(current.loading || Boolean(current.applying)));
     $("#project-tools-refresh").disabled = current.loading || Boolean(current.applying);
-    $("#project-tools-refresh").textContent = current.loading ? "刷新中…" : "刷新";
+    $("#project-tools-refresh").textContent = current.loading ? "扫描中…" : "扫描 / 重载";
     if (current.loading && !current.tools.length) {
       list.replaceChildren(appElement("p", "正在扫描公共工具目录…", "project-tools-empty"));
       return;
@@ -6968,16 +6974,8 @@
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
       const controlsDisabled = current.loading || Boolean(current.applying);
-      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "audio-cpp" || tool.id === "obs-preview";
       if (!tool.installed) {
-        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !tool.catalog_available || !canInstall;
-        approval.append(checkbox, copy);
-        const install = appElement("button", busy ? "正在安装…" : tool.id === "obs-preview" ? "安装预览工具" : "安装", "button compact primary");
-        install.type = "button"; install.disabled = true;
-        checkbox.addEventListener("change", () => { install.disabled = checkbox.disabled || !checkbox.checked; });
-        install.addEventListener("click", () => updateProjectTool(tool, "install", checkbox.checked));
-        controls.append(approval, install);
+        controls.append(appElement("span", tool.reason || "工具包会在扫描目录时自动登记。", "project-tool-update-note"));
       } else {
         const action = tool.enabled ? "disable" : "enable";
         const button = appElement("button", busy ? "正在处理…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
@@ -6992,19 +6990,9 @@
             control.addEventListener("click", () => updateProjectTool(tool, action, false)); controls.append(control);
           }
         }
-        if (tool.update_available) {
-          if (tool.enabled) {
-            controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
-          } else {
-            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !canInstall;
-            approval.append(checkbox, copy);
-            const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");
-            upgrade.type = "button"; upgrade.disabled = true;
-            checkbox.addEventListener("change", () => { upgrade.disabled = checkbox.disabled || !checkbox.checked; });
-            upgrade.addEventListener("click", () => updateProjectTool(tool, "upgrade", checkbox.checked));
-            controls.append(approval, upgrade);
-          }
+        if (tool.update_available || tool.reason) {
+          const guidance = tool.reason || "新版工具包将在扫描目录时重载。";
+          controls.append(appElement("span", projectToolReason(tool) || guidance, "project-tool-update-note"));
         }
       }
       detail.append(controls); card.append(detail); return card;
@@ -7646,6 +7634,7 @@
   if (window.chrome?.webview) {
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
+      if (value.type === "open-public-tools") { setActiveView("project-tools"); selectToolPanel("public"); return; }
       if (value.type === "share-reader-auth-result") {
         if (value.ok === true) {
           appFeedback(value.message || "登录凭据已保存。");

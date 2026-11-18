@@ -19,6 +19,7 @@ namespace WechatAgent.Desktop {
         bool terminal;
 
         internal event Action<string, string, int> ShareReaderLoginRequested;
+        internal event Action PublicToolsRequested;
 
         internal LegacyWechatConsoleDialog(Deployment deployment, Action closed) {
             this.deployment = deployment; this.closed = closed;
@@ -85,7 +86,10 @@ namespace WechatAgent.Desktop {
             if (terminal) return;
             try {
                 var input = Deployment.Json.Deserialize<System.Collections.Generic.Dictionary<string, object>>(message.WebMessageAsJson);
-                if (input == null || Deployment.Text(input, "type") != "share-reader-auth-open") return;
+                if (input == null) return;
+                var type = Deployment.Text(input, "type");
+                if (type == "open-public-tools" && AllowsNavigation(message.Source)) { var openTools = PublicToolsRequested; if (openTools != null) openTools(); return; }
+                if (type != "share-reader-auth-open") return;
                 string provider = Deployment.Text(input, "provider");
                 string account = Deployment.Text(input, "account");
                 int revision;

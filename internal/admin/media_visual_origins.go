@@ -35,6 +35,18 @@ func (m *Manager) newBoundMediaVisualObservationPolicy(ctx context.Context, imag
 	if err := m.mediaImageObservationReady(ctx); err != nil {
 		return nil, err
 	}
+	if host, shared := m.sharedStationVision(); shared {
+		source := agentID(inv.Account, inv.Thread, inv.RequestKey, strconv.Itoa(revision))
+		origin := func(ctx context.Context) error {
+			if m.native.Account() != inv.Account {
+				return errors.New("media_visual_origin_changed")
+			}
+			return check(ctx)
+		}
+		return &mediaPluginPolicy{sharedCheck: origin, shared: func(ctx context.Context) (string, error) {
+			return host.observeSharedVision(ctx, source, prompt, images, maxTokens, origin)
+		}}, nil
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		return nil, err

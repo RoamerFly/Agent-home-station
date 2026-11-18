@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"wechat-bot/internal/pluginruntime"
@@ -151,4 +152,52 @@ func TestExtractedToolPackageLifecycle(t *testing.T) {
 	if raw, err := os.ReadFile(configPath); err != nil || !bytes.Equal(raw, invalid) {
 		t.Fatal("invalid config was replaced", err)
 	}
+	// A published tools directory automatically reloads a compatible updated
+	// snapshot while preserving its settings and respecting in-flight work.
+	if err = os.WriteFile(configPath, userConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.handler.home.toolPackages = catalog
+	manifest["version"] = "0.1.2"
+	nextManifest, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "plugin.json"), nextManifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := tools.markActive(id)
+	waiting := localProjectToolByID(t, f, id)
+	done()
+	if waiting["update_available"] != true || !strings.Contains(waiting["reason"].(string), "在途任务") {
+		t.Fatal("busy tool was reloaded", waiting)
+	}
+	upgraded := localProjectToolByID(t, f, id)
+	if upgraded["update_available"] != false || upgraded["enabled"] != true {
+		t.Fatal("updated tool did not reload", upgraded)
+	}
+	if raw, err := os.ReadFile(configPath); err != nil || !bytes.Equal(raw, userConfig) {
+		t.Fatal("upgrade replaced owner settings", err)
+	}
+	blank := filepath.Join(catalog, "new-tool")
+	if err = os.Mkdir(blank, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(source, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(blank, entry.Name()), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	automatic := localProjectToolByID(t, f, "example-echo")
+	if automatic["installed"] != true || automatic["enabled"] != true || automatic["state"] != "idle" {
+		t.Fatal("compatible package was not auto-registered", automatic)
+	}
+
 }

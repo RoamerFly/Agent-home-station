@@ -93,9 +93,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 	if m.Type == 3 && !c.ReadImages || m.Type == 43 && !c.ReadVideos {
 		return "", errors.New("media_understanding_disabled")
 	}
-	// Image/sticker bytes are private incoming media. Verify the only supported
-	// image observer before asking the native bridge to download any bytes; do
-	// not fall back to a chat model when the media package is absent.
+	// Verify the image observer before asking the native bridge for private media.
 	if m.Type == 3 {
 		check := a.manager.mediaImageObservationReady
 		if c.DirectImageInput {
@@ -110,7 +108,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		if stateErr != nil {
 			return "", stateErr
 		}
-		if !installed {
+		if _, shared := a.manager.sharedStationVision(); !installed && !shared {
 			return "", errors.New("media_plugin_migration_required")
 		}
 		if !a.manager.mediaObservationConfigured(ctx) && !a.manager.mediaTranscriptionConfigured(ctx) {

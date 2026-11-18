@@ -21,12 +21,38 @@ type mediaPluginPolicy struct {
 	receivedSharePolicy *receivedSharePolicy
 	store               *pluginhost.Store
 	post                pluginruntime.RouteTransport
+	shared              func(context.Context) (string, error)
+	sharedCheck         func(context.Context) error
+}
+
+func (p *mediaPluginPolicy) Observe(ctx context.Context) (string, error) {
+	if p.shared != nil {
+		return p.shared(ctx)
+	}
+	return p.Visual.Observe(ctx)
+}
+
+func (p *mediaPluginPolicy) CheckCompleted(ctx context.Context) error {
+	if p.sharedCheck != nil {
+		return p.sharedCheck(ctx)
+	}
+	return p.Visual.CheckCompleted(ctx)
 }
 
 func (m *Manager) newMediaPluginPolicy(ctx context.Context, message linuxnative.Message, prompt string, images []deepseek.Image, tokens int) (*mediaPluginPolicy, error) {
 	base, err := m.newReceivedSharePolicyFor(ctx, message, "media.observe")
 	if err != nil {
 		return nil, err
+	}
+	if host, shared := m.sharedStationVision(); shared {
+		base.sharedVision = true
+		source := agentID(message.AccountID, message.ThreadID, message.ID, strconv.Itoa(base.source.Revision), base.fingerprint)
+		return &mediaPluginPolicy{receivedSharePolicy: base, shared: func(ctx context.Context) (string, error) {
+			check := func(ctx context.Context) error {
+				return base.Check(ctx, pluginhost.Job{Plugin: "media-understanding", Tool: "media.observe", Context: base.invocation()}, pluginhost.Capability{})
+			}
+			return host.observeSharedVision(ctx, source, prompt, images, tokens, check)
+		}}, nil
 	}
 	p, err := newLegacyVisualPolicy(ctx, base.store, base.source.Revision, prompt, images, tokens)
 	if err != nil {
@@ -97,6 +123,12 @@ func (a mediaUnderstanding) observeImages(ctx context.Context, message linuxnati
 // authorized media-understanding package. It also lets callers reject before a
 // private native attachment download.
 func (m *Manager) mediaImageObservationReady(ctx context.Context) error {
+	if shared, ready := m.sharedVisionReady(ctx); shared {
+		if ready {
+			return nil
+		}
+		return errors.New("media_station_vision_unavailable")
+	}
 	installed, err := m.installedServiceState(ctx, "media-understanding", "media")
 	if err != nil {
 		return err

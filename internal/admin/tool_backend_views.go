@@ -43,6 +43,9 @@ func (m *Manager) toolBackendViews(ctx context.Context, store *pluginhost.Store,
 		if vision.Model == "" {
 			vision.State = "missing"
 		}
+		if _, shared := m.sharedStationVision(); shared {
+			return []pluginhost.ToolBackendView{asr}
+		}
 		return []pluginhost.ToolBackendView{asr, vision}
 	case "web-search":
 		if value("search_backend") == "deepseek" {

@@ -81,6 +81,9 @@ func configuredSecret(c pluginhost.Configuration, name string) bool {
 // ASR-only installation must remain usable for transcription, and a
 // vision-only installation must remain usable for image observations.
 func (m *Manager) mediaObservationConfigured(ctx context.Context) bool {
+	if shared, ready := m.sharedVisionReady(ctx); shared {
+		return ready
+	}
 	s, err := m.packageStore()
 	if err != nil {
 		return false

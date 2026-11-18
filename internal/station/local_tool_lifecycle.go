@@ -181,6 +181,9 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 	action := strings.TrimPrefix(name, "station_tool_")
 	views := []localProjectToolView{}
 	sources := discoverToolPackages(s.options.CatalogDirectory)
+	if action == "status" {
+		s.refreshDirectoryTools(ctx, host, sources)
+	}
 	for _, p := range s.packages(ctx, host, sources) {
 		if in.ToolID != "" && in.ToolID != p.ID {
 			continue

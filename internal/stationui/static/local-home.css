@@ -495,6 +495,7 @@ p.publication-authorization-note,
 .app-tool-settings-summary { margin-top: var(--s-3); border-top: 1px solid var(--border); padding-top: var(--s-2); }
 .app-tool-settings-summary summary { cursor: pointer; font-size: var(--fs-caption); }
 .app-tool-settings-summary[open] summary { margin-bottom: var(--s-2); }
+.tool-balance { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-width: 0; }
 .tool-card-link { align-self: end; color: var(--accent-deep); font-size: var(--fs-caption); }
 .tool-dialog .project-tool-head { display: none; }
 .tool-dialog .project-tool-record { max-width: 1100px; margin-inline: auto; }

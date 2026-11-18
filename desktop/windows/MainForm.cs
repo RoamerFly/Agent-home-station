@@ -440,6 +440,13 @@ namespace WechatAgent.Desktop {
             LegacyWechatConsoleDialog dialog = null;
             dialog = new LegacyWechatConsoleDialog(deployment, () => { if (legacyWechatConsole == dialog) legacyWechatConsole = null; });
             dialog.ShareReaderLoginRequested += delegate(string provider, string account, int revision) { OpenLegacyShareCredentialLogin(dialog, provider, account, revision); };
+            dialog.PublicToolsRequested += delegate {
+                dialog.Close();
+                if (web != null && web.CoreWebView2 != null) {
+                    web.CoreWebView2.PostWebMessageAsJson("{\"type\":\"open-public-tools\"}");
+                    Activate();
+                }
+            };
             legacyWechatConsole = dialog;
             dialog.FormClosed += delegate { if (legacyWechatConsole == dialog) legacyWechatConsole = null; };
             dialog.Show(this);
