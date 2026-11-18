@@ -2,12 +2,12 @@ package station
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
 	"wechat-bot/internal/obspreview"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -21,15 +21,31 @@ type localOBSDeployment struct {
 // The fixed launch arguments never request recording, streaming or capture.
 func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, password string) (result error) {
 	path := stationToolRegistrationPath(s.home.dataDir, "station-obs-preview.json")
-	raw, err := os.ReadFile(path)
+	raw, portable, err := portableRegistration(path, s.options.CatalogDirectory, localOBSPackage, s.home.root, 16<<10)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	} // Existing externally managed OBS remains supported.
+		return nil // Existing externally managed OBS remains supported.
+	}
 	if err != nil {
 		return err
 	}
 	var r localOBSDeployment
-	if json.Unmarshal(raw, &r) != nil || !filepath.IsAbs(r.Executable) || !strings.EqualFold(filepath.Base(r.Executable), "obs64.exe") || !localComfyHexDigest.MatchString(r.SHA256) {
+	if localComfyStrictDecode(raw, &r) != nil || !strings.EqualFold(filepath.Base(r.Executable), "obs64.exe") || !localComfyHexDigest.MatchString(r.SHA256) {
+		return errors.New("OBS 独立预览登记无效")
+	}
+	profile := "StationPreview"
+	portableConfig := ""
+	if portable != "" {
+		if err := resolvePortablePaths(portable, &r.Executable); err != nil {
+			return err
+		}
+		r, err = s.preparePortableOBSPayload(r, port, password)
+		if err != nil {
+			return err
+		}
+		profile = "Station"
+		portableConfig = filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(r.Executable))), "config")
+	}
+	if !filepath.IsAbs(r.Executable) {
 		return errors.New("OBS 独立预览登记无效")
 	}
 	check := func(context.Context) error {
@@ -39,6 +55,9 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 		studio := filepath.Dir(filepath.Dir(filepath.Dir(r.Executable)))
 		actual, e := os.Stat(filepath.Join(studio, "config"))
 		expected := filepath.Join(s.home.dataDir, "publictools", "obs-preview", "config")
+		if portableConfig != "" {
+			expected = portableConfig
+		}
 		want, expectedErr := os.Stat(expected)
 		if e != nil || expectedErr != nil || !os.SameFile(actual, want) {
 			return errors.New("OBS 独立预览配置目录不匹配")
@@ -56,7 +75,7 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 	if err = os.MkdirAll(logs, 0700); err != nil {
 		return err
 	}
-	_, err = s.obsProcesses.Start(ctx, "preview", pluginruntime.ManagedServiceSpec{OwnerPlugin: localOBSPackage, Binding: r.SHA256, Executable: r.Executable, Directory: filepath.Dir(r.Executable), Arguments: []string{"--portable", "--multi", "--websocket_ipv4_only", "--only-bundled-plugins", "--disable-updater", "--disable-missing-files-check", "--minimize-to-tray", "--profile", "StationPreview", "--collection", "StationPreview"}, Environment: os.Environ(), LogPath: filepath.Join(logs, "process.log"), StopTimeout: 5 * time.Second, Check: check}, func(_ context.Context, start func() error) error { return start() })
+	_, err = s.obsProcesses.Start(ctx, "preview", pluginruntime.ManagedServiceSpec{OwnerPlugin: localOBSPackage, Binding: r.SHA256, Executable: r.Executable, Directory: filepath.Dir(r.Executable), Arguments: []string{"--portable", "--multi", "--websocket_ipv4_only", "--only-bundled-plugins", "--disable-updater", "--disable-missing-files-check", "--minimize-to-tray", "--profile", profile, "--collection", profile}, Environment: os.Environ(), LogPath: filepath.Join(logs, "process.log"), StopTimeout: 5 * time.Second, Check: check}, func(_ context.Context, start func() error) error { return start() })
 	if err != nil {
 		return err
 	}

@@ -118,7 +118,11 @@ func discoverToolPackages(directory string) map[string]discoveredToolPackage {
 }
 
 func (p discoveredToolPackage) compatible() bool {
+	return p.Runtime.Transport == "mcp-stdio" && p.hostCompatible()
+}
+
+func (p discoveredToolPackage) hostCompatible() bool {
 	return p.SchemaVersion == 1 && p.HostProtocol == pluginhost.Protocol && p.Status == "ready" &&
-		p.Runtime.Transport == "mcp-stdio" && p.Runtime.Entrypoint != "" && p.Files[p.Runtime.Entrypoint] != "" &&
+		p.Runtime.Entrypoint != "" && p.Files[p.Runtime.Entrypoint] != "" &&
 		(slices.Contains(p.Platforms, runtime.GOOS) || slices.Contains(p.Platforms, runtime.GOOS+"-"+runtime.GOARCH))
 }

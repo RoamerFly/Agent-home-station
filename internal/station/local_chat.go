@@ -77,15 +77,16 @@ func newLocalChatService(home *localHomeService) *localChatService {
 	if home.toolPackages != "" {
 		toolOptions.CatalogDirectory = filepath.Clean(home.toolPackages)
 	}
+	toolOptions.DocumentRuntimeRoot = portableDocumentRoot(home.toolPackages, home.root, toolOptions.DocumentRuntimeRoot)
 	h := &localChatService{home: home, models: newLocalModelStore(stationAuthorityDir(home.dataDir)), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{
 			home: home, options: toolOptions,
-			rvc: newLocalRVCService(home.dataDir, home.root), comfy: newLocalComfyService(home.dataDir, home.root),
-			yue:   newLocalYuEService(home.dataDir, home.root),
-			tts:   newLocalTTSBackend(home.dataDir, home.root),
-			audio: newLocalAudioCppService(home.dataDir, home.root),
+			rvc: newLocalRVCService(home.dataDir, home.root, home.toolPackages), comfy: newLocalComfyService(home.dataDir, home.root, home.toolPackages),
+			yue:   newLocalYuEService(home.dataDir, home.root, home.toolPackages),
+			tts:   newLocalTTSBackend(home.dataDir, home.root, home.toolPackages),
+			audio: newLocalAudioCppService(home.dataDir, home.root, home.toolPackages),
 		}}
 	h.followups = &localTaskFollowupWorker{service: h, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	h.surfActions = newLocalSurfActionWorker(h)

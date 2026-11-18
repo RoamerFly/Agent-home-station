@@ -40,7 +40,11 @@ func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntim
 	// The current signed catalog travels with the tested preview.  Pointing the
 	// acceptance test at source-tree plugin files can pair a new runner with an
 	// old manifest, which is not a deployable Windows configuration.
-	catalog, err := filepath.Abs(filepath.Join(filepath.Dir(runtimeRoot), "plugins"))
+	catalogDirectory := os.Getenv("AHS_LOCAL_PROJECT_TOOL_CATALOG")
+	if catalogDirectory == "" {
+		catalogDirectory = filepath.Join(filepath.Dir(runtimeRoot), "plugins")
+	}
+	catalog, err := filepath.Abs(catalogDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,13 +54,17 @@ func localProjectToolWindowsOptionsFor(t *testing.T, plugin string) pluginruntim
 		Pythonw:             filepath.Join(python, "pythonw.exe"),
 		WindowsHelper:       filepath.Join(runtimeRoot, "windows-agent-host", "windows_plugin_host.pyw"),
 		RuntimeRoots:        []string{python},
-		DocumentRuntimeRoot: filepath.Join(runtimeRoot, "document-workshop"),
+		DocumentRuntimeRoot: portableDocumentRoot(catalog, "", filepath.Join(runtimeRoot, "document-workshop")),
 		CatalogDirectory:    catalog,
+	}
+	pluginDir, err := catalogPackageDir(catalog, plugin)
+	if err != nil {
+		t.Fatal(err)
 	}
 	required := []string{
 		options.Python, options.Pythonw, options.WindowsHelper,
 		filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py"),
-		filepath.Join(options.CatalogDirectory, plugin, "plugin.json"),
+		filepath.Join(pluginDir, "plugin.json"),
 	}
 	if plugin == pluginruntime.DocumentWorkshopID {
 		required = append(required, filepath.Join(options.DocumentRuntimeRoot, "runtime-manifest.json"))

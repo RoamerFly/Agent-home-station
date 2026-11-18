@@ -88,6 +88,7 @@ type localTTSResult struct {
 // easy way to accidentally turn a local configuration into a command channel.
 // All paths stay host-private and are never returned by Info.
 type localTTSRegistration struct {
+	portable      bool
 	SchemaVersion int                         `json:"schema_version"`
 	Enabled       bool                        `json:"enabled"`
 	Project       string                      `json:"project"`
@@ -120,6 +121,7 @@ type localTTSVoiceRegistration struct {
 }
 
 type localTTSService struct {
+	catalog       string
 	dataDir       string
 	editableRoot  string
 	executableDir string
@@ -132,9 +134,11 @@ type localTTSService struct {
 // newLocalTTSBackend is intentionally a one-shot worker rather than a warmed
 // resident process: GPT-SoVITS is selected by one private voice binding, and
 // leaving a server alive would retain a voice/model outside the durable task.
-func newLocalTTSBackend(dataDir, editableRoot string) localTTSBackend {
+func newLocalTTSBackend(dataDir, editableRoot string, catalog string) localTTSBackend {
 	exe, _ := os.Executable()
-	return newLocalTTSBackendAt(dataDir, editableRoot, filepath.Dir(exe))
+	service := newLocalTTSBackendAt(dataDir, editableRoot, filepath.Dir(exe))
+	service.catalog = catalog
+	return service
 }
 
 func newLocalTTSBackendAt(dataDir, editableRoot, executableDir string) *localTTSService {
@@ -234,7 +238,11 @@ func (s *localTTSService) run(ctx context.Context, fish, binding string, registr
 	// random MkdirTemp root would continuously mint distinct LPAC identities and
 	// leave ACL entries on the interpreter/model files. Each invocation still
 	// uses unique output paths, even if an old broker survived a host crash.
-	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "jobs", mediaspec.SpeechSHA256([]byte(fish+"\n"+voice.version())))
+	identity := mediaspec.SpeechSHA256([]byte(fish + "\n" + voice.version()))
+	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "jobs", identity)
+	if registration.portable {
+		directory = filepath.Join(stationToolRoot(s.dataDir, "station-speech"), "jobs", identity[:24])
+	}
 	if err := localTTSEnsureDir(directory); err != nil {
 		return localTTSResult{}, errors.New("station_speech_private_directory_unavailable")
 	}
@@ -353,7 +361,7 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 	if err := ctx.Err(); err != nil {
 		return localTTSRegistration{}, err
 	}
-	data, err := localTTSReadRegular(stationToolRegistrationPath(s.dataDir, localTTSRegistrationFile), localTTSRegistrationMax)
+	data, portable, err := portableRegistration(stationToolRegistrationPath(s.dataDir, localTTSRegistrationFile), s.catalog, localTTSPackage, s.editableRoot, localTTSRegistrationMax)
 	if err != nil || len(data) == 0 {
 		return localTTSRegistration{}, errors.New("station_speech_not_installed_or_authorized")
 	}
@@ -363,6 +371,18 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&registration) != nil || decoder.Decode(&struct{}{}) != io.EOF || json.Unmarshal(data, &fields) != nil || !localTTSRegistrationFields(fields) || registration.SchemaVersion != 1 || !registration.Enabled {
 		return localTTSRegistration{}, errors.New("station_speech_not_installed_or_authorized")
+	}
+	if portable != "" {
+		registration.portable = true
+		if err := resolvePortablePaths(portable, &registration.Project, &registration.Python, &registration.BaseModels, &registration.Packages, &registration.Runner, &registration.Media, &registration.NLTKData); err != nil {
+			return localTTSRegistration{}, err
+		}
+		for i := range registration.Voices {
+			voice := &registration.Voices[i]
+			if err := resolvePortablePaths(portable, &voice.GPT, &voice.SoVITS, &voice.Reference, &voice.Prompt); err != nil {
+				return localTTSRegistration{}, err
+			}
+		}
 	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localTTSRegistration{}, err

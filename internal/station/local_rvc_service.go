@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginruntime"
 	"wechat-bot/internal/stationruntime"
@@ -70,17 +71,19 @@ type localRVCVoice struct {
 }
 
 type localRVCRegistration struct {
-	SchemaVersion int             `json:"schema_version"`
-	Enabled       bool            `json:"enabled"`
-	Workspace     string          `json:"workspace"`
-	Media         string          `json:"media"`
-	Port          int             `json:"port"`
-	IdleSeconds   int             `json:"idle_seconds,omitempty"`
-	Profiles      []localRVCVoice `json:"profiles"`
-	FishID        string          `json:"fish_id,omitempty"`
+	public, control string
+	SchemaVersion   int             `json:"schema_version"`
+	Enabled         bool            `json:"enabled"`
+	Workspace       string          `json:"workspace"`
+	Media           string          `json:"media"`
+	Port            int             `json:"port"`
+	IdleSeconds     int             `json:"idle_seconds,omitempty"`
+	Profiles        []localRVCVoice `json:"profiles"`
+	FishID          string          `json:"fish_id,omitempty"`
 }
 
 type localRVCService struct {
+	catalog       string
 	dataDir       string
 	editableRoot  string
 	executableDir string
@@ -114,9 +117,11 @@ var (
 // workspace.  The latter is selected only by the private registration and is
 // rejected if it overlaps this home root.  This avoids accidentally granting
 // a conversion process the Agent's editable files as its service mount.
-func newLocalRVCService(dataDir, workspace string) localRVCBackend {
+func newLocalRVCService(dataDir, workspace, catalog string) localRVCBackend {
 	exe, _ := os.Executable()
-	return newLocalRVCServiceAt(dataDir, workspace, filepath.Dir(exe))
+	service := newLocalRVCServiceAt(dataDir, workspace, filepath.Dir(exe))
+	service.catalog = catalog
+	return service
 }
 
 // newLocalRVCServiceAt exists for isolated tests.  Production callers use the
@@ -289,14 +294,14 @@ func (s *localRVCService) start(ctx context.Context, fish, expectedBinding strin
 	if closed {
 		return errors.New("station_rvc_service_closed")
 	}
-	if err := s.ensurePrivateScope(registration.Workspace, fish); err != nil {
+	if err := s.ensurePrivateScope(registration, fish); err != nil {
 		return err
 	}
 	var token string
 	runtimeRoot := stationPackageRuntimeRoot(s.executableDir)
-	control := filepath.Join(runtimeRoot, "windows-station-rvc")
+	control := s.controlDirectory(registration)
 	python := filepath.Join(runtimeRoot, "windows-python-cli", "python.exe")
-	private := localRVCPrivateScope(registration.Workspace, fish)
+	private := registration.privateDirectory(fish)
 	state := filepath.Join(private, "music", "jobs")
 	logDir := stationToolLogsDir(s.dataDir, "rvc")
 	if err := os.MkdirAll(logDir, 0700); err != nil {
@@ -333,7 +338,7 @@ func (s *localRVCService) start(ctx context.Context, fish, expectedBinding strin
 		Binding:     binding,
 		Executable:  python,
 		Arguments: []string{"-X", "utf8", filepath.Join(control, "yue_bridge.py"), "--rvc-only", "--station-fish", fish,
-			"--project", filepath.Join(registration.Workspace, "public_workspace"), "--managed-public", filepath.Join(registration.Workspace, "public_workspace"),
+			"--project", registration.publicDirectory(), "--managed-public", registration.publicDirectory(),
 			"--managed-private", private, "--state", state, "--token-file", stationRVCTokenPath(s.dataDir), "--ready-file", readyPath, "--ready-nonce", readyNonce,
 			"--bind", "127.0.0.1", "--port", strconv.Itoa(registration.Port), "--desktop"},
 		Directory:       control,
@@ -477,7 +482,7 @@ func (s *localRVCService) loadRegistration(ctx context.Context) (localRVCRegistr
 	if err := ctx.Err(); err != nil {
 		return localRVCRegistration{}, nil, err
 	}
-	data, err := localRVCReadRegular(stationRVCRegistrationPath(s.dataDir), 64<<10)
+	data, portable, err := portableRegistration(stationRVCRegistrationPath(s.dataDir), s.catalog, localRVCPackage, s.editableRoot, 64<<10)
 	if err != nil || len(data) == 0 {
 		return localRVCRegistration{}, nil, errors.New("station_rvc_not_installed_or_authorized")
 	}
@@ -486,10 +491,23 @@ func (s *localRVCService) loadRegistration(ctx context.Context) (localRVCRegistr
 	if json.Unmarshal(data, &registration) != nil || json.Unmarshal(data, &fields) != nil || !localRVCRegistrationFields(fields) || registration.SchemaVersion != 1 || !registration.Enabled {
 		return localRVCRegistration{}, nil, errors.New("station_rvc_not_installed_or_authorized")
 	}
+	if portable != "" {
+		// Package supplies read-only runtime resources. Each fish's journal
+		// and scratch remain in the station-managed private tool directory.
+		if registration.Workspace != "." || registration.FishID != "" {
+			return localRVCRegistration{}, nil, errors.New("station_rvc_registration_invalid")
+		}
+		registration.public = portable
+		registration.control = "runtime/windows-station-rvc"
+		registration.Workspace = stationToolRoot(s.dataDir, "rvc")
+		if err := resolvePortablePaths(portable, &registration.control, &registration.Media); err != nil {
+			return localRVCRegistration{}, nil, err
+		}
+	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localRVCRegistration{}, nil, err
 	}
-	manifest, err := localRVCControlManifest(filepath.Join(stationPackageRuntimeRoot(s.executableDir), "windows-station-rvc"))
+	manifest, err := localRVCControlManifest(s.controlDirectory(registration))
 	if err != nil {
 		return localRVCRegistration{}, nil, err
 	}
@@ -515,16 +533,16 @@ func localRVCRegistrationFields(fields map[string]json.RawMessage) bool {
 }
 
 func (r localRVCRegistration) validate(dataDir, editableRoot string) error {
-	if r.Port < 1024 || r.Port > 65535 || !localRVCSafeDirectory(r.Workspace) || !localRVCSafeDirectory(r.Media) {
+	if r.Port < 1024 || r.Port > 65535 || !localRVCSafeDirectory(r.Media) || (r.public == "" && !localRVCSafeDirectory(r.Workspace)) {
 		return errors.New("station_rvc_registration_invalid")
 	}
 	if localRVCInside(dataDir, editableRoot) {
 		return errors.New("station_rvc_host_storage_overlaps_agent_home")
 	}
-	if localRVCPathsOverlap(r.Workspace, editableRoot) || localRVCPathsOverlap(r.Workspace, dataDir) || localRVCPathsOverlap(r.Media, editableRoot) || localRVCPathsOverlap(r.Media, dataDir) {
+	if localRVCPathsOverlap(r.Workspace, editableRoot) || (r.public == "" && localRVCPathsOverlap(r.Workspace, dataDir)) || localRVCPathsOverlap(r.Media, editableRoot) || localRVCPathsOverlap(r.Media, dataDir) {
 		return errors.New("station_rvc_workspace_overlaps_agent_home")
 	}
-	if !localRVCSafeDirectory(filepath.Join(r.Workspace, "public_workspace")) || !localRVCSafeDirectory(filepath.Join(r.Workspace, "pri_workspace")) {
+	if !localRVCSafeDirectory(r.publicDirectory()) || (r.public == "" && !localRVCSafeDirectory(filepath.Join(r.Workspace, "pri_workspace"))) {
 		return errors.New("station_rvc_workspace_invalid")
 	}
 	for _, executable := range []string{"ffmpeg.exe", "ffprobe.exe"} {
@@ -567,13 +585,28 @@ func (r localRVCRegistration) idleTimeout() time.Duration {
 	return time.Duration(r.IdleSeconds) * time.Second
 }
 
-func (s *localRVCService) ensurePrivateScope(workspace, fish string) error {
-	private := localRVCPrivateScope(workspace, fish)
+func (s *localRVCService) ensurePrivateScope(registration localRVCRegistration, fish string) error {
+	private := registration.privateDirectory(fish)
 	for _, directory := range []string{private, filepath.Join(private, "music"), filepath.Join(private, "music", "jobs")} {
 		if err := os.MkdirAll(directory, 0700); err != nil || !localRVCSafeDirectory(directory) {
 			return errors.New("station_rvc_private_scope_unavailable")
 		}
 	}
+	if registration.public != "" {
+		identity := filepath.Join(private, "account.json")
+		raw, err := json.Marshal(map[string]string{"account_id": fish, "scope": localRVCFishHash(fish), "directory": filepath.Base(private)})
+		if err != nil {
+			return err
+		}
+		existing, err := localRVCReadRegular(identity, 8192)
+		if errors.Is(err, os.ErrNotExist) {
+			return hostfile.WritePrivate(identity, raw)
+		}
+		if err != nil || !bytes.Equal(raw, existing) {
+			return errors.New("station_rvc_private_scope_unavailable")
+		}
+	}
+
 	return nil
 }
 
@@ -703,6 +736,27 @@ func localRVCEnvironment(media, scratch string) []string {
 func localRVCServiceID(fish string) string {
 	return localRVCServiceOwner + "." + localRVCFishHash(fish)
 }
+func (r localRVCRegistration) publicDirectory() string {
+	if r.public != "" {
+		return r.public
+	}
+	return filepath.Join(r.Workspace, "public_workspace")
+}
+
+func (s *localRVCService) controlDirectory(r localRVCRegistration) string {
+	if r.control != "" {
+		return r.control
+	}
+	return filepath.Join(stationPackageRuntimeRoot(s.executableDir), "windows-station-rvc")
+}
+
+func (r localRVCRegistration) privateDirectory(fish string) string {
+	if r.public == "" {
+		return localRVCPrivateScope(r.Workspace, fish)
+	}
+	return filepath.Join(r.Workspace, "pri_workspace", localRVCFishHash(fish)[:20])
+}
+
 func localRVCPrivateScope(workspace, fish string) string {
 	return filepath.Join(workspace, "pri_workspace", localRVCFishHash(fish))
 }
@@ -724,7 +778,8 @@ func localRVCBinding(registration localRVCRegistration, manifest map[string]stri
 		Profiles         []localRVCVoice
 		Files            []string
 		FishID           string `json:",omitempty"`
-	}{registration.SchemaVersion, registration.Port, registration.Workspace, registration.Media, profiles, files, registration.FishID})
+		Public           string `json:",omitempty"`
+	}{registration.SchemaVersion, registration.Port, registration.Workspace, registration.Media, profiles, files, registration.FishID, registration.public})
 	return mediaspec.SpeechSHA256(value)
 }
 

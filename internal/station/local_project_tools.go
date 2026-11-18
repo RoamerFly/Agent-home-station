@@ -280,7 +280,9 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			backendRunning = err == nil && info.Running
 			backendBusy = err == nil && info.Busy
 			view.Workflows = localComfyWorkflowViews(workflows)
-			if errors.Is(err, errLocalComfyWorkflowSetup) {
+			if err == nil {
+				view.Reason = ""
+			} else if errors.Is(err, errLocalComfyWorkflowSetup) {
 				view.Reason = "comfyui_workflows_missing"
 			} else if err != nil {
 				view.Reason = err.Error() // comfySetup returns only public setup messages.

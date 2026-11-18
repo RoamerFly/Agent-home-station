@@ -46,7 +46,7 @@ func TestLocalAudioCppRegistrationInfoAndPermissionFence(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(data, localAudioCppRegistrationFile), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	service := newLocalAudioCppService(data, root)
+	service := newLocalAudioCppService(data, root, "")
 	info, err := service.Info(context.Background(), "fish-test")
 	if err != nil {
 		t.Fatal(err)

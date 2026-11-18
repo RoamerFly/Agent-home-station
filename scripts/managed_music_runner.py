@@ -297,7 +297,9 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
         except (OSError, UnicodeError, ValueError):
             continue
     if station_rvc:
-        if (control.name != "windows-station-rvc" or control.is_relative_to(public.parent) or
+        packaged_control = runtime_root / "windows-station-rvc"
+        if (control.name != "windows-station-rvc" or
+                (control.is_relative_to(public.parent) and control != packaged_control) or
                 not control_converter):
             raise ValueError("station_rvc_converter_not_packaged")
     from windows_lpac import launch

@@ -26,8 +26,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/workspacefs"
 )
 
 const (
@@ -69,20 +71,27 @@ type localAudioCppPermissions struct {
 }
 
 type localAudioCppServerModel struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Task string `json:"task"`
+	Family  string            `json:"family,omitempty"`
+	Mode    string            `json:"mode,omitempty"`
+	Options map[string]any    `json:"default_request_options,omitempty"`
+	Voice   map[string]string `json:"default_voice_preset,omitempty"`
+	ID      string            `json:"id"`
+	Path    string            `json:"path"`
+	Task    string            `json:"task"`
 }
 
 type localAudioCppServerConfig struct {
-	Host       string                     `json:"host"`
-	Port       int                        `json:"port"`
-	Backend    string                     `json:"backend"`
-	ModelsRoot string                     `json:"models_root"`
-	Models     []localAudioCppServerModel `json:"models"`
+	LazyLoad        bool                       `json:"lazy_load,omitempty"`
+	MaxLoadedModels int                        `json:"max_loaded_models,omitempty"`
+	Host            string                     `json:"host"`
+	Port            int                        `json:"port"`
+	Backend         string                     `json:"backend"`
+	ModelsRoot      string                     `json:"models_root"`
+	Models          []localAudioCppServerModel `json:"models"`
 }
 
 type localAudioCppRegistration struct {
+	portable      bool
 	SchemaVersion int                              `json:"schema_version"`
 	Enabled       bool                             `json:"enabled"`
 	Runtime       string                           `json:"runtime"`
@@ -128,6 +137,7 @@ type localAudioCppBackend interface {
 }
 
 type localAudioCppService struct {
+	catalog      string
 	dataDir      string
 	editableRoot string
 	services     pluginruntime.ManagedServices
@@ -135,8 +145,8 @@ type localAudioCppService struct {
 	closed       bool
 }
 
-func newLocalAudioCppService(dataDir, editableRoot string) localAudioCppBackend {
-	return &localAudioCppService{dataDir: filepath.Clean(dataDir), editableRoot: filepath.Clean(editableRoot)}
+func newLocalAudioCppService(dataDir, editableRoot, catalog string) localAudioCppBackend {
+	return &localAudioCppService{catalog: catalog, dataDir: filepath.Clean(dataDir), editableRoot: filepath.Clean(editableRoot)}
 }
 
 func (s *localAudioCppService) Info(ctx context.Context, fish string) (localAudioCppDeployment, error) {
@@ -187,7 +197,37 @@ func (s *localAudioCppService) Start(ctx context.Context, fish string) error {
 		if loadErr != nil || localAudioCppBinding(currentRaw) != binding || current.Engine.Server != r.Engine.Server {
 			return errors.New("audio_cpp_registration_changed")
 		}
-		return s.verifyRegistrationFiles(current)
+		if err := s.verifyRegistrationFiles(current); err != nil {
+			return err
+		}
+		if current.portable {
+			config := localAudioCppServerConfig{Host: current.Host, Port: current.Port, Backend: current.Backend, ModelsRoot: current.ModelsRoot, LazyLoad: true, MaxLoadedModels: 2}
+			for _, model := range current.Models {
+				if model.ID == current.TTSModelID || model.ID == current.ASRModelID {
+					entry := localAudioCppServerModel{ID: model.ID, Path: model.Path, Task: model.Task, Family: model.Family, Mode: "offline", Options: map[string]any{"language": "zh"}}
+					if model.Task == "asr" {
+						entry.Options["audio_chunk_mode"] = "none"
+					} else if model.Family == "kokoro_tts" {
+						entry.Voice = map[string]string{"voice_id": "zf_xiaobei"}
+						entry.Options["seed"] = 42
+					}
+					config.Models = append(config.Models, entry)
+				}
+			}
+			raw, err := json.Marshal(config)
+			if err != nil {
+				return err
+			}
+			dir, err := workspacefs.EnsurePath(filepath.Dir(current.ServerConfig))
+			if err != nil {
+				return err
+			}
+			if err := dir.Close(); err != nil {
+				return err
+			}
+			return hostfile.WritePrivate(current.ServerConfig, raw)
+		}
+		return nil
 	}
 	args := []string{"--config", r.ServerConfig, "--ui", "--host", r.Host, "--port", strconv.Itoa(r.Port), "--backend", r.Backend, "--log", "--log-file", logPath}
 	env := localAudioCppEnvironment()
@@ -396,7 +436,7 @@ func (s *localAudioCppService) loadRegistration(ctx context.Context) (localAudio
 	if err := ctx.Err(); err != nil {
 		return localAudioCppRegistration{}, nil, err
 	}
-	data, err := os.ReadFile(stationToolRegistrationPath(s.dataDir, localAudioCppRegistrationFile))
+	data, portable, err := portableRegistration(stationToolRegistrationPath(s.dataDir, localAudioCppRegistrationFile), s.catalog, localAudioCppPackage, s.editableRoot, localAudioCppMaxConfig)
 	if err != nil || len(data) == 0 || len(data) > localAudioCppMaxConfig {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_not_installed_or_authorized")
 	}
@@ -412,7 +452,22 @@ func (s *localAudioCppService) loadRegistration(ctx context.Context) (localAudio
 	if r.Permissions.Network != "loopback_only" || !r.Permissions.ModelRead || !r.Permissions.ArtifactWrite || r.Permissions.ExternalDelivery {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_permission_invalid")
 	}
-	if !filepath.IsAbs(r.Engine.Server) || !filepath.IsAbs(r.ServerConfig) || !localAudioCppRegular(r.Engine.Server) || !localAudioCppRegular(r.ServerConfig) || len(r.Models) == 0 {
+	if portable != "" {
+		r.portable = true
+		if r.ServerConfig != "" {
+			return localAudioCppRegistration{}, nil, errors.New("便携 audio.cpp 的服务器配置由工作站生成")
+		}
+		r.ServerConfig = filepath.Join(stationToolRoot(s.dataDir, "audio-cpp"), "portable-server.json")
+		if err := resolvePortablePaths(portable, &r.ModelsRoot, &r.Engine.CLI, &r.Engine.Server); err != nil {
+			return localAudioCppRegistration{}, nil, err
+		}
+		for i := range r.Models {
+			if err := resolvePortablePaths(portable, &r.Models[i].Path); err != nil {
+				return localAudioCppRegistration{}, nil, err
+			}
+		}
+	}
+	if !filepath.IsAbs(r.Engine.Server) || !filepath.IsAbs(r.ServerConfig) || !localAudioCppRegular(r.Engine.Server) || (!r.portable && !localAudioCppRegular(r.ServerConfig)) || len(r.Models) == 0 {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_registration_invalid")
 	}
 	seen := map[string]bool{}
@@ -425,8 +480,12 @@ func (s *localAudioCppService) loadRegistration(ctx context.Context) (localAudio
 	if !seen[r.TTSModelID] || !seen[r.ASRModelID] {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_model_selection_invalid")
 	}
-	if err := localAudioCppValidateServerConfig(r); err != nil {
-		return localAudioCppRegistration{}, nil, err
+	if !r.portable {
+		if err := localAudioCppValidateServerConfig(r); err != nil {
+			return localAudioCppRegistration{}, nil, err
+		}
+	} else {
+		data, _ = json.Marshal(r)
 	}
 	return r, data, nil
 }

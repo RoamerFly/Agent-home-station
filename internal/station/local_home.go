@@ -331,6 +331,11 @@ func (h *localHomeService) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.Action == "initialize" && h.projectTools != nil && h.toolPackages != "" {
+		if host, err := h.projectTools.forFish(record.FishID); err == nil {
+			h.projectTools.refreshDirectoryTools(r.Context(), host, discoverToolPackages(h.toolPackages))
+		}
+	}
 	// Report the latest revision if another owner page changed the grant while
 	// directory preparation was in progress. Never revive it from a stale copy.
 	h.status(w, r)

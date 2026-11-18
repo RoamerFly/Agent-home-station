@@ -320,7 +320,16 @@ def signal_station_ready(path,nonce,port,scope):
             json.dump({'nonce':nonce,'port':port,'scope':scope,'pid':os.getpid()},file)
             file.flush()
             os.fsync(file.fileno())
-        os.link(temporary,path)
+        # The scope and nonce can take an otherwise valid Windows path
+        # past MAX_PATH. Use the extended path API for this atomic link.
+        def native_path(value):
+            text = os.path.abspath(value)
+            if os.name != "nt" or text.startswith("\\\\?\\"):
+                return text
+            if text.startswith("\\\\"):
+                return "\\\\?\\UNC\\" + text[2:]
+            return "\\\\?\\" + text
+        os.link(native_path(temporary), native_path(path))
     finally:
         Path(temporary).unlink(missing_ok=True)
 

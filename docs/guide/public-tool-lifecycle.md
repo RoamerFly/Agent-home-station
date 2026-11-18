@@ -61,3 +61,19 @@ OBS 的 WebSocket 在 IPv4 通配地址监听，但工作站客户端使用 127.
 - 工具文件校验、登记启用、进程启停和业务调用各自核验。已登记的模型文件只能证明文件随包。音频、图像或视频实际生成还应在目标机调用一次。
 - 独立本地后端需要可执行文件、模型、运行依赖和目标机可解析的登记。重点核对 audio.cpp、RVC、YuE、站内语音、ComfyUI、OBS。现有旧登记的盘符路径、COM/GPU 驱动和外部进程不能通过拷目录恢复。
 - `data/publictools` 保存工具私有设置，`data/applications/wechat` 保存微信账号、记忆和应用设置，`data/main_setting` 保存工作站设置。迁移私有资料时按需安全复制，云模型和第三方站点按目标机实际授权验证。
+
+### Windows 本地工具包
+
+把同版本的 `applications/wechat` 和 `publictools` 放进基础 Windows x64 便携包。首次准备工作站家目录时，宿主会校验并登记已就绪的工具。复制之后可以直接用工具，实际调用才启动后端。已有私有登记和停用状态优先，程序会保留原配置。
+
+| 工具 | 随包资源 |
+| --- | --- |
+| audio.cpp | `runtime/engine` 内的服务、DLL，以及 `models` 中的 ASR 和 TTS 模型 |
+| RVC | `runtime` 内的 Python、换声服务和 FFmpeg，`project` 内的 RVC 上游程序，以及 `models` 内的分离与换声模型 |
+| YuE | `runtime/engine`、`runtime/media`、`models/checkpoints` 和 `workflows` |
+| 站内语音 | `runtime/windows-gpt-sovits`、`runtime/media`、推理项目、基础模型和 `voice-library` |
+| ComfyUI | `runtime/engine`、`models/checkpoints` 和本地出图工作流 |
+| OBS | `runtime/studio` 内的 OBS 程序。首次预览使用宿主准备的独立场景和私有认证配置 |
+| 文档工坊 | `runtime/native` 内的 PDF 读取、导出组件与字体 |
+
+六个本地后端的默认登记文件位于各自工具包的 `runtime/station-registration.json`，其中资源路径相对于本工具包。运行产生的音频、图片、任务状态、OBS 工作配置和密码保存在工作站数据区。模型推理按登记的 CPU 或 CUDA 设备运行。CUDA 包仍需要目标机的 NVIDIA 驱动以及工作流所需显存。

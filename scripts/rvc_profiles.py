@@ -2,9 +2,10 @@
 import json
 from pathlib import Path
 import re
+from singing_config import portable_member, portable_rvc_root
 
 
-def resolve(public, default, body, private=None):
+def resolve(public, default, body, private=None, *, packaged=False):
     identity = body.get('voice_profile_id', '')
     if not identity:
         return default
@@ -22,11 +23,16 @@ def resolve(public, default, body, private=None):
                 raise ValueError('rvc_voice_library_registration_invalid')
             root = registered
     root = root.resolve(strict=True)
-    manifest = root / 'manifests' / (identity + '.json')
+    manifests = root / 'manifests'
+    if packaged and not personal:
+        manifests = manifests / 'portable'
+    manifest = manifests / (identity + '.json')
     if manifest.is_symlink() or not manifest.resolve(strict=True).is_relative_to(root):
         raise ValueError('rvc_voice_manifest_outside_public')
     data = json.loads(manifest.read_text(encoding='utf-8'))
     path = Path(data['configuration'])
+    if packaged and not personal and not path.is_absolute() and portable_rvc_root(root):
+        path = portable_member(root, data['configuration'])
     allowed = root if personal else root / 'models' / 'voice-library'
     if not path.is_absolute() or path.is_symlink() or not path.resolve(strict=True).is_relative_to(allowed):
         raise ValueError('rvc_voice_configuration_outside_library')

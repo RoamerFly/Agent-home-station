@@ -16,6 +16,7 @@ import struct
 
 from managed_music_runner import canonical
 import rvc_profiles
+from singing_config import load_singing_config, portable_rvc_root
 
 
 HEADER = "X-Agent-Station-Fish"
@@ -124,15 +125,25 @@ def bind_scope(fish, public, private, state, token_file):
     if not isinstance(fish, str) or not _FISH.fullmatch(fish):
         _fail("station_fish_invalid")
     public = _directory(public, "station_scope_invalid")
-    if public.name != "public_workspace":
-        _fail("station_scope_invalid")
-    workspace = _directory(public.parent, "station_scope_invalid")
-    if public.parent != workspace:
-        _fail("station_scope_invalid")
-    private_root = _directory(workspace / "pri_workspace", "station_scope_invalid")
-    scope = hashlib.sha256(fish.encode("ascii")).hexdigest()
-    expected_private = private_root / scope
     private = _directory(private, "station_scope_invalid")
+    if portable_rvc_root(public):
+        private_root = private.parent
+        workspace = private_root.parent
+        if private_root.name != "pri_workspace" or _inside(private_root, public) or _inside(public, private_root):
+            _fail("station_scope_invalid")
+    else:
+        if public.name != "public_workspace":
+            _fail("station_scope_invalid")
+        workspace = _directory(public.parent, "station_scope_invalid")
+        private_root = _directory(workspace / "pri_workspace", "station_scope_invalid")
+    scope = hashlib.sha256(fish.encode("ascii")).hexdigest()
+    if portable_rvc_root(public):
+        from music_account_scope import account_scope
+        if account_scope(private) != scope:
+            _fail("station_scope_invalid")
+        expected_private = private_root / scope[:20]
+    else:
+        expected_private = private_root / scope
     if not _same_path(private, expected_private):
         _fail("station_scope_invalid")
 
@@ -146,7 +157,7 @@ def bind_scope(fish, public, private, state, token_file):
     token = _regular(token_file, "station_token_invalid", 4096)
     # Tokens do not belong in any mount that an RVC configuration or project can
     # traverse. Requiring it outside the common workspace also covers siblings.
-    if _inside(token, workspace):
+    if _inside(token, private_root) or _inside(token, public) or (not portable_rvc_root(public) and _inside(token, workspace)):
         _fail("station_token_invalid")
     try:
         token_value = token.read_text(encoding="ascii")
@@ -232,11 +243,14 @@ def checked_profile(public, private, body, profile_reader):
         _fail("station_profile_invalid")
     # ``resolve`` reads this registration. Establish that its selected
     # directory is a real child before an untrusted id selects a manifest.
+    packaged = portable_rvc_root(public)
     manifest_root = (private / "voice-library" / "manifests"
                      if identity.startswith("private-") else public / "manifests")
+    if packaged and not identity.startswith("private-"):
+        manifest_root = manifest_root / "portable"
     _directory(manifest_root, "station_profile_invalid")
     try:
-        config_name = rvc_profiles.resolve(str(public), None, body, str(private))
+        config_name = rvc_profiles.resolve(str(public), None, body, str(private), packaged=packaged)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         _fail("station_profile_invalid")
     if not config_name:
@@ -247,13 +261,15 @@ def checked_profile(public, private, body, profile_reader):
                    _directory(public / "models" / "voice-library", "station_profile_invalid"))
     config = _under_file(config_name, [chosen_root], "station_profile_invalid", ".json")
     config, item = _json_object(config, _MAX_CONFIG, "station_profile_invalid")
+    if packaged and item.get("portable"):
+        item = load_singing_config(config)
     profile_label = item.get("profile")
     if (not isinstance(profile_label, str) or not _PROFILE.fullmatch(profile_label)
             or item.get("engine") != "rvc" or item.get("enabled") is not True):
         _fail("station_profile_invalid")
 
-    runtimes = _directory(public / "runtimes", "station_profile_invalid")
-    projects = _directory(public / "projects", "station_profile_invalid")
+    runtimes = _directory(public / ("runtime" if packaged else "runtimes"), "station_profile_invalid")
+    projects = _directory(public / ("project" if packaged else "projects"), "station_profile_invalid")
     python = _under_file(item.get("python"), [runtimes], "station_profile_invalid", ".exe")
     rvc_python = _under_file(item.get("rvc_python"), [runtimes], "station_profile_invalid", ".exe")
     runtime = _directory(item.get("runtime"), "station_profile_invalid")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"slices"
 	"sort"
 
@@ -35,11 +36,14 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 	var pending []pluginhost.InstalledPackage
 	for _, id := range ids {
 		source := sources[id]
-		if !source.compatible() {
+		official, officialErr := catalog.ContractFor(id)
+		if !source.compatible() && !(officialErr == nil && portableManagedTool(id) &&
+			source.Runtime.Transport == "http-adapter" && source.hostCompatible() &&
+			localRVCSafeRegular(filepath.Join(source.directory, filepath.FromSlash(portableRegistrationFile)))) {
 			continue
 		}
 		grants := source.Permissions
-		if official, err := catalog.ContractFor(id); err == nil {
+		if officialErr == nil {
 			if source.digest != official.ManifestSHA256 {
 				notes[id] = "工具包与当前工作站版本不匹配，已保留原版本。"
 				continue
@@ -112,6 +116,12 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 		if id == localasr.PluginID && host.store.CheckConfiguration(ctx, id) != nil {
 			notes[id] = "媒体后端等待配置。"
 			continue
+		}
+		if id == localOBSPackage {
+			if err := s.configurePortableOBS(ctx, host); err != nil {
+				notes[id] = "便携 OBS 预览配置未就绪。"
+				continue
+			}
 		}
 		view, err := s.projectView(ctx, host, id, item.Package.Name, sources)
 		if err != nil || !view.RuntimeReady {

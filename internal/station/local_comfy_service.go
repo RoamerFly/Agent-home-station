@@ -110,6 +110,7 @@ type localComfyManifest struct {
 }
 
 type localComfyService struct {
+	catalog      string
 	dataDir      string
 	editableRoot string
 	services     pluginruntime.ManagedServices
@@ -143,8 +144,10 @@ type localComfyManagedSpec struct {
 	Timeout     time.Duration
 }
 
-func newLocalComfyService(dataDir, workspace string) localComfyBackend {
-	return newLocalComfyServiceAt(dataDir, workspace)
+func newLocalComfyService(dataDir, workspace string, catalog string) localComfyBackend {
+	service := newLocalComfyServiceAt(dataDir, workspace)
+	service.catalog = catalog
+	return service
 }
 
 // newLocalComfyServiceAt keeps tests independent of the packed executable.
@@ -385,7 +388,14 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	if err := ctx.Err(); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
-	data, err := readLocalComputeRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+	data, portable, err := portableRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), s.catalog, "comfyui", s.editableRoot, localComfyMaxManifest)
+	if err != nil && portable == "" {
+		// Preserve the existing public error codes for private registrations.
+		_, legacyErr := readLocalComputeRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+		if legacyErr != nil {
+			err = legacyErr
+		}
+	}
 	if err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
@@ -396,6 +406,11 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	}
 	if !registration.Enabled {
 		return localComfyRegistration{}, localComfyManifest{}, errors.New("station_comfyui_not_installed_or_authorized")
+	}
+	if portable != "" {
+		if err := resolvePortablePaths(portable, &registration.Runtime, &registration.Models, &registration.Workflows); err != nil {
+			return localComfyRegistration{}, localComfyManifest{}, err
+		}
 	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
