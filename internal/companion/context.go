@@ -22,7 +22,7 @@ type ContextSettings struct {
 	MaxInputChars  int  `json:"max_input_chars"`
 }
 
-func ContextDefaults() *ContextSettings { return &ContextSettings{true, 120, 60, 24000} }
+func ContextDefaults() *ContextSettings { return &ContextSettings{true, 120, 80, 96000} }
 func (c Config) ContextConfig() ContextSettings {
 	if c.Context == nil {
 		return *ContextDefaults()
@@ -131,6 +131,7 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 		// leaving the session in a retry loop forever.
 		if d, ok := deepseek.ErrorDiagnostics(err); ok && compressionFallbackCode(d.Code) {
 			fallback := verifiedFallbackSummary(selected)
+			fitFallbackSummary(&fallback)
 			persistCtx := context.WithoutCancel(ctx)
 			if bindErr := e.bindSummarySources(persistCtx, in, &fallback, selected, previous.Sources); bindErr != nil {
 				return false, err
@@ -286,6 +287,36 @@ func compressionFallbackCode(code string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// fitFallbackSummary keeps the source-bound local fallback within the same
+// schema budget as a model-produced summary. A large batch can otherwise make
+// the safe fallback fail validation and surface the original timeout again.
+func fitFallbackSummary(summary *contextSummary) {
+	for summaryJSONLength(*summary) > 3500 || len(summaryJSONBytes(*summary)) > 14000 {
+		switch {
+		case len(summary.Topics) > 1:
+			summary.Topics = summary.Topics[1:]
+		case len(summary.Media) > 1:
+			summary.Media = summary.Media[1:]
+		case len(summary.People) > 1:
+			summary.People = summary.People[1:]
+		case len(summary.PendingTasks) > 1:
+			summary.PendingTasks = summary.PendingTasks[1:]
+		case len(summary.Preferences) > 0:
+			summary.Preferences = summary.Preferences[1:]
+		case len(summary.Corrections) > 0:
+			summary.Corrections = summary.Corrections[1:]
+		default:
+			for i := range summary.Topics {
+				summary.Topics[i].Text = boundedText(summary.Topics[i].Text, 120)
+			}
+			for i := range summary.Media {
+				summary.Media[i].Title = boundedText(summary.Media[i].Title, 140)
+			}
+			return
+		}
 	}
 }
 

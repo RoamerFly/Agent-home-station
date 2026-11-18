@@ -79,7 +79,7 @@ func readWechatCrossDelivery(root *os.Root, key, account string) (stationWechatC
 		return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 	}
 	for i, p := range row.Parts {
-		if p.Key != key+"-"+fmt.Sprint(i) || !forward && (strings.TrimSpace(p.Text) == "" || len(p.Text) > 3000 || p.Upload != "") || forward && (p.Text != "" || p.Attempted && !identity.ValidPathID(p.Upload)) {
+		if p.Key != key+"-"+fmt.Sprint(i) || !forward && (strings.TrimSpace(p.Text) == "" || len(p.Text) > 1<<20 || p.Upload != "") || forward && (p.Text != "" || p.Attempted && !identity.ValidPathID(p.Upload)) {
 			return stationWechatCrossDelivery{}, apphost.ErrUnavailable
 		}
 		if p.Status.ID != "" {
@@ -155,7 +155,7 @@ func (t *stationAttachmentTools) RoutePrivateReply(ctx context.Context, messages
 		row = stationWechatCrossDelivery{Version: 1, Key: key, Account: t.trace.Account, Origin: t.trace.Thread, Trace: t.trace.TraceID, Target: t.cross.Target, Created: time.Now().UTC(), Proofs: slices.Clone(t.cross.Proofs), Used: slices.Clone(t.cross.Used)}
 		for _, message := range messages {
 			text := strings.TrimSpace(message)
-			if text == "" || len(text) > 3000 {
+			if text == "" || len(text) > 1<<20 {
 				return errors.New("cross_memory_private_text_invalid")
 			}
 			row.Parts = append(row.Parts, stationWechatCrossDeliveryPart{Key: key + "-" + fmt.Sprint(len(row.Parts)), Text: text})

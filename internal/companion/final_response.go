@@ -38,10 +38,10 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		}
 		var d Decision
 		answer = strings.TrimSpace(answer)
-		if json.Unmarshal([]byte(answer), &d) != nil && len(answer) > 0 && len(answer) <= 3000 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
+		if json.Unmarshal([]byte(answer), &d) != nil && len(answer) > 0 && len(answer) <= 1<<20 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
 			d = Decision{Action: "reply", Messages: []string{answer}}
 		}
-		if len(answer) > 32<<10 || (d.Action != "reply" && d.Action != "silent" && d.Action != "wait") || decisionShape(d, r.Config.MaxBubbles) != "" {
+		if len(answer) > 1<<20 || (d.Action != "reply" && d.Action != "silent" && d.Action != "wait") || decisionShape(d, r.Config.MaxBubbles) != "" {
 			return silent("invalid_model_decision"), nil
 		}
 		for _, id := range d.MediaIDs {

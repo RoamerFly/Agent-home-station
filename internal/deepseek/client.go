@@ -91,10 +91,10 @@ func normalizeConfig(config Config) (Config, error) {
 		config.SystemPrompt = DefaultSystemPrompt
 	}
 	if config.MaxTokens == 0 {
-		config.MaxTokens = 768
+		config.MaxTokens = 8192
 	}
 	if config.ToolMaxTokens == 0 {
-		config.ToolMaxTokens = config.MaxTokens
+		config.ToolMaxTokens = 16384
 	}
 	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 393216 {
 		return Config{}, errors.New("invalid tool output limit")
@@ -132,14 +132,14 @@ func newConfiguredClient(config Config, key string) (*Client, error) {
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
 	enabled := config.ThinkingEnabled != nil && *config.ThinkingEnabled
 	return &Client{thinkingConfigured: config.ThinkingEnabled != nil, thinkingEnabled: enabled, reasoningEffort: config.ReasoningEffort, endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, toolMaxTokens: config.ToolMaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
-		Timeout:       90 * time.Second,
+		Timeout:       5 * time.Minute,
 		Transport:     &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 2},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") },
 	}}, nil
 }
 
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
-	if strings.TrimSpace(prompt) == "" || len(prompt) > 4096 || !utf8.ValidString(prompt) {
+	if strings.TrimSpace(prompt) == "" || len(prompt) > 1<<20 || !utf8.ValidString(prompt) {
 		return "", errors.New("invalid model input")
 	}
 	return c.Chat(ctx, c.systemPrompt, []map[string]string{{"role": "user", "content": prompt}})
@@ -153,7 +153,17 @@ func (c *Client) Chat(ctx context.Context, system string, messages []map[string]
 	if err != nil {
 		return "", err
 	}
-	return c.chat(ctx, system, messages, false)
+	answer, callErr := c.chat(ctx, system, messages, false)
+	if d, ok := ErrorDiagnostics(callErr); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil && c.maxTokens < 393216 {
+		retry := *c
+		retry.maxTokens = min(393216, max(c.maxTokens*2, 16384))
+		answer, retryErr := retry.chat(ctx, system, messages, false)
+		if retryErr == nil {
+			return answer, nil
+		}
+		return answer, retryErr
+	}
+	return answer, callErr
 }
 
 // ChatCompression has its own output budget; a short conversational reply
@@ -163,7 +173,7 @@ func (c *Client) ChatCompression(ctx context.Context, system string, messages []
 		ctx = WithPurpose(ctx, "compression")
 	}
 	copy := *c
-	copy.maxTokens = 4096
+	copy.maxTokens = 16384
 	structured := true
 	answer, err := copy.chat(ctx, system, messages, structured)
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_invalid_parameters" && c.compatible {
@@ -172,7 +182,7 @@ func (c *Client) ChatCompression(ctx context.Context, system string, messages []
 		answer, err = copy.chat(ctx, system, messages, structured)
 	}
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil {
-		copy.maxTokens = 8192
+		copy.maxTokens = 32768
 		answer, retryErr := copy.chat(ctx, system, messages, structured)
 		var failure *RequestError
 		if errors.As(retryErr, &failure) {
@@ -190,7 +200,7 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 }
 
 func (c *Client) chatWithGrounding(ctx context.Context, system string, messages []map[string]string, structured bool, grounding *GroundingOptions) (string, error) {
-	messageLimit, totalLimit := 96<<10, 192<<10
+	messageLimit, totalLimit := 1<<20, 4<<20
 	if grounding != nil {
 		// Structured evidence is one message, unlike paginated tool history.
 		// This is a transport guard, not a claim about any model's token window.
@@ -319,10 +329,7 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, f
 	}
 	limit := c.responseLimitBytes
 	if limit == 0 {
-		limit = 256 << 10
-		if c.thinkingEnabled {
-			limit = 16 << 20
-		}
+		limit = 16 << 20
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {

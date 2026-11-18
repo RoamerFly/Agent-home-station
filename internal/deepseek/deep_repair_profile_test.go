@@ -99,7 +99,7 @@ func TestDeepRepairExplicitV11ReviewProfileBody(t *testing.T) {
 	if body["model"] != "deepseek-v4-pro" || body["max_tokens"] != float64(32768) || body["reasoning_effort"] != "high" || body["thinking"].(map[string]any)["type"] != "enabled" || body["response_format"].(map[string]any)["type"] != "json_object" {
 		t.Fatal("actual V11 HTTP body did not preserve review profile", body["model"], body["max_tokens"])
 	}
-	if client.maxTokens != 768 || client.toolMaxTokens != 4096 || client.http.Timeout != 90*time.Second {
+	if client.maxTokens != 768 || client.toolMaxTokens != 4096 || client.http.Timeout != 5*time.Minute {
 		t.Fatal("independent V11 review mutated primary generation client")
 	}
 }

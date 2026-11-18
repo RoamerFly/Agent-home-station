@@ -245,7 +245,7 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 		return d, errors.New("invalid pending-plan action")
 	}
 	for _, s := range d.Messages {
-		if strings.TrimSpace(s) == "" || len(s) > 3000 || !utf8.ValidString(s) {
+		if strings.TrimSpace(s) == "" || len(s) > 1<<20 || !utf8.ValidString(s) {
 			return d, errors.New("invalid pending-plan message")
 		}
 	}

@@ -620,7 +620,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	}
 	for i, text := range decision.Messages {
 		text = strings.TrimSpace(text)
-		if text == "" || len(text) > 3000 {
+		if text == "" || len(text) > 1<<20 {
 			return silent("invalid_model_decision"), nil
 		}
 		decision.Messages[i] = text

@@ -100,7 +100,7 @@ func Validate(c Config) error {
 		return err
 	}
 	ctx := c.ContextConfig()
-	if ctx.CompressAfter < 20 || ctx.CompressAfter > 500 || ctx.RecentMessages < 5 || ctx.RecentMessages > 100 || ctx.RecentMessages >= ctx.CompressAfter || ctx.MaxInputChars < 4000 || ctx.MaxInputChars > 64000 {
+	if ctx.CompressAfter < 20 || ctx.CompressAfter > 500 || ctx.RecentMessages < 5 || ctx.RecentMessages > 200 || ctx.RecentMessages >= ctx.CompressAfter || ctx.MaxInputChars < 4000 || ctx.MaxInputChars > 512000 {
 		return errors.New("请检查上下文压缩阈值、近期消息数与输入预算")
 	}
 	if err := validateConversation(c.Conversation); err != nil {

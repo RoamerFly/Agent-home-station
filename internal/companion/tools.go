@@ -447,10 +447,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				answer = strings.TrimSpace(strings.TrimSuffix(answer[newline+1:], "```"))
 			}
 		}
-		if len(answer) > 32<<10 || json.Unmarshal([]byte(answer), &response) != nil {
+		if len(answer) > 1<<20 || json.Unmarshal([]byte(answer), &response) != nil {
 			// Older history may elicit a natural-language reply. Accept bounded plain
 			// text as text only; never interpret it as a tool or media instruction.
-			if len(answer) > 0 && len(answer) <= 3000 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
+			if len(answer) > 0 && len(answer) <= 1<<20 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
 				response.Decision = Decision{Action: "reply", Messages: []string{answer}, Reason: "plain_text_reply"}
 			} else {
 				if repairFormat("decision_json_invalid", answer) {
