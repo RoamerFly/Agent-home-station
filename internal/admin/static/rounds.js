@@ -206,7 +206,10 @@
       }
       round.group = groupByStatus[round.status] || 'pending';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
-      round.source_kind ||= round.system ? 'system' : 'private';
+      // The native thread identity is authoritative for the chat type. A
+      // stale or hand-written source_kind must never turn a @chatroom round
+      // into a private round in the console.
+      round.source_kind = round.system ? 'system' : round.thread_id.endsWith('@chatroom') ? 'group' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));
       round.categories = [...new Set(round.entries.map(x => x.category || 'system'))];
       round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.effect, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();

@@ -44,6 +44,10 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  assert.equal(round.group,'done');
  assert.equal(round.orphanReceipt,true);
 });
+test('thread identity wins over a stale source kind label',()=>{
+ const [round]=project([entry(1,{source_kind:'private',thread_id:'fixture@chatroom',event:'message_received',category:'received',status:'received'})]);
+ assert.equal(round.source_kind,'group');
+});
 test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
  const items=[];
  for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
