@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -123,7 +124,27 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	turns := []map[string]string{{"role": "user", "content": string(request)}}
 	result, err := chat(ctx, summaryPrompt, turns)
 	if err != nil {
-		return false, err
+		// A summary request can be accepted by the provider and still end with
+		// HTTP 200 when the structured output reaches the token limit. The
+		// conversation must remain compressible in that case. Keep the verified
+		// source-bound events and build a conservative local summary instead of
+		// leaving the session in a retry loop forever.
+		if d, ok := deepseek.ErrorDiagnostics(err); ok && compressionFallbackCode(d.Code) {
+			fallback := verifiedFallbackSummary(selected)
+			persistCtx := context.WithoutCancel(ctx)
+			if bindErr := e.bindSummarySources(persistCtx, in, &fallback, selected, previous.Sources); bindErr != nil {
+				return false, err
+			}
+			resultBytes, marshalErr := json.Marshal(fallback)
+			if marshalErr != nil {
+				return false, marshalErr
+			}
+			result = string(resultBytes)
+			// Continue through the normal transaction below so epoch and source
+			// checks still protect the write.
+		} else {
+			return false, err
+		}
 	}
 
 	validateSummary := func(text string) (contextSummary, error) {
@@ -131,7 +152,7 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 		if err != nil {
 			return parsed, fmt.Errorf("%w: %s", ErrSummaryInvalid, err)
 		}
-		return parsed, e.bindSummarySources(ctx, in, &parsed, selected, previous.Sources)
+		return parsed, e.bindSummarySources(context.WithoutCancel(ctx), in, &parsed, selected, previous.Sources)
 	}
 	parsed, validationErr := validateSummary(result)
 	if validationErr != nil {
@@ -211,21 +232,6 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 					}
 				}
 			}
-			if validationErr == nil {
-				// The repair above kept only claims with verified provenance.
-				// Continue to canonical persistence below without another model call.
-			} else {
-				// A provider can return a response that is neither a valid summary
-				// object nor repairable in one retry. Keep compression useful without
-				// inventing facts: build a small summary directly from the verified
-				// user events and their host-attached media observations. This is a
-				// storage fallback only; it never turns assistant text or tool logs
-				// into user claims.
-				fallback := verifiedFallbackSummary(selected)
-				if bindErr := e.bindSummarySources(ctx, in, &fallback, selected, previous.Sources); bindErr == nil {
-					parsed, validationErr = fallback, nil
-				}
-			}
 			if validationErr != nil {
 				if errors.Is(validationErr, ErrSummarySourceMissing) || errors.Is(validationErr, ErrSummarySourceInvalid) {
 					return false, validationErr
@@ -233,12 +239,17 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 				return false, fmt.Errorf("%w: %s", ErrSummaryInvalid, validationErr)
 			}
 		}
-		if previous.Version == 1 {
-			mergeVerifiedSummaryHistory(&parsed, previous)
-			if err := e.bindSummarySources(ctx, in, &parsed, selected, previous.Sources); err != nil {
-				return false, err
-			}
+	}
+	if previous.Version == 1 {
+		mergeVerifiedSummaryHistory(&parsed, previous)
+		if err := e.bindSummarySources(context.WithoutCancel(ctx), in, &parsed, selected, previous.Sources); err != nil {
+			return false, err
 		}
+		canonical, err := json.Marshal(parsed)
+		if err != nil {
+			return false, err
+		}
+		result = string(canonical)
 	}
 	canonical, err := json.Marshal(parsed)
 	if err != nil {
@@ -246,8 +257,9 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	}
 	result = string(canonical)
 	expected := fingerprintTurns(scope.Messages[:end])
+	persistCtx := context.WithoutCancel(ctx)
 	err = e.Store.scopeTransaction(scope.ID, func(data *persisted) error {
-		current, err := e.Store.RecallEpoch(ctx)
+		current, err := e.Store.RecallEpoch(persistCtx)
 		if err != nil {
 			return err
 		}
@@ -266,6 +278,15 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 		return nil
 	})
 	return err == nil, err
+}
+
+func compressionFallbackCode(code string) bool {
+	switch code {
+	case "model_output_token_limit", "model_response_incomplete", "model_upstream_timeout", "model_deadline_exceeded", "model_network_timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 // verifiedFallbackSummary creates a conservative summary when both model
