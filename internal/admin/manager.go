@@ -159,6 +159,7 @@ type Manager struct {
 	mcp                 mcpSettings
 	plugins             *pluginLedger
 	reminderWake        chan struct{}
+	remindersMu         sync.Mutex
 }
 
 func (m *Manager) setWorker(worker *bot.Worker) {

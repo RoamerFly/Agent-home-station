@@ -109,17 +109,17 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		if err != nil {
 			return "", err
 		}
-		policy, err := p.newReferenceTranscriptionPolicy(ctx, a, wav, input.Offset, seconds)
-		if err != nil {
-			return "", err
-		}
-		text, err := policy.transcribe(ctx)
+		text, backend, check, err := p.transcribeReference(ctx, a, wav, input.Offset, seconds)
 		if err != nil {
 			return "", err
 		}
 		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
+		out["transcription_backend"] = backend
+		if duration, e := wavDuration(wav); e == nil {
+			out["actual_window_seconds"] = duration
+		}
 		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
-		if err = policy.checkCompleted(ctx); err != nil {
+		if err = check(ctx); err != nil {
 			return "", err
 		}
 		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
@@ -132,6 +132,23 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	}
 	b, _ := json.Marshal(out)
 	return string(b), nil
+}
+
+func (p *permittedTools) transcribeReference(ctx context.Context, asset mediaAsset, wav []byte, offset, seconds int) (string, string, func(context.Context) error, error) {
+	if station := p.manager.readyStationASR(ctx); station != nil {
+		_, check, err := p.newReferenceAudioOrigin(ctx, asset, offset, seconds, "transcribe selected reference recording", "reference-asr")
+		if err != nil {
+			return "", "", nil, err
+		}
+		text, err := station.transcribe(ctx, wav, check)
+		return text, "station_local_asr", check, err
+	}
+	policy, err := p.newReferenceTranscriptionPolicy(ctx, asset, wav, offset, seconds)
+	if err != nil {
+		return "", "", nil, err
+	}
+	text, err := policy.transcribe(ctx)
+	return text, policy.Backend(), policy.checkCompleted, err
 }
 
 func musicTranscriptionWindow(ctx context.Context, root string, data []byte, offset, seconds int) ([]byte, error) {

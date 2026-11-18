@@ -57,14 +57,20 @@ func (m *Manager) transcribeNativeAudio(ctx context.Context, message linuxnative
 		return "", err
 	}
 	job := pluginhost.Job{Plugin: mediatranscribe.PluginID, Tool: mediatranscribe.CapabilityID, Context: origin.invocation()}
-	if err := origin.Check(ctx, job, pluginhost.Capability{}); err != nil {
+	return station.transcribe(ctx, wav, func(ctx context.Context) error {
+		return origin.Check(ctx, job, pluginhost.Capability{})
+	})
+}
+
+func (station *stationASR) transcribe(ctx context.Context, wav []byte, check func(context.Context) error) (string, error) {
+	if err := check(ctx); err != nil {
 		return "", err
 	}
 	data, err := station.host.stationToolRequest(ctx, station.session, http.MethodPost, stationASRPath, map[string]any{"version": station.version, "audio": wav})
 	if err != nil {
 		return "", toolInputError("公共语音转写未返回结果，请用station_tool_status核对audio-cpp；本次未切换到云端")
 	}
-	if err := origin.Check(ctx, job, pluginhost.Capability{}); err != nil {
+	if err := check(ctx); err != nil {
 		return "", err
 	}
 	var result struct {

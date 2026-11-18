@@ -387,3 +387,50 @@ func TestReminderUpdatePreservesIdentityAndPersists(t *testing.T) {
 		t.Fatal("other sender changed reminder")
 	}
 }
+
+func TestOwnerCanFindAndEditOriginalReminderWithoutRecreatingIt(t *testing.T) {
+	f, p, native := memberReminder(t)
+	sender, group := p.trace.Sender, p.trace.Thread
+	cfg := f.manager.agent.config()
+	cfg.OwnerIDs, cfg.PrivilegedThreads = []string{sender}, []string{"*"}
+	cfg.CrossConversation, cfg.ReadConversations = true, true
+	if err := f.manager.agent.save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.config.PrivateEnabled = true
+	f.manager.config.DirectIDs = []string{sender}
+	native.contacts = []map[string]any{{"roomId": "other@chatroom", "displayName": "验收群"}}
+	create := `{"action":"create","kind":"execute","text":"准备音乐","delay_seconds":7200,"request_key":"music"}`
+	first, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(create))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(strings.Replace(create, `"music"`, `"generated-new-key"`, 1)))
+	if err != nil || !strings.Contains(again, `"existing":true`) || len(f.manager.agent.active(p.trace.Account, group)) != 1 {
+		t.Fatal("retry made duplicate reminder", first, again, err)
+	}
+	original := f.manager.agent.active(p.trace.Account, group)[0]
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: sender, Sender: sender, TraceID: "private-query"})
+	p.routeCrossConversationThread(group)
+	if _, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(create)); err == nil {
+		t.Fatal("reading another conversation recreated its reminder")
+	}
+	list, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(`{"action":"list","scope":"account","query":"准备音乐","limit":1}`))
+	if err != nil || !strings.Contains(list, original.ID) || !strings.Contains(list, `"total":1`) {
+		t.Fatal(list, err)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: sender, Sender: sender, TraceID: "private-edit"})
+	edit, _ := json.Marshal(map[string]any{
+		"action": "update", "scope": "account", "id": original.ID,
+		"title": "更新标题", "text": "改用新歌曲", "delivery_group": "验收群", "delay_seconds": 10800,
+	})
+	if _, err := p.Call(t.Context(), "agent_reminder", edit); err != nil {
+		t.Fatal(err)
+	}
+	after, ok := f.manager.agent.lookupTask(original.ID, original.Account, group)
+	if !ok || after.OriginTrace != original.OriginTrace || after.Thread != original.Thread || after.Title != "更新标题" ||
+		after.RequestedText != "改用新歌曲" || after.Reminder.ResultGroup != "other@chatroom" ||
+		!after.Next.After(original.Next) || len(native.requests) > 0 {
+		t.Fatal("edit changed origin, lost fields or sent a message", after)
+	}
+}

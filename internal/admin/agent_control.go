@@ -870,7 +870,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/tasks/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Action string `json:"action"`
-			RunAt  string `json:"run_at"`
+			reminderEdit
 		}
 		if !decode(w, r, &in) {
 			return
@@ -879,6 +879,8 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, "操作无效")
 			return
 		}
+		s.manager.remindersMu.Lock()
+		defer s.manager.remindersMu.Unlock()
 		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok {
 			if s.manager.mobileRetired && old.DeviceTask != "" {
 				fail(w, http.StatusGone, errDeviceServiceRetired.Error())
@@ -894,6 +896,15 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				continue
 			}
 			if in.Action == "update" {
+				if t.Reminder != nil {
+					updated, err := s.manager.editReminder(r.Context(), t, in.reminderEdit)
+					if err != nil {
+						fail(w, 409, err.Error())
+						return
+					}
+					respond(w, 200, map[string]any{"id": updated.ID, "due_at": updated.Reminder.Due, "updated_existing": true})
+					return
+				}
 				due, err := time.Parse(time.RFC3339, in.RunAt)
 				if err != nil {
 					fail(w, 400, "run_at需包含时区")
