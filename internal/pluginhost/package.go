@@ -279,6 +279,9 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 		}
 	}
 	found := map[string]bool{}
+	// The desktop checks the separate Windows native inventory before launch.
+	// Keep its binaries out of the source checkout and source descriptor.
+	wechatRuntime := filepath.Join(dir, "runtime", "windows-x64")
 	err = filepath.WalkDir(dir, func(full string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return e
@@ -287,6 +290,9 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 			return errors.New("package links forbidden")
 		}
 		if d.IsDir() {
+			if descriptor == "app.json" && p.ID == "wechat" && full == wechatRuntime {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, e := d.Info()

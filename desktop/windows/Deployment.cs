@@ -21,8 +21,7 @@ namespace WechatAgent.Desktop {
         internal bool StationNativeEnabled = true;
         internal bool Windows { get { return Backend == "windows-native"; } }
         internal bool LocalStation { get { return Backend == "local-station"; } }
-        // The local station starts no WeChat-native runtime unless the owner
-        // explicitly opts in through wechat_native_url and has not disabled startup.
+        // A complete drop-in bundle supplies the default address. The saved switch takes precedence.
         internal bool LocalStationNative { get { return LocalStation && StationNativeEnabled && StationNativeUrl != ""; } }
         internal string PrivateSettingsRoot { get { return LocalStation ? Path.Combine(Root, "main_setting") : Path.Combine(Workspace, "secrets"); } }
         internal string StationNativeRoot { get { return Path.Combine(Root, "applications", "wechat", "native"); } }
@@ -72,6 +71,7 @@ namespace WechatAgent.Desktop {
                     local.ApplicationPackagesDirectory = Path.GetFullPath(Path.IsPathRooted(apps) ? apps : Path.Combine(workspace, apps));
                     if (Directory.Exists(local.ApplicationPackagesDirectory)) WindowsRuntime.NoLinks(local.ApplicationPackagesDirectory);
                 }
+                local.ResolveStationWechatPackage();
                 if (Text(data, "admin_url") != "") local.Url = LocalUrl(Text(data, "admin_url"));
                 if (Text(data, "wechat_native_url") != "") local.StationNativeUrl = LocalUrl(Text(data, "wechat_native_url"), true);
                 object nativeEnabled;
@@ -112,8 +112,14 @@ namespace WechatAgent.Desktop {
                 throw new InvalidOperationException("请先在本机部署中配置微信原生地址。");
             var config = Path.Combine(Workspace, "secrets", "local-deployment.json");
             if (!File.Exists(config) && LocalStation) config = Path.Combine(Root, "main_setting", "local-deployment.json");
-            ValidateDeploymentFile(config);
-            var original = File.ReadAllBytes(config);
+            bool existing = File.Exists(config);
+            if (existing) ValidateDeploymentFile(config);
+            else {
+                // A drop-in application can be enabled before any deployment file exists.
+                config = Path.Combine(Workspace, "data", "main_setting", "local-deployment.json");
+                WindowsRuntime.NoLinks(Path.GetDirectoryName(config));
+            }
+            var original = existing ? File.ReadAllBytes(config) : Encoding.UTF8.GetBytes("{\"backend\":\"local-station\"}");
             var text = Encoding.UTF8.GetString(original).TrimStart('\uFEFF');
             var data = Json.Deserialize<Dictionary<string, object>>(text);
             var saved = Parse(Workspace, data);
@@ -128,10 +134,14 @@ namespace WechatAgent.Desktop {
                     file.Write(bytes, 0, bytes.Length);
                     file.Flush(true);
                 }
-                ValidateDeploymentFile(config);
-                if (!File.ReadAllBytes(config).SequenceEqual(original))
-                    throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
-                File.Replace(temporary, config, null);
+                if (existing) {
+                    ValidateDeploymentFile(config);
+                    if (!File.ReadAllBytes(config).SequenceEqual(original))
+                        throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
+                    File.Replace(temporary, config, null);
+                } else {
+                    File.Move(temporary, config);
+                }
                 StationNativeEnabled = enabled;
             } finally {
                 if (File.Exists(temporary)) File.Delete(temporary);
@@ -156,11 +166,34 @@ namespace WechatAgent.Desktop {
             return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(packageRuntime, "windows-x64", "wx.exe"), AdminExe = Path.Combine(packageRuntime, "windows-x64", "wechat-admin.exe") };
         }
         internal static Deployment LocalStationDefault(string workspace) {
-            var data = Path.Combine(workspace, "data", "station");
-            data = Path.Combine(workspace, "data");
+            var data = Path.Combine(workspace, "data");
             var runtime = Path.Combine(data, "main_setting", "runtime");
-            var packageRuntime = PackageRuntimeRoot(workspace);
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "workspace"), StationExe = Path.Combine(runtime, "agent-home-station-server.exe"), AdminExe = Path.Combine(packageRuntime, "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(packageRuntime, "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
+            var station = new Deployment {
+                Workspace = workspace, Backend = "local-station", Root = data,
+                StationWorkspace = Path.Combine(data, "workspace"),
+                StationExe = Path.Combine(runtime, "agent-home-station-server.exe"),
+                ToolPackagesDirectory = Directory.Exists(Path.Combine(workspace, "publictools")) ? Path.Combine(workspace, "publictools") : "",
+                ApplicationPackagesDirectory = Directory.Exists(Path.Combine(workspace, "connected-apps")) && !Directory.Exists(Path.Combine(workspace, "applications"))
+                    ? Path.Combine(workspace, "connected-apps") : Path.Combine(workspace, "applications"),
+                Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = ""
+            };
+            station.ResolveStationWechatPackage();
+            return station;
+        }
+        void ResolveStationWechatPackage() {
+            var app = Path.Combine(ApplicationPackagesDirectory, "wechat");
+            var bundled = Path.Combine(app, "runtime", "windows-x64");
+            var manifest = Path.Combine(bundled, "windows-native-manifest.json");
+            var packageRuntime = Path.Combine(PackageRuntimeRoot(Workspace), "windows-x64");
+            StationNativeUrl = "";
+            if (Directory.Exists(bundled)) {
+                WindowsRuntime.NoLinks(bundled);
+                packageRuntime = bundled;
+                if (File.Exists(Path.Combine(app, "app.json")) && File.Exists(manifest))
+                    StationNativeUrl = "http://127.0.0.1:6174";
+            }
+            AdminExe = Path.Combine(packageRuntime, "wechat-admin.exe");
+            StationNativeExe = Path.Combine(packageRuntime, "wx.exe");
         }
         // Keep the desktop's local-station login resolution identical to the
         // Go server. The old Windows-native and WSL deployments retain their

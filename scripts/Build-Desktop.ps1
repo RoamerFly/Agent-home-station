@@ -87,7 +87,10 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   if(-not $allowed){throw ('The selected WeChat runtime contains a file that is not a native dependency or notice: '+$relative)}
  }
 
- $runtimeRoot=Join-Path $PackageDirectory 'env'
+ $runtimeRoot=Join-Path $PackageDirectory 'applications/wechat/runtime'
+ # Existing external catalogs are read-only build inputs. Stage their native
+ # overlay separately so the caller can apply it to the chosen catalog.
+ if($ApplicationPackagesDirectory){$runtimeRoot=Join-Path $PackageDirectory 'env'}
  $destination=Join-Path $runtimeRoot 'windows-x64'
  Assert-NoReparsePointAncestor $PackageDirectory
  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -485,7 +488,7 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
    [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/main"}',[Text.UTF8Encoding]::new($false))
   }
   $jsonData=[ordered]@{backend='local-station';data_root='data';workspace_root='data\workspace'}
-  if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
+  if($WithWeChatRuntime -and $ApplicationPackagesDirectory){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
   if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools')){$jsonData.tool_packages_directory='publictools'}
   if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'applications')){$jsonData.application_packages_directory='applications'}
   $json=($jsonData | ConvertTo-Json)

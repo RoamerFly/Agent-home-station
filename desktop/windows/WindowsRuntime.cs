@@ -304,6 +304,10 @@ namespace WechatAgent.Desktop {
                         throw new InvalidOperationException("Windows 原生运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
                     if (String.Equals(target, Path.GetFullPath(nativeExe), StringComparison.OrdinalIgnoreCase)) nativeListed = true;
                 }
+                if (stationRuntime && Path.GetFileName(Path.GetDirectoryName(dir)) == "runtime" &&
+                    (!files.ContainsKey("wechat-admin.exe") ||
+                    !String.Equals(Convert.ToString(files["wechat-admin.exe"]), Deployment.Text(manifest, "admin_sha256"), StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("微信应用包运行清单缺少管理控制台或其校验值不匹配。");
                 if (strictInventory && !nativeListed) throw new InvalidOperationException("Windows 原生运行包未登记 wx.exe。");
                 if (cutoverRuntime) {
                     remaining.Add("windows-native-manifest.json");

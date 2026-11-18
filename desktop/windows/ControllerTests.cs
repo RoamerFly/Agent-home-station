@@ -403,6 +403,25 @@ namespace WechatAgent.Desktop {
                 File.WriteAllText(path, File.ReadAllText(path).Replace("unrelated.service", "wechat-agent-music.service"));
                 Assert(Deployment.Load(root).Workspace == Path.GetFullPath(root), "workspace relocation");
             } finally { Directory.Delete(root, true); }
+            root = Path.Combine(Path.GetTempPath(), "desktop drop-in wechat " + Guid.NewGuid());
+            try {
+                var settings = Directory.CreateDirectory(Path.Combine(root, "data", "main_setting"));
+                var service = Directory.CreateDirectory(Path.Combine(settings.FullName, "runtime"));
+                File.WriteAllText(Path.Combine(service.FullName, "agent-home-station-server.exe"), "");
+                Assert(!Deployment.Load(root).LocalStationNative, "base station has no WeChat service");
+                var app = Path.Combine(root, "applications", "wechat");
+                var bundled = Directory.CreateDirectory(Path.Combine(app, "runtime", "windows-x64"));
+                File.WriteAllText(Path.Combine(app, "app.json"), "{}");
+                Assert(!Deployment.Load(root).LocalStationNative, "partial drop-in has no WeChat service");
+                File.WriteAllText(Path.Combine(bundled.FullName, "windows-native-manifest.json"), "{}");
+                var relocated = Deployment.Load(root);
+                Assert(relocated.LocalStationNative && relocated.StationNativeExe == Path.Combine(bundled.FullName, "wx.exe") &&
+                    relocated.AdminExe == Path.Combine(bundled.FullName, "wechat-admin.exe"), "drop-in runtime and console follow the app folder");
+                relocated.SaveStationNativeEnabled(false);
+                Assert(!Deployment.Load(root).LocalStationNative, "drop-in pause survives reload without a preexisting deployment file");
+                Deployment.Load(root).SaveStationNativeEnabled(true);
+                Assert(Deployment.Load(root).LocalStationNative, "drop-in resumes through the saved switch");
+            } finally { Directory.Delete(root, true); }
             root = Path.Combine(Path.GetTempPath(), "desktop local station " + Guid.NewGuid()); Directory.CreateDirectory(Path.Combine(root, "secrets"));
             try {
                 var config = Path.Combine(root, "secrets", "local-deployment.json");
@@ -587,7 +606,6 @@ namespace WechatAgent.Desktop {
                     // the restart, install the legacy token plus managed
                     // password; the managed value must win over that same env.
                     Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
-                    Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
                     d.Url = CycleUrl();
                     do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
                     d.StationNativeEnabled = false;
