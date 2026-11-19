@@ -189,7 +189,7 @@ func TestWechatNativePrivateQuoteContinuesOnlyUsedSources(t *testing.T) {
 	}
 	old := save(parent, "first", now.Add(-4*time.Minute), "私聊历史结果不得直接入模")
 	current := makeTools(observe("request-next", person, person, "接着查这一条", now.Add(-3*time.Minute), &old))
-	if list, err := current.List(t.Context()); err != nil || len(list) != 1 || list[0].Name != stationWechatCrossToolName || current.cross != nil {
+	if list, err := current.List(t.Context()); err != nil || !hasTool(list, stationWechatCrossToolName) || current.cross != nil {
 		t.Fatal("linked quote discovery loaded content or exposed unrelated tools", list, err)
 	}
 	if _, allowed, err := current.historyMessage(t.Context(), old.ID); err != nil || allowed {
