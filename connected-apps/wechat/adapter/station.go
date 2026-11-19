@@ -19,7 +19,15 @@ func StationRegistration(ctx context.Context, endpoint string, pid int, stationD
 	nativeDir := filepath.Join(stationData, "applications", ID, "native")
 	root, err := workspacefs.OpenPath(nativeDir)
 	if err != nil {
-		return apphost.Registration{}, errors.New("微信原生私有目录不可读")
+		// Older local station packages used apps/<id>/native. Keep that
+		// layout readable during migration while all newly created data uses
+		// applications/<id>/native.
+		legacyDir := filepath.Join(stationData, "apps", ID, "native")
+		root, err = workspacefs.OpenPath(legacyDir)
+		if err != nil {
+			return apphost.Registration{}, errors.New("微信原生私有目录不可读")
+		}
+		nativeDir = legacyDir
 	}
 	defer root.Close()
 	info, err := root.Lstat("api-token")

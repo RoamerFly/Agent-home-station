@@ -59,8 +59,11 @@ func TestMediaLineageRetainsVideoParentAndRequestAcrossFormatReuse(t *testing.T)
 		t.Fatal("conversion source hidden", missing, err)
 	}
 	missing, err = p.reuseAsset(context.Background(), m.ParentAssetID, "video")
-	if err != nil || !strings.Contains(missing, `"file_available":true`) {
-		t.Fatal("cached original treated as requiring network", missing, err)
+	if err != nil || !strings.Contains(missing, `"network_downloads":0`) {
+		t.Fatal("cached original was not staged locally", missing, err)
+	}
+	if _, ok := p.Media(m.ParentAssetID + "-video"); !ok {
+		t.Fatal("cached original video handle was not retained")
 	}
 	result, err = p.reuseAsset(context.Background(), m.ParentAssetID, "file")
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -60,10 +61,44 @@ type webFixture struct {
 	dir     string
 }
 
+var adminWorkspaceTemplate struct {
+	sync.Once
+	root string
+	err  error
+}
+
+func preparedAdminWorkspace(t *testing.T) string {
+	t.Helper()
+	adminWorkspaceTemplate.Do(func() {
+		templateRoot, err := os.MkdirTemp("", "agent-admin-workspace-template-")
+		if err != nil {
+			adminWorkspaceTemplate.err = err
+			return
+		}
+		m, err := NewManagerWithDeviceIO(templateRoot, "", &fakeNative{}, devicebroker.Host{})
+		if err != nil {
+			adminWorkspaceTemplate.err = err
+			return
+		}
+		if err = m.Close(); err != nil {
+			adminWorkspaceTemplate.err = err
+			return
+		}
+		adminWorkspaceTemplate.root = filepath.Join(templateRoot, "agent-workspace")
+	})
+	if adminWorkspaceTemplate.err != nil {
+		t.Fatal(adminWorkspaceTemplate.err)
+	}
+	return adminWorkspaceTemplate.root
+}
+
 func setup(t *testing.T) *webFixture {
 	t.Helper()
 	native := &fakeNative{}
 	dir := t.TempDir()
+	if err := os.CopyFS(filepath.Join(dir, "agent-workspace"), os.DirFS(preparedAdminWorkspace(t))); err != nil {
+		t.Fatal(err)
+	}
 	m, err := NewManagerWithDeviceIO(dir, "", native, devicebroker.Host{})
 	if err != nil {
 		t.Fatal(err)

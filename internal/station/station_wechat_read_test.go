@@ -100,7 +100,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 		t.Fatal("history on by default")
 	}
 	tools.reads = map[string]time.Time{thread: now}
-	if available, _ := tools.List(t.Context()); len(available) != 2 {
+	if available, _ := tools.List(t.Context()); len(available) < 2 || available[0].Name != "wechat_read" || available[1].Name != "wechat_message_read" {
 		t.Fatal("missing history tools", available)
 	}
 	call := func(name, raw string) map[string]any {

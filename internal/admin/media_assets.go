@@ -572,10 +572,6 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		source = format.Sources[0]
 	}
 	if source == "" {
-		if kind == "video" && strings.HasPrefix(a.MIME, "video/") && len(a.Hash) == 64 {
-			b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "filename": a.Filename, "file_available": true, "source_url": a.URL, "instruction": "当前会话保留了原视频文件，但尚未建立 video 发送句柄。若用户要直接发送原文件，请用相同 asset_id 和 kind=file，不能重新下载同一来源。"})
-			return string(b), nil
-		}
 		if (kind != "file" && !(kind == "video" && strings.HasPrefix(a.MIME, "video/")) && !(kind == "image" && strings.HasPrefix(a.MIME, "image/"))) || len(a.Hash) != 64 {
 			if a.ParentAssetID != "" {
 				for _, parent := range items {
