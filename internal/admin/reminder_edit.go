@@ -66,8 +66,8 @@ func (m *Manager) editReminder(ctx context.Context, t agentTask, edit reminderEd
 	}
 	if edit.Text != nil {
 		text := strings.TrimSpace(*edit.Text)
-		if text == "" || utf8.RuneCountInString(text) > 650 {
-			return agentTask{}, mcptools.ArgumentError("$.text", "正文需为 1 至 650 字")
+		if text == "" || utf8.RuneCountInString(text) > 2000 {
+			return agentTask{}, mcptools.ArgumentError("$.text", "正文需为 1 至 2000 字")
 		}
 		t.RequestedText = text
 		t.Reminder.Text = "提醒你：" + text
