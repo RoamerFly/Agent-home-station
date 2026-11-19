@@ -112,6 +112,19 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	if err = errors.Join(fenceErr, root.Close()); err != nil {
 		return nil, err
 	}
+	// Structured station homes keep the identity and local-owner authority
+	// under main_setting/authority.  The top-level data root can already exist
+	// when an application package creates applications/wechat/native first, so
+	// prepare the authority path before the registry attempts to create its
+	// sidecar lock.  Without this, LockFileEx reports a missing parent as the
+	// generic registry-busy error and the station cannot start on a fresh home.
+	authorityRoot, err := workspacefs.EnsurePath(stationAuthorityDir(dir))
+	if err != nil {
+		return nil, errors.New("本机身份配置目录不可用")
+	}
+	if err := authorityRoot.Close(); err != nil {
+		return nil, err
+	}
 	if err = migrateLegacyAppPersona(dir); err != nil {
 		return nil, err
 	}
