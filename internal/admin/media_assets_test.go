@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
@@ -206,6 +207,16 @@ func TestAssetSynthesisScriptIsNotReattributedOnReuse(t *testing.T) {
 	input.Sender = "alice"
 	if text, ok := assetSynthesisForRequest(asset, input, "voice", &voiceConversion{}); ok || text != "" {
 		t.Fatal("converted voice inherited full-original script", text, ok)
+	}
+}
+
+func TestAssetSynthesisTextPreservesLongScript(t *testing.T) {
+	text := strings.Repeat("长脚本内容。", 700)
+	if len(text) <= 4096 {
+		t.Fatalf("test script is not long enough: %d", len(text))
+	}
+	if got := boundedAssetSynthesisText("  " + text + "  "); got != text {
+		t.Fatalf("long synthesis script was rewritten: got %d bytes, want %d", len(got), len(text))
 	}
 }
 

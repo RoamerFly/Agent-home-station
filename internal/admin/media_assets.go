@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
@@ -647,15 +646,10 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 }
 
 func boundedAssetSynthesisText(text string) string {
-	text = strings.TrimSpace(text)
-	if len(text) > 4096 {
-		for n := 4096; n > 0; n-- {
-			if utf8.ValidString(text[:n]) {
-				return text[:n]
-			}
-		}
-	}
-	return text
+	// Keep the verified script intact. The caller decides how much text a
+	// model request or UI page can display, so asset persistence must not
+	// silently rewrite the source script.
+	return strings.TrimSpace(text)
 }
 
 // Preserve a script only for delivery of the exact original, whole voice
