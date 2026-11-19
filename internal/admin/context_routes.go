@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"syscall"
-	"time"
-	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 )
@@ -28,40 +26,23 @@ func (s *Server) contextRoutes(mux *http.ServeMux) {
 			fail(w, 409, "此账号已关闭记忆，开启后可压缩会话")
 			return
 		}
-		trace := "compression-" + randomToken()
-		s.manager.record(bot.Record{Event: "context_compression_started", Category: "tool", ThreadID: scope.Thread, MessageID: trace, Content: "手动压缩上下文", Status: "running", Origin: "manual"})
-		reject := func(err error) {
-			code, message, status := compressionFailure(err)
-			record := bot.Record{Event: "context_compression_failed", Category: "error", ThreadID: scope.Thread, MessageID: trace, Reason: code, Content: message, Status: "failed", Origin: "manual"}
-			if diagnostic, ok := deepseek.ErrorDiagnostics(err); ok {
-				record.ModelAttempts, record.ModelMaxAttempts, record.ModelHTTPStatus = diagnostic.Attempts, diagnostic.MaxAttempts, diagnostic.HTTPStatus
-				record.ModelStage, record.DurationMS = diagnostic.Stage, diagnostic.DurationMS
+		job, err := s.manager.enqueueContextCompression(scope)
+		if err != nil {
+			if errors.Is(err, companion.ErrCompressionInProgress) {
+				respond(w, 409, map[string]any{"error": "这个会话正在压缩，其他会话仍可独立压缩", "code": "context_compression_in_progress", "job": job})
+				return
 			}
-			s.manager.record(record)
-			respond(w, status, map[string]any{"error": message, "code": code})
-		}
-		provider, err := s.manager.makeModel(cfg)
-		if err != nil {
-			reject(err)
+			respond(w, 409, map[string]any{"error": err.Error(), "code": "context_compression_not_queued"})
 			return
 		}
-		engine, err := companion.New(cfg.sharedCompanion(), s.manager.memory, provider, cfg.SystemPrompt)
-		if err != nil {
-			reject(err)
+		respond(w, http.StatusAccepted, map[string]any{"queued": true, "scope_id": scope.ID, "trace": job.Trace, "status_url": "/api/companion/memory/" + scope.ID + "/compression"})
+	}))
+	mux.HandleFunc("GET /api/companion/memory/{id}/compression", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := s.manager.memoryScope(r.PathValue("id")); err != nil {
+			fail(w, 404, err.Error())
 			return
 		}
-		// Compression has a larger dedicated budget than an ordinary reply. The
-		// request context still cancels when the client disconnects, while a
-		// slow provider response can finish and commit one atomic summary.
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
-		defer cancel()
-		changed, err := engine.CompressContext(ctx, companion.Input{Channel: scope.Channel, Account: scope.Account, Thread: scope.Thread}, true)
-		if err != nil {
-			reject(err)
-			return
-		}
-		s.manager.record(bot.Record{Event: "context_compression_completed", Category: "decision", ThreadID: scope.Thread, MessageID: trace, Content: "会话压缩处理完成", Status: "completed", Origin: "manual"})
-		respond(w, 200, map[string]any{"compressed": changed, "scope_id": scope.ID})
+		respond(w, 200, s.manager.compressionStatus(r.PathValue("id")))
 	}))
 }
 

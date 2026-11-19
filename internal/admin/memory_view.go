@@ -51,6 +51,7 @@ func (s *Server) memoryDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view["messages"] = newestMemory(visible.Messages)
+	view["compression"] = s.manager.compressionStatus(scope.ID)
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
 	view["label"] = s.manager.memoryLabel(ctx, scope.Thread)

@@ -113,6 +113,10 @@ type Manager struct {
 	memoryRunnerWG      sync.WaitGroup
 	memoryRunners       map[string]context.CancelFunc
 	memoryRunnersClosed bool
+	compressionMu       sync.Mutex
+	compressionWG       sync.WaitGroup
+	compressionJobs     map[string]*contextCompressionJob
+	compressionClosed   bool
 	memoryServiceMu     sync.Mutex
 	workerMu            sync.RWMutex
 	worker              *bot.Worker
@@ -553,6 +557,7 @@ func (m *Manager) Close() error {
 		packageErr = packages.Close()
 	}
 	m.closeWindowsMusic()
+	m.closeContextCompressions()
 	m.closeMemoryRunners()
 	if m.accounts != nil {
 		m.accounts.close()
