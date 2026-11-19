@@ -147,6 +147,13 @@ func readMediaWithRecoveryHook(ctx context.Context, m linuxnative.Message, analy
 		if !retryableObservationReason(reason) {
 			return text, err
 		}
+		// A missing native attachment is a deterministic local bridge result.
+		// Retrying it through the full share backoff would consume the caller's
+		// turn deadline before the worker can report the unreadable file. Keep one
+		// recovery attempt for transient races, then return the original failure.
+		if (reason == "incoming_file_download_failed" || reason == "incoming_media_download_failed") && attempt > 1 {
+			return text, err
+		}
 		delay := observationRetryDelay(attempt)
 		retryAt := time.Now().Add(delay)
 		if onRetry != nil {
@@ -176,10 +183,13 @@ func (w *Worker) stopUnreadableTurn(in companion.Input, err error) {
 	if errors.As(err, &failed) {
 		source = failed.messageID
 	}
-	if w.scheduleToolRetry(in, source, reason) {
-		return
-	}
-	if retryableObservationReason(reason) {
+	// Keep a durable retry checkpoint while reporting the failed group turn
+	// immediately.  Waiting for the first backoff window made an unreadable
+	// attachment look permanently stuck in the UI and also hid the failure
+	// from the owner.  The inbox item remains in waiting_tool_retry, so the
+	// retry loop can continue after the report is queued.
+	retryScheduled := w.scheduleToolRetry(in, source, reason)
+	if !retryScheduled && retryableObservationReason(reason) {
 		w.activity(Record{Event: "tool_retry_exhausted", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Tool: "share-reader", ToolStage: "observation", Status: "failed", Reason: reason, RetryAttempts: maxObservationRetries, Origin: "wechat"})
 	}
 	report := "本回合有消息未能读取，已停止群回复。读取错误：" + reason
@@ -188,10 +198,12 @@ func (w *Worker) stopUnreadableTurn(in companion.Input, err error) {
 	if w.config.ObservationFailed == nil || w.config.ObservationFailed(in, report) != nil {
 		w.activity(Record{Event: "private_failure_report_unavailable", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, Status: "failed", Reason: "private_owner_report_not_queued"})
 	}
-	if source != in.TraceID {
+	if !retryScheduled && source != in.TraceID {
 		w.queuePhase(source, "stopped")
 	}
-	w.queuePhase(in.TraceID, "stopped")
+	if !retryScheduled {
+		w.queuePhase(in.TraceID, "stopped")
+	}
 }
 
 // An attempted read is evidence of failure, not evidence of video contents.

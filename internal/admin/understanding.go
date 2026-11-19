@@ -162,6 +162,10 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 }
 
 func sharedVideoReadReason(err error) string {
+	var channelsFailure *channelsObservationFailure
+	if errors.As(err, &channelsFailure) {
+		return "shared_video_read_failed"
+	}
 	if err != nil && err.Error() == "share_public_read_failed" {
 		return "share_public_read_failed"
 	}

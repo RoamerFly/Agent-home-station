@@ -334,7 +334,8 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	analysisMessage, _ := quotedAnalysisMessage(message)
 	working := quotedPlainBody(message)
-	isMedia := analysisMessage.Type == 34 || analysisMessage.Type == 3 || analysisMessage.Type == 47 || analysisMessage.Type == 43 || analysisMessage.Type == 49 && !analysisMessage.IsQuotedText()
+	groupFile := strings.HasSuffix(message.ThreadID, "@chatroom") && (message.FileAttachmentName() != "" || len(message.Attachments) > 0)
+	isMedia := groupFile || analysisMessage.Type == 34 || analysisMessage.Type == 3 || analysisMessage.Type == 47 || analysisMessage.Type == 43 || analysisMessage.Type == 49 && !analysisMessage.IsQuotedText()
 	preferredShare := w.preferredGroupShare(analysisMessage)
 	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
 	canAnalyze := isMedia && w.mediaAnalyzer(ctx, analysisMessage) != nil
@@ -406,12 +407,18 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
-	readMedia := isMedia && w.readMediaBeforeDecision(analysisMessage)
-	if canAnalyze && !onDemandAttachment && w.config.Options != nil {
-		if !w.observationAllowed(message) {
+	readMedia := groupFile || isMedia && w.readMediaBeforeDecision(analysisMessage)
+	if (canAnalyze && !onDemandAttachment || groupFile) && w.config.Options != nil {
+		if !groupFile && !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
+		// Generation sessions perform the observation inside startGeneration so
+		// the same attachment is not downloaded twice.  The direct model path has
+		// no later observation stage, so it must pre-read here.  Group files still
+		// enter this branch even when media analysis is unavailable, allowing the
+		// generation path to report a durable read failure instead of silently
+		// treating the attachment as a normal text turn.
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			analysisCtx = companion.WithReplayNonce(analysisCtx, w.replayNonce(message.ID))
@@ -421,11 +428,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			cancel()
 			if analysisErr != nil {
 				mediaObservationState = "incomplete"
-				if ctx.Err() != nil {
-					return
-				}
 				if strings.HasSuffix(message.ThreadID, "@chatroom") {
 					w.stopUnreadableTurn(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, TraceID: message.ID}, analysisErr)
+					return
+				}
+				if ctx.Err() != nil {
 					return
 				}
 				summary = failedObservation(analysisErr)
@@ -500,7 +507,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment {
+			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment || groupFile && mediaObservationState == "pending" {
 				copy := analysisMessage
 				analysis = &copy
 			}
