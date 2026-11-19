@@ -11,6 +11,7 @@ import urllib.parse
 import threading
 import hashlib
 import socket
+from pathlib import PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -55,6 +56,31 @@ def external_comfy_url(value):
     return f'http://127.0.0.1:{port}'
 
 
+def yue_project_paths(public, controls):
+    """Choose YuE paths for legacy workspaces and relocated tool packages.
+
+    A portable package may keep its workflow files beside ``runtime`` while
+    older registrations keep the app under ``projects/yue/app``.  Resolve
+    only directories under the registered public root or this shipped control
+    directory, never by searching the host filesystem.
+    """
+    public = Path(public)
+    controls = Path(controls)
+    project_candidates = (public / "projects/yue/app", public / "runtime", public)
+    workflow_candidates = (controls / "workflows", public / "workflows", public / "runtime/workflows",
+                           public / "runtime/workflows_api", public / "projects/yue/app/workflows_api")
+    required = ("audio_yue2_text_to_music.json", "audio_yue2_music_cover.json")
+    workflows = next((path for path in workflow_candidates
+                      if path.is_dir() and all((path / name).is_file() for name in required)), None)
+    if workflows is None:
+        workflows = next((path for path in workflow_candidates if path.is_dir()), workflow_candidates[0])
+    project = next((path for path in project_candidates
+                    if (path / "comfy/ComfyUI/main.py").is_file()), None)
+    if project is None:
+        project = next((path for path in project_candidates if path.is_dir()), public)
+    return project, workflows
+
+
 def registered_comfy_command(config_file, url, state):
     """Start an explicitly registered backend as this music service's child."""
     from managed_music_runner import canonical
@@ -63,22 +89,36 @@ def registered_comfy_command(config_file, url, state):
         raise ValueError("music_comfy_registration_disabled")
     runtime = canonical(config["runtime"])
     def member(name):
-        relative = Path(config[name])
+        raw = config.get(name)
+        if not isinstance(raw, str) or not raw or "\0" in raw:
+            raise ValueError("music_comfy_registration_path_invalid")
+        relative = PurePosixPath(raw.replace("\\", "/"))
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError("music_comfy_registration_path_invalid")
-        path = canonical(runtime / relative)
+        path = canonical(runtime.joinpath(*relative.parts))
         if not path.is_relative_to(runtime):
             raise ValueError("music_comfy_registration_path_invalid")
         return path
     python, entry, frontend = member("python"), member("entry"), member("frontend")
-    manifest_path = Path(config["manifest"])
-    if not manifest_path.is_absolute(): manifest_path = runtime / manifest_path
+    manifest_raw = config.get("manifest")
+    if not isinstance(manifest_raw, str) or not manifest_raw or "\0" in manifest_raw:
+        raise ValueError("music_comfy_manifest_invalid")
+    manifest_member = PurePosixPath(manifest_raw.replace("\\", "/"))
+    manifest_path = Path(manifest_raw)
+    if not manifest_path.is_absolute():
+        if manifest_member.is_absolute() or ".." in manifest_member.parts:
+            raise ValueError("music_comfy_manifest_invalid")
+        manifest_path = runtime.joinpath(*manifest_member.parts)
     manifest = json.loads(canonical(manifest_path).read_text(encoding="utf-8-sig"))
     if manifest.get("schema_version") != 1 or manifest.get("policy") not in ("station-yue-v1", "station-comfyui-v1"):
         raise ValueError("music_comfy_manifest_invalid")
     files = manifest.get("files", {})
+    if not isinstance(files, dict):
+        raise ValueError("music_comfy_manifest_invalid")
     for name, path in (("python",python),("entry",entry)):
-        expected = files.get(config[name]) or files.get(config[name].replace("\\", "/"))
+        key = config[name].replace("\\", "/")
+        expected = next((checksum for member, checksum in files.items()
+                         if isinstance(member, str) and member.replace("\\", "/") == key), None)
         if not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise ValueError("music_comfy_registration_digest_changed")
     port = urllib.parse.urlsplit(external_comfy_url(url)).port
@@ -144,9 +184,7 @@ def main():
     python = str(Path(args.python).absolute())
     scripts = Path(__file__).resolve().parent
     inference_scripts = public / "projects/agent-tools"
-    workflows = scripts / "workflows"
-    if not workflows.is_dir(): workflows = scripts.parent / "components/yue2/app/workflows_api"
-    project = public / "projects/yue/app"
+    project, workflows = yue_project_paths(public, scripts)
     argv = [python, str(inference_scripts / "comfy_unix_entry.py"), "--socket", "/run/managed-music/comfy.sock",
             "--entry", str(project / "comfy/ComfyUI/main.py"), "--base-directory", str(state / "base"),
             "--models-directory", str(public / "models/yue"), "--input-directory", str(state / "input"),

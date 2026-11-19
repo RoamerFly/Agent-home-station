@@ -22,6 +22,29 @@ from rvc_train_trial import BINDING as TRAINING_BINDING, training_resources
 POLICY = "registry-read-private-network-v1"
 
 
+def _portable_path(value):
+    """Normalize separators used by legacy Windows/POSIX manifests."""
+    return value.replace("\\", "/") if isinstance(value, str) else value
+
+
+def _registered_public_rewriter(old_root, public):
+    old_root = _portable_path(old_root)
+    marker = "/projects/"
+    if not isinstance(old_root, str) or marker not in old_root:
+        raise ValueError("legacy_public_root_invalid")
+    prefix = old_root.rsplit(marker, 1)[0]
+    public = Path(public)
+
+    def rewrite(value):
+        normalized = _portable_path(value)
+        if isinstance(normalized, str) and (normalized == prefix or normalized.startswith(prefix + "/")):
+            suffix = normalized[len(prefix):].lstrip("/")
+            return str(public.joinpath(*suffix.split("/"))) if suffix else str(public)
+        return value
+
+    return rewrite
+
+
 def registered_comfy_url(value):
     """Validate an optional Station-owned local Comfy endpoint."""
     if not value:
@@ -183,7 +206,7 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
         versions = {d.metadata["Name"]: d.version for d in metadata.distributions(path=[str(training_overlay)])}
         publish_json(public / "runtimes/windows-rvc-training-package-versions.json", {"platform": "windows-x64", "packages": versions})
     old = json.loads((legacy_public / "manifests/rvc.json").read_text(encoding="utf8"))
-    prefix = old["root"].rsplit("/projects/", 1)[0]
+    rewrite_public_path = _registered_public_rewriter(old.get("root"), public)
     python = str(interpreter / "python.exe")
 
     def paths(value):
@@ -192,9 +215,7 @@ def register(workspace, legacy_public, admin, program_runtimes, authorize=False,
                     for k, v in value.items()}
         if isinstance(value, list):
             return [paths(x) for x in value]
-        if isinstance(value, str) and (value == prefix or value.startswith(prefix + "/")):
-            return str(public / value[len(prefix):].lstrip("/"))
-        return value
+        return rewrite_public_path(value)
 
     for source in (legacy_public / "manifests").glob("*.json"):
         if source.name.startswith("asr-") or ".backup-" in source.name:

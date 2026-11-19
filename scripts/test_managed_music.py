@@ -11,11 +11,26 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
 from managed_music_runner import command, managed_public_root
-from managed_music_service import comfy_memory_arguments, external_comfy_url, registered_comfy_command
+from managed_music_service import comfy_memory_arguments, external_comfy_url, registered_comfy_command, yue_project_paths
 from music_unix_client import open_request
 
 
 class MusicMemoryPolicyTests(unittest.TestCase):
+    def test_yue_paths_use_relocated_package_workflows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            public = root / 'public-package'
+            controls = root / 'controls'
+            (public / 'runtime/comfy/ComfyUI').mkdir(parents=True)
+            (public / 'runtime/comfy/ComfyUI/main.py').write_text('# synthetic', encoding='utf8')
+            workflows = public / 'workflows'
+            workflows.mkdir()
+            for name in ('audio_yue2_text_to_music.json', 'audio_yue2_music_cover.json'):
+                (workflows / name).write_text('{}', encoding='utf8')
+            project, selected = yue_project_paths(public, controls)
+            self.assertEqual(project, public / 'runtime')
+            self.assertEqual(selected, workflows)
+
     def test_registered_child_uses_pinned_runtime_and_private_output(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
@@ -41,6 +56,27 @@ class MusicMemoryPolicyTests(unittest.TestCase):
             config['entry'] = '../outside.py'; registration.write_text(json.dumps(config))
             with self.assertRaisesRegex(ValueError, 'path_invalid'):
                 registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+
+    def test_registered_child_accepts_windows_relative_members_and_manifest_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            runtime = root / 'runtime'; runtime.mkdir()
+            (runtime / 'python.exe').write_bytes(b'python')
+            (runtime / 'ComfyUI').mkdir()
+            (runtime / 'ComfyUI' / 'main.py').write_bytes(b'entry')
+            (runtime / 'frontend').mkdir(); (root / 'models').mkdir()
+            manifest = {'schema_version': 1, 'policy': 'station-yue-v1',
+                        'files': {'python.exe': hashlib.sha256(b'python').hexdigest(),
+                                  r'ComfyUI\main.py': hashlib.sha256(b'entry').hexdigest()}}
+            (runtime / 'manifest.json').write_text(json.dumps(manifest), encoding='utf8')
+            config = {'schema_version': 1, 'enabled': True, 'runtime': str(runtime),
+                      'python': r'python.exe', 'entry': r'ComfyUI\main.py', 'frontend': r'frontend',
+                      'manifest': r'manifest.json', 'models': str(root / 'models'), 'device': 'cpu'}
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(config), encoding='utf8')
+            argv = registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            self.assertEqual(Path(argv[0]), runtime / 'python.exe')
+            self.assertEqual(Path(argv[3]), runtime / 'ComfyUI' / 'main.py')
 
     def test_registered_public_tool_root_is_accepted(self):
         with tempfile.TemporaryDirectory() as temp:
