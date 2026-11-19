@@ -394,6 +394,33 @@ func (a *agentControl) list(account, thread string) []agentTask {
 func (a *agentControl) active(account, thread string) []agentTask {
 	return a.listTasks(account, thread, false)
 }
+
+// children returns live and archived tasks that explicitly point at a parent.
+// ParentID is the durable relationship for background/reminder work; the
+// delivery thread may legitimately differ from the request thread.
+func (a *agentControl) children(account, parentID string) []agentTask {
+	if account == "" || parentID == "" {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := []agentTask{}
+	for _, task := range a.data.Tasks {
+		if task.Account == account && task.ParentID == parentID {
+			out = append(out, copyTask(task))
+		}
+	}
+	for id, task := range a.archived {
+		if _, live := a.data.Tasks[id]; live {
+			continue
+		}
+		if task.Account == account && task.ParentID == parentID {
+			out = append(out, copyTask(task))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
+	return out
+}
 func (a *agentControl) listTasks(account, thread string, history bool) []agentTask {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -731,10 +758,20 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				return
 			}
 			if (t.OwnerRequest && state == "reply") || (t.ReminderDue && state == "silent") {
-				for _, child := range m.agent.list(in.Account, in.Thread) {
+				for _, child := range m.agent.children(in.Account, t.ID) {
 					if child.ParentID == t.ID && child.State != "cancelled" && child.State != "needs_review" {
-						t.State = "completed"
-						t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
+						// A cross-thread child is still running after the model
+						// acknowledged the request. Keep the parent live so restart
+						// recovery can route the child result back to this request;
+						// same-thread legacy tasks retain their completed projection.
+						if child.Thread != t.Thread {
+							t.State = "waiting"
+							t.Next = time.Now().UTC()
+							t.LastResult = "安排请求已保存；后续实际执行与发送状态见跨会话子任务 " + child.ID
+						} else {
+							t.State = "completed"
+							t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
+						}
 						_ = m.agent.task(t)
 						return
 					}

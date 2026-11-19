@@ -86,7 +86,7 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 	}
 	videoRequired := m.AppMessageType != nil && *m.AppMessageType == 4
 	progress("share_public_read_started", "running", url)
-	share, err := mcptools.ReadPublicShare(ctx, url, 64<<20, videoRequired)
+	share, err := mcptools.ReadPublicShareViaHostReader(ctx, url, 64<<20, videoRequired)
 	if err != nil {
 		progress("share_public_read_failed", "failed", err.Error())
 		return "", companion.MediaObservationEvidence{}, err

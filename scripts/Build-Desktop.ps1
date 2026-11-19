@@ -2,6 +2,21 @@
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
+# Do not depend on the PowerShell Utility module being auto-loaded. The
+# Windows PowerShell process started by the Python build/test harness can have
+# a mixed PSModulePath, making Get-FileHash unavailable even though the
+# interactive shell exposes it. Keep integrity checks deterministic by using
+# the .NET hashing API directly.
+function Get-Sha256Hex([string]$Path){
+ if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw ('Cannot hash missing file: '+$Path)}
+ $sha=[System.Security.Cryptography.SHA256]::Create()
+ try {
+  $stream=[IO.File]::OpenRead($Path)
+  try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+  finally {$stream.Dispose()}
+ } finally {$sha.Dispose()}
+}
+
 function Assert-CanonicalSource {
  $markerPath=Join-Path $workspace '.build-source.json'
  if(-not(Test-Path -LiteralPath $markerPath -PathType Leaf)){throw 'This checkout is not the registered canonical Windows build source.'}
@@ -66,7 +81,7 @@ function Test-LocalStationRuntimeIdentical([string]$Existing,[System.Collections
   if($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)){return $false}
   $relative=Get-RelativeRuntimePath $Existing $file.FullName
   if($relative -eq 'windows-native-manifest.json'){continue}
-  $actual[$relative]=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
+  $actual[$relative]=Get-Sha256Hex $file.FullName
  }
  if($actual.Count -ne $ExpectedFiles.Count){return $false}
  foreach($entry in $ExpectedFiles.GetEnumerator()){
@@ -96,11 +111,11 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
  if($sourceManifest.schema_version -ne 1 -or $sourceManifest.platform -ne 'windows-x64'){throw 'The selected WeChat runtime manifest is not a Windows x64 native bundle.'}
  $wxSource=Join-Path $source 'wx.exe'
  if(-not(Test-Path -LiteralPath $wxSource -PathType Leaf)){throw 'The selected WeChat runtime has no wx.exe.'}
- $wxHash=(Get-FileHash -LiteralPath $wxSource -Algorithm SHA256).Hash.ToLower()
+ $wxHash=Get-Sha256Hex $wxSource
  if([string]::IsNullOrWhiteSpace($sourceManifest.native_sha256) -or $sourceManifest.native_sha256.ToLower() -ne $wxHash){throw 'The selected WeChat runtime wx.exe does not match its manifest hash.'}
  $legacyAdminSource=Join-Path $source 'wechat-admin.exe'
  if(-not(Test-Path -LiteralPath $legacyAdminSource -PathType Leaf)){throw 'The selected WeChat runtime has no wechat-admin.exe for the legacy console.'}
- $legacyAdminHash=(Get-FileHash -LiteralPath $legacyAdminSource -Algorithm SHA256).Hash.ToLower()
+ $legacyAdminHash=Get-Sha256Hex $legacyAdminSource
  if([string]::IsNullOrWhiteSpace($sourceManifest.admin_sha256) -or $sourceManifest.admin_sha256.ToLower() -ne $legacyAdminHash){throw 'The selected wechat-admin.exe does not match its manifest hash.'}
 
  $required=@('wx.exe','wechat-admin.exe','vcruntime140.dll','MSVC-REDISTRIBUTABLE-NOTICE.txt','agent-wechat-LICENSE.txt')
@@ -134,8 +149,8 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    $target=Join-Path $staging $relative.Replace('/','\')
    New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
    Copy-Item -LiteralPath $file.FullName -Destination $target
-   $sourceHash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
-   $targetHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLower()
+   $sourceHash=Get-Sha256Hex $file.FullName
+   $targetHash=Get-Sha256Hex $target
    if($sourceHash -ne $targetHash){throw ('WeChat runtime copy hash mismatch: '+$relative)}
    $hashes[$relative]=$targetHash
   }
@@ -146,7 +161,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    & go build -buildvcs=false -trimpath -o (Join-Path $staging 'wechat-admin.exe') ./cmd/wechat-admin
    if($LASTEXITCODE -ne 0){throw 'Failed to build the current WeChat console.'}
   } finally { Pop-Location }
-  $hashes['wechat-admin.exe']=(Get-FileHash -LiteralPath (Join-Path $staging 'wechat-admin.exe') -Algorithm SHA256).Hash.ToLower()
+  $hashes['wechat-admin.exe']=Get-Sha256Hex (Join-Path $staging 'wechat-admin.exe')
   if($hashes['wx.exe'] -ne $wxHash){throw 'The staged wx.exe hash is not the validated native hash.'}
   $provenance=Get-SourceProvenance
   $record=[ordered]@{
@@ -169,7 +184,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    live_delivery_verified=$false
   }
   [IO.File]::WriteAllText((Join-Path $staging 'windows-native-manifest.json'),($record | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
-  if((Get-FileHash -LiteralPath (Join-Path $staging 'wx.exe') -Algorithm SHA256).Hash.ToLower() -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
+  if((Get-Sha256Hex (Join-Path $staging 'wx.exe')) -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
   if(Test-Path -LiteralPath $destination){
    # A previous manual update could have left the temporary backup names that
    # Windows tools commonly create beside the native bundle. They are not part
@@ -207,7 +222,7 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
  $source=Join-Path $workspace 'plugins\speech\runtime\gpt_sovits.py'
  if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw 'The trusted local speech runner is missing from plugins/speech/runtime.'}
  Assert-NoReparsePointAncestor $source
- $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLower()
+ $hash=Get-Sha256Hex $source
  $runtimeRoot=Join-Path $PackageDirectory 'env'
  $destination=Join-Path $runtimeRoot 'windows-station-speech'
  $manifestPath=Join-Path $destination 'runtime-manifest.json'
@@ -222,14 +237,14 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
   $entries=@(Get-ChildItem -LiteralPath $destination -Force)
   if($entries.Count -ne 2 -or $entries | Where-Object {$_.PSIsContainer -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)}){throw 'Existing station speech runner has unexpected files.'}
   $staged=Join-Path $destination 'gpt_sovits.py'
-  if(-not(Test-Path -LiteralPath $staged -PathType Leaf) -or (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Existing station speech runner integrity check failed.'}
+  if(-not(Test-Path -LiteralPath $staged -PathType Leaf) -or ((Get-Sha256Hex $staged) -ne $hash)){throw 'Existing station speech runner integrity check failed.'}
   Write-Output ('Verified existing station speech runner: '+$staged+' (SHA-256 '+$hash+').')
   return
  }
  New-Item -ItemType Directory -Path $destination | Out-Null
  $staged=Join-Path $destination 'gpt_sovits.py'
  Copy-Item -LiteralPath $source -Destination $staged
- if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Station speech runner source changed during staging.'}
+ if((Get-Sha256Hex $staged) -ne $hash){throw 'Station speech runner source changed during staging.'}
  [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
  Write-Output ('Staged trusted station speech runner: '+$staged+' (SHA-256 '+$hash+'). Backend registration must use this explicit absolute path and digest.')
 }
@@ -281,7 +296,17 @@ foreach($relative in @('plugins\mobile-control','env\windows-music\mobile_bridge
  }
 }
 if($LocalStation){
- $foreignOutput=@('WechatAgent.exe','env\windows-music')
+ $foreignOutput=@('WechatAgent.exe','runtimes\windows-x64','env\windows-music')
+ # A Station build must never be layered over the retired mobile/phone
+ # desktop output.  The old windows-x64 and windows-music trees contain a
+ # second native host and can make the package appear to start while the
+ # wrong product is actually serving the port.
+ foreach($retired in @('runtimes\windows-music','env\windows-x64','env\windows-music','mobile_bridge.py')){
+  $obsolete=Join-Path $OutputDirectory $retired
+  if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
+   throw 'Output contains retired mobile components; build into a fresh directory.'
+  }
+ }
 }else{
  $foreignOutput=@('AgentHomeStation.exe','agent-home-station-server.exe')
 }
@@ -365,7 +390,7 @@ if($appIDs.Count -and -not ($LocalStation -and $ApplicationPackagesDirectory)){
 if(-not(Test-Path -LiteralPath $archive)){
  Invoke-WebRequest -Uri ('https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/'+$version+'/microsoft.web.webview2.'+$version+'.nupkg') -OutFile $archive
 }
-if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash){throw 'WebView2 SDK package hash mismatch; build refused.'}
+if((Get-Sha256Hex $archive).ToUpperInvariant() -ne $expectedHash){throw 'WebView2 SDK package hash mismatch; build refused.'}
 if(-not(Test-Path -LiteralPath (Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'))){Expand-Archive -LiteralPath $archive -DestinationPath $cache -Force}
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if(-not(Test-Path -LiteralPath $compiler)){throw 'The Windows .NET Framework C# compiler is required.'}
@@ -451,14 +476,14 @@ if($WithRVCBackend){
  foreach($name in @('managed_music_runner.py','managed_music_service.py','managed_music_ipc.py','music_unix_client.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
                     'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
                     'singing_voice.py','station_rvc.py','windows_lpac.py','yue_bridge.py','yue_recovery.py','yue_sampling.py')){
-  $files[$name]=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+  $files[$name]=Get-Sha256Hex (Join-Path $PSScriptRoot $name)
  }
  $sources=@{}
  foreach($name in $files.Keys){$sources[$name]=Join-Path $PSScriptRoot $name}
  foreach($workflow in Get-ChildItem -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -File -Filter '*.json'){
   $name='workflows/'+$workflow.Name
   $sources[$name]=$workflow.FullName
-  $files[$name]=(Get-FileHash -LiteralPath $workflow.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+  $files[$name]=Get-Sha256Hex $workflow.FullName
  }
  $manifest=([ordered]@{schema_version=1;platform='windows-x64';policy='station-rvc-v1';files=$files}|ConvertTo-Json -Depth 4)
  Assert-NoReparsePointAncestor $control
@@ -472,7 +497,7 @@ if($WithRVCBackend){
   foreach($name in $files.Keys){
    $staged=Join-Path $control $name
    Assert-NoReparsePointAncestor $staged
-   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC control integrity check failed.'}
+   if((Get-Sha256Hex $staged) -ne $files[$name]){throw 'Standalone RVC control integrity check failed.'}
   }
  }else{
   New-Item -ItemType Directory -Path $control | Out-Null
@@ -480,7 +505,7 @@ if($WithRVCBackend){
    $staged=Join-Path $control $name
    New-Item -ItemType Directory -Force -Path (Split-Path $staged -Parent) | Out-Null
    Copy-Item -LiteralPath $sources[$name] -Destination $staged
-   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
+   if((Get-Sha256Hex $staged) -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
   }
   [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
  }
@@ -540,7 +565,7 @@ if($Portable){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
   Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length
-  Get-FileHash -LiteralPath $target -Algorithm SHA256
+  [ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}
   return
  }
  $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env\windows-x64')}
@@ -555,10 +580,10 @@ if($Portable){
  foreach($name in @('gpt_sovits_windows_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
  Copy-Item -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -Destination (Join-Path $music 'workflows') -Recurse -Force
  $musicFiles=@{}
- Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}
+ Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=Get-Sha256Hex $_.FullName}
  [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
 Invoke-DesktopPackageTests
 Get-Item -LiteralPath $target | Select-Object FullName,Length
-Get-FileHash -LiteralPath $target -Algorithm SHA256
+[ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}

@@ -580,12 +580,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return "", &mcptools.WebError{Code: "audio_preview_invalid"}
 		}
 		if input.Kind == "video" && mcptools.IsPublicVideoPage(input.URL) {
-			video, err := mcptools.DownloadPublicVideoObservation(ctx, input.URL, toolsLimit("video"))
+			video, err := p.readPublicVideoThroughSharePlugin(ctx, input.URL, toolsLimit("video"))
 			if err != nil {
 				return "", err
-			}
-			if video.LinkOnly {
-				return p.stageVideoShare(video.PageURL, video.Title, video.DurationMS)
 			}
 			downloadBytes = int64(len(video.Data))
 			data, err := preparePublicVideo(ctx, p.manager.dir, video.Data)
@@ -599,7 +596,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已取得公开可播放的视频文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "video", Data: data, MIMEType: "video/mp4", Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: filename})
 		}
 		if (input.Kind == "voice" || input.Kind == "file") && mcptools.IsPublicVideoPage(input.URL) {
-			video, err := mcptools.DownloadPublicVideoAudio(ctx, input.URL, toolsLimit(input.Kind))
+			video, err := p.readPublicVideoThroughSharePlugin(ctx, input.URL, toolsLimit(input.Kind))
 			if err != nil {
 				return "", err
 			}

@@ -105,6 +105,36 @@ func (p *permittedTools) inspectionPublicURLPolicy(ctx context.Context, rawURL s
 	return policy, nil
 }
 
+// readPublicVideoThroughSharePlugin is the single host path for a public video
+// URL supplied during a WeChat turn.  Downloading a URL is still an
+// attachment operation, but resolving the page and obtaining its bytes must
+// use the installed share-reader package so its source binding, network grant,
+// provenance and tool records are identical to video_inspect and received
+// share observation.  Keeping this helper here also prevents the legacy
+// mcptools downloader from becoming an untracked optional execution path.
+func (p *permittedTools) readPublicVideoThroughSharePlugin(ctx context.Context, rawURL string, maxBytes int64) (mcptools.PublicVideo, error) {
+	policy, err := p.inspectionPublicURLPolicy(ctx, rawURL)
+	if err != nil {
+		return mcptools.PublicVideo{}, err
+	}
+	if maxBytes <= 0 {
+		return mcptools.PublicVideo{}, toolInputError("视频下载大小参数无效")
+	}
+	page, err := policy.readShare(ctx, maxBytes)
+	if err != nil {
+		return mcptools.PublicVideo{}, err
+	}
+	if page.Kind != "video" || len(page.Data) == 0 {
+		return mcptools.PublicVideo{}, toolInputError("分享链接没有返回实际视频")
+	}
+	return mcptools.PublicVideo{
+		Data:        page.Data,
+		ContentType: page.ContentType,
+		PageURL:     page.PageURL,
+		Title:       page.Title,
+	}, nil
+}
+
 func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspectionInput) ([]byte, string, error) {
 	count := 0
 	for _, s := range []string{in.Asset, in.Message, in.URL} {
