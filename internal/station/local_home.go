@@ -14,6 +14,7 @@ import (
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/stationauth"
 	"wechat-bot/internal/stationhost"
 	"wechat-bot/internal/stationruntime"
@@ -112,6 +113,12 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	if err = errors.Join(fenceErr, root.Close()); err != nil {
 		return nil, err
 	}
+	if err := migrateLegacyAuthority(dir); err != nil {
+		return nil, err
+	}
+	if err := migrateLegacyToolRegistrations(dir); err != nil {
+		return nil, err
+	}
 	// Structured station homes keep the identity and local-owner authority
 	// under main_setting/authority.  The top-level data root can already exist
 	// when an application package creates applications/wechat/native first, so
@@ -176,6 +183,93 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	chat.startLocalTaskFollowups()
 	chat.startSurfActionContinuations()
 	return &LocalHomeHandler{Handler: stationhost.New(mux, auth, registry, dir, chat, apps...), chat: chat, home: home}, nil
+}
+
+// migrateLegacyAuthority moves installation records that were written at the
+// data root before the structured main_setting/authority layout existed. The
+// move is performed only when the canonical destination is absent, preserving
+// a partial migration for inspection instead of overwriting newer authority.
+func migrateLegacyAuthority(dataDir string) error {
+	if !structuredDataRoot(dataDir) || stationMainDir(dataDir) == dataDir {
+		return nil
+	}
+	canonical := stationAuthorityDir(dataDir)
+	release, err := hostfile.Lock(filepath.Join(dataDir, ".legacy-authority-migration.lock"))
+	if err != nil {
+		return errors.New("旧身份配置迁移暂不可用")
+	}
+	defer release()
+	root, err := workspacefs.EnsurePath(canonical)
+	if err != nil {
+		return err
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	for _, name := range []string{"fish-identity.json", "local-model.json", legacySettingsReceiptFile, "tool-grants.json"} {
+		source := filepath.Join(dataDir, name)
+		destination := filepath.Join(canonical, name)
+		info, statErr := os.Lstat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("旧身份配置文件不可迁移")
+		}
+		if _, destErr := os.Lstat(destination); destErr == nil {
+			continue
+		} else if !errors.Is(destErr, os.ErrNotExist) {
+			return destErr
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateLegacyToolRegistrations publishes registrations written at the old
+// data root into the structured public-tools index. Tool binaries and private
+// resources remain in their existing managed locations and are not copied.
+func migrateLegacyToolRegistrations(dataDir string) error {
+	if !structuredDataRoot(dataDir) {
+		return nil
+	}
+	registrationDir := filepath.Join(stationPublicToolsDir(dataDir), "registrations")
+	registrationRoot, err := workspacefs.EnsurePath(registrationDir)
+	if err != nil {
+		return err
+	}
+	if err := registrationRoot.Close(); err != nil {
+		return err
+	}
+	for _, name := range []string{
+		localTTSRegistrationFile,
+		localRVCRegistrationFile,
+		localYuERegistrationFile,
+		localAudioCppRegistrationFile,
+		localComfyRegistrationFile,
+		"station-obs-preview.json",
+	} {
+		source := filepath.Join(dataDir, name)
+		destination := filepath.Join(registrationDir, name)
+		info, statErr := os.Lstat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("旧工具登记文件不可迁移")
+		}
+		if _, destErr := os.Lstat(destination); destErr == nil {
+			continue
+		} else if !errors.Is(destErr, os.ErrNotExist) {
+			return destErr
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RegisterLegacyHomeRoutes retains the home settings in the existing management

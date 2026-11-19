@@ -199,7 +199,7 @@ func (s *stationWechat) relocationSourceStillFenced(worker *os.Root, evidence le
 	source, err := workspacefs.OpenPath(evidence.SourceDir)
 	if err == nil {
 		defer source.Close()
-		if !matchesLiveRelocationFence(source, evidence, proof) {
+		if !matchesLiveRelocationFence(source, evidence, proof, evidence.SourceDir) {
 			return false
 		}
 	} else if !detached || !relocationSourceAbsent(err) {
@@ -218,15 +218,15 @@ func (s *stationWechat) relocationSourceStillFenced(worker *os.Root, evidence le
 	return s.legacyHandover(proof, handoverActive) == ""
 }
 
-func matchesLiveRelocationFence(source *os.Root, evidence legacyRelocationEvidence, proof legacyActivation) bool {
-	raw, err := readLegacyImportFile(source, stationNativeLifecycleRelative(proof.OldRoot, stationNativeReleaseFile), 4096)
+func matchesLiveRelocationFence(source *os.Root, evidence legacyRelocationEvidence, proof legacyActivation, sourceDir string) bool {
+	raw, err := readLegacyImportFile(source, stationNativeLifecycleRelative(sourceDir, stationNativeReleaseFile), 4096)
 	var intent legacyReleaseIntent
 	if err != nil || json.Unmarshal(raw, &intent) != nil || intent.Version != 1 ||
 		intent.ConnectionID != evidence.Target.Connection || intent.AuditDigest != evidence.AuditDigest ||
 		intent.ApplyDigest != evidence.SourceFence || intent.RelocationTarget != evidence.Target.ID {
 		return false
 	}
-	stop, err := readLegacyImportFile(source, stationNativeLifecycleRelative(proof.OldRoot, stationNativeStopFile), 16<<10)
+	stop, err := readLegacyImportFile(source, stationNativeLifecycleRelative(sourceDir, stationNativeStopFile), 16<<10)
 	claim, _ := json.Marshal(legacyHandoverKey(proof))
 	return err == nil && hexDigest(stop) == evidence.Target.SourceStop && intent.ClaimDigest == hexDigest(claim) &&
 		intent.ApplyDigest == localCheckpointKey("wechat-relocation-fence-v1", proof, intent.AuditDigest,

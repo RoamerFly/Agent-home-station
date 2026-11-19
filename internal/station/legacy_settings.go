@@ -332,7 +332,7 @@ func validateLegacyIdentity(data []byte) (string, error) {
 	if err = hostfile.WritePrivate(filepath.Join(dir, legacySettingsIdentityFile), data); err != nil {
 		return "", err
 	}
-	record, err := fishidentity.New(dir).Read()
+	record, err := fishidentity.New(stationAuthorityDir(dir)).Read()
 	if err != nil || !fishidentity.ValidFishID(record.FishID) {
 		return "", errors.New("invalid fish identity")
 	}

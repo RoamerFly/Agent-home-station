@@ -188,7 +188,7 @@ func migrateLegacyAppPersona(dir string) error {
 		return err
 	}
 	defer release()
-	root, err := workspacefs.OpenPath(dir)
+	root, err := workspacefs.OpenPath(stationAuthorityDir(dir))
 	if err != nil {
 		return err
 	}

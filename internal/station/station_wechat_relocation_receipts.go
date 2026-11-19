@@ -125,7 +125,7 @@ func (s *stationWechat) readRelocationEvidence(root *os.Root, id string) (legacy
 		evidence.Target.Connection != id || !sameCutoverPath(evidence.Target.Root, s.dataDir) || !legacyMemoryDigestValid(evidence.AuditDigest) {
 		return evidence, apphost.ErrUnavailable
 	}
-	owner, err := fishidentity.New(s.dataDir).Read()
+	owner, err := fishidentity.New(stationAuthorityDir(s.dataDir)).Read()
 	if err != nil || owner.LocalOwner == nil || owner.FishID != evidence.Target.FishID || owner.LocalOwner.ID != evidence.Target.OwnerID {
 		return evidence, apphost.ErrUnavailable
 	}

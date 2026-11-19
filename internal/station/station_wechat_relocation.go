@@ -99,7 +99,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		source != "" && !sameCutoverPath(stop.DataRoot, source) {
 		return out, errors.New("目标站须保留源站正常停机记录，并在不同目录准备")
 	}
-	owner, err := fishidentity.New(dir).Read()
+	owner, err := fishidentity.New(stationAuthorityDir(dir)).Read()
 	if err != nil || !fishidentity.ValidFishID(owner.FishID) || owner.LocalOwner == nil || !fishidentity.ValidLocalOwner(*owner.LocalOwner) {
 		return out, errors.New("目标站缺少可核对的鱼身份和本机主人")
 	}
@@ -147,7 +147,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		if sourceStop != want.SourceStop {
 			return errors.New("源站停机记录与目标副本不一致")
 		}
-		sourceOwner, err := fishidentity.New(source).Read()
+		sourceOwner, err := fishidentity.New(stationAuthorityDir(source)).Read()
 		if err != nil || sourceOwner.FishID != want.FishID || sourceOwner.LocalOwner == nil || sourceOwner.LocalOwner.ID != want.OwnerID {
 			return errors.New("源站和目标站的本机主人或鱼身份不一致")
 		}
