@@ -44,8 +44,10 @@ func Open(root string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	dir.Close()
-	return &Store{root: abs, BoundaryRoot: abs}, nil
+	// Keep the pinned root for the lifetime of the store. Closing the root here
+	// only to reopen it on the first operation adds a Windows handle flush and
+	// briefly leaves the workspace without a pinned boundary.
+	return &Store{root: abs, BoundaryRoot: abs, boundary: dir, boundaryPath: abs}, nil
 }
 
 func (s *Store) Close() error {
