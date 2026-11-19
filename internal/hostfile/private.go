@@ -5,7 +5,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// Windows FlushFileBuffers serializes access to the filesystem cache more
+// reliably than the SQLite layer alone.  The test and desktop hosts can write
+// several private records at once during startup and shutdown.  Serializing
+// the durable flush prevents one handle from holding another flush open for
+// minutes while retaining the same write-then-rename durability contract.
+var privateSyncMu sync.Mutex
 
 // WritePrivate replaces a private record through a synchronized sibling file.
 func WritePrivate(path string, data []byte) error {
@@ -18,7 +26,9 @@ func WritePrivate(path string, data []byte) error {
 		_, err = file.Write(data)
 	}
 	if err == nil {
+		privateSyncMu.Lock()
 		err = file.Sync()
+		privateSyncMu.Unlock()
 	}
 	closeErr := file.Close()
 	if err != nil || closeErr != nil {

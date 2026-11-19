@@ -87,7 +87,15 @@ func TestShareFacadeProjectionNeverLeaksResolverOrClaimsObservation(t *testing.T
 func TestShareServiceAvailabilityDoesNotRequireBridgeConfiguration(t *testing.T) {
 	f, p := trustedAgent(t)
 	_, store, _, _ := shareBindingFixtureFor(t, "test", shareServicePluginID, true)
+	f.manager.packageMu.Lock()
+	previous := f.manager.packages
 	f.manager.packages = store
+	f.manager.packageMu.Unlock()
+	if previous != nil && previous != store {
+		if err := previous.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if !p.shareServiceCapabilityAvailable(context.Background()) {
 		t.Fatal("installed share reader hidden without bridge credentials")
 	}
