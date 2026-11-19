@@ -22,7 +22,7 @@ import (
 func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	base := t.TempDir()
 	host, workspace := filepath.Join(base, "host"), filepath.Join(base, "home")
-	nativeDir := filepath.Join(host, "apps", "wechat", "native")
+	nativeDir := filepath.Join(host, "applications", "wechat", "native")
 	if err := os.MkdirAll(nativeDir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +539,7 @@ func TestStationWechatGroupDirectoryAndMuteReceipt(t *testing.T) {
 	// handover. A malformed receipt is enough to fence every platform write;
 	// it must not leave a local action reservation that prevents the same owner
 	// request from being retried after the receipt is removed.
-	importReceipt := filepath.Join(host, "apps", "wechat", "native-import-"+wechatapp.ConnectionID("one")+".json")
+	importReceipt := filepath.Join(host, "applications", "wechat", "native-import-"+wechatapp.ConnectionID("one")+".json")
 	if err := os.WriteFile(importReceipt, []byte(`{"id":"wrong-account"}`), 0600); err != nil {
 		t.Fatal(err)
 	}

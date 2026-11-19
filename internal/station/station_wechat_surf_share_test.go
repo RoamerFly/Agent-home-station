@@ -43,7 +43,7 @@ func newSurfShareFixture(t *testing.T, extra ...apphost.Registration) *surfShare
 	x := &surfShareFixture{t: t, dataset: "synthetic-surf-dataset", statuses: map[string]map[string]any{}}
 	base := t.TempDir()
 	data, home := filepath.Join(base, "host"), filepath.Join(base, "home")
-	native := filepath.Join(data, "apps", "wechat", "native")
+	native := filepath.Join(data, "applications", "wechat", "native")
 	mustWriteSnapshotFixture(t, filepath.Join(native, "api-token"), []byte("synthetic-surf-share-token"))
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		x.mu.Lock()

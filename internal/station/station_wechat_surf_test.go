@@ -93,7 +93,7 @@ func TestStationSurfScheduleClaimPauseAndRestart(t *testing.T) {
 func TestStationSurfOwnerRoute(t *testing.T) {
 	base := t.TempDir()
 	data, home := filepath.Join(base, "host"), filepath.Join(base, "home")
-	native := filepath.Join(data, "apps", "wechat", "native")
+	native := filepath.Join(data, "applications", "wechat", "native")
 	mustWriteSnapshotFixture(t, filepath.Join(native, "api-token"), []byte("synthetic-surf-native-token"))
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -151,7 +151,7 @@ func TestStationSurfOwnerRoute(t *testing.T) {
 		t.Fatal("empty history lost requested parameters", empty)
 	}
 	req("GET", strings.TrimSuffix(url("one"), "/surf")+"/surf-history?limit=0", nil, false, 400)
-	if _, err := os.Stat(filepath.Join(data, "apps", "wechat", "workers")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(data, "applications", "wechat", "workers")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("opening settings created a worker: %v", err)
 	}
 	settings := stationSurfDefaults("one").Settings

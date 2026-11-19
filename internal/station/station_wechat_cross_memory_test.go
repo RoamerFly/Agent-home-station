@@ -25,7 +25,7 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	const account, origin, source, ownerID = "one", "origin@chatroom", "source@chatroom", "wxid-synthetic-owner"
 	base := t.TempDir()
 	data, home := filepath.Join(base, "data"), filepath.Join(base, "home")
-	nativeRoot := filepath.Join(data, "apps", "wechat", "native")
+	nativeRoot := filepath.Join(data, "applications", "wechat", "native")
 	mustWriteSnapshotFixture(t, filepath.Join(nativeRoot, "api-token"), []byte("synthetic-cross-token"))
 	var mu sync.Mutex
 	messages := map[string]linuxnative.Message{}

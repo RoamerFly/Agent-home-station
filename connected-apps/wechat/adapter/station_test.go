@@ -16,7 +16,7 @@ import (
 
 func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 	data := t.TempDir()
-	native := filepath.Join(data, "apps", "wechat", "native")
+	native := filepath.Join(data, "applications", "wechat", "native")
 	if err := os.MkdirAll(native, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 		t.Fatal("mismatching PID admitted")
 	}
 	wrong := t.TempDir()
-	wrongNative := filepath.Join(wrong, "apps", "wechat", "native")
+	wrongNative := filepath.Join(wrong, "applications", "wechat", "native")
 	if err := os.MkdirAll(wrongNative, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestStationRegistrationVerifiesOwnedDaemonAndScopesReads(t *testing.T) {
 
 func TestStationConnectionsPrepareDefaultDesktop(t *testing.T) {
 	data := t.TempDir()
-	native := filepath.Join(data, "apps", "wechat", "native")
+	native := filepath.Join(data, "applications", "wechat", "native")
 	if err := os.MkdirAll(native, 0700); err != nil {
 		t.Fatal(err)
 	}

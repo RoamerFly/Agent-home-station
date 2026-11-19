@@ -33,7 +33,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	// model, stable identity, persistent project and both private voice types.
 	ownerIdentity, speakingVoice := prepareLegacyCutover(t, base, host, work)
 	legacyHost := filepath.Join(base, "old-host")
-	app := filepath.Join(host, "apps", "wechat")
+	app := filepath.Join(host, "applications", "wechat")
 	native := filepath.Join(app, "native")
 	write := func(path string, data []byte) {
 		t.Helper()
@@ -758,7 +758,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := os.CopyFS(movedWork, os.DirFS(work)); err != nil {
 		t.Fatal(err)
 	}
-	movedNative := filepath.Join(movedHost, "apps", "wechat", "native")
+	movedNative := filepath.Join(movedHost, "applications", "wechat", "native")
 	var daemonReady, unexpectedRequest atomic.Bool
 	daemonReady.Store(true)
 	movedDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +816,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if code, _ := movedFixture.request("GET", route("three")+"/receipts/legacy-accepted", nil, false); code != 404 {
 		t.Fatal("offline lookup escaped its connection", code)
 	}
-	movedTarget := filepath.Join(movedHost, "apps", "wechat", "workers", wechatapp.ConnectionID("one"))
+	movedTarget := filepath.Join(movedHost, "applications", "wechat", "workers", wechatapp.ConnectionID("one"))
 	copied, err := readStationLegacyMemory(movedTarget, "one", "123@chatroom", bundle.Grant)
 	if err != nil || !bytes.Equal(j(copied), j(bundle)) {
 		t.Fatal("relocated history changed its source identity, revision or text", err)
@@ -832,7 +832,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		row["target_login"] != "online" || !strings.Contains(reason, "搬迁前的目录") || bytes.Contains(j(row), []byte("portable package")) {
 		t.Fatal("activation did not distinguish the relocated receipt from the current login", code, row)
 	}
-	movedReceiptPath := filepath.Join(movedHost, "apps", "wechat", filepath.Base(receiptPath))
+	movedReceiptPath := filepath.Join(movedHost, "applications", "wechat", filepath.Base(receiptPath))
 	write(movedReceiptPath, j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": filepath.Join(movedNative, "accounts", "one", "profile")}))
 	if code, row := movedFixture.request("GET", activationRoute, nil, false); code != 200 || row["status"] != "blocked" ||
 		row["native_profile"] != "import_receipt_matched" || row["legacy_host"] != "stop_record_matched" || row["digest"] != nil {
@@ -1241,7 +1241,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "目标站缺少") {
 		t.Fatal("old import receipt passed target verification", err)
 	}
-	receiverApp := filepath.Join(receiver, "apps", "wechat")
+	receiverApp := filepath.Join(receiver, "applications", "wechat")
 	receiverProfile := filepath.Join(receiverApp, "native", "accounts", "one", "profile")
 	write(filepath.Join(receiverApp, filepath.Base(receiptPath)), j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": receiverProfile}))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "尚未为此目标") {

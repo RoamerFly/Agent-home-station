@@ -89,7 +89,7 @@ func testDesktopRun(t *testing.T, nativeURL string) {
 	done := make(chan error, 1)
 	args := []string{"--desktop", "--data", dataDir, "--workspace", workspace, "--listen", "127.0.0.1:0"}
 	if nativeURL != "" {
-		nativeDir := filepath.Join(dataDir, "apps", "wechat", "native")
+		nativeDir := filepath.Join(dataDir, "applications", "wechat", "native")
 		if err := os.MkdirAll(nativeDir, 0700); err != nil {
 			t.Fatal(err)
 		}

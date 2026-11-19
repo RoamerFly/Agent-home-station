@@ -24,7 +24,7 @@ import (
 func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 	base := t.TempDir()
 	host, workspace := filepath.Join(base, "host"), filepath.Join(base, "workspace")
-	nativeRoot := filepath.Join(host, "apps", "wechat", "native")
+	nativeRoot := filepath.Join(host, "applications", "wechat", "native")
 	if err := os.MkdirAll(nativeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
