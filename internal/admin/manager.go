@@ -585,11 +585,7 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	if err := writePrivate(keyFile, []byte(c.APIKey)); err != nil {
 		return nil, err
 	}
-	toolTokens := c.MaxTokens
-	if !c.ThinkingEnabled && c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
-		toolTokens = 4096
-	}
-	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: c.MaxTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			if err := m.billing.Record(modelForBilling(c), u); err != nil {
 				m.log("usage_record_save_failed")
