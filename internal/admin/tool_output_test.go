@@ -100,10 +100,13 @@ func TestToolOutputPaginationIsIsolatedByVerifiedSpeakerAndConversation(t *testi
 	longArgs := json.RawMessage(`{"result_id":"` + id + `","max_chars":4000}`)
 	longResult, e := p.Call(ctx, "tool_output_read", longArgs)
 	var longPage struct {
-		Text string
-		Next int `json:"next_offset"`
+		Text      string
+		Next      int    `json:"next_offset"`
+		Requested int    `json:"requested_max_chars"`
+		Effective int    `json:"effective_max_chars"`
+		Reason    string `json:"adjustment_reason"`
 	}
-	if e != nil || len(longResult) > 5400 || json.Unmarshal([]byte(longResult), &longPage) != nil || longPage.Next != len([]rune(longPage.Text)) {
+	if e != nil || len(longResult) > 5400 || json.Unmarshal([]byte(longResult), &longPage) != nil || longPage.Next != len([]rune(longPage.Text)) || longPage.Requested != 4000 || longPage.Effective != len([]rune(longPage.Text)) || longPage.Effective >= longPage.Requested || longPage.Reason == "" {
 		t.Fatal("multibyte pagination skipped hidden text", e)
 	}
 	p.trace.Sender = "different-member"
