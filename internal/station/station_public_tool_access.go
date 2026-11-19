@@ -173,6 +173,22 @@ func (a *publicToolAccess) ToolTimeout(name string) time.Duration {
 	return 0
 }
 
+// Media exposes prepared delivery handles owned by the permission-sensitive
+// application adapter. The merged access object must preserve this capability
+// so the companion engine can validate media_ids after a tool prepares them.
+func (a *publicToolAccess) Media(id string) (companion.GeneratedMedia, bool) {
+	if a == nil || a.primary == nil {
+		return companion.GeneratedMedia{}, false
+	}
+	access, ok := a.primary.(interface {
+		Media(string) (companion.GeneratedMedia, bool)
+	})
+	if !ok {
+		return companion.GeneratedMedia{}, false
+	}
+	return access.Media(id)
+}
+
 func (a *publicToolAccess) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if a == nil {
 		return nil, errors.New("工具访问未初始化")
