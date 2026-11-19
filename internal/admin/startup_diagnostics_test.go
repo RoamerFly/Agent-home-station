@@ -23,7 +23,7 @@ func TestStartupDiagnosticsReadsLatestFailureAndMarksHistoricalLogs(t *testing.T
 	if !d.Available || d.LastFailure == nil || d.LastFailure.Stage != "wechat_native" {
 		t.Fatalf("unexpected diagnostics: %+v failure=%+v", d, d.LastFailure)
 	}
-	if d.LatestStage != "server.admitted" || d.LatestStatus != "ok" || !d.LogIsHistorical {
+	if d.LatestStage != "server.admitted" || d.LatestStatus != "ok" || !d.LogIsHistorical || !d.FailureHistorical {
 		t.Fatalf("unexpected latest state: %+v", d)
 	}
 }

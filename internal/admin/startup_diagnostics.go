@@ -20,16 +20,17 @@ type startupDiagnosticFailure struct {
 }
 
 type startupDiagnostics struct {
-	Available       bool                      `json:"available"`
-	LogDirectory    string                    `json:"log_directory,omitempty"`
-	StartupLog      string                    `json:"startup_log,omitempty"`
-	NativeLog       string                    `json:"native_log,omitempty"`
-	LatestEventAt   time.Time                 `json:"latest_event_at,omitzero"`
-	LatestStage     string                    `json:"latest_stage,omitempty"`
-	LatestStatus    string                    `json:"latest_status,omitempty"`
-	LastSuccessAt   time.Time                 `json:"last_success_at,omitzero"`
-	LastFailure     *startupDiagnosticFailure `json:"last_failure,omitempty"`
-	LogIsHistorical bool                      `json:"log_is_historical"`
+	Available         bool                      `json:"available"`
+	LogDirectory      string                    `json:"log_directory,omitempty"`
+	StartupLog        string                    `json:"startup_log,omitempty"`
+	NativeLog         string                    `json:"native_log,omitempty"`
+	LatestEventAt     time.Time                 `json:"latest_event_at,omitzero"`
+	LatestStage       string                    `json:"latest_stage,omitempty"`
+	LatestStatus      string                    `json:"latest_status,omitempty"`
+	LastSuccessAt     time.Time                 `json:"last_success_at,omitzero"`
+	LastFailure       *startupDiagnosticFailure `json:"last_failure,omitempty"`
+	FailureHistorical bool                      `json:"failure_historical"`
+	LogIsHistorical   bool                      `json:"log_is_historical"`
 }
 
 func (m *Manager) startupLogDirectory() string {
@@ -73,6 +74,9 @@ func (m *Manager) startupDiagnostics() startupDiagnostics {
 	}
 	if !latest.IsZero() {
 		out.LogIsHistorical = time.Since(latest) > 30*time.Minute
+	}
+	if out.LastFailure != nil && !out.LastSuccessAt.IsZero() && !out.LastFailure.At.After(out.LastSuccessAt) {
+		out.FailureHistorical = true
 	}
 	return out
 }
