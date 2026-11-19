@@ -112,6 +112,8 @@ type Controller struct {
 	idleWake    chan struct{}
 	idleStop    chan struct{}
 	idleDone    chan struct{}
+	idleCtx     context.Context
+	idleCancel  context.CancelFunc
 	closed      bool
 	services    *ManagedServices
 }
@@ -163,7 +165,8 @@ func newControllerWithIdleLoop(store *pluginhost.Store, executor pluginhost.Exec
 	if clock == nil {
 		clock = wallClock{}
 	}
-	c := &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}, automatic: map[string]time.Time{}, manual: map[string]map[string]bool{}, idleTimeout: 10 * time.Minute, clock: clock, idleWake: make(chan struct{}), idleStop: make(chan struct{}), idleDone: make(chan struct{})}
+	idleCtx, idleCancel := context.WithCancel(context.Background())
+	c := &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}, automatic: map[string]time.Time{}, manual: map[string]map[string]bool{}, idleTimeout: 10 * time.Minute, clock: clock, idleWake: make(chan struct{}), idleStop: make(chan struct{}), idleDone: make(chan struct{}), idleCtx: idleCtx, idleCancel: idleCancel}
 	if runIdleLoop {
 		go c.idleLoop()
 	} else {
@@ -579,6 +582,9 @@ func (c *Controller) Close() error {
 	services := c.services
 	c.loaded = map[string]loadedPlugin{}
 	c.notifyLocked()
+	if c.idleCancel != nil {
+		c.idleCancel()
+	}
 	close(c.idleStop)
 	c.mu.Unlock()
 	// Let a reaper which already reserved a session finish its exact close
