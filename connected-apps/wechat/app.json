@@ -96,7 +96,7 @@
     "adapter/station_read.go": "e36190c1bd29fb830b919a802e68bbab24c4bc7a7e1aa74e6cd2ec66ff96976f",
     "adapter/station_recall.go": "ddb13f33323d9aca62502ec8f2820a59d5fc365779f5ab91899a3026b30f87e8",
     "adapter/station_setup.go": "5de6fa1ce6ebdd81e05b756db5c5d320fa267acf5406c6ae407319736291f541",
-    "adapter/station_test.go": "759161e0e11f973aeeb5f18ff3caa311373ddd35584b882dc2553d5b1e0b7273",
+    "adapter/station_test.go": "f7d93a980df2d38ec849898e82e6bc9eb1296e9ad3bf71b6b149f3d25f2a2964",
     "adapter/station_video.go": "b016acbec9f00a2628094d2b32bb1b86e1c3544f2be15129eef5cebc8d2ba57a",
     "adapter/station_worker.go": "070f9e6ebda679fe16826443962f233ff61d04cac68bd0260fe938ff1f919ad3",
     "adapter/station_worker_test.go": "813ce95ea393a026abd4e16fb70e3428a40eed7ac19165c4c58e3633c56b7388",
