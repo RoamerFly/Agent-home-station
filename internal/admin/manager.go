@@ -267,6 +267,35 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 		return nil, err
 	}
 	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO, reminderWake: make(chan struct{}, 1)}
+	constructionReady := false
+	defer func() {
+		if constructionReady {
+			return
+		}
+		// A manager can fail after the workspace/process/mobile services have
+		// been opened (for example, a corrupt audit or journal).  Release every
+		// owned runtime here so the next startup can acquire the same Windows
+		// locks.  The memory and workspace stores have their own defers below.
+		if m.mobile != nil {
+			_ = m.mobile.Close()
+		}
+		if !m.mobileRetired && m.deviceIO != nil {
+			_ = m.deviceIO.Cleanup()
+		}
+		m.packageMu.Lock()
+		m.packagesClosed = true
+		packages, packageRuntime := m.packages, m.packageRuntime
+		m.packageMu.Unlock()
+		if packageRuntime != nil {
+			_ = packageRuntime.Close()
+		}
+		if packages != nil {
+			_ = packages.Close()
+		}
+		if m.processes != nil {
+			m.processes.Close()
+		}
+	}()
 	if err := m.loadCompressionJobs(); err != nil {
 		return nil, err
 	}
@@ -286,15 +315,12 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 		return nil, err
 	}
 	if err = m.configureWorkspaceDirectory(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	if err = m.configureManagedNotes(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	if err = m.initializeWorkspace(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	m.mobile = m.newMobileService()
@@ -352,8 +378,6 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	// Recovery diagnostics must append to the loaded journal, never overwrite
 	// existing history while manager construction is still in progress.
 	if err = m.restoreCrossMedia(); err != nil {
-		m.processes.Close()
-		m.mobile.Close()
 		return nil, err
 	}
 	if err := m.surfHistory.importAccepted(m.journal); err != nil {
@@ -381,6 +405,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 			}
 		}
 	}
+	constructionReady = true
 	return m, nil
 }
 func (m *Manager) Config() ConfigView {
