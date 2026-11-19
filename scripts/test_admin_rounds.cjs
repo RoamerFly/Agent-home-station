@@ -48,6 +48,22 @@ test('thread identity wins over a stale source kind label',()=>{
  const [round]=project([entry(1,{source_kind:'private',thread_id:'fixture@chatroom',event:'message_received',category:'received',status:'received'})]);
  assert.equal(round.source_kind,'group');
 });
+test('an old receive-only round is settled for review when later activity exists',()=>{
+ const old=entry(1,{message_id:'old-message',event:'message_received',category:'received',status:'received'});
+ const later={...entry(2,{message_id:'later-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const [round]=project([old,later]).filter(x=>x.triggerMessageID==='old-message');
+ assert.equal(round.status,'needs_review');
+ assert.equal(round.group,'done');
+ assert.equal(round.staleUnfinished,true);
+});
+test('a durable continuation stays pending or active even when older than later activity',()=>{
+ const old=entry(1,{message_id:'saved-task',event:'message_received',category:'received',status:'received'});
+ const saved=entry(2,{message_id:'saved-task',event:'task_execution_waiting',category:'decision',status:'waiting'});
+ const later={...entry(3,{message_id:'later-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const [round]=project([old,saved,later]).filter(x=>x.triggerMessageID==='saved-task');
+ assert.equal(round.status,'waiting');
+ assert.equal(round.staleUnfinished,undefined);
+});
 test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
  const items=[];
  for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));

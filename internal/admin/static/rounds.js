@@ -70,6 +70,7 @@
   }
   function project(items) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+    const latestEntryTime = entries.reduce((latest, item) => Math.max(latest, Date.parse(item.time) || 0), 0);
     const parents = new Map(), sends = new Map(), groups = new Map();
     const find = key => {
       const seen = new Set();
@@ -189,6 +190,26 @@
     }
     return [...groups.values()].map(round => {
       present(round);
+      // A bare receive/processing entry can survive a worker crash without a
+      // durable continuation or a terminal event. Once a later activity entry
+      // is present, settle such an old projection for review instead of
+      // reporting it as a live task forever. Persistent task, tool and delivery
+      // evidence remains active so a real resumable job is never hidden.
+      const hasDurableContinuation = round.entries.some(e => [
+        'generation_started', 'tool_call_started', 'tool_call_succeeded',
+        'tool_call_failed', 'task_execution_waiting', 'task_delivery_updated',
+        'delivery_waiting', 'agent_task_started', 'agent_task_saved',
+        'background_turn_yielded', 'message_progress',
+      ].includes(e.event));
+      const hasTerminalEvidence = round.entries.some(e =>
+        e.event === 'message_processed' || ['completed', 'accepted', 'failed', 'blocked', 'stopped', 'cancelled', 'needs_review'].includes(e.status));
+      const ageFromLatest = latestEntryTime - Date.parse(round.updated);
+      const hasOnlyReceiveProcessing = round.entries.every(e =>
+        e.event === 'message_received' || e.event === 'message_processing' || e.category === 'received');
+      if (ageFromLatest >= 10 * 60 * 1000 && !hasDurableContinuation && !hasTerminalEvidence && hasOnlyReceiveProcessing && ['received', 'running'].includes(round.status)) {
+        round.status = 'needs_review';
+        round.staleUnfinished = true;
+      }
       // A receipt-wait record without an inbound turn, a submitted send, or
       // any task continuation is an orphan from an interrupted pre-submit
       // draft. It must not keep the execution-round list in "进行中" forever.
