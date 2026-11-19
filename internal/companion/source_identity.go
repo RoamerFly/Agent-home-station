@@ -10,22 +10,32 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 )
 
+// Source instance creation is a one-row write performed during every store
+// open. Serializing it avoids concurrent WAL upgrades fighting over the same
+// SQLite writer when multiple managers reload one memory directory.
+var sourceInstanceMu sync.Mutex
+
 func (s *Store) initializeSourceInstance() error {
+	sourceInstanceMu.Lock()
+	defer sourceInstanceMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	var id string
-	err := s.db.QueryRow("SELECT value FROM meta WHERE key='source_instance'").Scan(&id)
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='source_instance'").Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		var b [24]byte
 		if _, err = rand.Read(b[:]); err != nil {
 			return err
 		}
 		id = hex.EncodeToString(b[:])
-		if _, err = s.db.Exec("INSERT OR IGNORE INTO meta(key,value) VALUES('source_instance',?)", id); err != nil {
+		if _, err = s.db.ExecContext(ctx, "INSERT OR IGNORE INTO meta(key,value) VALUES('source_instance',?)", id); err != nil {
 			return err
 		}
-		if err = s.db.QueryRow("SELECT value FROM meta WHERE key='source_instance'").Scan(&id); err != nil {
+		if err = s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='source_instance'").Scan(&id); err != nil {
 			return err
 		}
 	} else if err != nil {

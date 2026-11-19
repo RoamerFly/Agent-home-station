@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,6 +26,35 @@ func TestSourceInstancePersistsAcrossRestart(t *testing.T) {
 	defer s.Close()
 	if id != s.SourceInstanceID() {
 		t.Fatal("source namespace changed")
+	}
+}
+
+func TestConcurrentStoreOpenSharesSourceInstanceWithoutWALContention(t *testing.T) {
+	dir := t.TempDir()
+	initial, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer group.Done()
+			errs <- initial.initializeSourceInstance()
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer initial.Close()
+	if initial.SourceInstanceID() == "" {
+		t.Fatal("source instance was cleared during concurrent initialization")
 	}
 }
 
