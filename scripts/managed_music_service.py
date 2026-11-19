@@ -67,8 +67,8 @@ def yue_project_paths(public, controls):
     public = Path(public)
     controls = Path(controls)
     project_candidates = (public / "projects/yue/app", public / "runtime", public)
-    workflow_candidates = (controls / "workflows", public / "workflows", public / "runtime/workflows",
-                           public / "runtime/workflows_api", public / "projects/yue/app/workflows_api")
+    workflow_candidates = (public / "workflows", public / "runtime/workflows_api", public / "runtime/workflows",
+                           public / "projects/yue/app/workflows_api", controls / "workflows")
     required = ("audio_yue2_text_to_music.json", "audio_yue2_music_cover.json")
     workflows = next((path for path in workflow_candidates
                       if path.is_dir() and all((path / name).is_file() for name in required)), None)

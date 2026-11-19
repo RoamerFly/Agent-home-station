@@ -27,6 +27,10 @@ class MusicMemoryPolicyTests(unittest.TestCase):
             workflows.mkdir()
             for name in ('audio_yue2_text_to_music.json', 'audio_yue2_music_cover.json'):
                 (workflows / name).write_text('{}', encoding='utf8')
+            shipped = controls / 'workflows'
+            shipped.mkdir(parents=True)
+            for name in ('audio_yue2_text_to_music.json', 'audio_yue2_music_cover.json'):
+                (shipped / name).write_text('wrong package', encoding='utf8')
             project, selected = yue_project_paths(public, controls)
             self.assertEqual(project, public / 'runtime')
             self.assertEqual(selected, workflows)
