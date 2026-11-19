@@ -386,9 +386,11 @@ namespace WechatAgent.Desktop {
             d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
             d.Url = FreeLocalUrl();
             Assert(File.Exists(d.StationExe), "local station executable missing from preview package");
-            // A station package can carry the optional native WeChat runtime.
-            // Its presence alone must never start it or make it required.
-            Assert(!d.LocalStationNative, "default local station leaves wx opt-in disabled");
+            // A complete local-station package carries its native WeChat
+            // runtime and enables the managed endpoint by default.  The
+            // switch remains persisted and can be turned off explicitly;
+            // merely constructing the deployment must not start a process.
+            Assert(d.LocalStationNative, "complete local station enables its bundled wx runtime");
             // The package workspace is the portable installation root even
             // though this fixture redirects only its station data into the
             // isolated test root. Use the same administrator-owned portable
@@ -398,7 +400,8 @@ namespace WechatAgent.Desktop {
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 Assert(instance.IsOwner, "local station window owns its isolated control name");
-                Assert(WechatStartupItem(form).Owner == null, "a station without a configured native endpoint has no startup switch");
+                Assert(WechatStartupItem(form).Owner != null && WechatStartupItem(form).Checked,
+                    "a complete local station exposes an enabled wx startup switch");
                 form.Show();
                 await Wait(() => form.Controls.OfType<WebView2>().Any(candidate => candidate.CoreWebView2 != null && candidate.Visible), "local station WebView did not initialize");
                 var view = form.Controls.OfType<WebView2>().Single();

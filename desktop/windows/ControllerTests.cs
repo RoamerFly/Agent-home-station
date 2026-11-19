@@ -130,13 +130,13 @@ namespace WechatAgent.Desktop {
                 using (var runtime = new LocalStationRuntime(d)) {
                     for (int round = 0; round < 2; round++) {
                         runtime.Start(CancellationToken.None).GetAwaiter().GetResult();
-                        var stopPath = Path.Combine(d.Root, "station-native-stop.json");
+                        var stopPath = Path.Combine(d.StationLifecycleRoot, "station-native-stop.json");
                         var starting = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(stopPath));
                         var epoch = Deployment.Text(starting, "epoch");
                         Assert(Convert.ToInt32(starting["version"]) == 1 && Deployment.Text(starting, "state") == "starting", "native launch atomically invalidates prior stop proof");
                         Assert(epoch.Length == 32 && epoch != priorEpoch && Deployment.Text(starting, "data_root") == WindowsRuntime.ComparablePath(d.Root), "native launch writes a fresh private proof epoch");
                         Assert(Deployment.Text(starting, "native_server_id") == "" && Deployment.Text(starting, "native_ownership_generation") == "", "unadmitted launch proof has no native identity");
-                        var runLock = Path.Combine(d.Root, "station-native-run.lock");
+                        var runLock = Path.Combine(d.StationLifecycleRoot, "station-native-run.lock");
                         using (var contender = new FileStream(runLock, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) {
                             var held = false;
                             try { contender.Lock(0, 1); }
@@ -186,7 +186,7 @@ namespace WechatAgent.Desktop {
                                         Assert(Deployment.Text(profile, "account_id") == "account-" + key, "provisioning returned the exact profile");
                                         var profileUrl = d.Url + connections + "/" + Deployment.Text(profile, "id");
                                         profiles.Add(profileUrl);
-                                        var worker = round == 0 ? "disabled" : profiles.Count == 1 ? "paused" : "waiting_login";
+                                        var worker = round == 0 ? "disabled" : profiles.Count == 1 ? "paused" : "needs_setup";
                                         Dictionary<string, object> connection;
                                         var workerDeadline = DateTime.UtcNow.AddSeconds(5);
                                         do {
@@ -196,7 +196,8 @@ namespace WechatAgent.Desktop {
                                             if (Deployment.Text(connection, "worker") == worker) break;
                                             Thread.Sleep(100);
                                         } while (DateTime.UtcNow < workerDeadline);
-                                        Assert(Deployment.Text(connection, "login") == "signed_out" && Deployment.Text(connection, "worker") == worker, "native login remains separate from persisted worker state");
+                                        Assert(Deployment.Text(connection, "login") == "signed_out" && Deployment.Text(connection, "worker") == worker,
+                                            "native login remains separate from persisted worker state (login=" + Deployment.Text(connection, "login") + ", worker=" + Deployment.Text(connection, "worker") + ", expected_worker=" + worker + ")");
                                     }
                                 }
                                 var list = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(d.Url + connections).GetAwaiter().GetResult());
@@ -237,7 +238,7 @@ namespace WechatAgent.Desktop {
                         priorEpoch = epoch;
                     }
                 }
-                var stopMarker = Path.Combine(d.Root, "station-native-stop.json");
+                var stopMarker = Path.Combine(d.StationLifecycleRoot, "station-native-stop.json");
                 var lastProof = File.ReadAllText(stopMarker);
                 var contenderPort = new TcpListener(IPAddress.Loopback, new Uri(d.StationNativeUrl).Port);
                 try {
@@ -264,7 +265,7 @@ namespace WechatAgent.Desktop {
                 }
                 using (var forced = new LocalStationRuntime(d)) {
                     forced.Start(CancellationToken.None).GetAwaiter().GetResult();
-                    var markerPath = Path.Combine(d.Root, "station-native-stop.json");
+                    var markerPath = Path.Combine(d.StationLifecycleRoot, "station-native-stop.json");
                     var startingBytes = File.ReadAllText(markerPath);
                     var started = Deployment.Json.Deserialize<Dictionary<string, object>>(startingBytes);
                     Assert(Deployment.Text(started, "state") == "starting" && Deployment.Text(started, "epoch") != priorEpoch, "new launch invalidates the last successful stop proof");
@@ -287,15 +288,15 @@ namespace WechatAgent.Desktop {
                     Assert(!ProcessAlive(oldNative) && restart.NativeAvailable && WaitLocalHealth(d.Url), "restart settles the old native child and releases its lease before starting a new pair");
                     restart.Stop().GetAwaiter().GetResult();
                 }
-                var stopProofBeforeRelease = File.ReadAllText(Path.Combine(d.Root, "station-native-stop.json"));
-                var releaseIntent = Path.Combine(d.Root, "station-native-release.json");
+                var stopProofBeforeRelease = File.ReadAllText(Path.Combine(d.StationLifecycleRoot, "station-native-stop.json"));
+                var releaseIntent = Path.Combine(d.StationLifecycleRoot, "station-native-release.json");
                 File.WriteAllText(releaseIntent, Deployment.Json.Serialize(new { version = 1, state = "released" }));
                 using (var released = new LocalStationRuntime(d)) {
                     Reject(() => released.Start(CancellationToken.None)).GetAwaiter().GetResult();
                     Assert(released.PID == 0 && released.NativePID == 0, "offline release intent refuses native startup before either child exists");
                 }
                 Assert(File.Exists(releaseIntent), "offline release intent is never cleared by a refused native startup");
-                Assert(File.ReadAllText(Path.Combine(d.Root, "station-native-stop.json")) == stopProofBeforeRelease, "offline release intent cannot overwrite the existing stop proof");
+                Assert(File.ReadAllText(Path.Combine(d.StationLifecycleRoot, "station-native-stop.json")) == stopProofBeforeRelease, "offline release intent cannot overwrite the existing stop proof");
             } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
         }
 
@@ -623,7 +624,7 @@ namespace WechatAgent.Desktop {
                         for (int i = 0; i < 2; i++) {
                             c.Start(CancellationToken.None).GetAwaiter().GetResult();
                             Assert(c.Healthy().GetAwaiter().GetResult(), "local station health after start");
-                            Assert(!File.Exists(Path.Combine(d.Root, "station-native-stop.json")) && !File.Exists(Path.Combine(d.StationNativeRoot, "native-server.toml")) &&
+                            Assert(!File.Exists(Path.Combine(d.StationLifecycleRoot, "station-native-stop.json")) && !File.Exists(Path.Combine(d.StationNativeRoot, "native-server.toml")) &&
                                 File.ReadAllText(loginMarker) == "preserve login evidence", "disabled native runtime never creates native startup files or changes retained profile data");
                             c.Stop(CancellationToken.None).GetAwaiter().GetResult();
                             if (i == 0) {
