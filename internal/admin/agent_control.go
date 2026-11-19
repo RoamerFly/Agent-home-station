@@ -571,7 +571,19 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if m.mobileRetired && t.DeviceTask != "" {
 			continue
 		}
-		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
+		// A due execute reminder keeps the request thread as its model/context
+		// thread, while an explicit delivery group is stored separately.  The
+		// request thread may still contain an old waiting receipt or a paused
+		// utterance plan; that must not prevent the due work from entering its
+		// execution round.  The actual delivery conversation remains the
+		// scheduler's busy boundary, so an active group turn is still respected.
+		busyThread := t.Thread
+		if t.ReminderDue {
+			if delivery := taskDeliveryThread(t); delivery != "" && delivery != t.Thread {
+				busyThread = delivery
+			}
+		}
+		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(busyThread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
 		// Recheck identity and owner authority before dispatching any specialized

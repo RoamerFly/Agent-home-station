@@ -272,10 +272,20 @@ func TestExecuteReminderResolvesNamedGroupAndKeepsOrigin(t *testing.T) {
 		t.Fatal("ambiguous name accepted")
 	}
 	f.manager.processDueReminders(t.Context(), reminder.Next.Add(time.Second), false)
-	in, err := f.manager.claimAgentTask(reminder.Next.Add(time.Second), func(string) bool { return false })
+	busyThreads := []string{}
+	in, err := f.manager.claimAgentTask(reminder.Next.Add(time.Second), func(thread string) bool {
+		busyThreads = append(busyThreads, thread)
+		// The private request conversation has an unrelated pending/receipt
+		// plan, but the selected delivery group is idle.  A due cross-session
+		// reminder must still enter its execution round in this case.
+		return thread == p.trace.Thread
+	})
 	if err != nil || in == nil || in.Thread != p.trace.Thread || !in.SilentExecution ||
 		!strings.Contains(in.Text, "test-group@chatroom") || len(native.requests) != 0 {
 		t.Fatal("wrong due execution", in, err)
+	}
+	if len(busyThreads) != 1 || busyThreads[0] != "test-group@chatroom" {
+		t.Fatal("cross-session reminder checked the request thread for busy state", busyThreads)
 	}
 	p.SetTrace(*in)
 	if !p.taskDeliveryAllowed("test-group@chatroom") || p.taskDeliveryAllowed("test-group-2@chatroom") ||
