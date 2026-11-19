@@ -267,6 +267,9 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 		return nil, err
 	}
 	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO, reminderWake: make(chan struct{}, 1)}
+	if err := m.loadCompressionJobs(); err != nil {
+		return nil, err
+	}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {

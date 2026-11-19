@@ -111,6 +111,50 @@ func TestCompressionFailureReleasesInProgressStateForRetry(t *testing.T) {
 	}
 }
 
+func TestCompressionGuardStopsBeforeModelAndPreservesMemory(t *testing.T) {
+	cfg, store, in := compressionFixture(t)
+	model := &compressionFailureModel{out: repairedSummary}
+	engine, err := New(cfg, store, model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := engine.CompressContextWithGuard(context.Background(), in, true, func() bool { return false })
+	if changed || !errors.Is(err, ErrCompressionPermissionRevoked) || model.calls != 0 {
+		t.Fatalf("revoked guard was not enforced before model call: changed=%v err=%v calls=%d", changed, err, model.calls)
+	}
+	scope, err := store.Read(ScopeID(in.Channel, in.Account, in.Thread), cfg, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.Summary != "" || scope.CompressedCount != 0 {
+		t.Fatal("permission guard changed memory before compression")
+	}
+}
+
+func TestCompressionGuardStopsBeforeFinalCommit(t *testing.T) {
+	cfg, store, in := compressionFixture(t)
+	model := &compressionFailureModel{out: repairedSummary}
+	engine, err := New(cfg, store, model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	changed, err := engine.CompressContextWithGuard(context.Background(), in, true, func() bool {
+		calls++
+		return calls < 3 // start, snapshot, then the final transaction check
+	})
+	if changed || !errors.Is(err, ErrCompressionPermissionRevoked) || model.calls == 0 {
+		t.Fatalf("revoked guard was not enforced before final commit: changed=%v err=%v calls=%d model_calls=%d", changed, err, calls, model.calls)
+	}
+	scope, err := store.Read(ScopeID(in.Channel, in.Account, in.Thread), cfg, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.Summary != "" || scope.CompressedCount != 0 {
+		t.Fatal("permission guard allowed an un-authorized summary commit")
+	}
+}
+
 func TestCompressionUnknownSourcesFallsBackToVerifiedBatch(t *testing.T) {
 	cfg, store, in := compressionFixture(t)
 	model := &compressionFailureModel{out: `{"version":1,"people":[],"topics":[{"source_event_ids":["unknown-event"],"text":"模型编造的来源","state":"active","at":"2026-11-18T00:00:00Z"}],"current_focus":"","media":[],"pending_tasks":[],"preferences":[],"corrections":[]}`}

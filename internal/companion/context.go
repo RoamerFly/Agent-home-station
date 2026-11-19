@@ -41,8 +41,23 @@ func fingerprintTurns(t []Turn) string {
 	return hex.EncodeToString(sum[:])
 }
 func (e *Engine) CompressContext(ctx context.Context, in Input, force bool) (bool, error) {
+	return e.compressContext(ctx, in, force, nil)
+}
+
+// CompressContextWithGuard is the host-facing variant used for asynchronous
+// jobs.  Config is a snapshot captured when an Engine is built, so the guard
+// lets the host re-check the live Remember permission immediately before the
+// final store transaction.  A revoked permission never commits a summary.
+func (e *Engine) CompressContextWithGuard(ctx context.Context, in Input, force bool, guard func() bool) (bool, error) {
+	return e.compressContext(ctx, in, force, guard)
+}
+
+func (e *Engine) compressContext(ctx context.Context, in Input, force bool, guard func() bool) (bool, error) {
 	if in.Preview || !e.Config.Permissions.Remember {
 		return false, nil
+	}
+	if guard != nil && !guard() {
+		return false, ErrCompressionPermissionRevoked
 	}
 	settings := e.Config.ContextConfig()
 	if !force && !settings.AutoCompress {
@@ -54,7 +69,7 @@ func (e *Engine) CompressContext(ctx context.Context, in Input, force bool) (boo
 	}
 	defer release()
 	for attempt := 0; attempt < 2; attempt++ {
-		changed, err := e.compressSnapshot(ctx, in, force)
+		changed, err := e.compressSnapshot(ctx, in, force, guard)
 		if !errors.Is(err, ErrContextChanged) || ctx.Err() != nil || attempt == 1 {
 			return changed, err
 		}
@@ -62,7 +77,10 @@ func (e *Engine) CompressContext(ctx context.Context, in Input, force bool) (boo
 	return false, ErrContextChanged
 }
 
-func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bool, error) {
+func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool, guard func() bool) (bool, error) {
+	if guard != nil && !guard() {
+		return false, ErrCompressionPermissionRevoked
+	}
 	settings := e.Config.ContextConfig()
 	scope, err := e.Store.Read(ScopeID(in.Channel, in.Account, in.Thread), e.Config, time.Now())
 	if err != nil {
@@ -277,6 +295,9 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool) (bo
 	expected := fingerprintTurns(scope.Messages[:end])
 	persistCtx := context.WithoutCancel(ctx)
 	err = e.Store.scopeTransaction(scope.ID, func(data *persisted) error {
+		if guard != nil && !guard() {
+			return ErrCompressionPermissionRevoked
+		}
 		current, err := e.Store.RecallEpoch(persistCtx)
 		if err != nil {
 			return err

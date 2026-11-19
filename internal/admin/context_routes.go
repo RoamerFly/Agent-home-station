@@ -53,6 +53,8 @@ func compressionFailure(err error) (string, string, int) {
 	switch {
 	case errors.Is(err, companion.ErrCompressionInProgress):
 		return "context_compression_in_progress", "这个会话正在压缩，其他会话仍可独立压缩", 409
+	case errors.Is(err, companion.ErrCompressionPermissionRevoked):
+		return "context_compression_permission_revoked", "记忆权限在压缩完成前已关闭；原始记忆保留，未写入摘要", 409
 	case errors.Is(err, companion.ErrSummaryInvalid):
 		return "context_summary_invalid", "模型摘要格式或长度仍不合要求，已尝试一次格式修复；原始记忆保留", 502
 	case errors.Is(err, companion.ErrSummarySourceMissing):

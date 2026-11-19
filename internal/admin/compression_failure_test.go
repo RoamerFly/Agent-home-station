@@ -22,11 +22,12 @@ func TestCompressionFailureExplainsTruncationAndNeverLeaksSourceError(t *testing
 		t.Fatal("snapshot cause lost")
 	}
 	for _, tc := range []struct {
-		err  error
-		code string
-	}{{companion.ErrSummarySourceMissing, "context_summary_source_missing"}, {companion.ErrSummarySourceInvalid, "context_summary_source_invalid"}} {
+		err    error
+		code   string
+		status int
+	}{{companion.ErrSummarySourceMissing, "context_summary_source_missing", 502}, {companion.ErrSummarySourceInvalid, "context_summary_source_invalid", 502}, {companion.ErrCompressionPermissionRevoked, "context_compression_permission_revoked", 409}} {
 		code, message, status = compressionFailure(tc.err)
-		if code != tc.code || status != 502 || strings.Contains(message, "磁盘") || strings.Contains(message, "权限") {
+		if code != tc.code || status != tc.status || strings.Contains(message, "磁盘") || tc.err != companion.ErrCompressionPermissionRevoked && strings.Contains(message, "权限") {
 			t.Fatal(code, message, status)
 		}
 	}
