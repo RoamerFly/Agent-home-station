@@ -394,7 +394,7 @@ namespace WechatAgent.Desktop {
             // isolated test root. Use the same administrator-owned portable
             // allowance as MainForm so CI checkout ownership cannot make the
             // fixture reject an otherwise install-ready package.
-            new CloseSettings(d.Workspace, true).Save("exit");
+            new CloseSettings(d.Workspace, d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory), d.PrivateSettingsRoot).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 Assert(instance.IsOwner, "local station window owns its isolated control name");
@@ -429,7 +429,7 @@ namespace WechatAgent.Desktop {
             deployment.Url = FreeLocalUrl();
             var emptyRuntime = Path.Combine(workspace, "empty-runtime");
             Directory.CreateDirectory(emptyRuntime);
-            new CloseSettings(workspace, true).Save("exit");
+            new CloseSettings(deployment.Workspace, deployment.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory), deployment.PrivateSettingsRoot).Save("exit");
             using (var activation = new EventWaitHandle(false, EventResetMode.AutoReset))
             using (var form = new MainForm(deployment, activation, new ServiceController(deployment), false)) {
                 var retry = (Button)typeof(MainForm).GetField("retry", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
@@ -461,11 +461,11 @@ namespace WechatAgent.Desktop {
             string nativeUrl;
             do { nativeUrl = FreeLocalUrl(); } while (nativeUrl == url);
             File.WriteAllText(Path.Combine(secrets, "local-deployment.json"), Deployment.Json.Serialize(new {
-                backend = "local-station", runtime_directory = Path.GetFullPath(package),
+                backend = "local-station", runtime_directory = Path.GetFullPath(Path.Combine(package, "data", "main_setting", "runtime")),
                 admin_url = url, wechat_native_url = nativeUrl, wechat_native_enabled = false
             }));
             var d = Deployment.Load(workspace);
-            new CloseSettings(workspace, true).Save("exit");
+            new CloseSettings(d.Workspace, d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory), d.PrivateSettingsRoot).Save("exit");
             using (var instance = new DesktopInstance(DesktopInstance.LocalStationName + ".window-test." + Guid.NewGuid().ToString("N")))
             using (var form = new MainForm(d, instance)) {
                 form.Show();
