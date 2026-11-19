@@ -110,7 +110,7 @@
  }
  function renderOverview(all){
   if(state.selected)return;
-  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3',state.managed?'应用内工具':'工具目录'),el('p','在这里管理微信收发权限、视频号登录与投递。','hint'));const actions=el('div',undefined,'package-overview-actions');if(!state.managed)actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
+  const intro=el('div',undefined,'package-overview-intro'),copy=el('div');copy.append(el('h3',state.managed?'应用内工具（兼容视图）':'工具目录'),el('p',state.managed?'这里只显示应用独有配置；公共工具的状态、配置和启停以工作站“项目工具”页为准。':'在这里管理微信收发权限、视频号登录与投递。','hint'));const actions=el('div',undefined,'package-overview-actions');if(!state.managed)actions.append(button('新建工具',createPlugin),button('管理连接工具',()=>manageConnections()),button('导入本机工具',importPackage));intro.append(copy,actions);
   const grid=el('div',undefined,'capability-overview-grid');
   renderGroups(grid,all,true);
   editor.replaceChildren(intro,grid);window.WechatSaveActions?.sync();

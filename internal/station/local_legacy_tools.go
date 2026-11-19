@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"wechat-bot/internal/pluginhost"
+	catalog "wechat-bot/plugins"
 )
 
 type legacyToolClient struct {
@@ -155,8 +156,18 @@ func (s *localProjectTools) legacyToolViews(ctx context.Context) map[string]loca
 	if json.Unmarshal(raw, &data) != nil {
 		return views
 	}
+	publicTools := s.publicToolIDs()
 	for _, p := range data.Installed {
 		if p.Removed || p.Package.ID == "mobile-control" {
+			continue
+		}
+		// Public tools are owned by the Station catalog and are already exposed
+		// by /api/local/project-tools.  The legacy admin registry may still hold
+		// a historical copy of their configuration, but presenting it here makes
+		// the application tab look as if the tool is WeChat-only and gives it a
+		// second, stale lifecycle state.  Keep this projection for genuinely
+		// application-scoped packages only.
+		if _, ok := publicTools[p.Package.ID]; ok {
 			continue
 		}
 		v := localProjectToolView{ID: p.Package.ID, Name: p.Package.Name, Installed: true, Enabled: p.Enabled, Revision: p.Revision, RuntimeReady: data.Connected, State: data.Runtimes[p.Package.ID].State, Host: "legacy"}
@@ -182,4 +193,28 @@ func (s *localProjectTools) legacyToolViews(ctx context.Context) map[string]loca
 		views[v.ID] = v
 	}
 	return views
+}
+
+// publicToolIDs returns the IDs whose lifecycle belongs to the Station public
+// tool catalog.  The legacy admin store is retained for compatibility with
+// old WeChat application packages, but it must not re-advertise a public
+// package in the application's private-tools tab.  Include the embedded
+// catalog as well as directory discovery so this remains correct when a new
+// public package is added without changing this adapter.
+func (s *localProjectTools) publicToolIDs() map[string]struct{} {
+	ids := map[string]struct{}{"music": {}}
+	for _, p := range localProjectPackages {
+		ids[p.ID] = struct{}{}
+	}
+	if items, err := catalog.List(); err == nil {
+		for _, p := range items {
+			if p.ID != "mobile-control" {
+				ids[p.ID] = struct{}{}
+			}
+		}
+	}
+	for id := range discoverToolPackages(s.options.CatalogDirectory) {
+		ids[id] = struct{}{}
+	}
+	return ids
 }

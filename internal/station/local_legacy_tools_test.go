@@ -67,3 +67,19 @@ func TestUnboundToolIsNotAdvertisedReady(t *testing.T) {
 		t.Fatalf("view=%+v err=%v", v, err)
 	}
 }
+
+func TestPublicToolsAreNotApplicationToolCandidates(t *testing.T) {
+	s := &localProjectTools{}
+	ids := s.publicToolIDs()
+	for _, id := range []string{
+		"document-workshop", "media-understanding", "share-reader", "web-search",
+		"music", "project-development", "rvc", "yue", "station-speech",
+	} {
+		if _, ok := ids[id]; !ok {
+			t.Fatalf("public tool %q was not classified as public: %#v", id, ids)
+		}
+	}
+	if _, ok := ids["wechat-private-example"]; ok {
+		t.Fatal("application-only package was classified as public")
+	}
+}

@@ -6890,7 +6890,10 @@
             card.append(detail);
           }
         }
-        if (app.id === "wechat" && (config.status === "rejected" || !config.value.wechat?.length)) card.append(appElement("p", "微信当前配置暂不可读。", "local-vision-note"));
+        if (app.id === "wechat") {
+          if (config.status === "rejected") card.append(appElement("p", "微信独有工具状态暂不可读；公共工具请在“公共工具”标签管理。", "local-vision-note"));
+          else if (!config.value.wechat?.length) card.append(appElement("p", "微信当前没有独有工具；文档工坊、分享读取、媒体理解、音乐等公共工具请在“公共工具”标签管理。", "local-vision-note"));
+        }
         return card;
       });
       panel.replaceChildren(...(cards.length ? cards : [appElement("p", "没有可显示的应用工具。", "project-tools-empty")]));
