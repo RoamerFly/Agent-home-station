@@ -493,7 +493,27 @@ namespace WechatAgent.Desktop {
         bool Local(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && uri.UserInfo == "" && (uri.GetLeftPart(UriPartial.Authority) == deployment.Url || deployment.LocalStation && uri.GetLeftPart(UriPartial.Authority) == deployment.LegacyUrl); }
         static bool Http(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"); }
         void SetRetryText(string text) { retry.Text = retry.AccessibleName = text; }
-        void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
+        string StartupDiagnosticText(Exception error) {
+            var fallback = error == null ? "启动失败。" : error.Message;
+            try {
+                var path = Path.Combine(deployment.Root, "main_setting", "logs", "startup-diagnostic.json");
+                if (!File.Exists(path)) return fallback;
+                var record = Deployment.Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                if (record == null) return fallback;
+                var stage = Deployment.Text(record, "stage");
+                var code = Deployment.Text(record, "error_code");
+                var detail = Deployment.Text(record, "error_message");
+                var updated = Deployment.Text(record, "updated_at");
+                var lines = new List<string>();
+                if (!String.IsNullOrEmpty(stage)) lines.Add("阶段：" + stage);
+                if (!String.IsNullOrEmpty(code)) lines.Add("错误码：" + code);
+                if (!String.IsNullOrEmpty(detail)) lines.Add(detail);
+                if (!String.IsNullOrEmpty(updated)) lines.Add("诊断时间：" + updated);
+                lines.Add("日志：data\\main_setting\\logs");
+                return lines.Count == 0 ? fallback : String.Join("\n", lines);
+            } catch { return fallback; }
+        }
+        void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); var message = StartupDiagnosticText(error); status.Text = message;lifecycle.State("操作未完成",message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
             if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); CloseShareCredentialLogin(); CloseLegacyWechatConsole(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
             base.Dispose(disposing);

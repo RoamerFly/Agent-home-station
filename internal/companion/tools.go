@@ -217,8 +217,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	if max < 0 {
 		max = 0
 	}
-	if max > 30 {
-		max = 30
+	if max > 60 {
+		max = 60
 	}
 	calls, repairs, searches, fetches, downloads := 0, 0, 0, 0, 0
 	verifiedFetches := 0

@@ -532,7 +532,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.config.Log("model_output_invalid")
 		return
 	}
-	if len(text) > 4096 {
+	if len(text) > 1<<20 {
 		w.config.Log("model_reply_text_too_long")
 		w.activity(Record{Event: "model_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "model_reply_text_too_long", Status: "failed"})
 		return
@@ -551,7 +551,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		w.activity(Record{Event: "send_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Content: text, Origin: "bot", Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err)})
 		if errors.Is(err, sending.ErrOutcomeUnknown) {
-			w.config.Log("reply_outcome_unknown_not_retried")
+			w.queuePhase(message.ID, "delivery_waiting")
+			w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Content: text, Reason: sending.FailureReason(err), Status: "waiting", SendID: sending.IntentID(err), Origin: "bot"})
+			w.config.Log("reply_outcome_unknown_queued_for_reconciliation")
 		} else {
 			w.config.Log("reply_failed_not_retried")
 		}
@@ -565,7 +567,7 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 	return w.promptWithSharePreference(message, now, false)
 }
 func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time.Time, preferredShare bool) (string, bool) {
-	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 4096 {
+	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 1<<20 {
 		return "", false
 	}
 	if !w.messageInTime(message, now) {
@@ -882,7 +884,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Origin: "bot", Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err)})
 			if errors.Is(err, sending.ErrOutcomeUnknown) {
-				w.config.Log("reply_outcome_unknown_not_retried")
+				w.queuePhase(input.TraceID, "delivery_waiting")
+				w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Reason: sending.FailureReason(err), Status: "waiting", SendID: sending.IntentID(err), Origin: "bot"})
+				w.config.Log("reply_outcome_unknown_queued_for_reconciliation")
 			} else {
 				w.config.Log("reply_failed_not_retried")
 			}

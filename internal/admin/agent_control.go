@@ -58,7 +58,9 @@ func (m *Manager) musicIdleTimeout() time.Duration {
 }
 
 // Legacy configuration value. Autonomous actions do not consume this quota.
-const agentTurnToolLimit = 30
+// Keep a loop guard while allowing long document and media workflows to finish
+// their read, transform, verify and delivery phases in one durable run.
+const agentTurnToolLimit = 60
 
 func agentDefaults() agentSettings {
 	host := agenthost.Defaults()

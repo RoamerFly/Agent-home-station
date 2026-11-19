@@ -16,6 +16,9 @@ namespace WechatAgent.Desktop {
         ProcessJob job;
         WechatStationRuntime wechat;
         bool stationAdmitted;
+        string startupInstanceId;
+        string startupStage;
+        DateTime startupStartedAt;
         internal LocalStationRuntime(Deployment deployment) { d = deployment; }
         bool UsesPortableData { get { return d.UsesPortableStationData(AppDomain.CurrentDomain.BaseDirectory); } }
         internal bool Running { get { return server != null && server.Alive; } }
@@ -24,10 +27,48 @@ namespace WechatAgent.Desktop {
         internal bool NativeAvailable { get { return wechat != null && wechat.Available; } }
 
         void Stage(string name, int errorCode = 0) {
+            startupStage = name;
             try {
             var path = Path.Combine(d.Root, "main_setting", "logs", "startup-stage.log");
                 var suffix = errorCode == 0 ? "" : " code=0x" + errorCode.ToString("X8");
                 File.AppendAllText(path, DateTime.UtcNow.ToString("o") + "\t" + name + suffix + Environment.NewLine, new UTF8Encoding(false));
+            } catch { }
+        }
+
+        static string StartupErrorCode(Exception error) {
+            var message = error == null ? "" : error.Message ?? "";
+            if (message.IndexOf("校验", StringComparison.OrdinalIgnoreCase) >= 0 || message.IndexOf("清单", StringComparison.OrdinalIgnoreCase) >= 0) return "native_manifest_mismatch";
+            if (message.IndexOf("端口", StringComparison.OrdinalIgnoreCase) >= 0) return "port_in_use";
+            if (message.IndexOf("未就绪", StringComparison.OrdinalIgnoreCase) >= 0 || message.IndexOf("提前退出", StringComparison.OrdinalIgnoreCase) >= 0) return "service_not_ready";
+            if (message.IndexOf("不存在", StringComparison.OrdinalIgnoreCase) >= 0 || message.IndexOf("缺少", StringComparison.OrdinalIgnoreCase) >= 0) return "runtime_missing";
+            return "startup_failed";
+        }
+
+        void WriteStartupDiagnostic(string status, Exception error = null, int errorCode = 0) {
+            try {
+                var logRoot = Path.Combine(d.Root, "main_setting", "logs");
+                Directory.CreateDirectory(logRoot);
+                var record = new Dictionary<string, object> {
+                    { "schema_version", 1 },
+                    { "instance_id", startupInstanceId ?? "" },
+                    { "started_at", startupStartedAt == default(DateTime) ? "" : startupStartedAt.ToString("o") },
+                    { "updated_at", DateTime.UtcNow.ToString("o") },
+                    { "stage", startupStage ?? "unknown" },
+                    { "status", status },
+                    { "error_code", error == null ? "" : StartupErrorCode(error) },
+                    { "error_message", error == null ? "" : error.Message },
+                    { "win32_error", errorCode },
+                    { "log_files", new Dictionary<string, string> {
+                        { "startup", Path.Combine(logRoot, "startup-stage.log") },
+                        { "native", Path.Combine(logRoot, "wechat-native.log") },
+                        { "station", Path.Combine(logRoot, "station.log") },
+                        { "legacy_admin", Path.Combine(logRoot, "legacy-wechat.log") }
+                    } }
+                };
+                var path = Path.Combine(logRoot, "startup-diagnostic.json");
+                var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                File.WriteAllText(temp, Deployment.Json.Serialize(record), new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
             } catch { }
         }
 
@@ -63,6 +104,9 @@ namespace WechatAgent.Desktop {
             if (!Running) throw new InvalidOperationException("本机成长站提前退出，请查看 data/main_setting/logs/station.log；没有改动微信或旧数据。");
         }
         internal async Task Start(CancellationToken cancel) {
+            startupInstanceId = Guid.NewGuid().ToString("N");
+            startupStartedAt = DateTime.UtcNow;
+            startupStage = "start.begin";
             cancel.ThrowIfCancellationRequested();
             if (Running) { CheckAlive(); return; }
             var startNative = d.LocalStationNative;
@@ -83,9 +127,9 @@ namespace WechatAgent.Desktop {
                 WindowsRuntime.FreePort(d.Url);
                 Stage("free-port.ok");
             }
-            catch { Stage("free-port.failed"); throw; }
+            catch (Exception error) { Stage("free-port.failed"); WriteStartupDiagnostic("failed", error); throw; }
             try { Stage("process-job.begin"); job = new ProcessJob(); Stage("process-job.ok"); }
-            catch { Stage("process-job.failed", ProcessJob.LastConstructionErrorCode); throw; }
+            catch (Exception error) { Stage("process-job.failed", ProcessJob.LastConstructionErrorCode); WriteStartupDiagnostic("failed", error, ProcessJob.LastConstructionErrorCode); throw; }
             stationAdmitted = false;
             Exception startFailure = null;
             try {
@@ -128,6 +172,7 @@ namespace WechatAgent.Desktop {
                     legacyEnv["WECHAT_STATION_DATA_DIR"] = d.Root;
                     legacyEnv["WECHAT_STATION_WORKER_DIR"] = workerDir;
                     legacyEnv["WECHAT_STATION_MODEL_FILE"] = Path.Combine(d.Root, "main_setting", "authority", "local-model.json");
+                    legacyEnv["WECHAT_STARTUP_LOG_DIR"] = Path.Combine(d.Root, "main_setting", "logs");
                     var packageRoot = d.Workspace;
                     var packageRuntime = Deployment.PackageRuntimeRoot(packageRoot);
                     var pythonRoot = Path.Combine(packageRuntime, "windows-python-cli");
@@ -155,6 +200,7 @@ namespace WechatAgent.Desktop {
                 Stage("server.start.failed", job == null ? 0 : job.LastWin32Error);
             }
             if (startFailure != null) {
+                var failureCode = job == null ? 0 : job.LastWin32Error;
                 Stage("startup.cleanup.begin");
                 if (server != null) { server.Dispose(); server = null; }
                 if (legacy != null) { legacy.Dispose(); legacy = null; }
@@ -162,9 +208,11 @@ namespace WechatAgent.Desktop {
                 if (job != null) { job.Dispose(); job = null; }
                 try { await StopWechat(false, true); } catch (Exception error) { cleanupFailure = error; }
                 Stage(cleanupFailure == null ? "startup.cleanup.ok" : "startup.cleanup.failed");
+                WriteStartupDiagnostic("failed", startFailure, failureCode);
                 if (cleanupFailure != null) throw new InvalidOperationException("本机成长站启动失败，且已拥有的微信原生进程未能正常关闭。", new AggregateException(startFailure, cleanupFailure));
                 throw startFailure;
             }
+            WriteStartupDiagnostic("running");
         }
         internal async Task Stop() {
             var ownedServer = server; server = null; var ownedLegacy = legacy; legacy = null; Exception failure = null;

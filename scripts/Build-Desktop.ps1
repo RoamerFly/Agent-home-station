@@ -2,6 +2,20 @@
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
+function Assert-CanonicalSource {
+ $markerPath=Join-Path $workspace '.build-source.json'
+ if(-not(Test-Path -LiteralPath $markerPath -PathType Leaf)){throw 'This checkout is not the registered canonical Windows build source.'}
+ try {$marker=Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json} catch {throw 'The canonical build source marker is invalid.'}
+ if($marker.schema_version -ne 1 -or $marker.canonical_id -ne 'agent-home-station-windows' -or $marker.module -ne 'wechat-bot'){
+  throw 'The selected checkout is not the registered canonical Windows build source.'
+ }
+ if(-not(Test-Path -LiteralPath (Join-Path $workspace 'go.mod') -PathType Leaf) -or -not(Test-Path -LiteralPath (Join-Path $workspace 'connected-apps\wechat\app.json') -PathType Leaf)){
+  throw 'The canonical Windows build source is incomplete.'
+ }
+}
+
+Assert-CanonicalSource
+
 function Get-RelativeRuntimePath([string]$Root,[string]$Path){
  $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
  $fullPath=[IO.Path]::GetFullPath($Path)
@@ -22,6 +36,20 @@ function Assert-NoReparsePointAncestor([string]$Path){
   $parent=Split-Path -Path $candidate -Parent
   if(-not $parent -or $parent -eq $candidate){break}
   $candidate=$parent
+ }
+}
+
+function Get-SourceProvenance {
+ $commit=(& git -C $workspace rev-parse HEAD 2>$null | Select-Object -First 1)
+ if($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)){throw 'Unable to determine the canonical source commit.'}
+ $remote=(& git -C $workspace config --get remote.origin.url 2>$null | Select-Object -First 1)
+ $dirty=((& git -C $workspace status --porcelain 2>$null) | Where-Object {$_ -and $_.Trim()}).Count -gt 0
+ return [ordered]@{
+  source_root=(Split-Path $workspace -Leaf)
+  source_commit=$commit.Trim()
+  source_remote=([string]$remote).Trim()
+  source_dirty=$dirty
+  build_utc=(Get-Date).ToUniversalTime().ToString('o')
  }
 }
 
@@ -120,6 +148,7 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   } finally { Pop-Location }
   $hashes['wechat-admin.exe']=(Get-FileHash -LiteralPath (Join-Path $staging 'wechat-admin.exe') -Algorithm SHA256).Hash.ToLower()
   if($hashes['wx.exe'] -ne $wxHash){throw 'The staged wx.exe hash is not the validated native hash.'}
+  $provenance=Get-SourceProvenance
   $record=[ordered]@{
    schema_version=1
    platform='windows-x64'
@@ -130,6 +159,11 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    native_license_commit=$sourceManifest.native_license_commit
    native_sha256=$wxHash
    admin_sha256=$hashes['wechat-admin.exe']
+   source_root=$provenance.source_root
+   source_commit=$provenance.source_commit
+   source_remote=$provenance.source_remote
+   source_dirty=$provenance.source_dirty
+   build_utc=$provenance.build_utc
    files=$hashes
    live_login_verified=$false
    live_delivery_verified=$false

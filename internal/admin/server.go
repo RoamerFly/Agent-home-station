@@ -82,6 +82,9 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		station.RegisterLegacyHomeRoutes(s.auth, mux, manager.fish, manager.managedRoot(), manager.dir)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
+	mux.HandleFunc("GET /api/startup/diagnostics", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, s.manager.startupDiagnostics())
+	}))
 	if root {
 		mux.HandleFunc("POST /api/login", auth.Login)
 		mux.HandleFunc("POST /api/logout", auth.Protect(auth.Logout))

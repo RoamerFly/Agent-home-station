@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "canonical_id": "agent-home-station-windows",
+  "module": "wechat-bot",
+  "purpose": "Windows desktop and release builds use this checkout"
+}
