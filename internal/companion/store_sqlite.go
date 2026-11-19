@@ -13,10 +13,18 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// modernc SQLite performs a synchronous WAL setup while changing the journal
+// mode. On Windows that path calls FlushFileBuffers, and concurrent first
+// opens can block each other in the OS even when each store has a different
+// database. Keep the one-time SQLite setup serialized. This does not protect
+// normal store reads or writes after initialization.
+var sqliteInitMu sync.Mutex
 
 const memorySchema = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -197,7 +205,15 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	fail := func(e error) (*Store, error) { db.Close(); return nil, e }
+	sqliteInitMu.Lock()
+	initLocked := true
+	unlockInit := func() {
+		if initLocked {
+			sqliteInitMu.Unlock()
+			initLocked = false
+		}
+	}
+	fail := func(e error) (*Store, error) { unlockInit(); db.Close(); return nil, e }
 	for _, q := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", memorySchema} {
 		if _, err = db.Exec(q); err != nil {
 			return fail(err)
@@ -206,6 +222,7 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 	if err = upgradeLocalTaskFollowupTargets(db); err != nil {
 		return fail(err)
 	}
+	unlockInit()
 	if err = os.Chmod(path, 0600); err != nil {
 		return fail(err)
 	}

@@ -58,6 +58,35 @@ func TestConcurrentStoreOpenSharesSourceInstanceWithoutWALContention(t *testing.
 	}
 }
 
+func TestConcurrentStoreOpenOnIndependentDatabasesSerializesWALSetup(t *testing.T) {
+	const workers = 8
+	dirs := make([]string, workers)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for _, dir := range dirs {
+		go func(dir string) {
+			defer group.Done()
+			store, err := NewStore(dir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			errs <- store.Close()
+		}(dir)
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestLegacyRowIDDoesNotQuarantineFreshNativeDataset(t *testing.T) {
 	for _, oldMarked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "legacy", true: "legacy_quarantined"}[oldMarked], func(t *testing.T) {
