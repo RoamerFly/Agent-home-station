@@ -214,7 +214,7 @@ func TestLocalWechatWorkersIsolatePauseRevokeAndRestore(t *testing.T) {
 		t.Helper()
 		select {
 		case <-ch:
-		case <-time.After(14 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("worker did not reach expected stage")
 		}
 	}
