@@ -399,7 +399,10 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
     $dataRoot=Join-Path $OutputDirectory 'data'
     $busy=Get-ToolBusyEvidence $package.Name $destination $dataRoot
     if($busy.Count){throw ('工具包 '+$package.Name+' 当前不可替换，检测到 '+($busy -join ', ')+ '。请先等待任务完成或停止工具。')}
-    if(-not $QuarantineDirectory){throw ('工具包 '+$package.Name+' 已存在，但未发现运行进程或未完成任务。请使用干净输出目录，或指定 -QuarantineDirectory 后再替换。外部路径登记和配置缓存不会单独阻止构建。')}
+    if(-not $QuarantineDirectory){
+     $volume=[IO.Path]::GetPathRoot([IO.Path]::GetFullPath($OutputDirectory))
+     $QuarantineDirectory=Join-Path $volume ('待删除\release-tool-replacements-'+(Get-Date -Format 'yyyyMMddHHmmss'))
+    }
     New-Item -ItemType Directory -Force -Path $QuarantineDirectory | Out-Null
     $retired=Join-Path $QuarantineDirectory ($package.Name+'-'+(Get-Date -Format 'yyyyMMddHHmmssfff'))
     Move-Item -LiteralPath $destination -Destination $retired
