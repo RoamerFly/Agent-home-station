@@ -3,6 +3,7 @@
 import importlib.machinery
 import os
 from pathlib import Path
+import runpy
 import sys
 import tempfile
 from types import ModuleType
@@ -61,3 +62,12 @@ def initialize():
     sink = task / f"null-{os.getpid()}.tmp"
     sink.write_bytes(b"")
     os.devnull = str(sink)
+
+
+if __name__ == "__main__":
+    runner = Path(sys.argv[1])
+    if not runner.is_absolute() or runner.name != "gpt_sovits.py":
+        raise ValueError("offline_speech_runner_invalid")
+    initialize()
+    sys.argv = sys.argv[1:]
+    runpy.run_path(str(runner), run_name="__main__")

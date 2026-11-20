@@ -8,6 +8,7 @@ from ctypes import wintypes as w
 import hashlib
 import os
 from pathlib import Path
+import stat
 import subprocess
 import time
 
@@ -106,12 +107,12 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
     for original in [*writable, *readonly]:
         path = Path(original)
         for parent in [path, *path.parents]:
-            if parent.is_symlink() or parent.is_junction():
+            if parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                 raise RuntimeError("lpac_mount_reparse_point")
     paths = [(str(Path(p).resolve(strict=True)), "M") for p in writable]
     paths += [(str(Path(p).resolve(strict=True)), "RX") for p in readonly]
     for p, _ in paths:
-        if Path(p).parent == Path(p) or Path(p).is_junction() or Path(p).is_symlink():
+        if Path(p).parent == Path(p) or Path(p).lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
             raise RuntimeError("lpac_invalid_mount")
     if type(music_runtime) is not bool or type(speech_runtime) is not bool or music_runtime and speech_runtime:
         raise ValueError("invalid_music_runtime_policy")

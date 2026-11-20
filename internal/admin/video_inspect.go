@@ -211,7 +211,7 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 			if !ok {
 				return nil, "", errors.New("incoming_media_backend_unavailable")
 			}
-			b, _, e := reader.IncomingMedia(ctx, msg.ID, 64<<20)
+			b, e := readIncomingVideo(ctx, reader, msg.ID, 64<<20)
 			return b, msg.ID, e
 		}
 		if wechatapp.IsChannelsShare(msg) {

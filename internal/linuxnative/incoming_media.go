@@ -11,8 +11,47 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 )
+
+// IncomingMediaTransferError describes a terminal native download. Transfer
+// counters refer to the native transport, before any verified asset is exposed.
+type IncomingMediaTransferError struct {
+	state, reason    string
+	completed, total int64
+}
+
+func (e *IncomingMediaTransferError) Error() string {
+	code, _ := e.SafeToolFailure()
+	return code
+}
+
+func (e *IncomingMediaTransferError) SafeToolFailure() (string, string) {
+	switch e.state {
+	case "expired":
+		return "incoming_media_expired", "微信原生服务确认此媒体版本已过期。"
+	case "unsupported":
+		return "incoming_media_unsupported", "微信原生服务无法取得此媒体版本。"
+	case "cancelled":
+		return "incoming_media_cancelled", "微信媒体原件读取已取消。"
+	case "needs_review":
+		return "incoming_media_needs_review", "微信媒体原件的下载结果需要核对。"
+	}
+	switch e.reason {
+	case "media_integrity_failed", "source_integrity_failed":
+		return "incoming_media_integrity_mismatch", "微信媒体原件的完整性校验失败。"
+	case "media_processing_failed":
+		if e.total > 0 && e.completed == e.total {
+			return "incoming_media_native_processing_failed", "微信原生下载进度已达 " + strconv.FormatInt(e.total, 10) + " 字节，但原生处理失败，未取得可读取的原件。"
+		}
+		return "incoming_media_native_processing_failed", "微信原生媒体处理失败，未取得可读取的原件。"
+	case "transport_unavailable", "media_disconnected", "media_worker_stopping", "worker_interrupted":
+		return "incoming_media_download_failed", "微信原生媒体传输暂不可用。"
+	default:
+		return "incoming_media_native_download_failed", "微信原生媒体下载已终止，未取得可读取的原件。"
+	}
+}
 
 // IncomingMedia obtains an owned message's attachment from the native transfer
 // API. It never lets a message choose a local filesystem path or bearer URL.
@@ -36,11 +75,15 @@ func (s *Sender) incomingMediaResponseChecked(ctx context.Context, messageID str
 		return nil, err
 	}
 	type mediaJob struct {
-		ID      string `json:"id"`
-		State   string `json:"state"`
-		AssetID string `json:"assetId"`
-		Account string `json:"accountId"`
-		Kind    string `json:"kind"`
+		ID        string `json:"id"`
+		State     string `json:"state"`
+		AssetID   string `json:"assetId"`
+		Account   string `json:"accountId"`
+		Kind      string `json:"kind"`
+		Reason    string `json:"reason"`
+		Code      string `json:"errorCode"`
+		Completed int64  `json:"completedBytes"`
+		Total     int64  `json:"totalBytes"`
 	}
 	var job mediaJob
 	validJob := func() bool {
@@ -51,8 +94,13 @@ func (s *Sender) incomingMediaResponseChecked(ctx context.Context, messageID str
 	}
 	jobID, assetID := job.ID, job.AssetID
 	for job.State != "completed" && job.State != "succeeded" && job.State != "available" {
-		if job.State == "failed" || job.State == "cancelled" || job.State == "needs_review" {
-			return nil, errors.New("incoming media unavailable")
+		switch job.State {
+		case "failed", "cancelled", "needs_review", "expired", "unsupported":
+			reason := job.Reason
+			if reason == "" {
+				reason = job.Code
+			}
+			return nil, &IncomingMediaTransferError{state: job.State, reason: reason, completed: job.Completed, total: job.Total}
 		}
 		select {
 		case <-ctx.Done():
@@ -114,35 +162,40 @@ type incomingMediaAsset struct {
 	SHA256  string `json:"sha256"`
 }
 
-func (s *Sender) incomingMediaSourceVariant(ctx context.Context, message, kind string) (string, error) {
+func (s *Sender) incomingMediaSourceVariants(ctx context.Context, message, kind string) ([]string, error) {
 	var alternative string
 	switch kind {
 	case "file":
-		return "original", nil
+		return []string{"original"}, nil
 	case "voice":
-		return "encoded", nil
+		return []string{"encoded"}, nil
 	case "image":
 		alternative = "standard"
 	case "video":
 		alternative = "normal"
 	default:
-		return "", errors.New("unsupported incoming media kind")
+		return nil, errors.New("unsupported incoming media kind")
 	}
 	var assets struct {
 		Items []incomingMediaAsset `json:"items"`
 	}
 	if err := s.readJSON(ctx, s.accountPath()+"/messages/"+url.PathEscape(message)+"/media", &assets); err != nil {
-		return "", err
+		return nil, err
 	}
+	var variants []string
 	for _, candidate := range []string{"original", alternative} {
 		for _, asset := range assets.Items {
 			if asset.Account == s.account && asset.Message == message && asset.Kind == kind && asset.Variant == candidate &&
 				asset.State != "expired" && asset.State != "unsupported" && (asset.State != "available" || asset.Actual == candidate) {
-				return candidate, nil
+				variants = append(variants, candidate)
+				break
 			}
 		}
 	}
-	return "", errors.New("incoming_media_full_source_unavailable")
+	if len(variants) == 0 {
+		return nil, errors.New("incoming_media_full_source_unavailable")
+	}
+	return variants, nil
 }
 
 // StreamVerifiedIncomingMedia binds the original to the native message and
@@ -151,11 +204,28 @@ func (s *Sender) StreamVerifiedIncomingMedia(ctx context.Context, messageID, kin
 	if len(messageID) == 0 || len(messageID) > 8192 || max < 1 || max > 512<<20 || output == nil {
 		return VerifiedIncomingMedia{}, errors.New("invalid incoming media request")
 	}
-	variant, err := s.incomingMediaSourceVariant(ctx, messageID, kind)
+	variants, err := s.incomingMediaSourceVariants(ctx, messageID, kind)
 	if err != nil {
 		return VerifiedIncomingMedia{}, err
 	}
-	return s.streamVerifiedIncomingMedia(ctx, messageID, kind, variant, max, output)
+	var transfer *IncomingMediaTransferError
+	for _, variant := range variants {
+		result, readErr := s.streamVerifiedIncomingMedia(ctx, messageID, kind, variant, max, output)
+		// A terminal job is reported before any bytes reach output. Another
+		// declared full rendition can be read independently without mixing data.
+		if kind != "video" || !errors.As(readErr, &transfer) || !transfer.canTryOtherVideoVariant() || ctx.Err() != nil {
+			return result, readErr
+		}
+		err = readErr
+	}
+	return VerifiedIncomingMedia{}, err
+}
+
+func (e *IncomingMediaTransferError) canTryOtherVideoVariant() bool {
+	if e.state == "expired" || e.state == "unsupported" {
+		return true
+	}
+	return e.state == "failed" && (e.reason == "media_processing_failed" || e.reason == "media_integrity_failed" || e.reason == "source_integrity_failed")
 }
 
 // StreamVerifiedPlayableVoice verifies the separately decoded native voice

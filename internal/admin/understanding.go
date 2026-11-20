@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +20,21 @@ import (
 
 type incomingReader interface {
 	IncomingMedia(context.Context, string, int64) ([]byte, string, error)
+}
+
+func readIncomingVideo(ctx context.Context, native incomingReader, message string, limit int64) ([]byte, error) {
+	if verified, ok := native.(interface {
+		StreamVerifiedIncomingMedia(context.Context, string, string, int64, io.Writer) (linuxnative.VerifiedIncomingMedia, error)
+	}); ok {
+		var output bytes.Buffer
+		_, err := verified.StreamVerifiedIncomingMedia(ctx, message, "video", limit, &output)
+		if err != nil {
+			return nil, err
+		}
+		return output.Bytes(), nil
+	}
+	data, _, err := native.IncomingMedia(ctx, message, limit)
+	return data, err
 }
 
 func formatSeconds(v float64) string               { return strconv.FormatFloat(v, 'f', 3, 64) }
@@ -126,15 +143,18 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		limit = 50 << 20
 	}
 	var data []byte
-	var typ string
 	var incoming mediaAsset
 	var err error
 	if m.Type == 3 {
 		incoming, data, err = a.rememberIncomingOriginal(ctx, m, "image", limit)
 	} else {
-		data, typ, err = native.IncomingMedia(ctx, m.ID, limit)
+		data, err = readIncomingVideo(ctx, native, m.ID, limit)
 	}
 	if err != nil {
+		var transfer *linuxnative.IncomingMediaTransferError
+		if errors.As(err, &transfer) || ctx.Err() != nil || err.Error() == "incoming_media_full_source_unavailable" || err.Error() == "incoming_media_integrity_mismatch" || err.Error() == "incoming_media_asset_identity_unverified" {
+			return "", err
+		}
 		return "", errors.New("incoming_media_download_failed")
 	}
 	if m.Type == 43 {
@@ -144,7 +164,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		}
 		return a.observeVideo(ctx, m, data, sample, false)
 	}
-	images := []deepseek.Image{{Data: data, MIME: typ}}
+	images := []deepseek.Image{{Data: data, MIME: incoming.MIME}}
 	if c.DirectImageInput {
 		return "[收到图片原件] asset_id：" + incoming.ID + "；message_id：" + m.ID + "。本轮使用主模型直接看图，请调用 artifact_view_image(asset_id) 载入真实图片后处理；尚未生成视觉描述。", nil
 	}

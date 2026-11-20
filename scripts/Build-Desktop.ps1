@@ -540,7 +540,7 @@ function Invoke-DesktopPackageTests {
 # Incremental desktop updates need the matching plugin launch protocol too.
  $broker=Join-Path $OutputDirectory 'env\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
-foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw','windows_speech_compat.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 if($WithRVCBackend){
  $control=Join-Path $OutputDirectory 'env\windows-station-rvc'
  $files=[ordered]@{}
