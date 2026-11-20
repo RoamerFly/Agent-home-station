@@ -62,12 +62,15 @@ func localIPv4ListenerOwner(port, expectedPID int, allowWildcard bool) error {
 	}
 	count := *(*uint32)(unsafe.Pointer(&buffer[0]))
 	rowSize := int(unsafe.Sizeof(localComfyTCPRowOwnerPID{}))
-	if count > uint32((len(buffer)-4)/rowSize) {
+	if count == 0 || count > uint32((len(buffer)-4)/rowSize) {
 		return errLocalComfyNoListener
 	}
-	for index := uint32(0); index < count; index++ {
-		offset := 4 + int(index)*rowSize
-		row := (*localComfyTCPRowOwnerPID)(unsafe.Pointer(&buffer[offset]))
+	rows := unsafe.Slice((*localComfyTCPRowOwnerPID)(unsafe.Pointer(&buffer[4])), count)
+	return verifyLocalIPv4ListenerRows(rows, port, expectedPID, allowWildcard)
+}
+
+func verifyLocalIPv4ListenerRows(rows []localComfyTCPRowOwnerPID, port, expectedPID int, allowWildcard bool) error {
+	for _, row := range rows {
 		if row.State != localComfyTCPStateListening || (row.LocalAddr != 0x0100007f && !(allowWildcard && row.LocalAddr == 0)) || int(syscall.Ntohs(uint16(row.LocalPort))) != port {
 			continue
 		}

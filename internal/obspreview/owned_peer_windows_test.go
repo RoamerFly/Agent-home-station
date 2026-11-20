@@ -31,10 +31,15 @@ func TestVerifyEncoderPeerRejectsWrongProcess(t *testing.T) {
 }
 
 func TestVerifyEncoderPeerRejectsWildcardListener(t *testing.T) {
-	client := loopbackConnection(t, "0.0.0.0:0")
-	defer client.Close()
-	if err := verifyEncoderPeer(context.Background(), client, uint32(os.Getpid())); !errors.Is(err, ErrStreamEndpoint) {
-		t.Fatalf("wildcard listener = %v", err)
+	const pid = 1987
+	clientPort, serverPort := hostPort(39076), hostPort(41762)
+	rows := []obsTCPRowOwnerPID{
+		{State: obsTCPStateListen, LocalAddr: 0, LocalPort: serverPort, OwnerPID: pid},
+		{State: obsTCPStateEstablished, LocalAddr: obsLoopbackIPv4, LocalPort: serverPort,
+			RemoteAddr: obsLoopbackIPv4, RemotePort: clientPort, OwnerPID: pid},
+	}
+	if hasEncoderLoopbackPeer(rows, clientPort, serverPort, pid) {
+		t.Fatal("wildcard listener accepted")
 	}
 }
 
