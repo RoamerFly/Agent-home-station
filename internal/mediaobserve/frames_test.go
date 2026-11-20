@@ -16,7 +16,7 @@ func TestExplicitFramePageAndBatchExceedOldDefaults(t *testing.T) {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pattern.mp4")
-	if b, e := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=8", "-c:v", "libx264", "-threads", "1", path).CombinedOutput(); e != nil {
+	if b, e := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=8", "-c:v", "mpeg4", "-threads", "1", path).CombinedOutput(); e != nil {
 		t.Fatalf("fixture %v %.100s", e, b)
 	}
 	in := FrameOptions{Step: 1, BatchSize: 20, MaxDimension: 96, Tokens: 1200}

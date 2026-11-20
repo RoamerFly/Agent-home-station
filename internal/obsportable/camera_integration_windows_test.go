@@ -129,7 +129,7 @@ func installOfficialTestProgram(t *testing.T, ctx context.Context) (*Installatio
 	command := exec.CommandContext(ctx, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "color=black:s=1280x720:r=30:d=1,drawbox=x=0:y=0:w=640:h=720:c=white:t=fill",
 		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
-		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", program)
+		"-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-c:a", "aac", program)
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 	if out, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("generate synthetic program: %v\n%s", err, out)

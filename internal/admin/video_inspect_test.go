@@ -48,7 +48,7 @@ func inspectionFixture(t *testing.T) []byte {
 		t.Skip("ffmpeg unavailable")
 	}
 	path := filepath.Join(t.TempDir(), "synthetic.mp4")
-	if b, e := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=2", "-c:v", "libx264", "-threads", "1", path).CombinedOutput(); e != nil {
+	if b, e := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=2", "-c:v", "mpeg4", "-threads", "1", path).CombinedOutput(); e != nil {
 		t.Fatalf("synthetic encoding %v %.200s", e, b)
 	}
 	data, e := os.ReadFile(path)

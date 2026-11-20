@@ -75,7 +75,7 @@ func observationFixture(t *testing.T, audioSeconds string) []byte {
 	if audioSeconds != "" {
 		args = append(args, "-f", "lavfi", "-i", "sine=frequency=440:duration="+audioSeconds, "-c:a", "aac")
 	}
-	args = append(args, "-c:v", "libx264", "-threads", "1", out)
+	args = append(args, "-c:v", "mpeg4", "-threads", "1", out)
 	if raw, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 		t.Fatalf("synthetic encoder failed: %v %.200s", err, raw)
 	}
@@ -175,8 +175,10 @@ func TestVideoAudioLimitsActualTrackTo180Seconds(t *testing.T) {
 		return "合成180秒音轨转写", nil
 	}
 	text, seconds, err := a.videoAudioRangeTimedWith(context.Background(), video, 0, 180, 60, transcribe)
-	if err != nil || text == "" || seconds < 179.9 || seconds > 180.01 || submittedBytes < 5760000 || submittedBytes > 5761024 {
-		t.Fatal("audio exceeded observation coverage", seconds, submittedBytes, err)
+	// The bundled FFmpeg can return one fewer AAC frame at the range boundary.
+	// Use the same lower tolerance for duration and 16 kHz mono PCM bytes.
+	if err != nil || text == "" || seconds < 179.9 || seconds > 180.01 || submittedBytes < 5_756_800 || submittedBytes > 5_761_024 {
+		t.Fatal("audio did not match the requested coverage", seconds, submittedBytes, err)
 	}
 	text, seconds, err = a.videoAudioRangeTimedWith(context.Background(), video, 180, 1, 60, transcribe)
 	if err != nil || text == "" || seconds < .9 || seconds > 1.1 || submittedBytes > 40000 {
