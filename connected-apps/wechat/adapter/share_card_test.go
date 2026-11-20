@@ -43,3 +43,23 @@ func TestCardBodyDescriptionNeverReleasesURLOrInstructions(t *testing.T) {
 		t.Fatal("malformed card treated as video")
 	}
 }
+
+func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
+	subtype := 19
+	message := linuxnative.Message{
+		Type:           49,
+		AppMessageType: &subtype,
+		Body:           "[Chat History] 测试聊天记录\n甲: 第一条测试文字\n乙: 第二条测试文字",
+	}
+	description := CardDescription(message)
+	if !strings.Contains(description, "微信合并转发") || !strings.HasSuffix(description, message.Body) {
+		t.Fatal(description)
+	}
+	if _, ok := PublisherCardDescription(message); ok {
+		t.Fatal("forwarded conversation became publisher card copy")
+	}
+	message.Body = "[Chat History unavailable]"
+	if description := CardDescription(message); !strings.Contains(description, "正文暂不可用") {
+		t.Fatal(description)
+	}
+}

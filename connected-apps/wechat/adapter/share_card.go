@@ -25,6 +25,9 @@ func PublisherCardDescription(m linuxnative.Message) (PublisherDescription, bool
 	if m.Type != 49 || m.IsQuotedText() || m.FileAttachmentName() != "" {
 		return PublisherDescription{}, false
 	}
+	if isForwardedConversation(m) {
+		return PublisherDescription{}, false
+	}
 	if m.Link == nil {
 		if strings.HasPrefix(m.Body, "[Link]") {
 			return PublisherDescription{Range: "分享卡片原始描述", Excerpt: truncateCardText(m.Body, 4000)}, true
@@ -50,6 +53,13 @@ func PublisherCardDescription(m linuxnative.Message) (PublisherDescription, bool
 // CardDescription returns a safe, card-only presentation for the chat model.
 // It never claims that the linked material has been opened or observed.
 func CardDescription(m linuxnative.Message) string {
+	if isForwardedConversation(m) {
+		body := strings.TrimSpace(m.Body)
+		if body == "" || body == "[Chat History unavailable]" {
+			return "[微信合并转发] 转发记录正文暂不可用。"
+		}
+		return "[微信合并转发，以下是消息中取得的转发资料]\n" + truncateCardText(body, 64<<10)
+	}
 	if m.Link != nil {
 		part, hasDescription := PublisherCardDescription(m)
 		parts := []string{}
@@ -70,6 +80,10 @@ func CardDescription(m linuxnative.Message) string {
 		return "[收到链接卡片的文字摘要，未观看视频]\n" + truncateCardText(m.Body, 4000)
 	}
 	return CardBodyDescription(m.Body)
+}
+
+func isForwardedConversation(m linuxnative.Message) bool {
+	return m.Type == 49 && m.AppMessageType != nil && *m.AppMessageType == 19
 }
 
 // ObservedCardDescription changes only the header after the caller has actual
