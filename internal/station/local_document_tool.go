@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -33,6 +34,7 @@ const (
 	// document creation until the owner upgrades to the current package.
 	localDocumentLegacyDigest = "5a42b66c29e1e5b23822807e2bcbd3bf148ce8d244a559b616b36bfecc7ad371"
 	localDOCXMIME             = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	localXLSXMIME             = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
 func localDocumentTool() mcptools.Tool {
@@ -276,20 +278,25 @@ func (p *localProjectPolicy) validateDocument(ctx context.Context, job pluginhos
 }
 
 func validateLocalDOCX(file *os.File, size int64) error {
-	doc, err := zip.NewReader(file, size)
-	if err == nil {
-		found := map[string]bool{}
-		for _, part := range doc.File {
-			switch part.Name {
-			case "[Content_Types].xml", "_rels/.rels", "word/document.xml":
-				if part.UncompressedSize64 > 0 {
-					found[part.Name] = true
-				}
-			}
-		}
-		if len(found) == 3 {
-			return nil
-		}
+	if documentHasZIPParts(file, size, "[Content_Types].xml", "_rels/.rels", "word/document.xml") {
+		return nil
 	}
 	return errors.New("生成文件缺少有效的 DOCX 文档结构")
+}
+
+func documentHasZIPParts(file io.ReaderAt, size int64, names ...string) bool {
+	doc, err := zip.NewReader(file, size)
+	if err != nil {
+		return false
+	}
+	missing := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		missing[name] = struct{}{}
+	}
+	for _, part := range doc.File {
+		if part.UncompressedSize64 > 0 {
+			delete(missing, part.Name)
+		}
+	}
+	return len(missing) == 0
 }

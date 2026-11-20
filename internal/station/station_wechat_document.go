@@ -58,7 +58,7 @@ type stationDocumentInput struct {
 
 func stationDocumentExtension(name string) string {
 	switch ext := strings.ToLower(filepath.Ext(name)); ext {
-	case ".docx", ".pdf":
+	case ".docx", ".xlsx", ".pdf":
 		return ext
 	default:
 		return ""
@@ -129,10 +129,10 @@ func (t *stationAttachmentTools) inspectDocument(ctx context.Context, raw json.R
 		return "", mcptools.ArgumentError("$", "需要原消息编号、有效页码和正文范围。OCR 支持 auto、off 或 always，识别分辨率为 96–300 DPI")
 	}
 	in, err := t.openDocumentInput(ctx, args.Message, args.Hash, 49, func(ext string) error {
-		if ext == ".docx" && args.Page != nil {
-			return mcptools.ArgumentError("$.page", "DOCX 请按 text_offset 续读正文")
+		if ext != ".pdf" && args.Page != nil {
+			return mcptools.ArgumentError("$.page", "DOCX 和 XLSX 请按 text_offset 续读")
 		}
-		if ext == ".docx" && (args.OCRMode != "auto" || args.OCRDPI != nil) {
+		if ext != ".pdf" && (args.OCRMode != "auto" || args.OCRDPI != nil) {
 			return mcptools.ArgumentError("$.ocr_mode", "OCR 模式和分辨率只用于 PDF 页")
 		}
 		if !t.documents.available(ctx, ext) {
@@ -196,7 +196,7 @@ func (t *stationAttachmentTools) openDocumentInput(ctx context.Context, message,
 	} else {
 		ext = stationDocumentExtension(source.Filename)
 		if source.Kind != "file" || ext == "" {
-			return in, mcptools.ArgumentError("$.message_id", "此工具读取已关联的 Word（.docx）或 PDF 附件")
+			return in, mcptools.ArgumentError("$.message_id", "此工具读取已关联的 Word（.docx）、Excel（.xlsx）或 PDF 附件")
 		}
 		if err := format(ext); err != nil {
 			return in, err
@@ -254,15 +254,22 @@ func stationDocumentImageFormat(file *os.File, size int64) (string, string, erro
 }
 
 func verifyStationDocument(file *os.File, size int64, ext string) error {
-	if ext == ".docx" {
+	switch ext {
+	case ".docx":
 		if validateLocalDOCX(file, size) != nil {
 			return errors.New("Word 附件缺少有效的 DOCX 文档结构")
 		}
-	} else {
+	case ".xlsx":
+		if !documentHasZIPParts(file, size, "[Content_Types].xml", "xl/workbook.xml", "xl/_rels/workbook.xml.rels") {
+			return errors.New("Excel 附件缺少有效的 XLSX 工作簿结构")
+		}
+	case ".pdf":
 		var header [5]byte
 		if _, err := file.ReadAt(header[:], 0); err != nil || !bytes.Equal(header[:], []byte("%PDF-")) {
 			return errors.New("附件缺少有效的 PDF 文件头")
 		}
+	default:
+		return errors.New("文档附件格式不可用")
 	}
 	return nil
 }

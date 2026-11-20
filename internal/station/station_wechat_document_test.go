@@ -28,6 +28,8 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
+const syntheticStationWorkbookText = "[Sheet: 验收表]\nA1=合成单元格\nB1=formula=1+2; cached_value=3"
+
 func TestStationWechatDocumentScope(t *testing.T) {
 	testStationWechatDocument(t, stationDocumentTools{
 		available: func(context.Context, string) bool { return true },
@@ -36,11 +38,22 @@ func TestStationWechatDocumentScope(t *testing.T) {
 			if _, err := in.materialize(ctx, dir); err != nil {
 				return "", err
 			}
-			if in.extension != ".docx" || in.offset != 0 || in.limit != 2 {
-				t.Fatalf("unexpected document input: %#v", in)
+			rawView := map[string]any{"kind": strings.TrimPrefix(in.extension, "."),
+				"sha256": in.record.SHA256, "bytes": in.record.Bytes, "text_offset": in.offset}
+			switch in.extension {
+			case ".docx":
+				if in.offset != 0 || in.limit != 2 {
+					t.Fatalf("unexpected DOCX range: %d+%d", in.offset, in.limit)
+				}
+				rawView["text"], rawView["text_total_characters"] = "合成", 4
+			case ".xlsx":
+				text := []rune(syntheticStationWorkbookText)
+				rawView["text"], rawView["text_total_characters"] = string(text[in.offset:min(len(text), in.offset+in.limit)]), len(text)
+				rawView["formula_values"] = "stored_cache_only_not_recalculated"
+			default:
+				t.Fatalf("unexpected document input format: %s", in.extension)
 			}
-			raw, _ := json.Marshal(map[string]any{"kind": "docx", "sha256": in.record.SHA256,
-				"bytes": in.record.Bytes, "text": "合成", "text_offset": 0, "text_total_characters": 4})
+			raw, _ := json.Marshal(rawView)
 			view, err := stationDocumentResult(in, raw)
 			if err != nil {
 				return "", err
@@ -96,6 +109,8 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		"doc": makeMessage("doc", requester, "fixture.docx"), "other": makeMessage("other", "another-member", "fixture.docx"),
 		"pdf": makeMessage("pdf", "another-member", "fixture.pdf"), "unseen": makeMessage("unseen", requester, "fixture.docx"),
 		"own-pdf": makeMessage("own-pdf", requester, "fixture.pdf"),
+		"xlsx":    makeMessage("xlsx", requester, "fixture.xlsx"),
+		"spoof":   makeMessage("spoof", requester, "invalid.xlsx"),
 	}
 	foreign := makeMessage("foreign", requester, "fixture.docx")
 	foreign.ThreadID = "different@chatroom"
@@ -105,8 +120,10 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	messages[future.ID] = future
 	docx := syntheticStationDOCX(t)
 	pdf := syntheticStationPDF()
-	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf}
-	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf"}
+	xlsx := syntheticStationXLSX(t)
+	fixtures := map[string][]byte{"doc": docx, "unseen": docx, "pdf": pdf, "own-pdf": pdf, "xlsx": xlsx, "spoof": docx}
+	mimes := map[string]string{"doc": localDOCXMIME, "unseen": localDOCXMIME, "pdf": "application/pdf", "own-pdf": "application/pdf",
+		"xlsx": "application/octet-stream", "spoof": localXLSXMIME}
 	withIllustrations := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_ILLUSTRATIONS_TEST") == "1"
 	withMerges := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_MERGED_TABLE_TEST") == "1"
 	withBorderless := imagePDFText != nil && os.Getenv("AHS_LOCAL_PROJECT_BORDERLESS_TABLE_TEST") == "1"
@@ -257,6 +274,8 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 		MessageTime: now.Format(time.RFC3339), UnreadMessages: []companion.ConversationEvent{
 			{MessageID: "doc", Sender: requester, Source: refs["doc"]},
 			{MessageID: "other", Sender: "another-member", Source: refs["other"]},
+			{MessageID: "xlsx", Sender: requester, Source: refs["xlsx"]},
+			{MessageID: "spoof", Sender: requester, Source: refs["spoof"]},
 		}}
 	tools.SetTrace(current)
 	list, err := tools.List(t.Context())
@@ -278,6 +297,26 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 	if _, err := call(`{"message_id":"other"}`); !errors.Is(err, wechatapp.ErrAttachmentDenied) {
 		t.Fatalf("unquoted other-sender attachment was not denied: %v", err)
 	}
+	t.Run("xlsx", func(t *testing.T) {
+		beforeXLSX := transfers.Load()
+		digest := fmt.Sprintf("%x", sha256.Sum256(xlsx))
+		first, err := call(`{"message_id":"xlsx","text_limit":10}`)
+		if err != nil || !strings.Contains(first, `"format":"xlsx"`) ||
+			!strings.Contains(first, `"next_text_offset":10`) || !strings.Contains(first, digest) {
+			t.Fatalf("first workbook read: %s, %v", first, err)
+		}
+		continued, err := call(fmt.Sprintf(`{"message_id":"xlsx","text_offset":10,"expected_sha256":%q}`, digest))
+		if err != nil || !strings.Contains(continued, "A1=合成单元格") || !strings.Contains(continued, "B1=formula=1+2; cached_value=3") ||
+			!strings.Contains(continued, `"formula_values":"stored_cache_only_not_recalculated"`) || transfers.Load() != beforeXLSX+1 {
+			t.Fatalf("workbook continuation: %s, %v", continued, err)
+		}
+		for _, invalid := range []string{`{"message_id":"xlsx","page":1}`, `{"message_id":"xlsx","ocr_mode":"always"}`,
+			fmt.Sprintf(`{"message_id":"xlsx","expected_sha256":%q}`, strings.Repeat("0", 64)), `{"message_id":"spoof"}`} {
+			if out, err := call(invalid); err == nil {
+				t.Fatalf("invalid workbook invocation succeeded: %s", out)
+			}
+		}
+	})
 	if withPDF {
 		current.QuotedSource = refs["pdf"]
 		tools.SetTrace(current)
@@ -589,13 +628,29 @@ func testStationWechatDocument(t *testing.T, documents stationDocumentTools, wit
 
 func syntheticStationDOCX(t *testing.T) []byte {
 	t.Helper()
-	var buf bytes.Buffer
-	z := zip.NewWriter(&buf)
-	for name, value := range map[string]string{
+	return syntheticStationOOXML(t, map[string]string{
 		"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
 		"_rels/.rels":         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
 		"word/document.xml":   `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>合成正文</w:t></w:r></w:p></w:body></w:document>`,
-	} {
+	})
+}
+
+func syntheticStationXLSX(t *testing.T) []byte {
+	t.Helper()
+	return syntheticStationOOXML(t, map[string]string{
+		"[Content_Types].xml":        `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+		"_rels/.rels":                `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+		"xl/workbook.xml":            `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="验收表" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>合成单元格</t></is></c><c r="B1"><f>1+2</f><v>3</v></c></row></sheetData></worksheet>`,
+	})
+}
+
+func syntheticStationOOXML(t *testing.T, parts map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	for name, value := range parts {
 		part, err := z.Create(name)
 		if err != nil {
 			t.Fatal(err)
