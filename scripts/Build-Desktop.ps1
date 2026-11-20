@@ -592,7 +592,7 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
   New-Item -ItemType Directory -Force -Path $dataRoot,(Join-Path $dataRoot 'applications'),(Join-Path $dataRoot 'publictools'),(Join-Path $dataRoot 'main_setting'),(Join-Path $dataRoot 'workspace') | Out-Null
   $layoutPath=Join-Path $dataRoot 'data-layout.json'
   if(-not (Test-Path -LiteralPath $layoutPath -PathType Leaf)){
-   [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/main"}',[Text.UTF8Encoding]::new($false))
+   [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/tools/workspace/main_setting"}',[Text.UTF8Encoding]::new($false))
   }
   $jsonData=[ordered]@{backend='local-station';data_root='data';workspace_root='data\workspace'}
   if($WithWeChatRuntime -and $ApplicationPackagesDirectory){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
