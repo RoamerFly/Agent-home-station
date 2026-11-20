@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -35,7 +35,7 @@
     "base_models/enrollment-v2.json": "3602c939d4c742fe7c0674bdb7be8a093e36171ca4cd99575e72dc2a150944ec",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_cloud_tts.py": "6c17889c9652060c9ebe3e1dcb993b49b9d96502cddc066b59901241bad9a8f3",
-    "tests/test_named_voice.py": "1aef6669ef2a5a4bda43c664aa71c837ab1b6a75052e16ec57d6220a77f22fa8",
+    "tests/test_named_voice.py": "6996ca61d8e4b71476dbc5e9e46b0bd2afd8f3022b72859273d8494af0a09b64",
     "tests/test_enroll.py": "26574d299d3ebb9f8749bedb28acea478394cf2b4f1ce2f6bd685d4dacaac493",
     "ui.schema.json": "897a018b01ecd8ec11d6c9b8ac02e067c442916d061410ffb7459658ff338300",
     "dev/legacy-sdk/client.go": "4dcd019791ccda44ca685a61b9471ff5295d9d242bac849d2eee77b88ad42192",

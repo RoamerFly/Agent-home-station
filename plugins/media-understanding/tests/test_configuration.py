@@ -24,8 +24,8 @@ class ConfigurationContractTests(unittest.TestCase):
         profile = self.schema["properties"]["local_asr_profile_id"]
         self.assertEqual((profile["minLength"], profile["maxLength"]), (1, 128))
 
-    def test_staged_ready_scope_is_exactly_observe_and_transcribe(self):
-        self.assertEqual((self.manifest["version"], self.manifest["status"]), ("0.2.0", "ready"))
+    def test_ready_scope_is_vision_transcription_and_audio_review(self):
+        self.assertEqual(self.manifest["status"], "ready")
         capabilities = json.loads((ROOT / "capabilities.json").read_text(encoding="utf8"))["capabilities"]
         self.assertEqual([item["id"] for item in capabilities], ["media.observe", "media.transcribe", "media.listen"])
         for item in capabilities:

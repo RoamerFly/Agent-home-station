@@ -10,6 +10,7 @@ from pathlib import Path
 import random
 import shutil
 import hashlib
+import stat
 
 
 def checkpoint_digest(path):
@@ -68,7 +69,8 @@ def training_layout(project):
 def create_shadow(source, destination):
     """Keep all mutable training state private; reuse only read-only assets."""
     source, destination = training_path(source), training_path(destination)
-    if not source.is_dir() or source.is_symlink() or (os.name == 'nt' and source.is_junction()):
+    if (not source.is_dir() or source.is_symlink()
+            or (os.name == 'nt' and source.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
         raise ValueError('training_source_directory_required')
     if destination.exists():
         raise ValueError('training_shadow_destination_must_be_new')

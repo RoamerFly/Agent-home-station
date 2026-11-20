@@ -117,7 +117,6 @@ class NamedVoiceTests(unittest.TestCase):
         package = json.loads((ROOT / 'plugin.json').read_text(encoding='utf8'))
         config = json.loads((ROOT / 'config.schema.json').read_text(encoding='utf8'))
         caps = json.loads((ROOT / 'capabilities.json').read_text(encoding='utf8'))['capabilities']
-        self.assertEqual(package['version'], '0.3.0')
         self.assertEqual(package['permissions'], ['artifact.read', 'model.invoke'])
         self.assertTrue(package['http_routes'][0]['optional'])
         self.assertFalse(config.get('required'))

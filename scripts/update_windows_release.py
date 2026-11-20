@@ -205,11 +205,14 @@ def main():
     parser.add_argument("--media-directory", type=Path)
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--keep-stopped", action="store_true", help="Apply and verify files without starting account services")
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--native-account", default="desktop")
     args = parser.parse_args()
     if os.name != "nt" or args.timeout <= 0:
         parser.error("Windows and a positive timeout are required")
+    if args.keep_stopped and not args.apply:
+        parser.error("--keep-stopped requires --apply")
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", args.native_account):
         parser.error("Invalid native account ID")
     release = physical(args.release.absolute())
@@ -290,6 +293,11 @@ def update(args, release, work):
                 row["path"] = Path(row["path"]).relative_to(release).as_posix()
         write_json(work / "manifest.json", old_manifest)
         transaction.install(Path("manifest.json"), work / "manifest.json")
+        if args.keep_stopped:
+            if listeners():
+                raise RuntimeError("A workstation listener started during the stopped update")
+            write_json(work / "result.json", {"updated": True, "kept_stopped": True, "healthy": None, "native_login": None})
+            return
         startup = subprocess.STARTUPINFO()
         startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         process = subprocess.Popen([str(launcher)], cwd=release, startupinfo=startup)

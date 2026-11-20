@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "media-understanding",
   "name": "媒体理解",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -32,7 +32,7 @@
     "runtime/audio_observation.py": "3c61c7e29a2746e503877a1f80b3ece0b06757f74dc72da730d7f41958fb0f18",
     "runtime/local_asr.py": "0f450db04bd023769ae812a8d8d3582ce30f3552effb20b0c094be4a0f071ed0",
     "runtime/README.md": "59d431dc918a5b21801d3ed396b01c44ca3863fe202c172ed3791e26919048d3",
-    "tests/test_configuration.py": "a2ececc04f51e9016e9a647ca2ce022c70d6199b15170306ad744ae47c857f4e",
+    "tests/test_configuration.py": "533d329d6eea45dd0a7075d436078b48430dfc50ddda2fa008553da1d6d309b3",
     "tests/test_audio_observation.py": "f7b6b84d4df3aeede2ed15a56e7cc42731193475b330c24bed411d3f05ba7efc",
     "tests/test_observation.py": "0a0c4c1485dc2e3a3b39c7850da9e627380c7b688f214327dfc693476bc006b8",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",

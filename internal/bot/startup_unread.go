@@ -347,8 +347,12 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		if err != nil && in.IsGroup {
 			if independentGroupTextRequest(in, *event) {
 				event.MediaReadFailed = true
-				report(Record{Event: "background_video_read_failed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
-					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: "背景视频未读到内容，继续独立文字请求。"})
+				name, detail := "background_video_read_failed", "背景视频未读到内容，继续独立文字请求。"
+				if event.Source.MessageType == 47 {
+					name, detail = "background_sticker_read_failed", "背景表情包未读到画面，继续独立文字请求。"
+				}
+				report(Record{Event: name, Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
+					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: detail})
 				continue
 			}
 			return &groupObservationFailure{reason: observationReason(err), messageID: id}
@@ -369,7 +373,7 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 	return nil
 }
 
-// An unrelated video or share card can remain background for a verified text
+// An unrelated video, share card or sticker can remain background for a verified text
 // request. Keep the existing failure policy when it is the actual target or
 // is explicitly referenced anywhere in this batch. A share from the same
 // sender is allowed when a later message is the explicit text request; this
@@ -378,11 +382,11 @@ func independentGroupTextRequest(in *companion.Input, media companion.Conversati
 	if !in.Directed || media.Source == nil || media.MessageID == in.TraceID || media.Sender == "" {
 		return false
 	}
-	background := media.Source.MessageType == 43 || media.Source.MessageType == 49
+	background := media.Source.MessageType == 43 || media.Source.MessageType == 49 || media.Source.MessageType == 47
 	if !background {
 		return false
 	}
-	if media.Source.MessageType != 49 && media.Sender == in.Sender {
+	if media.Source.MessageType == 43 && media.Sender == in.Sender {
 		return false
 	}
 	anchorText := false

@@ -68,6 +68,26 @@ func TestIndependentGroupTextRequestKeepsReferencedShareBlocking(t *testing.T) {
 	}
 }
 
+func TestIndependentGroupTextRequestHandlesOnlyBackgroundSticker(t *testing.T) {
+	sticker := companion.SourceRef{MessageID: "sticker", MessageType: 47}
+	in := companion.Input{
+		Directed: true,
+		Sender:   "sender",
+		TraceID:  "text",
+		UnreadMessages: []companion.ConversationEvent{
+			{MessageID: sticker.MessageID, Sender: "sender", Source: &sticker},
+			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}},
+		},
+	}
+	if !independentGroupTextRequest(&in, in.UnreadMessages[0]) {
+		t.Fatal("an unrelated sticker blocked an independent directed request")
+	}
+	in.UnreadMessages[1].ReplyTo = &sticker
+	if independentGroupTextRequest(&in, in.UnreadMessages[0]) {
+		t.Fatal("a directly quoted sticker was treated as background")
+	}
+}
+
 func (s *pagedUnreadSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
 	n, _ := strconv.Atoi(after)
 	page := linuxnative.EventPage{NextCursor: after}

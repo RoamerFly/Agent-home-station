@@ -4,13 +4,39 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from update_windows_release import EXE, SERVER, Replacement, payload
+from update_windows_release import EXE, MIGRATION, SERVER, Replacement, payload, update
 
 
 class UpdateTests(unittest.TestCase):
+    def test_apply_while_stopped_does_not_start_account_services(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release, candidate, work = root / "release", root / "candidate", root / "work"
+            release.mkdir()
+            candidate.mkdir()
+            (release / EXE).write_bytes(b"old")
+            (candidate / EXE).write_bytes(b"new")
+            (release / "manifest.json").write_text("{}", encoding="utf-8")
+            paths = {Path(EXE): candidate / EXE}
+            with (
+                patch("update_windows_release.payload", return_value=paths),
+                patch("update_windows_release.check", return_value={"applications": [], "public_tools": []}),
+                patch("update_windows_release.validate", return_value={"ok": True}),
+                patch("update_windows_release.migration_manifest", return_value={"schema_version": 1}),
+                patch("update_windows_release.listeners", return_value=False),
+                patch("update_windows_release.subprocess.Popen") as launch,
+            ):
+                update(SimpleNamespace(candidate=candidate, apply=True, keep_stopped=True), release, work)
+            launch.assert_not_called()
+            self.assertEqual((release / EXE).read_bytes(), b"new")
+            self.assertTrue((release / MIGRATION).is_file())
+            result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result, {"updated": True, "kept_stopped": True, "healthy": None, "native_login": None})
+
     def test_payload_updates_indexed_package_files_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
