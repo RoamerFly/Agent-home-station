@@ -163,9 +163,8 @@ func (m *Manager) reclaimWindowsMusicIdle(generation uint64, timeout time.Durati
 }
 
 func (m *Manager) windowsMusicRegistered() bool {
-	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
-	var profile windowsMusicConfig
-	return err == nil && len(data) <= 16384 && json.Unmarshal(data, &profile) == nil && profile.Enabled && profile.Policy == windowsMusicPolicy
+	_, _, err := m.windowsMusicLaunchConfig()
+	return err == nil
 }
 
 func regularMusicPath(path string, directory bool) error {
@@ -249,41 +248,32 @@ func registeredMusicVoiceConfig(raw string) (string, error) {
 	return filepath.Clean(raw), nil
 }
 
-func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
-	if m.draining() {
-		return "", toolInputError("windows_music_start_paused_for_update")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
+// Validate the same launch resources for status and start, including registrations
+// preserved across a portable upgrade whose original paths no longer exist.
+func (m *Manager) windowsMusicLaunchConfig() (windowsMusicConfig, []byte, error) {
 	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
 	var config windowsMusicConfig
 	if err != nil || len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
-		return "", toolInputError("windows_music_not_installed_or_authorized")
-	}
-	if config.ComfyRegistration != "" {
-		if !filepath.IsAbs(config.ComfyRegistration) || regularMusicPath(config.ComfyRegistration, false) != nil || config.ComfyURL == "" {
-			return "", toolInputError("windows_music_comfy_registration_invalid")
-		}
+		return config, nil, toolInputError("windows_music_not_installed_or_authorized")
 	}
 	comfyURL, err := registeredComfyURL(config.ComfyURL)
 	if err != nil {
-		return "", err
+		return config, nil, err
 	}
 	comfyInput, err := registeredComfyInput(config.ComfyInput)
 	if err != nil {
-		return "", err
+		return config, nil, err
 	}
 	public := filepath.Join(m.managedRoot(), "public_workspace")
 	if config.PublicRoot != "" {
 		public, err = registeredMusicPublicRoot(config.PublicRoot)
 		if err != nil {
-			return "", err
+			return config, nil, err
 		}
 	}
 	voiceConfig, err := registeredMusicVoiceConfig(config.SingingVoiceConfig)
 	if err != nil {
-		return "", err
+		return config, nil, err
 	}
 	// A package root stores its executable runtime under `runtime/`; the
 	// historical managed-workspaces layout used `runtimes/`. Accept the
@@ -294,35 +284,54 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	pythonRoot := filepath.Join(public, pythonRootName) + string(os.PathSeparator)
 	if !strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) || !strings.EqualFold(filepath.Base(config.Python), "python.exe") || filepath.Base(config.Entry) != "managed_music_service.py" {
-		return "", toolInputError("windows_music_runtime_identity_invalid")
+		return config, nil, toolInputError("windows_music_runtime_identity_invalid")
+	}
+	if err := regularMusicPath(config.Python, false); err != nil {
+		return config, nil, toolInputError("windows_music_python_unavailable")
 	}
 	for _, resource := range []struct {
 		path string
 		dir  bool
-	}{{public, true}, {config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
+	}{{public, true}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
 		if err := regularMusicPath(resource.path, resource.dir); err != nil {
-			return "", err
+			return config, nil, err
 		}
 	}
-	if voiceConfig != "" {
-		if err := regularMusicPath(voiceConfig, false); err != nil {
-			return "", err
-		}
+	if config.ComfyRegistration != "" && (comfyURL == "" || regularMusicPath(config.ComfyRegistration, false) != nil) {
+		return config, nil, toolInputError("windows_music_comfy_registration_invalid")
 	}
 	if comfyInput != "" {
 		if comfyURL == "" {
-			return "", toolInputError("windows_music_comfy_input_requires_url")
+			return config, nil, toolInputError("windows_music_comfy_input_requires_url")
 		}
 		if err := regularMusicPath(comfyInput, true); err != nil {
-			return "", err
+			return config, nil, err
 		}
 	}
 	// Control code, authentication and IPC leases stay outside inference mounts.
 	for _, path := range []string{config.Entry, config.IPC} {
 		if pathWithin(m.managedRoot(), path) {
-			return "", toolInputError("windows_music_control_inside_agent_workspace")
+			return config, nil, toolInputError("windows_music_control_inside_agent_workspace")
 		}
 	}
+	config.PublicRoot, config.SingingVoiceConfig = public, voiceConfig
+	config.ComfyURL, config.ComfyInput = comfyURL, comfyInput
+	return config, data, nil
+}
+
+func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
+	if m.draining() {
+		return "", toolInputError("windows_music_start_paused_for_update")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	config, data, err := m.windowsMusicLaunchConfig()
+	if err != nil {
+		return "", err
+	}
+	public, voiceConfig := config.PublicRoot, config.SingingVoiceConfig
+	comfyURL, comfyInput := config.ComfyURL, config.ComfyInput
 	localEndpoint, localToken, err := m.localMusicPluginConnection(ctx)
 	if err != nil {
 		return "", err
@@ -359,34 +368,22 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		if err := checkMusicServiceControl(ctx); err != nil {
 			return err
 		}
-		current, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
-		if err != nil || string(current) != string(data) {
+		_, current, err := m.windowsMusicLaunchConfig()
+		if err != nil {
+			return err
+		}
+		if string(current) != string(data) {
 			return toolInputError("windows_music_registration_changed")
 		}
 		currentAuthority, err := m.musicServiceAuthority(ctx)
 		if err != nil || currentAuthority != authority {
 			return toolInputError("windows_music_plugin_authorization_changed")
 		}
-		for _, resource := range []struct {
-			path string
-			dir  bool
-		}{{public, true}, {config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
-			if err := regularMusicPath(resource.path, resource.dir); err != nil {
-				return err
-			}
-		}
-		if voiceConfig != "" {
-			if err := regularMusicPath(voiceConfig, false); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 	arguments := []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
 		"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"}
-	if config.PublicRoot != "" {
-		arguments = append(arguments, "--public-root", public)
-	}
+	arguments = append(arguments, "--public-root", public)
 	if voiceConfig != "" {
 		arguments = append(arguments, "--singing-voice-config", voiceConfig)
 	}

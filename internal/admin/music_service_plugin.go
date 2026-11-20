@@ -90,11 +90,18 @@ func (p *musicServiceControlPolicy) Service(ctx context.Context, j pluginhost.Jo
 		result = json.RawMessage(value)
 	case "status":
 		state := m.windowsMusicStatus()
-		configured := m.localMusicPluginConfigured(ctx)
-		if runtime.GOOS == "windows" {
-			configured = configured && m.windowsMusicRegistered()
+		status := map[string]any{
+			"platform": runtime.GOOS, "configured": m.localMusicPluginConfigured(ctx),
+			"running": state.Running, "busy": state.Busy, "stopping": state.Stopping,
+			"coverage": "owned_supervisor_only", "model_ready_verified": false,
 		}
-		result, _ = json.Marshal(map[string]any{"platform": runtime.GOOS, "configured": configured, "running": state.Running, "busy": state.Busy, "stopping": state.Stopping, "coverage": "owned_supervisor_only", "model_ready_verified": false})
+		if runtime.GOOS == "windows" {
+			if _, _, err := m.windowsMusicLaunchConfig(); err != nil {
+				status["configured"] = false
+				status["registration_error"] = err.Error()
+			}
+		}
+		result, _ = json.Marshal(status)
 	case "stop":
 		if runtime.GOOS != "windows" {
 			return nil, toolInputError("managed_local_music_stop_not_applicable")

@@ -48,6 +48,23 @@ func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	save()
+	if !f.manager.windowsMusicRegistered() {
+		t.Fatal("complete registration was rejected")
+	}
+	config.Python = filepath.Join(public, "runtimes", "moved", "python.exe")
+	save()
+	if _, err := f.manager.startWindowsMusic(t.Context()); f.manager.windowsMusicRegistered() || err == nil || err.Error() != "windows_music_python_unavailable" {
+		t.Fatal("missing interpreter was reported as configured", err)
+	}
+	config.Python = python
+	config.ComfyURL = "http://127.0.0.1:6193"
+	config.ComfyRegistration = filepath.Join(control, "moved", "station-registration.json")
+	save()
+	if _, err := f.manager.startWindowsMusic(t.Context()); f.manager.windowsMusicRegistered() || err == nil || err.Error() != "windows_music_comfy_registration_invalid" {
+		t.Fatal("missing ComfyUI registration was advertised as configured", err)
+	}
+	config.ComfyURL, config.ComfyRegistration = "", ""
 	config.Policy = "unrestricted"
 	save()
 	if _, err := f.manager.startWindowsMusic(t.Context()); err == nil {
