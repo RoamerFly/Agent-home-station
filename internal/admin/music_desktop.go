@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -248,12 +250,64 @@ func registeredMusicVoiceConfig(raw string) (string, error) {
 	return filepath.Clean(raw), nil
 }
 
+// A relocated Windows installation may share the packaged CLI Python with
+// other local tools.  Accept only this release-owned executable and verify its
+// pinned bytes; a path in private configuration cannot nominate another host
+// interpreter or turn the music package into an arbitrary process launcher.
+func registeredPortableMusicPython(adminDir, python string) bool {
+	release := filepath.Clean(filepath.Join(adminDir, "..", "..", "..", ".."))
+	if !strings.EqualFold(filepath.Clean(adminDir), filepath.Join(release, "data", "applications", "wechat", "legacy-admin")) ||
+		!strings.EqualFold(filepath.Clean(python), filepath.Join(release, "env", "windows-python-cli", "python.exe")) {
+		return false
+	}
+	var layout struct {
+		Package  string `json:"package"`
+		Platform string `json:"platform"`
+		Layout   struct {
+			Data     string `json:"data"`
+			Runtimes string `json:"runtimes"`
+		} `json:"layout"`
+	}
+	manifest, err := os.ReadFile(filepath.Join(release, "manifest.json"))
+	if err != nil || len(manifest) > 16<<10 || json.Unmarshal(manifest, &layout) != nil ||
+		layout.Package != "agent-home-station" || layout.Platform != "windows-amd64" ||
+		layout.Layout.Data != "data" || layout.Layout.Runtimes != "env" {
+		return false
+	}
+	var runtimeManifest struct {
+		Platform string            `json:"platform"`
+		Files    map[string]string `json:"files"`
+	}
+	runtimeRoot := filepath.Join(release, "env", "windows-python-cli")
+	manifest, err = os.ReadFile(filepath.Join(runtimeRoot, "runtime-manifest.json"))
+	if err != nil || len(manifest) > 16<<10 || json.Unmarshal(manifest, &runtimeManifest) != nil || runtimeManifest.Platform != "windows-x64" {
+		return false
+	}
+	expected, err := hex.DecodeString(runtimeManifest.Files["python.exe"])
+	if err != nil || len(expected) != sha256.Size || regularMusicPath(python, false) != nil {
+		return false
+	}
+	actual, err := os.ReadFile(python)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(actual)
+	return string(digest[:]) == string(expected)
+}
+
 // Validate the same launch resources for status and start, including registrations
 // preserved across a portable upgrade whose original paths no longer exist.
 func (m *Manager) windowsMusicLaunchConfig() (windowsMusicConfig, []byte, error) {
 	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
+	if err != nil {
+		return windowsMusicConfig{}, nil, toolInputError("windows_music_not_installed_or_authorized")
+	}
+	return m.validateWindowsMusicLaunchConfig(data)
+}
+
+func (m *Manager) validateWindowsMusicLaunchConfig(data []byte) (windowsMusicConfig, []byte, error) {
 	var config windowsMusicConfig
-	if err != nil || len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
+	if len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
 		return config, nil, toolInputError("windows_music_not_installed_or_authorized")
 	}
 	comfyURL, err := registeredComfyURL(config.ComfyURL)
@@ -283,7 +337,8 @@ func (m *Manager) windowsMusicLaunchConfig() (windowsMusicConfig, []byte, error)
 		pythonRootName = "runtime"
 	}
 	pythonRoot := filepath.Join(public, pythonRootName) + string(os.PathSeparator)
-	if !strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) || !strings.EqualFold(filepath.Base(config.Python), "python.exe") || filepath.Base(config.Entry) != "managed_music_service.py" {
+	packagePython := strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) && strings.EqualFold(filepath.Base(config.Python), "python.exe")
+	if (!packagePython && !registeredPortableMusicPython(m.dir, config.Python)) || filepath.Base(config.Entry) != "managed_music_service.py" {
 		return config, nil, toolInputError("windows_music_runtime_identity_invalid")
 	}
 	if err := regularMusicPath(config.Python, false); err != nil {

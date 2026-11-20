@@ -3,6 +3,8 @@ package admin
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -23,6 +25,66 @@ func TestWindowsMusicIdleFixture(t *testing.T) {
 	for s.Scan() {
 		if s.Text() == "stop" {
 			return
+		}
+	}
+}
+
+func TestRegisteredPortableMusicPythonRequiresPinnedRelease(t *testing.T) {
+	release := t.TempDir()
+	adminDir := filepath.Join(release, "data", "applications", "wechat", "legacy-admin")
+	runtimeRoot := filepath.Join(release, "env", "windows-python-cli")
+	for _, dir := range []string{adminDir, runtimeRoot} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	python := filepath.Join(runtimeRoot, "python.exe")
+	original := []byte("synthetic pinned CLI Python")
+	if err := os.WriteFile(python, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(release, "manifest.json"), []byte(`{"package":"agent-home-station","platform":"windows-amd64","layout":{"data":"data","runtimes":"env"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(original)
+	runtimeManifest, _ := json.Marshal(map[string]any{"platform": "windows-x64", "files": map[string]string{"python.exe": hex.EncodeToString(digest[:])}})
+	if err := os.WriteFile(filepath.Join(runtimeRoot, "runtime-manifest.json"), runtimeManifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !registeredPortableMusicPython(adminDir, python) {
+		t.Fatal("pinned release CLI Python rejected")
+	}
+	if registeredPortableMusicPython(filepath.Join(release, "data", "other-admin"), python) ||
+		registeredPortableMusicPython(adminDir, filepath.Join(release, "other", "python.exe")) {
+		t.Fatal("unrelated administrator or interpreter admitted")
+	}
+	if err := os.WriteFile(python, []byte("modified executable"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if registeredPortableMusicPython(adminDir, python) {
+		t.Fatal("changed CLI Python admitted")
+	}
+}
+
+func TestRegisteredPortableMusicPythonInstalledRelease(t *testing.T) {
+	release := os.Getenv("AHS_WINDOWS_RELEASE_ROOT")
+	if release == "" {
+		t.Skip("set AHS_WINDOWS_RELEASE_ROOT for the installed Windows runtime check")
+	}
+	adminDir := filepath.Join(release, "data", "applications", "wechat", "legacy-admin")
+	python := filepath.Join(release, "env", "windows-python-cli", "python.exe")
+	if !registeredPortableMusicPython(adminDir, python) {
+		t.Fatal("installed Windows CLI Python is not a pinned music runtime")
+	}
+	if candidate := os.Getenv("AHS_WINDOWS_MUSIC_CANDIDATE"); candidate != "" {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := &Manager{dir: adminDir}
+		config, _, err := manager.validateWindowsMusicLaunchConfig(data)
+		if err != nil || config.Python != python {
+			t.Fatalf("isolated music registration not ready: %v", err)
 		}
 	}
 }
