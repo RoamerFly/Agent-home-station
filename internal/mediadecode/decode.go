@@ -190,7 +190,9 @@ var framePTS = regexp.MustCompile(`pts_time:([0-9.+eE-]+)`)
 func ExtractFramesSized(ctx context.Context, path, dir string, start, count, step, dimension int) ([]Image, []float64, error) {
 	end := start + (count-1)*step
 	filter := fmt.Sprintf("select=between(n\\,%d\\,%d)*not(mod(n-%d\\,%d)),showinfo,scale=%d:%d:force_original_aspect_ratio=decrease", start, end, start, step, dimension, dimension)
-	command := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", path, "-map", "0:v:0", "-vf", filter, "-fps_mode", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", filepath.Join(dir, "frame-%06d.jpg"))
+	// Only one output video stream is mapped. The bundled Windows FFmpeg also
+	// predates -fps_mode, so use the equivalent output sync option it supports.
+	command := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", path, "-map", "0:v:0", "-vf", filter, "-vsync", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", filepath.Join(dir, "frame-%06d.jpg"))
 	hideDecoderWindow(command)
 	log, err := command.CombinedOutput()
 	if err != nil {

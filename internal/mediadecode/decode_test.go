@@ -17,7 +17,7 @@ func fixture(t *testing.T) []byte {
 		t.Skip("ffmpeg unavailable")
 	}
 	path := filepath.Join(t.TempDir(), "synthetic.mp4")
-	if output, err := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=2", "-c:v", "libx264", "-threads", "1", path).CombinedOutput(); err != nil {
+	if output, err := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=2", "-c:v", "mpeg4", "-threads", "1", path).CombinedOutput(); err != nil {
 		t.Fatalf("fixture encode: %v %.200s", err, output)
 	}
 	data, err := os.ReadFile(path)
