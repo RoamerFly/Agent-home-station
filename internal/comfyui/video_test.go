@@ -34,9 +34,7 @@ func TestMP4ScopesApprovedOutputAndRejectsOtherJobs(t *testing.T) {
 			client, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/jobs/" + ref.ID:
-					fmt.Fprintf(w, `{"id":%q,"status":"completed"}`, ref.ID)
-				case "/history/" + ref.ID:
-					fmt.Fprintf(w, `{%q:{"status":{"status_str":"success","completed":true},"outputs":{"9":{"images":[{"filename":"video_00001_.mp4","subfolder":%q,"type":"output"}]}}}}`, ref.ID, scope)
+					fmt.Fprintf(w, `{"id":%q,"status":"completed","execution_status":{"status_str":"success","completed":true},"outputs":{"9":{"images":[{"filename":"video_00001_.mp4","subfolder":%q,"type":"output"}],"animated":[true]}}}`, ref.ID, scope)
 				case "/view":
 					if scope != ref.subfolder() || r.URL.Query().Get("subfolder") != ref.subfolder() || r.URL.Query().Get("filename") != "video_00001_.mp4" {
 						t.Error("unexpected MP4 readback", r.URL)
