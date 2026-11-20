@@ -137,6 +137,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	if t.projectTools != nil && !t.inspectOnly {
 		all = append(all, stationLifecycleTools()...)
 	}
+	all = append(all, t.localExternalHTTPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
 		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
 	}
@@ -205,6 +206,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if strings.HasPrefix(name, "station_tool_") {
 		return t.callStationLifecycle(ctx, name, raw)
+	}
+	if name == localExternalHTTPList || name == localExternalHTTPCall {
+		return t.callLocalExternalHTTP(ctx, name, raw)
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)

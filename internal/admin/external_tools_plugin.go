@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,27 +45,12 @@ type externalHTTPResult struct {
 	Output      plugins.Output           `json:"output"`
 }
 
-type externalHTTPBlobRef struct {
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
-}
-type externalHTTPObservation struct {
-	ContentType string               `json:"content_type"`
-	BodyBase64  string               `json:"body_base64,omitempty"`
-	BinaryRef   *externalHTTPBlobRef `json:"binary_ref,omitempty"`
-}
-type externalHTTPWireMedia struct {
-	plugins.MediaResult
-	HostBinaryRef string `json:"host_binary_ref,omitempty"`
-}
-type externalHTTPWireOutput struct {
-	Text  string                  `json:"text"`
-	Media []externalHTTPWireMedia `json:"media,omitempty"`
-}
-type externalHTTPWireResult struct {
-	Observation externalHTTPObservation `json:"observation"`
-	Output      externalHTTPWireOutput  `json:"output"`
-}
+type externalHTTPBlobRef = plugins.ExternalHTTPBlobRef
+type externalHTTPObservation = plugins.ExternalHTTPObservation
+type externalHTTPWireMedia = plugins.ExternalHTTPWireMedia
+type externalHTTPWireOutput = plugins.ExternalHTTPWireOutput
+type externalHTTPWireResult = plugins.ExternalHTTPWireResult
+
 type externalHTTPCheckpoint struct {
 	JobID       string              `json:"job_id,omitempty"`
 	Binding     string              `json:"binding"`
@@ -528,76 +511,16 @@ func (p *externalHTTPPolicy) captureReply(j pluginhost.Job, data []byte, content
 	return nil
 }
 
-func externalHTTPValue(data any, path string) any {
-	if path == "" {
-		return nil
-	}
-	for _, part := range strings.Split(path, ".") {
-		if part == "" {
-			continue
-		}
-		object, ok := data.(map[string]any)
-		if !ok {
-			return nil
-		}
-		data = object[part]
-	}
-	return data
-}
-func externalHTTPText(value any) []string {
-	if value == nil {
-		return []string{""}
-	}
-	if text, ok := value.(string); ok {
-		return []string{text}
-	}
-	encoded, _ := json.Marshal(value)
-	return []string{string(encoded), fmt.Sprint(value)}
-}
-
-// Verify output provenance against the exact observed bytes and selected
-// declaration. The package still owns extraction and protocol decisions.
-func (p *externalHTTPPolicy) outputProof(reply plugins.ExternalResponse, output plugins.Output) bool {
-	data, err := base64.StdEncoding.Strict().DecodeString(reply.BodyBase64)
-	if err != nil {
-		return false
-	}
-	var value any
-	if !externalHTTPIsJSON(data, reply.ContentType) {
-		if strings.Contains(strings.ToLower(reply.ContentType), "json") || output.Text != "" || len(output.Media) != 1 {
-			return false
-		}
-		media := output.Media[0]
-		binary, err := base64.StdEncoding.Strict().DecodeString(media.Base64Data)
-		return err == nil && media.URL == "" && media.Kind == p.tool.MediaKind && media.Kind != "" && media.MIMEType == reply.ContentType && media.Filename == "" && bytes.Equal(binary, data)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if decoder.Decode(&value) != nil {
-		return false
-	}
-	if !slices.Contains(externalHTTPText(externalHTTPValue(value, p.tool.TextPath)), output.Text) {
-		return false
-	}
-	if len(output.Media) > 1 || p.tool.MediaURLPath != "" && len(output.Media) != 1 || p.tool.MediaURLPath == "" && len(output.Media) != 0 {
-		return false
-	}
-	if len(output.Media) == 1 {
-		media := output.Media[0]
-		if media.Kind != p.tool.MediaKind || media.Kind == "" || media.Base64Data != "" || media.MIMEType != "" || media.Filename != "" || media.URL == "" {
-			return false
-		}
-		expected, ok := externalHTTPValue(value, p.tool.MediaURLPath).(string)
-		if !ok || expected != media.URL {
-			return false
-		}
-	}
-	return output.Text != "" || len(output.Media) > 0
-}
-
+func externalHTTPValue(data any, path string) any { return plugins.ExternalHTTPValue(data, path) }
+func externalHTTPText(value any) []string         { return plugins.ExternalHTTPText(value) }
 func externalHTTPIsJSON(data []byte, contentType string) bool {
-	return strings.Contains(strings.ToLower(contentType), "json") || json.Valid(data)
+	return plugins.ExternalHTTPIsJSON(data, contentType)
 }
+
+func (p *externalHTTPPolicy) outputProof(reply plugins.ExternalResponse, output plugins.Output) bool {
+	return plugins.VerifyExternalHTTPOutput(p.tool, reply, output)
+}
+
 func (p *externalHTTPPolicy) replyRoot() string {
 	return filepath.Join(p.p.manager.privateWorkspaceFor(p.invocation.Account), "external-http-replies")
 }
@@ -638,39 +561,9 @@ func (p *externalHTTPPolicy) readPrivateFile(j pluginhost.Job, name string, ref 
 	return data, nil
 }
 func (p *externalHTTPPolicy) materialize(result externalHTTPWireResult, data []byte, body externalHTTPBlobRef, contentType string) (plugins.Output, error) {
-	denied := errors.New("external_http_result_changed")
-	if result.Observation.ContentType != contentType {
-		return plugins.Output{}, denied
-	}
-	if !externalHTTPIsJSON(data, contentType) {
-		if result.Observation.BinaryRef == nil || *result.Observation.BinaryRef != body || result.Observation.BodyBase64 != "" || result.Output.Text != "" || len(result.Output.Media) != 1 {
-			return plugins.Output{}, denied
-		}
-		media := result.Output.Media[0]
-		if media.HostBinaryRef != body.SHA256 || media.Kind != p.tool.MediaKind || media.Kind == "" || media.URL != "" || media.Base64Data != "" || media.MIMEType != "" || media.Filename != "" {
-			return plugins.Output{}, denied
-		}
-		return plugins.Output{Media: []plugins.MediaResult{{Kind: media.Kind, Data: append([]byte(nil), data...), MIMEType: contentType}}}, nil
-	}
-	if result.Observation.BinaryRef != nil {
-		return plugins.Output{}, denied
-	}
-	observed, err := base64.StdEncoding.Strict().DecodeString(result.Observation.BodyBase64)
-	if err != nil || !bytes.Equal(data, observed) {
-		return plugins.Output{}, denied
-	}
-	output := plugins.Output{Text: result.Output.Text}
-	for _, media := range result.Output.Media {
-		if media.HostBinaryRef != "" {
-			return plugins.Output{}, denied
-		}
-		output.Media = append(output.Media, media.MediaResult)
-	}
-	if !p.outputProof(plugins.ExternalResponse{ContentType: contentType, BodyBase64: result.Observation.BodyBase64}, output) {
-		return plugins.Output{}, denied
-	}
-	return output, nil
+	return plugins.MaterializeExternalHTTPOutput(p.tool, result, data, body, contentType)
 }
+
 func (p *externalHTTPPolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

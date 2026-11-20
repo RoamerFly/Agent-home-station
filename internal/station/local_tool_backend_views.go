@@ -3,7 +3,9 @@ package station
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 
 	"wechat-bot/internal/localasr"
@@ -68,7 +70,22 @@ func (s *localProjectTools) populateToolBackends(ctx context.Context, host *loca
 		view.Backends = []pluginhost.ToolBackendView{search}
 	case "share-reader":
 		view.Backends = []pluginhost.ToolBackendView{{Name: "公开链接读取", Kind: "web", State: local.State}}
-	case "speech", "external-tools":
+	case localExternalPackage:
+		state := "missing"
+		if raw, err := s.externalRegistration(); err == nil {
+			if _, bridge, err := externalHTTPRegistration(raw); err != nil {
+				state = "unreadable"
+			} else if len(bridge.Protocol().Tools) != 0 {
+				state = "configured"
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			state = "unreadable"
+		}
+		view.Backends = []pluginhost.ToolBackendView{{Name: "同步 HTTP 连接", Kind: "api", State: state, Scope: "工作站"}}
+		if view.Installed && view.Enabled && view.RuntimeReady && state != "configured" && view.Reason == "" {
+			view.Reason = "请在工作站私有登记目录配置同步 HTTP 连接。"
+		}
+	case "speech":
 		view.Backends = []pluginhost.ToolBackendView{{Name: view.Name, Kind: "package", State: "declared"}}
 	default:
 		if view.ExternalPackage {

@@ -31,6 +31,37 @@
 
 最后一步核对目标并创建。工具初始未启用，可从“管理连接工具”编辑声明、鉴权和启用状态。请同时核对“外部工具连接”的安装与授权。本地程序和多文件工具仍可选择“导入本机工具”。
 
+### Windows 工作站主页的同步 HTTP 工具
+
+在工作站的「项目工具」安装并启用「外部工具连接」。自行构建时可用 `Build-Desktop.ps1 -LocalStation -WithExternalTools` 包含该工具。在发行目录的 `data/publictools/registrations/station-external-tools.json` 保存主人授权的连接。下面的例子登记一个无凭据的公开只读接口。
+
+```json
+{
+  "connections": [
+    {
+      "enabled": true,
+      "manifest": {
+        "id": "example",
+        "name": "公开仓库信息",
+        "version": "1.0.0",
+        "tools": [
+          {
+            "name": "repository",
+            "description": "查询公开示例仓库名称",
+            "method": "GET",
+            "url": "https://api.github.com/repos/octocat/Hello-World",
+            "text_path": "full_name",
+            "input_schema": {"type": "object", "properties": {}, "additionalProperties": false}
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。主页的 Job、Poll 和 MCP 连接接入继续跟踪。
+
 ## 编写第一个工具
 
 从仓库的 `templates/plugins/` 选一个能运行的模板：本地 Python 选 `python-stdio`，本地 Go 选 `go-stdio`，远程接口选 `http-mcp`。复制到自己的开发目录，给工具设置唯一 ID。

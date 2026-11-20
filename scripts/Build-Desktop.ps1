@@ -1,4 +1,4 @@
-﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop, [switch]$WithExternalTools)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -300,6 +300,7 @@ if($WithYuE -and -not $LocalStation){throw 'WithYuE is only valid with -LocalSta
 if($WithStationSpeech -and -not $LocalStation){throw 'WithStationSpeech is only valid with -LocalStation.'}
 if($WithAudioCpp -and -not $LocalStation){throw 'WithAudioCpp is only valid with -LocalStation.'}
 if($WithOBSPreview -and -not $LocalStation){throw 'WithOBSPreview is only valid with -LocalStation.'}
+if($WithExternalTools -and -not $LocalStation){throw 'WithExternalTools is only valid with -LocalStation.'}
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
 if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
 foreach($externalDirectory in @(@{Name='ToolPackagesDirectory';Value=$ToolPackagesDirectory},@{Name='ApplicationPackagesDirectory';Value=$ApplicationPackagesDirectory})){
@@ -371,7 +372,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview) -and -not ($LocalStation -and $ToolPackagesDirectory)){
+if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview -or $WithExternalTools) -and -not ($LocalStation -and $ToolPackagesDirectory)){
  $pluginSource=Join-Path $workspace 'plugins'
  $catalogArgs=@('--source',$pluginSource,'--output',(Join-Path $OutputDirectory 'plugins'))
  if(-not $LocalStation){
@@ -394,6 +395,7 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
  if($LocalStation -and $WithStationSpeech){$catalogArgs+=@('--package','station-speech')}
  if($LocalStation -and $WithAudioCpp){$catalogArgs+=@('--package','audio-cpp')}
  if($LocalStation -and $WithOBSPreview){$catalogArgs+=@('--package','obs-preview')}
+ if($LocalStation -and $WithExternalTools){$catalogArgs+=@('--package','external-tools')}
  if($LocalStation -and $WithWeChatApp){$catalogArgs+=@('--package','web-search')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
@@ -589,7 +591,7 @@ if($WithRVCBackend){
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithAudioCpp -or $WithMediaUnderstanding) -and -not $Portable){
+if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithAudioCpp -or $WithMediaUnderstanding -or $WithExternalTools) -and -not $Portable){
  $runtimeRoot=Join-Path $OutputDirectory 'env'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}
