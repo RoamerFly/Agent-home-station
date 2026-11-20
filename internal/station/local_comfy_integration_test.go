@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -27,6 +28,7 @@ type syntheticLocalComfy struct {
 	fish      string
 	prompt    comfyui.JobRef
 	image     comfyui.Image
+	video     comfyui.MP4
 	state     comfyui.State
 	submits   int
 	starts    int
@@ -80,6 +82,21 @@ func (s *syntheticLocalComfy) Status(_ context.Context, ref comfyui.JobRef) (com
 	return comfyui.JobStatus{State: s.state, ImageCount: 2}, nil
 }
 
+func (s *syntheticLocalComfy) VideoStatus(_ context.Context, ref comfyui.JobRef) (comfyui.VideoStatus, error) {
+	if ref != s.prompt || len(s.video.Data) == 0 {
+		return comfyui.VideoStatus{}, errors.New("fixture video unavailable")
+	}
+	return comfyui.VideoStatus{State: s.state, VideoCount: 1}, nil
+}
+
+func (s *syntheticLocalComfy) FetchMP4(_ context.Context, ref comfyui.JobRef) (comfyui.MP4, error) {
+	if ref != s.prompt || s.state != comfyui.Completed || len(s.video.Data) == 0 {
+		return comfyui.MP4{}, errors.New("fixture video unavailable")
+	}
+	s.fetches++
+	return s.video, nil
+}
+
 func (s *syntheticLocalComfy) Cancel(_ context.Context, ref comfyui.JobRef) (bool, error) {
 	if ref != s.prompt {
 		return false, errors.New("cancelled a different prompt")
@@ -126,6 +143,8 @@ func setUpLocalComfyChat(t *testing.T, f *localHomeFixture, backend localComfyBa
 	}
 }
 
+const localComfyFixturePrompt = "运行登记的离线测试工作流"
+
 func requestLocalComfyJob(t *testing.T, f *localHomeFixture, requestID string) string {
 	t.Helper()
 	var jobID string
@@ -155,7 +174,7 @@ func requestLocalComfyJob(t *testing.T, f *localHomeFixture, requestID string) s
 			}
 		}), nil
 	}
-	if code, out := localChatSend(f, requestID, "生成两张离线图像"); code != http.StatusOK || out["status"] != "completed" || jobID == "" {
+	if code, out := localChatSend(f, requestID, localComfyFixturePrompt); code != http.StatusOK || out["status"] != "completed" || jobID == "" {
 		t.Fatalf("ComfyUI submit chat: %d %#v job=%q", code, out, jobID)
 	}
 	return jobID
@@ -185,6 +204,57 @@ func writeLocalComfyChatWorkflow(t *testing.T, root string) {
 	t.Helper()
 	graph := []byte(`{"1":{"class_type":"EmptyImage","inputs":{"width":32,"height":24,"batch_size":2,"color":16711680}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0],"filename_prefix":"owner-prefix"}}}`)
 	writeLocalComfyRegistry(t, root, graph, `[{"id":"width","label":"Width","kind":"integer","minimum":16,"maximum":512,"node":"1","input":"width"}]`)
+}
+
+func TestLocalComfyVideoPublishesDecodedOutput(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("local FFmpeg is needed for the video fixture")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("local FFprobe is needed for the video fixture")
+	}
+	root := t.TempDir()
+	clip := filepath.Join(root, "fixture.mp4")
+	if data, err := exec.CommandContext(t.Context(), "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=48x24:r=8:d=1", "-c:v", "mpeg4", "-threads", "1", clip).CombinedOutput(); err != nil {
+		t.Fatalf("encode local fixture: %v %s", err, data)
+	}
+	video, err := os.ReadFile(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := []byte(`{"1":{"class_type":"EmptyImage","inputs":{"width":48,"height":24,"batch_size":8,"color":255}},"2":{"class_type":"CreateVideo","inputs":{"images":["1",0],"fps":8}},"9":{"class_type":"SaveVideo","inputs":{"video":["2",0],"filename_prefix":"owner-prefix","format":"mp4","codec":"h264"}}}`)
+	writeLocalComfyRegistry(t, root, graph, `[{"id":"width","label":"Width","kind":"integer","minimum":16,"maximum":512,"node":"1","input":"width"}]`)
+	f := localChatFixture(t)
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: fish, video: comfyui.MP4{Data: video, SHA256: localComfyDigest(video)}}
+	setUpLocalComfyChat(t, f, backend)
+	job := requestLocalComfyJob(t, f, "comfy-video-submit")
+	backend.state = comfyui.Completed
+	ids := requestLocalComfyStatus(t, f, "comfy-video-status", job, "status")
+	if len(ids) != 1 || backend.fetches != 1 {
+		t.Fatalf("expected one video artifact, got %v after %d readbacks", ids, backend.fetches)
+	}
+	if !bytes.Equal(localArtifactDownload(t, f, ids[0]), video) {
+		t.Fatal("published artifact does not match the job MP4")
+	}
+	host, err := f.handler.chat.projectTools.forFish(fish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := host.store.Job(t.Context(), job)
+	var receipt localComfyVideoReceipt
+	if err != nil || finished.State != "completed" || json.Unmarshal(finished.Result, &receipt) != nil ||
+		receipt.Kind != "video" || receipt.Width != 48 || receipt.Height != 24 || receipt.Frames != 8 ||
+		receipt.Seconds != 1 || receipt.FPS != 8 || receipt.SHA256 != backend.video.SHA256 {
+		t.Fatalf("unexpected decoded video receipt: %+v, %v", receipt, err)
+	}
+	again := requestLocalComfyStatus(t, f, "comfy-video-status-repeat", job, "status")
+	if len(again) != 1 || again[0] != ids[0] || backend.fetches != 1 {
+		t.Fatal("completed video receipt was not reused")
+	}
 }
 
 func TestLocalComfyRechecksOriginalApplicationMemoryBeforeResult(t *testing.T) {
@@ -244,7 +314,7 @@ func TestLocalComfyChatJobsAndArtifacts(t *testing.T) {
 		t.Fatal("installation or discovery launched ComfyUI")
 	}
 	jobID := requestLocalComfyJob(t, f, "comfy-submit")
-	if code, out := localChatSend(f, "comfy-submit", "生成两张离线图像"); code != http.StatusOK || out["reused"] != true || backend.submits != 1 {
+	if code, out := localChatSend(f, "comfy-submit", localComfyFixturePrompt); code != http.StatusOK || out["reused"] != true || backend.submits != 1 {
 		t.Fatalf("replayed chat resubmitted: %d %#v calls=%d", code, out, backend.submits)
 	}
 	backend.state = comfyui.Completed

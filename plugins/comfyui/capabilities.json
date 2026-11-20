@@ -19,7 +19,7 @@
     {
       "id": "comfyui.run",
       "implementation": "ready",
-      "description": "使用已登记的工作流异步生成图像。工作流标识和输入字段均由宿主核验；不能传入原始工作流、节点、路径、URL 或服务地址。成功仅表示成品已登记，不表示已发送。",
+      "description": "使用已登记的工作流异步生成图像或 MP4 视频。列表说明每个工作流的成品类型；工作流标识和输入字段均由宿主核验。成功表示当前任务已经登记成品。",
       "permissions": ["artifact.write", "gpu"],
       "input_schema": {
         "type": "object",

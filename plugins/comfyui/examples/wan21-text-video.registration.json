@@ -1,0 +1,80 @@
+{
+  "id": "wan21-text-video",
+  "label": "Wan 2.1 1.3B 文生视频",
+  "graph": "wan21-text-video.json",
+  "sha256": "0b14993f123efe1416b9aaecfd5b8f0eee0ec151a5c1981b5563a1ede27bdc18",
+  "save_node": "11",
+  "parameters": [
+    {
+      "id": "prompt",
+      "label": "画面描述",
+      "kind": "string",
+      "required": true,
+      "max_length": 4000,
+      "node": "4",
+      "input": "text"
+    },
+    {
+      "id": "negative_prompt",
+      "label": "排除内容",
+      "kind": "string",
+      "max_length": 4000,
+      "node": "5",
+      "input": "text"
+    },
+    {
+      "id": "width",
+      "label": "宽度（16 的倍数）",
+      "kind": "integer",
+      "minimum": 128,
+      "maximum": 832,
+      "node": "6",
+      "input": "width"
+    },
+    {
+      "id": "height",
+      "label": "高度（16 的倍数）",
+      "kind": "integer",
+      "minimum": 128,
+      "maximum": 832,
+      "node": "6",
+      "input": "height"
+    },
+    {
+      "id": "frames",
+      "label": "帧数（4n+1）",
+      "kind": "integer",
+      "minimum": 5,
+      "maximum": 81,
+      "node": "6",
+      "input": "length"
+    },
+    {
+      "id": "seed",
+      "label": "随机种子",
+      "kind": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "node": "8",
+      "input": "seed"
+    },
+    {
+      "id": "steps",
+      "label": "采样步数",
+      "kind": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "node": "8",
+      "input": "steps"
+    },
+    {
+      "id": "fps",
+      "label": "播放帧率",
+      "kind": "number",
+      "minimum": 1,
+      "maximum": 60,
+      "node": "10",
+      "input": "fps"
+    }
+  ]
+}

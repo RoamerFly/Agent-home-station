@@ -42,6 +42,7 @@ type localComfyWorkflow struct {
 	Version     string
 	Digest      string
 	SaveNode    string
+	OutputKind  string
 	Fingerprint string
 	graphPath   string
 	parameters  []localComfyWorkflowParameter
@@ -67,6 +68,7 @@ type localComfyWorkflowView struct {
 	Label       string                            `json:"label"`
 	Version     string                            `json:"comfyui_version"`
 	Fingerprint string                            `json:"fingerprint"`
+	OutputKind  string                            `json:"output_kind"`
 	Parameters  []localComfyWorkflowParameterView `json:"parameters"`
 }
 
@@ -154,7 +156,8 @@ func localComfyBuildWorkflow(root, version string, record localComfyWorkflowReco
 		return localComfyWorkflow{}, errors.New("station_comfy_workflow_approval_invalid")
 	}
 	graph, err := localComfyDecodeGraph(raw)
-	if err != nil || !localComfySaveNodeValid(graph, record.SaveNode) || !localComfyOutputBounded(graph) {
+	outputKind := localComfyOutputKind(graph, record.SaveNode)
+	if err != nil || outputKind == "" || !localComfyOutputBounded(graph) {
 		return localComfyWorkflow{}, errors.New("station_comfy_workflow_approval_invalid")
 	}
 	parameters := make([]localComfyWorkflowParameter, 0, len(record.Parameters))
@@ -171,7 +174,7 @@ func localComfyBuildWorkflow(root, version string, record localComfyWorkflowReco
 	if !localComfyOutputBoundedWithParameters(graph, parameters) {
 		return localComfyWorkflow{}, errors.New("station_comfy_workflow_registry_invalid")
 	}
-	workflow := localComfyWorkflow{ID: record.ID, Label: record.Label, Version: version, Digest: record.SHA256, SaveNode: record.SaveNode, graphPath: graphPath, parameters: parameters}
+	workflow := localComfyWorkflow{ID: record.ID, Label: record.Label, Version: version, Digest: record.SHA256, SaveNode: record.SaveNode, OutputKind: outputKind, graphPath: graphPath, parameters: parameters}
 	workflow.Fingerprint = localComfyFingerprint(workflow)
 	return workflow, nil
 }
@@ -185,7 +188,7 @@ func localComfyWorkflowViews(workflows []localComfyWorkflow) []localComfyWorkflo
 }
 
 func (w localComfyWorkflow) view() localComfyWorkflowView {
-	view := localComfyWorkflowView{ID: w.ID, Label: w.Label, Version: w.Version, Fingerprint: w.Fingerprint, Parameters: make([]localComfyWorkflowParameterView, 0, len(w.parameters))}
+	view := localComfyWorkflowView{ID: w.ID, Label: w.Label, Version: w.Version, Fingerprint: w.Fingerprint, OutputKind: w.OutputKind, Parameters: make([]localComfyWorkflowParameterView, 0, len(w.parameters))}
 	for _, p := range w.parameters {
 		view.Parameters = append(view.Parameters, localComfyWorkflowParameterView{ID: p.ID, Label: p.Label, Kind: p.Kind, Required: p.Required, Min: p.Min, Max: p.Max, MaxLength: p.MaxLength, Choices: append([]string(nil), p.Choices...)})
 	}
@@ -200,7 +203,7 @@ func (w localComfyWorkflow) prepare(inputs map[string]json.RawMessage) ([]byte, 
 		return nil, "", errors.New("station_comfy_workflow_approval_changed")
 	}
 	graph, err := localComfyDecodeGraph(raw)
-	if err != nil || !localComfySaveNodeValid(graph, w.SaveNode) {
+	if err != nil || localComfyOutputKind(graph, w.SaveNode) != w.OutputKind || w.OutputKind == "" {
 		return nil, "", errors.New("station_comfy_workflow_approval_changed")
 	}
 	if inputs == nil {
@@ -346,18 +349,31 @@ func localComfyClass(graph map[string]any, node string) any {
 	item, _ := graph[node].(map[string]any)
 	return item["class_type"]
 }
-func localComfySaveNodeValid(graph map[string]any, id string) bool {
+func localComfyOutputKind(graph map[string]any, id string) string {
 	item, _ := graph[id].(map[string]any)
 	inputs, _ := item["inputs"].(map[string]any)
-	_, images := inputs["images"]
-	return item != nil && item["class_type"] == "SaveImage" && inputs != nil && images
+	switch item["class_type"] {
+	case "SaveImage":
+		if _, ok := inputs["images"]; ok {
+			return "image"
+		}
+	case "SaveVideo":
+		if _, ok := inputs["video"]; ok {
+			return "video"
+		}
+	}
+	return ""
 }
 func localComfySafeBuiltinInput(class any, input, kind string) bool {
 	switch class {
 	case "CLIPTextEncode":
 		return input == "text" && kind == "string"
 	case "KSampler":
-		return input == "seed" && kind == "integer"
+		return (input == "seed" || input == "steps") && kind == "integer"
+	case "EmptyHunyuanLatentVideo":
+		return (input == "width" || input == "height" || input == "length") && kind == "integer"
+	case "CreateVideo":
+		return input == "fps" && kind == "number"
 	case "EmptyLatentImage":
 		return (input == "width" || input == "height" || input == "batch_size") && kind == "integer"
 	case "EmptyImage":
@@ -372,6 +388,16 @@ func localComfyOutputBounded(graph map[string]any) bool {
 		if node["class_type"] == "EmptyImage" || node["class_type"] == "EmptyLatentImage" {
 			count, ok := localComfyInteger(inputs["batch_size"])
 			if !ok || count < 1 || count > localComfyWorkflowMaxOutputs {
+				return false
+			}
+		}
+		if node["class_type"] == "EmptyHunyuanLatentVideo" {
+			count, countOK := localComfyInteger(inputs["batch_size"])
+			width, widthOK := localComfyInteger(inputs["width"])
+			height, heightOK := localComfyInteger(inputs["height"])
+			frames, framesOK := localComfyInteger(inputs["length"])
+			if !countOK || !widthOK || !heightOK || !framesOK || count != 1 ||
+				width <= 0 || width%16 != 0 || height <= 0 || height%16 != 0 || frames < 1 || (frames-1)%4 != 0 {
 				return false
 			}
 		}

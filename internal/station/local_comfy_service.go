@@ -647,6 +647,8 @@ type localComfyLeasedClient struct {
 	binding string
 }
 
+var _ localComfyVideoClient = (*localComfyLeasedClient)(nil)
+
 // Both controlled ComfyUI deployments use the same submission/settlement
 // lease. The registration verifier differs, but a submitted or uncertain job
 // must keep either process warm until the host has durably settled it.
@@ -676,6 +678,18 @@ func (c *localComfyLeasedClient) Status(ctx context.Context, ref comfyui.JobRef)
 		c.observe(ref, status.State)
 	}
 	return status, err
+}
+
+func (c *localComfyLeasedClient) VideoStatus(ctx context.Context, ref comfyui.JobRef) (comfyui.VideoStatus, error) {
+	status, err := c.client.VideoStatus(ctx, ref)
+	if err == nil {
+		c.observe(ref, status.State)
+	}
+	return status, err
+}
+
+func (c *localComfyLeasedClient) FetchMP4(ctx context.Context, ref comfyui.JobRef) (comfyui.MP4, error) {
+	return c.client.FetchMP4(ctx, ref)
 }
 
 func (c *localComfyLeasedClient) observe(ref comfyui.JobRef, remote comfyui.State) {

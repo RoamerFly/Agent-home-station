@@ -104,6 +104,16 @@ func prepareSaveWorkflow(raw []byte, approvedSHA256 string, ref JobRef, class, s
 		// dictionary before executing the Python node.
 		inputs["format"] = "flac"
 	}
+	if class == "SaveVideo" {
+		if _, exists := inputs["video"]; !exists {
+			return Prepared{}, errors.New("SaveVideo video input required")
+		}
+		inputs["format"] = "mp4"
+		// Newer ComfyUI versions expand the container's nested codec input.
+		// The older SaveVideo schema reads the top-level codec.
+		inputs["format.codec"] = "h264"
+		inputs["codec"] = "h264"
+	}
 	inputs["filename_prefix"] = ref.subfolder() + "/" + stem
 	body, err := json.Marshal(map[string]any{
 		"prompt_id": ref.ID, "client_id": ref.ID, "prompt": graph,

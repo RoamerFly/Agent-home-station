@@ -63,7 +63,7 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 	}
 	return []mcptools.Tool{
 		mcptools.NewTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`),
-		mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。PNG 成品从任务查询取得。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`),
+		mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。依据工作流的输出类型，从任务查询取得 PNG 或 MP4。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`),
 		jobTool,
 	}
 }
@@ -129,6 +129,7 @@ type localComfyJobInput struct {
 	Approval    string               `json:"workflow_approval"`
 	GraphSHA256 string               `json:"effective_sha256"`
 	SaveNode    string               `json:"save_node"`
+	VideoOutput bool                 `json:"video_output,omitempty"`
 	Title       string               `json:"title"`
 }
 
@@ -168,7 +169,7 @@ func (e localComfyInvocation) start(ctx context.Context, raw json.RawMessage) (s
 		return "", errors.New("本轮来源已变化，未提交 ComfyUI")
 	}
 	args := localComfyJobInput{Origin: source, Trace: t.traceID, Binding: e.deployment.Binding, Workflow: in.Workflow,
-		Approval: workflow.Fingerprint, GraphSHA256: digest, SaveNode: workflow.SaveNode, Title: in.Title}
+		Approval: workflow.Fingerprint, GraphSHA256: digest, SaveNode: workflow.SaveNode, VideoOutput: workflow.OutputKind == "video", Title: in.Title}
 	op := companion.LocalToolCheckpoint{Tool: localComfyStartTool, Target: in.Workflow, Grant: g.projectJobAuthorization(),
 		Key: localCheckpointKey(localComfyStartTool, source.EventID, source.Revision, args)}
 	call := pluginhost.Invocation{Account: g.FishID, Thread: g.OwnerID, Requester: g.OwnerID, Purpose: "local ComfyUI creation",
@@ -212,7 +213,7 @@ func (e localComfyInvocation) checkWorkflow(args localComfyJobInput) error {
 	workflows, err := loadLocalComfyWorkflows(e.deployment.WorkflowRoot)
 	if err == nil && e.deployment.Binding == args.Binding {
 		for _, workflow := range workflows {
-			if workflow.ID == args.Workflow && workflow.Fingerprint == args.Approval {
+			if workflow.ID == args.Workflow && workflow.Fingerprint == args.Approval && (workflow.OutputKind == "video") == args.VideoOutput {
 				return nil
 			}
 		}
@@ -225,7 +226,11 @@ func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, ar
 	if err != nil {
 		return job
 	}
-	prepared, err := comfyui.Prepare(graph, args.GraphSHA256, ref)
+	prepare := comfyui.Prepare
+	if args.VideoOutput {
+		prepare = comfyui.PrepareMP4
+	}
+	prepared, err := prepare(graph, args.GraphSHA256, ref)
 	if err != nil {
 		return job
 	}

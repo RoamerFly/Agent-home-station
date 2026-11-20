@@ -55,8 +55,9 @@ type localProjectTools struct {
 }
 
 type localProjectToolHost struct {
-	store      *pluginhost.Store
-	controller *pluginruntime.Controller
+	store             *pluginhost.Store
+	controller        *pluginruntime.Controller
+	comfyVideoPublish sync.Mutex
 }
 
 type localProjectToolView struct {
@@ -246,7 +247,10 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	contract, contractErr := catalog.ContractFor(id)
 	if contractErr == nil && contract.Package.Runtime.Transport == "unbound" {
 		view.RuntimeReady = false
-		view.Reason = "该工具包尚未绑定执行后端；图像工作流请使用 ComfyUI 创作。"
+		view.Reason = "该工具包尚未绑定执行后端。"
+		if id == "visual-generation" {
+			view.Reason = "本机图像和视频生成使用「ComfyUI 创作」中已登记的工作流。"
+		}
 		view.State = "not_available"
 		return view, nil
 	}
