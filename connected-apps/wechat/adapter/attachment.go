@@ -133,7 +133,7 @@ func StationAttachmentTool() mcptools.Tool {
 
 // StationAttachmentReplyTool prepares a response using a verified inbound source.
 func StationVoiceTranscriptionTool() mcptools.Tool {
-	return tool("wechat_voice_transcribe", "Transcribe the authorized current or verified quoted WeChat voice message by exact message_id using the enabled local speech recognition tool. Returns the decoded coverage, recognized words and next_start_seconds. Voice with no recognizable words and unavailable audio are distinct. No sending.", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"start_seconds":{"type":"number","minimum":0,"default":0},"duration_seconds":{"type":"number","exclusiveMinimum":0,"default":90},"timeout_seconds":{"type":"integer","minimum":0,"default":180}},"required":["message_id"],"additionalProperties":false}`)
+	return tool("wechat_voice_transcribe", "用本机语音识别转写当前或已核验引用的微信语音，以及 MP3、WAV、FLAC 文件附件。传原消息编号，可选起点、时长和超时。返回实际解码范围、识别文字和 next_start_seconds 续读位置，并区分无可辨识语音和音频不可用。", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"start_seconds":{"type":"number","minimum":0,"default":0},"duration_seconds":{"type":"number","exclusiveMinimum":0,"default":90},"timeout_seconds":{"type":"integer","minimum":0,"default":180}},"required":["message_id"],"additionalProperties":false}`)
 }
 
 func StationImageObservationTool() mcptools.Tool {

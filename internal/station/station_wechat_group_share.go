@@ -127,7 +127,7 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 		if bindErr == nil {
 			out := map[string]any{}
 			length := math.Min(meta.Seconds, stationGroupShareAudioBudget)
-			if audioErr := stationObserveAudio(ctx, path, dir, 0, length, meta.Seconds, false, transcribe, out); audioErr == nil {
+			if audioErr := stationObserveAudio(ctx, path, dir, 0, length, meta.Seconds, stationVideoAudio, transcribe, out); audioErr == nil {
 				if text, ok := out["text"].(string); ok && strings.TrimSpace(text) != "" {
 					parts = append(parts, companion.ObservationPart{Kind: companion.ObservationAudioTranscript, Range: "公开视频完整音轨", Excerpt: text})
 					progress("share_public_audio_transcription", "completed", "audio.cpp")

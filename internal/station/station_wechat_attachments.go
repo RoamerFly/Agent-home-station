@@ -385,7 +385,7 @@ func stationVideoRef(ref *companion.SourceRef) bool {
 }
 
 func stationVoiceRef(ref *companion.SourceRef) bool {
-	return ref != nil && ref.MessageType == 34
+	return ref != nil && (ref.MessageType == 34 || ref.MessageType == 49)
 }
 
 func stationImageRef(ref *companion.SourceRef) bool {

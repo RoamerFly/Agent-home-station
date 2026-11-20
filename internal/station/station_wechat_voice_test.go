@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/pluginhost"
 )
@@ -54,11 +56,29 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 			CreatedAt: now.Format(time.RFC3339Nano), Type: 34, Direction: "incoming", Body: "synthetic voice " + id,
 		}
 	}
+	fileKinds := map[string]string{"audio-mp3": "mp3", "audio-wav": "wav", "audio-flac": "flac", "audio-spoof": "mp3", "worksheet": "xlsx"}
+	fileBytes := map[string][]byte{"audio-wav": wav, "audio-spoof": wav}
+	for ext, encoder := range map[string]string{"mp3": "libmp3lame", "flac": "flac"} {
+		path := filepath.Join(root, "fixture."+ext)
+		if output, err := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-i", wavPath, "-c:a", encoder, path).CombinedOutput(); err != nil {
+			t.Fatalf("generate synthetic %s: %v %s", ext, err, output)
+		}
+		var err error
+		fileBytes["audio-"+ext], err = os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, ext := range fileKinds {
+		messages[id] = linuxnative.Message{ID: id, AccountID: account, ThreadID: thread, SenderID: "alice", ServerID: id + "-server",
+			CreatedAt: now.Format(time.RFC3339Nano), Type: 49, Direction: "incoming",
+			Body: "<msg><appmsg><type>6</type><title>fixture." + ext + "</title></appmsg></msg>"}
+	}
 	foreign := messages["voice-foreign"]
 	foreign.ThreadID = "elsewhere@chatroom"
 	messages[foreign.ID] = foreign
 
-	var normalTransfers atomic.Int32
+	var normalTransfers, originalTransfers atomic.Int32
 	nativeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/v1/accounts/one/"
 		write := func(value any) { _ = json.NewEncoder(w).Encode(value) }
@@ -83,15 +103,28 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 				write(message)
 				return
 			}
+			if suffix == "media" && message.Type == 49 && r.Method == http.MethodGet {
+				write(map[string]any{"items": []map[string]any{{"id": "voice-normal-asset-" + id, "accountId": account,
+					"messageId": id, "kind": "file", "state": "available", "variant": "original", "actualVariant": "original"}}})
+				return
+			}
 			if suffix == "media-transfers" && r.Method == http.MethodPost {
 				var request struct {
 					Quality string `json:"quality"`
 				}
-				if json.NewDecoder(r.Body).Decode(&request) != nil || request.Quality != "normal" {
+				quality := "normal"
+				if message.Type == 49 {
+					quality = "original"
+				}
+				if json.NewDecoder(r.Body).Decode(&request) != nil || request.Quality != quality {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				normalTransfers.Add(1)
+				if message.Type == 49 {
+					originalTransfers.Add(1)
+				} else {
+					normalTransfers.Add(1)
+				}
 				write(map[string]any{"id": "voice-normal-job-" + id, "accountId": account, "kind": "download", "state": "available", "assetId": "voice-normal-asset-" + id})
 				return
 			}
@@ -100,22 +133,25 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 			rest = strings.TrimPrefix(rest, "media/")
 			asset, suffix, _ := strings.Cut(rest, "/")
 			id := strings.TrimPrefix(asset, "voice-normal-asset-")
-			_, ok := messages[id]
+			message, ok := messages[id]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			payload := wav
+			payload, kind, variant, mime := wav, "voice", "normal", "audio/wav"
+			if message.Type == 49 {
+				payload, kind, variant, mime = fileBytes[id], "file", "original", "application/octet-stream"
+			}
 			if id == "voice-silk" {
 				payload = rawSILK
 			}
 			sum := sha256.Sum256(payload)
 			if suffix == "" && r.Method == http.MethodGet {
-				write(map[string]any{"id": asset, "accountId": account, "messageId": id, "kind": "voice", "state": "available", "variant": "normal", "actualVariant": "normal", "byteLength": len(payload), "contentType": "audio/wav", "sha256": hex.EncodeToString(sum[:])})
+				write(map[string]any{"id": asset, "accountId": account, "messageId": id, "kind": kind, "state": "available", "variant": variant, "actualVariant": variant, "byteLength": len(payload), "contentType": mime, "sha256": hex.EncodeToString(sum[:])})
 				return
 			}
 			if suffix == "content" && r.Method == http.MethodGet {
-				w.Header().Set("Content-Type", "audio/wav")
+				w.Header().Set("Content-Type", mime)
 				_, _ = w.Write(payload)
 				return
 			}
@@ -144,8 +180,10 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 	remember := companion.Defaults()
 	remember.Permissions.Remember = true
 	voiceRef := refFor(messages["voice-normal"])
-	for _, id := range []string{"voice-normal", "voice-silk"} {
-		message := messages[id]
+	for _, message := range messages {
+		if message.ThreadID != thread {
+			continue
+		}
 		if err := memory.Observe(companion.Input{Channel: "wechat", Account: account, Thread: thread, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, Source: refFor(message), Text: "[微信语音]"}, remember, now); err != nil {
 			t.Fatal(err)
 		}
@@ -298,6 +336,54 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 		tools.localASR = stationLocalASR{}
 		if out, err := call(direct, `{"message_id":"voice-normal"}`); out != "" || err == nil || err.Error() != "media_station_asr_unavailable" || stationCalls != 3 || localCalls.Load() != 5 {
 			t.Fatalf("unavailable workstation profile routed elsewhere: %q, %v", out, err)
+		}
+	})
+	t.Run("standalone_audio_uses_verified_original", func(t *testing.T) {
+		blocked.Store(false)
+		var calls int
+		tools.localASR = stationLocalASR{
+			version: func(context.Context) (string, error) { return "fixture-asr-v1", nil },
+			transcribe: func(_ context.Context, decoded []byte, verify func() error) (string, error) {
+				if err := verify(); err != nil {
+					return "", err
+				}
+				if len(decoded) < 1000 || !bytes.HasPrefix(decoded, []byte("RIFF")) || string(decoded[8:12]) != "WAVE" {
+					t.Fatal("audio attachment did not reach ASR as decoded PCM WAV")
+				}
+				calls++
+				return "", &mediaspec.Failure{Code: "ASR_RESPONSE_HAVE_NO_WORDS"}
+			},
+		}
+		fileTrace := func(id string) companion.Input {
+			trace := direct
+			trace.Source, trace.TraceID = refFor(messages[id]), id
+			return trace
+		}
+		for _, id := range []string{"audio-mp3", "audio-wav", "audio-flac"} {
+			trace := fileTrace(id)
+			tools.SetTrace(trace)
+			admitted, err := tools.List(t.Context())
+			if err != nil || !slices.ContainsFunc(admitted, func(tool mcptools.Tool) bool { return tool.Name == "wechat_voice_transcribe" }) {
+				t.Fatalf("transcription tool is missing for %s: %v", id, err)
+			}
+			out, err := call(trace, fmt.Sprintf(`{"message_id":%q,"start_seconds":0.1,"duration_seconds":0.5}`, id))
+			if err != nil || !strings.Contains(out, `"source_variant":"original"`) ||
+				!strings.Contains(out, `"transcription_state":"no_recognizable_speech"`) ||
+				!strings.Contains(out, `"next_start_seconds":0.6`) || strings.Contains(out, `"text":`) {
+				t.Fatalf("standalone audio %s: %s, %v", id, out, err)
+			}
+		}
+		for _, id := range []string{"audio-spoof", "worksheet"} {
+			if out, err := call(fileTrace(id), fmt.Sprintf(`{"message_id":%q}`, id)); err == nil || out != "" {
+				t.Fatalf("unsupported or mislabelled file %s reached ASR: %s, %v", id, out, err)
+			}
+		}
+		if calls != 3 || originalTransfers.Load() != 4 {
+			t.Fatalf("unexpected transfers or ASR calls: originals=%d ASR=%d", originalTransfers.Load(), calls)
+		}
+		blocked.Store(true)
+		if out, err := call(fileTrace("audio-mp3"), `{"message_id":"audio-mp3"}`); err == nil || out != "" || calls != 3 {
+			t.Fatal("withdrawn audio attachment grant was accepted")
 		}
 	})
 }

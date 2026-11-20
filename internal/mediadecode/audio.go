@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -24,6 +25,32 @@ func ProbeVoiceDuration(ctx context.Context, path string) (float64, error) {
 
 func ExtractVoiceAudioRange(ctx context.Context, path, out string, start, length float64) ([]byte, float64, error) {
 	return extractAudioRange(ctx, path, out, start, length, voiceAudioFormats)
+}
+
+// AudioFileFormat limits attachment decoding to standalone audio containers.
+// Match the declared extension and enforce that demuxer when opening bytes.
+func AudioFileFormat(path string) string {
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".mp3", ".wav", ".flac":
+		return ext[1:]
+	}
+	return ""
+}
+
+func ProbeAudioFileDuration(ctx context.Context, path string) (float64, error) {
+	format := AudioFileFormat(path)
+	if format == "" {
+		return 0, errors.New("audio_file_format_unsupported")
+	}
+	return probeDuration(ctx, path, format)
+}
+
+func ExtractAudioFileRange(ctx context.Context, path, out string, start, length float64) ([]byte, float64, error) {
+	format := AudioFileFormat(path)
+	if format == "" {
+		return nil, 0, errors.New("audio_file_format_unsupported")
+	}
+	return extractAudioRange(ctx, path, out, start, length, format)
 }
 
 // ExtractAudioRange decodes one page of the first audio stream. The caller
