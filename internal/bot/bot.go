@@ -421,18 +421,17 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
-	readMedia := groupFile || isMedia && w.readMediaBeforeDecision(analysisMessage)
-	if (canAnalyze && !onDemandAttachment || groupFile) && w.config.Options != nil {
-		if !groupFile && !w.observationAllowed(analysisMessage) {
+	requiredGroupFile := groupFile && !onDemandAttachment
+	readMedia := requiredGroupFile || isMedia && !onDemandAttachment && w.readMediaBeforeDecision(analysisMessage)
+	if (canAnalyze && !onDemandAttachment || requiredGroupFile) && w.config.Options != nil {
+		if !requiredGroupFile && !w.observationAllowed(analysisMessage) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
 		// Generation sessions perform the observation inside startGeneration so
 		// the same attachment is not downloaded twice.  The direct model path has
-		// no later observation stage, so it must pre-read here.  Group files still
-		// enter this branch even when media analysis is unavailable, allowing the
-		// generation path to report a durable read failure instead of silently
-		// treating the attachment as a normal text turn.
+		// no later observation stage, so it must pre-read here. Group files that
+		// require observation still report a durable read failure if it is unavailable.
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			analysisCtx = companion.WithReplayNonce(analysisCtx, w.replayNonce(message.ID))
@@ -522,7 +521,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment || groupFile && mediaObservationState == "pending" {
+			if input.GroupShareSummary || readMedia && canAnalyze || requiredGroupFile && mediaObservationState == "pending" {
 				copy := analysisMessage
 				analysis = &copy
 			}

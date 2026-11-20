@@ -154,6 +154,9 @@ func observationEvidence(media []IncomingMediaRef) []map[string]any {
 			continuation = "需要补读时用当前素材 source/asset 先查询读取信息，再按返回的继续位置读取。"
 		}
 		row := map[string]any{"evidence_kind": "media_observation", "producer": "media_observer", "observation_author_id": nil, "uploader_id": m.UploaderID, "source": m.Source, "asset_id": m.AssetID, "kind": m.Kind, "observation": observation, "observation_state": m.ObservationState, "observation_version": m.ObservationVersion, "result_available": observationAvailable(m), "observed_range": m.ObservedRange, "voice_speaker_id": nil, "voice_speaker_state": "unknown", "transcript_first_person_id": nil, "creator_id": nil, "owner_id": nil, "captured_at": nil}
+		if m.Filename != "" {
+			row["reported_filename"] = m.Filename
+		}
 		if len(m.ObservationParts) > 0 {
 			row["observation_parts"] = slices.Clone(m.ObservationParts)
 		}

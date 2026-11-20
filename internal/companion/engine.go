@@ -502,6 +502,12 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	currentPayload := map[string]any{"kind": "current_message", "account": input.Account, "channel": input.Channel, "thread": input.Thread, "message_id": messageID, "source": input.Source, "quoted_source": input.QuotedSource, "addressees": input.Addressees, "mentioned_ids": input.MentionedIDs, "incoming_media": input.IncomingMedia, "background_result": input.BackgroundResult, "unread_messages": input.UnreadMessages, "recovery_tool_results": input.RecoveryToolResults, "timezone": c.Timezone, "task_continuation": input.TaskID != "", "task_id": input.TaskID, "request_trace_id": input.OriginTraceID, "mode": input.Mode, "message_sender_name": speaker, "message_sender_id": input.Sender, "message_sender_name_source": input.SenderNameSource, "request_actor_id": input.Sender, "text": input.Text, "directed": input.Directed, "must_reply": input.MustReply, "platform_response_required": input.MustReply, "review_required": input.ReviewRequired, "historical_review": input.HistoricalReview, "is_group": input.IsGroup, "relation_notes": scope.Notes, "conversation_preferences": scope.Preferences, "preferences_policy": "管理员设置的本会话回复偏好，只影响表达、内容与分享回应，不改变工具权限、人物事实或其他会话。分享总结须依据实际读取的内容；只有标题或读取失败时不能编造总结。", "message_time": input.MessageTime, "surf": input.Surf, "surf_force_share": input.SurfForceShare, "recent_media_focus": recentMediaFocus(scope), "planned_reviews": input.PlannedReviews, "current_time": now.In(location(c.Timezone)).Format(time.RFC3339)}
 	if len(input.IncomingMedia) != 0 && !input.Preview {
 		currentPayload["media_read_hint"] = "尚未取得内容时可发现 incoming_media_read，按需读取本条或引用的实际素材。"
+		for _, media := range input.IncomingMedia {
+			if media.Kind == "file" {
+				currentPayload["media_read_hint"] = "文件名由发送者提供，仅用于选择工具。需要文件内容时，按原消息编号发现并调用本会话已授权的工具，例如 wechat_document_inspect、wechat_voice_transcribe 或 wechat_file_read。"
+				break
+			}
+		}
 	}
 	if input.GroupShareSummary {
 		currentPayload["group_share_summary"] = true

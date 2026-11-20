@@ -27,6 +27,7 @@ type IncomingMediaRef struct {
 	Source      SourceRef `json:"source"`
 	AssetID     string    `json:"asset_id,omitempty"`
 	Kind        string    `json:"kind"`
+	Filename    string    `json:"filename,omitempty"` // Sender-provided display metadata.
 	UploaderID  string    `json:"uploader_id"`
 	Observation string    `json:"observation,omitempty"`
 	// ObservationExcerpt contains only the host-produced visual/audio evidence.
