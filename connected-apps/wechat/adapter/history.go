@@ -58,13 +58,17 @@ func (a HistoryAccess) Message(ctx context.Context, id string) (linuxnative.Mess
 	if err != nil {
 		return m, false, err
 	}
-	if !a.allowed(ctx) || m.ID != id || m.AccountID != a.Account || m.ThreadID != a.Thread || m.SenderID == "" || m.Direction != "incoming" && m.Direction != "outgoing" {
+	// Native recall and system rows can have no participant attribution.
+	// The exact account, conversation, and message still have to match.
+	chatDirection := m.Direction == "incoming" || m.Direction == "outgoing"
+	validNotice := m.Type == 10000 && (chatDirection || m.Direction == "" || m.Direction == "system")
+	if !a.allowed(ctx) || m.ID != id || m.AccountID != a.Account || m.ThreadID != a.Thread || !validNotice && (m.SenderID == "" || !chatDirection) {
 		return m, false, errors.New("wechat_history_source_mismatch")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, m.CreatedAt); err != nil {
 		return m, false, errors.New("wechat_history_time_invalid")
 	}
-	if m.Direction == "outgoing" && a.ProtectMessage != nil && a.ProtectMessage(ctx, m) {
+	if (m.Direction == "outgoing" || validNotice && !chatDirection) && a.ProtectMessage != nil && a.ProtectMessage(ctx, m) {
 		return linuxnative.Message{}, false, nil
 	}
 	allowed, err := a.RecallAllowed(ctx, historyRecallInput(m))
@@ -73,7 +77,7 @@ func (a HistoryAccess) Message(ctx context.Context, id string) (linuxnative.Mess
 
 func historyRecallInput(m linuxnative.Message) companion.Input {
 	in := companion.Input{Channel: ID, Account: m.AccountID, Thread: m.ThreadID, Sender: m.SenderID, TraceID: m.ID, MessageTime: m.CreatedAt,
-		Source: &companion.SourceRef{MessageID: m.ID, ServerID: m.ServerID, Sender: m.SenderID, OccurredAt: m.CreatedAt}}
+		Source: &companion.SourceRef{MessageID: m.ID, ServerID: m.ServerID, Sender: m.SenderID, OccurredAt: m.CreatedAt, MessageType: m.Type}}
 	if m.Type == 1 {
 		in.OriginalText = &m.Body
 	}

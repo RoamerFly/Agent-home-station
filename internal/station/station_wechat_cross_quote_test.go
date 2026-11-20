@@ -195,6 +195,11 @@ func TestWechatNativePrivateQuoteContinuesOnlyUsedSources(t *testing.T) {
 	if _, allowed, err := current.historyMessage(t.Context(), old.ID); err != nil || allowed {
 		t.Fatal("private body readable through ordinary history", allowed, err)
 	}
+	notice := old
+	notice.Type, notice.SenderID, notice.Direction, notice.Body = 10000, "", "", "[Message recalled]"
+	if !current.protectCrossReply(t.Context(), notice) {
+		t.Fatal("an unattributed recall notice lost the original private delivery protection")
+	}
 	if result, err := current.Call(t.Context(), stationWechatCrossToolName, json.RawMessage(`{"action":"sources"}`)); err != nil ||
 		!strings.Contains(result, source) || strings.Contains(result, unused) || strings.Contains(result, old.Body) || strings.Contains(result, "火车合成") {
 		t.Fatal("linked catalog leaked text or included unused scope", result, err)

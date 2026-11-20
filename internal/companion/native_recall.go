@@ -22,10 +22,13 @@ func (s *Store) NativeRecallAllowed(ctx context.Context, in Input) (bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := time.Parse(time.RFC3339Nano, in.MessageTime)
-	if err != nil || in.Channel == "" || in.Account == "" || in.Thread == "" || in.TraceID == "" || in.Sender == "" || s.db == nil {
+	requested := in.Source
+	// An unattributed system notice cannot match an observed participant event.
+	// Keep the same database checks so it cannot disclose a forgotten source.
+	unattributedNotice := in.Channel == "wechat" && requested != nil && requested.MessageType == 10000 && in.OriginalText == nil
+	if err != nil || in.Channel == "" || in.Account == "" || in.Thread == "" || in.TraceID == "" || in.Sender == "" && !unattributedNotice || s.db == nil {
 		return false, err
 	}
-	requested := in.Source
 	if requested != nil && (requested.Account != "" && requested.Account != in.Account ||
 		requested.Thread != "" && requested.Thread != in.Thread ||
 		requested.Sender != "" && requested.Sender != in.Sender ||
