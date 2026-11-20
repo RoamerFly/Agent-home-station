@@ -801,6 +801,21 @@ func (stationShareTestExecutor) Call(ctx context.Context, _ pluginhost.Invocatio
 	return json.Marshal(map[string]any{"ok": true, "platform": "channels", "source_url": link, "object_id": "12345", "title": "", "author": "", "private_media_locators": []string{packet.Data.Feed["videoUrl"]}, "private_decode_key": packet.Data.Feed["decodeKey"], "coverage": "media_locator_only", "video_observed": false, "media_downloaded": false, "untrusted_external_content": true})
 }
 
+func TestPublicGroupVideoEvidenceUsesActualCoverage(t *testing.T) {
+	if short, long := stationGroupShareFrameStep(4), stationGroupShareFrameStep(6000); short != 1 || long != 1000 {
+		t.Fatalf("unexpected sampling steps for short and long videos: %d, %d", short, long)
+	}
+	audio := (stationGroupShareAudio{End: 240, Text: "first four minutes"}).observation()
+	frames := (stationGroupShareFrames{Times: []float64{0, 30, 60, 90, 120, 150}, Text: "six inspected frames"}).observation()
+	if !strings.Contains(audio.Range, "0.000–240.000") || strings.Contains(audio.Range, "完整") || !strings.Contains(frames.Range, "150.000秒") {
+		t.Fatalf("unexpected audio or visual coverage: %q, %q", audio.Range, frames.Range)
+	}
+	rangeLabel, _ := stationGroupShareEvidenceText([]companion.ObservationPart{frames})
+	if rangeLabel != frames.Range || strings.Contains(rangeLabel, "音轨") {
+		t.Fatalf("one successful modality was presented as audio and visuals: %q", rangeLabel)
+	}
+}
+
 func TestStationVideoDecoderUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := mediadecode.Probe(t.Context(), "irrelevant.mp4")

@@ -122,6 +122,7 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 		return "", companion.MediaObservationEvidence{}, err
 	}
 	parts := make([]companion.ObservationPart, 0, 2)
+	var audioObserved, visualObserved bool
 	if t.stationLocalAudio {
 		_, transcribe, bindErr := t.localASR.bind(ctx, mediaobserve.SourceCheck(func(context.Context) error { return checkSource() }))
 		if bindErr == nil {
@@ -129,8 +130,11 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 			length := math.Min(meta.Seconds, stationGroupShareAudioBudget)
 			if audioErr := stationObserveAudio(ctx, path, dir, 0, length, meta.Seconds, stationVideoAudio, transcribe, out); audioErr == nil {
 				if text, ok := out["text"].(string); ok && strings.TrimSpace(text) != "" {
-					parts = append(parts, companion.ObservationPart{Kind: companion.ObservationAudioTranscript, Range: "公开视频完整音轨", Excerpt: text})
-					progress("share_public_audio_transcription", "completed", "audio.cpp")
+					if end, ok := out["end_seconds"].(float64); ok && end > 0 {
+						parts = append(parts, (stationGroupShareAudio{Text: text, End: end, Complete: end+.001 >= meta.Seconds}).observation())
+						audioObserved = true
+						progress("share_public_audio_transcription", "completed", "audio.cpp")
+					}
 				}
 			} else {
 				progress("share_public_audio_failed", "failed", audioErr.Error())
@@ -141,20 +145,25 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 		_, vision, bindErr := t.localVision.bind(ctx, mediaobserve.SourceCheck(func(context.Context) error { return checkSource() }))
 		if bindErr == nil {
 			out := map[string]any{}
-			input := stationVideoObservationInput{Step: 1, Page: stationGroupShareFramePage, Batch: stationGroupShareFramePage, Dimension: 768, Tokens: 512}
+			input := stationVideoObservationInput{Step: stationGroupShareFrameStep(meta.Frames), Page: stationGroupShareFramePage, Batch: stationGroupShareFramePage, Dimension: 768, Tokens: 512}
 			analyze := func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
 				return vision(ctx, "public-share:"+url, prompt, images, tokens)
 			}
 			if frameErr := stationObserveFrames(ctx, path, dir, input, meta, analyze, out); frameErr == nil {
 				if batches, ok := out["batches"].([]map[string]any); ok {
 					var text []string
+					var times []float64
 					for _, batch := range batches {
 						if analysis, ok := batch["analysis"].(string); ok && strings.TrimSpace(analysis) != "" {
 							text = append(text, analysis)
+							if observed, ok := batch["timestamps_seconds"].([]float64); ok {
+								times = append(times, observed...)
+							}
 						}
 					}
 					if len(text) != 0 {
-						parts = append(parts, companion.ObservationPart{Kind: companion.ObservationVisualFrames, Range: "公开视频采样帧", Excerpt: strings.Join(text, "\n")})
+						parts = append(parts, (stationGroupShareFrames{Text: strings.Join(text, "\n"), Times: times}).observation())
+						visualObserved = true
 						progress("share_public_visual_frames", "completed", "station-vision")
 					}
 				}
@@ -167,9 +176,19 @@ func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Contex
 		progress("share_public_observation_unavailable", "failed", "no_audio_or_visual_observation")
 		return "", companion.MediaObservationEvidence{}, errors.New("share_public_media_observer_unavailable")
 	}
-	evidence := companion.MediaObservationEvidence{ObservedRange: "公开视频音轨与采样帧", Parts: parts}
-	_, evidence.Excerpt = stationGroupShareEvidenceText(parts)
-	progress("share_public_read_completed", "completed", "audio_and_visual")
+	if err = checkSource(); err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	evidence := companion.MediaObservationEvidence{Parts: parts}
+	evidence.ObservedRange, evidence.Excerpt = stationGroupShareEvidenceText(parts)
+	coverage := "visual"
+	if audioObserved {
+		coverage = "audio"
+		if visualObserved {
+			coverage = "audio_and_visual"
+		}
+	}
+	progress("share_public_read_completed", "completed", coverage)
 	return "[微信公开视频实际内容观察]\n" + evidence.Excerpt, evidence, nil
 }
 
@@ -187,13 +206,7 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 	if useAudio {
 		audio, audioErr = stationGroupShareObserveAudio(ctx, t, message, asset, duration, audioBudget)
 		if audioErr == nil && strings.TrimSpace(audio.Text) != "" {
-			rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", audio.Start, audio.End)
-			if audio.Complete {
-				rangeLabel += "（完整）"
-			}
-			evidence.Parts = append(evidence.Parts, companion.ObservationPart{
-				Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: audio.Text,
-			})
+			evidence.Parts = append(evidence.Parts, audio.observation())
 		}
 	}
 
@@ -210,17 +223,7 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 			return "", companion.MediaObservationEvidence{}, visualErr
 		}
 		if strings.TrimSpace(visual.Text) != "" {
-			times := make([]string, 0, len(visual.Times))
-			for _, at := range visual.Times {
-				times = append(times, fmt.Sprintf("%.3f秒", at))
-			}
-			rangeLabel := "视频采样帧"
-			if len(times) != 0 {
-				rangeLabel += "：" + strings.Join(times, "、")
-			}
-			evidence.Parts = append(evidence.Parts, companion.ObservationPart{
-				Kind: companion.ObservationVisualFrames, Range: rangeLabel, Excerpt: visual.Text,
-			})
+			evidence.Parts = append(evidence.Parts, visual.observation())
 		}
 	}
 	if !companion.HasFirsthandObservation(evidence.Parts) {
@@ -305,6 +308,14 @@ type stationGroupShareAudio struct {
 	Complete   bool
 }
 
+func (a stationGroupShareAudio) observation() companion.ObservationPart {
+	rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", a.Start, a.End)
+	if a.Complete {
+		rangeLabel += "（完整）"
+	}
+	return companion.ObservationPart{Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: a.Text}
+}
+
 func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachmentTools, message, asset string, duration, audioBudget float64) (stationGroupShareAudio, error) {
 	start, limit := 0.0, math.Min(duration, audioBudget)
 	result := stationGroupShareAudio{Start: 0}
@@ -334,7 +345,8 @@ func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachment
 		if value := strings.TrimSpace(page.Text); value != "" {
 			text = append(text, value)
 		}
-		result.End, result.Complete = max(result.End, page.End), page.Done
+		result.End = max(result.End, page.End)
+		result.Complete = page.Done && result.End+.001 >= duration
 		result.State = page.State
 		if page.Done || page.Next <= start+.001 {
 			break
@@ -350,14 +362,26 @@ type stationGroupShareFrames struct {
 	Times []float64
 }
 
-func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmentTools, message, asset string, frames int) (stationGroupShareFrames, error) {
-	step := 1
-	if frames > stationGroupShareFramePage {
-		step = max(1, frames/stationGroupShareFramePage)
+func (f stationGroupShareFrames) observation() companion.ObservationPart {
+	times := make([]string, 0, len(f.Times))
+	for _, at := range f.Times {
+		times = append(times, fmt.Sprintf("%.3f秒", at))
 	}
+	rangeLabel := "视频采样帧"
+	if len(times) != 0 {
+		rangeLabel += "：" + strings.Join(times, "、")
+	}
+	return companion.ObservationPart{Kind: companion.ObservationVisualFrames, Range: rangeLabel, Excerpt: f.Text}
+}
+
+func stationGroupShareFrameStep(frames int) int {
+	return max(1, frames/stationGroupShareFramePage)
+}
+
+func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmentTools, message, asset string, frames int) (stationGroupShareFrames, error) {
 	raw, err := tools.observeVideo(ctx, stationGroupShareJSON(map[string]any{
 		"message_id": message, "asset_id": asset, "mode": "frames", "page_size": stationGroupShareFramePage,
-		"step": step, "batch_size": stationGroupShareFramePage, "max_dimension": 768, "analysis_tokens": 512, "timeout_seconds": 120,
+		"step": stationGroupShareFrameStep(frames), "batch_size": stationGroupShareFramePage, "max_dimension": 768, "analysis_tokens": 512, "timeout_seconds": 120,
 	}))
 	if err != nil {
 		return stationGroupShareFrames{}, err
@@ -376,8 +400,8 @@ func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmen
 	for _, batch := range result.Batches {
 		if value := strings.TrimSpace(batch.Analysis); value != "" {
 			text = append(text, value)
+			times = append(times, batch.Times...)
 		}
-		times = append(times, batch.Times...)
 	}
 	return stationGroupShareFrames{Text: strings.Join(text, "\n"), Times: times}, nil
 }
