@@ -71,10 +71,10 @@ func (p *permittedTools) newReferenceAudioOrigin(ctx context.Context, asset medi
 				continue
 			}
 			event, err := p.manager.memory.ReadEvent(ctx, []string{assetScope(p.trace)}, id)
-			if err != nil || revision < 1 || event.Revision != revision {
+			if err != nil || revision < 1 {
 				return errors.New("media_reference_transcription_source_changed")
 			}
-			if source := p.trace.Source; source != nil && source.EventID == id && (event.Role != "user" || event.Sender != p.trace.Sender || source.Sender != "" && source.Sender != p.trace.Sender || source.BodyHash != "" && source.BodyHash != event.Hash || source.MessageID != "" && source.MessageID != event.Trace) {
+			if source := p.trace.Source; source != nil && source.EventID == id && (event.Role != "user" || event.Sender != p.trace.Sender || source.Sender != "" && source.Sender != p.trace.Sender || source.MessageID != "" && source.MessageID != event.Trace) {
 				return errors.New("media_reference_transcription_requester_changed")
 			}
 		}

@@ -96,8 +96,12 @@ func TestReplyRouteCannotRenewRevisionOrAuthorization(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err = e.applyReplyRoutes(t.Context(), in, d, []editedReplyBubble{{Text: "收到。", RouteID: routes[0].ID}}, routes); err == nil {
-				t.Fatal("old route was renewed", kind)
+			_, err = e.applyReplyRoutes(t.Context(), in, d, []editedReplyBubble{{Text: "收到。", RouteID: routes[0].ID}}, routes)
+			if kind == "revision" && err != nil {
+				t.Fatal("updated source revision was rejected", err)
+			}
+			if kind == "authorization" && err == nil {
+				t.Fatal("withdrawn authorization was renewed")
 			}
 		})
 	}

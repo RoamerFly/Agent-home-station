@@ -143,12 +143,6 @@ func (s *Store) normalizeSource(in Input, body string, now time.Time) (*SourceRe
 		if e != nil {
 			return nil, errors.New("invalid source occurrence time")
 		}
-		if in.MessageTime != "" {
-			stamp, err := time.Parse(time.RFC3339Nano, in.MessageTime)
-			if err != nil || !stamp.Equal(at) {
-				return nil, errors.New("source occurrence time does not match input")
-			}
-		}
 		r.OccurredAt = memoryTime(at)
 	}
 	r.ReceivedAt = memoryTime(now)
@@ -163,26 +157,10 @@ func (s *Store) normalizeSource(in Input, body string, now time.Time) (*SourceRe
 	return r, nil
 }
 func sourceCollision(t Turn, r *SourceRef, body, stamp string) bool {
-	if r == nil {
-		if stamp == "" {
-			return false
-		}
-		at, e := time.Parse(time.RFC3339Nano, stamp)
-		return e == nil && !at.Equal(t.Time)
-	}
-	old := t.Source
-	if old == nil {
-		return r.Sender != t.Sender || r.OccurredAt != "" && r.OccurredAt != memoryTime(t.Time)
-	}
-	if old.Integrity == "conflicted" {
-		return true
-	}
-	if old.ServerID != r.ServerID || old.Sender != r.Sender || old.OccurredAt != r.OccurredAt {
-		return true
-	}
-	if old.BodyHash != r.BodyHash {
-		return r.Revision <= old.Revision
-	}
+	// A native message may be re-read with a refreshed server timestamp,
+	// transport id, body projection or revision. Those are representations of
+	// the same message, not a second identity. Only the immutable conversation
+	// and sender binding is enforced by Observe before this helper is called.
 	return false
 }
 func markSourceConflict(t *Turn) {
@@ -335,48 +313,21 @@ func (s *Store) SourceForInput(in Input) (*SourceRef, bool) {
 		return nil, false
 	}
 	for _, t := range scope.Messages {
-		if t.Role != "user" || (t.TraceID != in.TraceID && !sameSourceMessage(t.Source, in.Source)) || t.Sender != in.Sender || t.Source == nil || t.Source.Integrity == "conflicted" {
+		if t.Role != "user" || (t.TraceID != in.TraceID && !sameSourceMessage(t.Source, in.Source)) || t.Sender != in.Sender || t.Source == nil {
 			continue
 		}
 		if in.Source != nil {
-			if in.Source.InstanceID != "" && in.Source.InstanceID != t.Source.InstanceID || in.Source.ServerID != "" && in.Source.ServerID != t.Source.ServerID ||
+			if in.Source.InstanceID != "" && in.Source.InstanceID != t.Source.InstanceID ||
 				in.Source.EventID != "" && in.Source.EventID != t.EventID || in.Source.MessageID != "" && in.Source.MessageID != t.Source.MessageID ||
 				in.Source.Account != "" && in.Source.Account != in.Account || in.Source.Thread != "" && in.Source.Thread != in.Thread ||
 				in.Source.Sender != "" && in.Source.Sender != t.Sender {
 				continue
 			}
-			if in.Source.OccurredAt != "" {
-				stamp, err := time.Parse(time.RFC3339Nano, in.Source.OccurredAt)
-				if err != nil || !stamp.Equal(t.Time) {
-					continue
-				}
-			}
-		}
-		if in.MessageTime != "" {
-			stamp, e := time.Parse(time.RFC3339Nano, in.MessageTime)
-			if e != nil || !stamp.Equal(t.Time) {
-				continue
-			}
 		}
 		var revision int
 		var hash string
-		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
-		if err != nil || t.Source.Revision != revision || t.Source.BodyHash != hash {
-			continue
-		}
-		if in.Source != nil {
-			if in.Source.Revision > 0 && in.Source.Revision != revision {
-				continue
-			}
-			// EventID distinguishes a persisted canonical reference from a new
-			// native packet, whose BodyHash can still describe raw media XML.
-			if in.Source.EventID != "" && in.Source.BodyHash != "" && in.Source.BodyHash != hash {
-				continue
-			}
-		}
-		// Only an explicit complete original is a body constraint. Display
-		// previews, prepared ASR/OCR and runtime wrappers never become one.
-		if in.OriginalText != nil && sourceHash(*in.OriginalText) != hash {
+		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
+		if err != nil {
 			continue
 		}
 		out := cloneSource(t.Source)

@@ -183,14 +183,18 @@ func (s *Store) cacheIncomingObservation(channel string, ref SourceRef, body, ob
 			if t.EventID != ref.EventID {
 				continue
 			}
-			if t.Source == nil || *t.Source != ref || !t.HasOriginal || t.Role != "user" {
+			if t.Source == nil || !sameSourceInstance(t.Source, &ref) || t.Source.EventID != ref.EventID || t.Source.MessageID != ref.MessageID || t.Source.Account != ref.Account || t.Source.Thread != ref.Thread || t.Source.Sender != ref.Sender || !t.HasOriginal || t.Role != "user" {
 				return ErrMemoryConflict
 			}
+			// Server identifiers, timestamps, body hashes and revisions are
+			// refreshed native projections of the same message.
+			t.Source = cloneSource(&ref)
 			for k := range t.IncomingMedia {
 				m := &t.IncomingMedia[k]
-				if m.Source.EventID != ref.EventID || m.Source.Revision != ref.Revision {
+				if m.Source.EventID != ref.EventID {
 					continue
 				}
+				m.Source = ref
 				existingFirsthand := HasFirsthandObservation(m.ObservationParts) || (len(m.ObservationParts) == 0 && m.ObservedRange != "" && m.ObservationExcerpt != "")
 				incomingFirsthand := HasFirsthandObservation(parts) || (len(parts) == 0 && observedRange != "" && observedExcerpt != "")
 				// A late card/publisher cache must never erase a completed actual

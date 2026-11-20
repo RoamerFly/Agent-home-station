@@ -344,7 +344,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	}
 	if p.remember {
 		ev, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.message.AccountID, p.message.ThreadID)}, p.source.EventID)
-		if err != nil || ev.Revision != p.source.Revision || ev.Sender != p.message.SenderID || ev.Trace != p.message.ID || ev.Hash != p.source.BodyHash {
+		if err != nil || ev.Sender != p.message.SenderID || ev.Trace != p.message.ID {
 			return errors.New("share_source_changed")
 		}
 	}
@@ -355,7 +355,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if current.AccountID == "" {
 		current.AccountID = p.manager.native.Account()
 	}
-	if wechatapp.ReceivedSourceFingerprint(current, p.tool) != p.fingerprint {
+	if current.ID != p.message.ID || current.AccountID != p.message.AccountID || current.ThreadID != p.message.ThreadID || current.SenderID != p.message.SenderID {
 		return errors.New("share_native_source_changed")
 	}
 	return nil

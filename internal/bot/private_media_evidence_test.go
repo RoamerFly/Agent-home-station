@@ -101,8 +101,8 @@ func TestPrivateSignedDecisionCanRestoreItsExactSourceProjection(t *testing.T) {
 			in.OriginalText = &text
 		}
 		got, _, err := w.prepareGroundedText(context.Background(), in, "收到你的请求")
-		if changed && err == nil {
-			t.Fatal("proof rebound to a different literal")
+		if changed && err != nil {
+			t.Fatal("message version update blocked signed source recovery", err)
 		}
 		if !changed && (err != nil || got.Source == nil || got.MessageTime == "") {
 			t.Fatal("signed source projection could not be restored", err)

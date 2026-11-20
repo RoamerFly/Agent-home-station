@@ -81,7 +81,7 @@ func (w *Worker) analyzeIncomingMediaEvidence(ctx context.Context, message linux
 		return "", MediaObservationEvidence{}, err
 	}
 	in.Source = source
-	if current, valid := e.Store.SourceForInput(in); !valid || current.EventID != source.EventID || current.Revision != source.Revision {
+	if current, valid := e.Store.SourceForInput(in); !valid || current.EventID != source.EventID {
 		return "", MediaObservationEvidence{}, errors.New("media_source_changed_during_analysis")
 	}
 	return text, evidence, nil

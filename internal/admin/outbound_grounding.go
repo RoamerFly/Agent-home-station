@@ -99,11 +99,11 @@ func validateOutboundSource(ctx context.Context, m *Manager, in companion.Input,
 	if access != nil && access.MemoryResultAuthorization() != "" && r.EvidenceAuthorization == "" {
 		return errors.New("legacy_outbound_authorization_requires_review")
 	}
-	// Check source versions even for private targets, which otherwise need no
-	// group semantic review. Forgotten sources never authorize new submissions.
+	// Resolve the source event for authorization. Its revision and body hash are
+	// mutable projections and must not invalidate an otherwise bound request.
 	if in.Source != nil && in.Source.EventID != "" {
 		ev, err := m.memory.ReadEvent(ctx, []string{companion.ScopeID(in.Channel, in.Account, in.Thread)}, in.Source.EventID)
-		if err != nil || in.Source.Revision > 0 && ev.Revision != in.Source.Revision {
+		if err != nil || ev.Role != "user" || ev.Sender != in.Sender {
 			return errors.New("outbound_source_unavailable_or_changed")
 		}
 	}

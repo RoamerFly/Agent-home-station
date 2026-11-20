@@ -76,7 +76,7 @@ func TestReplyAnchorNeverUsesLatestParticipantMessageWithoutLinkedSource(t *test
 	}
 }
 
-func TestReplyAnchorRejectsChangedExistingProofInsteadOfSelectingNewSource(t *testing.T) {
+func TestReplyAnchorAcceptsUpdatedExistingProofWithoutSelectingNewSource(t *testing.T) {
 	s, c, _ := memoryFixture(t)
 	in := groundedInput(t, s, c, "alpha", "source-before-edit", "你爸刚视频。")
 	in.Addressees = []string{"beta"}
@@ -89,8 +89,8 @@ func TestReplyAnchorRejectsChangedExistingProofInsteadOfSelectingNewSource(t *te
 		t.Fatal(err)
 	}
 	groundedInput(t, s, c, "beta", "new-unrelated", "今天还有别的安排。")
-	if _, err = e.normalizeReplyContexts(t.Context(), in, d); err == nil {
-		t.Fatal("stale anchor changed instead of stopping")
+	if next, err := e.normalizeReplyContexts(t.Context(), in, d); err != nil || next.ReplyContexts[0].AnchorMessageID != in.TraceID {
+		t.Fatal("updated anchor was rejected or redirected", next, err)
 	}
 }
 

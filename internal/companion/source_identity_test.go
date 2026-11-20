@@ -130,7 +130,7 @@ func TestLegacyRowIDDoesNotQuarantineFreshNativeDataset(t *testing.T) {
 		})
 	}
 }
-func TestSourceCollisionPreservesBothEventsAndIsIdempotent(t *testing.T) {
+func TestSourceVersionUpdateReusesLogicalMessageAndIsIdempotent(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()
 	in.MessageTime = now.Add(-time.Hour).UTC().Format(time.RFC3339)
@@ -152,14 +152,14 @@ func TestSourceCollisionPreservesBothEventsAndIsIdempotent(t *testing.T) {
 	}
 	var n int
 	s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&n)
-	if n != 2 {
-		t.Fatal("source overwritten or replay appended", n)
+	if n != 1 {
+		t.Fatal("version update appended a duplicate logical message", n)
 	}
-	if got := s.Context(in, c, now); len(got.Messages) != 0 {
-		t.Fatal("conflicted source in context", got.Messages)
+	if got := s.Context(in, c, now); len(got.Messages) != 1 || got.Messages[0].FullText != "new observation" {
+		t.Fatal("updated source missing from context", got.Messages)
 	}
 	audit, e := AuditSources(context.Background(), filepath.Dir(s.path))
-	if e != nil || len(audit) != 2 {
+	if e != nil || len(audit) != 0 {
 		t.Fatal(audit, e)
 	}
 }
@@ -333,7 +333,7 @@ func TestSourceForInputDoesNotResolveForgottenOrSuppressedEvents(t *testing.T) {
 		})
 	}
 }
-func TestSourceReceivedAtIsFirstObservationAndTimeMustAgree(t *testing.T) {
+func TestSourceReceivedAtIsFirstObservationAndOccurrenceTimeMayRefresh(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()
 	in.TraceID = "clock-source"
@@ -348,8 +348,8 @@ func TestSourceReceivedAtIsFirstObservationAndTimeMustAgree(t *testing.T) {
 		t.Fatal("first observed time came from input", got)
 	}
 	in.Source.OccurredAt = now.Format(time.RFC3339)
-	if err := s.Observe(in, c, now); err == nil {
-		t.Fatal("contradictory occurrence time accepted")
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal("refreshed occurrence time rejected", err)
 	}
 }
 

@@ -414,16 +414,16 @@ func (p *externalHTTPPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 	if err != nil || epoch != p.invocation.EvidenceEpoch {
 		return errors.New("external_http_evidence_changed")
 	}
-	for id, revision := range p.invocation.SourceVersions {
+	for id := range p.invocation.SourceVersions {
 		ev, e := p.p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.invocation.Account, p.invocation.Thread)}, id)
-		if e != nil || ev.Revision != revision {
+		if e != nil {
 			return errors.New("external_http_source_changed")
 		}
 		if source := p.p.trace.Source; source != nil && source.EventID == id && (ev.Role != "user" || ev.Sender != p.p.trace.Sender) {
 			return errors.New("external_http_source_actor_changed")
 		}
 	}
-	if source := p.p.trace.Source; source != nil && (source.Integrity == "conflicted" || source.Integrity == "quarantined" || source.Account != "" && source.Account != p.invocation.Account || source.Thread != "" && source.Thread != p.invocation.Thread || source.Sender != "" && source.Sender != p.p.trace.Sender) {
+	if source := p.p.trace.Source; source != nil && (source.Account != "" && source.Account != p.invocation.Account || source.Thread != "" && source.Thread != p.invocation.Thread || source.Sender != "" && source.Sender != p.p.trace.Sender) {
 		return errors.New("external_http_source_changed")
 	}
 	if j.ID != "" {

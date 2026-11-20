@@ -21,7 +21,7 @@ func (s *Store) LegacyHistoryAllowed(account, thread string) bool {
 func (s *Store) NativeRecallAllowed(ctx context.Context, in Input) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	at, err := time.Parse(time.RFC3339Nano, in.MessageTime)
+	_, err := time.Parse(time.RFC3339Nano, in.MessageTime)
 	if err != nil || in.Channel == "" || in.Account == "" || in.Thread == "" || in.TraceID == "" || in.Sender == "" || s.db == nil {
 		return false, err
 	}
@@ -39,21 +39,17 @@ func (s *Store) NativeRecallAllowed(ctx context.Context, in Input) (bool, error)
 		if err := rows.Scan(&sender, &stamp, &text, &raw, &suppressed, &blocked); err != nil {
 			return false, err
 		}
-		storedAt, err := time.Parse(time.RFC3339Nano, stamp)
+		_, err := time.Parse(time.RFC3339Nano, stamp)
 		var turn Turn
-		if err != nil || json.Unmarshal(raw, &turn) != nil || sender != in.Sender || !storedAt.Equal(at) || suppressed != 0 || blocked != 0 {
+		if err != nil || json.Unmarshal(raw, &turn) != nil || sender != in.Sender || suppressed != 0 || blocked != 0 {
 			return false, nil
 		}
 		if in.Source != nil && turn.Source != nil {
 			stored, requested := turn.Source, in.Source
 			sameInstance := requested.InstanceID != "" && requested.InstanceID == stored.InstanceID
-			if stored.Integrity == "conflicted" || stored.ServerID != "" && stored.ServerID != requested.ServerID ||
-				sameInstance && requested.Revision > 0 && stored.Revision != requested.Revision {
+			if requested.InstanceID != "" && !sameInstance || stored.MessageID != requested.MessageID || stored.Account != requested.Account || stored.Thread != requested.Thread || stored.Sender != requested.Sender {
 				return false, nil
 			}
-		}
-		if in.OriginalText != nil && text != *in.OriginalText {
-			return false, nil
 		}
 	}
 	return true, rows.Err()

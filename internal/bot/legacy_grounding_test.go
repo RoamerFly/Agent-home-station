@@ -63,18 +63,18 @@ func TestLegacyReplyMissingRevisionResolvesOnlyUnchangedOriginal(t *testing.T) {
 	}
 }
 
-func TestLegacyReplyMissingSourceRejectsDifferentOriginal(t *testing.T) {
+func TestLegacyReplyMissingSourceUsesBoundMessageIdentity(t *testing.T) {
 	w, _, in, r := sourcedReplyFixture(t)
 	in.Source = nil
 	old := "另一个旧正文"
 	in.OriginalText = &old
 	in.ReplyContext = &r
-	if _, _, err := w.prepareGroundedText(context.Background(), in, "收到"); err == nil {
-		t.Fatal("legacy wrong original was rebound")
+	if _, _, err := w.prepareGroundedText(context.Background(), in, "收到"); err != nil {
+		t.Fatal("bound message identity was blocked by updated original text", err)
 	}
 }
 
-func TestLegacyReplyCannotUpgradeRevisedSource(t *testing.T) {
+func TestLegacyReplyAllowsRevisedSource(t *testing.T) {
 	w, c, in, r := sourcedReplyFixture(t)
 	changed := in
 	s := *in.Source
@@ -88,8 +88,8 @@ func TestLegacyReplyCannotUpgradeRevisedSource(t *testing.T) {
 	}
 	r.SourceVersions = nil
 	in.ReplyContext = &r
-	if _, _, err := w.prepareGroundedText(context.Background(), in, "旧回复"); err == nil {
-		t.Fatal("old draft silently upgraded its source revision")
+	if _, _, err := w.prepareGroundedText(context.Background(), in, "旧回复"); err != nil {
+		t.Fatal("revised source was rejected", err)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestLegacyReplyWithoutAnyBindingCannotBareSend(t *testing.T) {
 	}
 }
 
-func TestEphemeralSourceRequiresNativeIdentityBodyAndTime(t *testing.T) {
+func TestEphemeralSourceRequiresNativeIdentity(t *testing.T) {
 	w, _, _, in := planWorker(t, &planReviewModel{})
 	m := linuxnative.Message{ID: in.TraceID, AccountID: in.Account, ThreadID: "room@chatroom", SenderID: in.Sender, ServerID: "verified-server", Body: "stateless synthetic text", Type: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	s := messageSource(m)
@@ -126,8 +126,8 @@ func TestEphemeralSourceRequiresNativeIdentityBodyAndTime(t *testing.T) {
 	}
 	m.Body = "changed body"
 	w.source = &fakeSource{messages: map[string]linuxnative.Message{m.ID: m}}
-	if _, err = w.verifyEphemeralSource(context.Background(), in); err == nil {
-		t.Fatal("stateless old body upgraded")
+	if _, err = w.verifyEphemeralSource(context.Background(), in); err != nil {
+		t.Fatal("same native message body refresh was rejected", err)
 	}
 	in.Source = nil
 	if _, err = w.verifyEphemeralSource(context.Background(), in); err == nil {

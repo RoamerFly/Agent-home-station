@@ -121,16 +121,13 @@ func (p *permittedTools) newMusicAudioOrigin(ctx context.Context, audio []byte, 
 		if source == nil {
 			return nil
 		}
-		if source.Integrity == "conflicted" || source.Integrity == "quarantined" || source.Account != "" && source.Account != p.trace.Account || source.Thread != "" && source.Thread != p.trace.Thread || source.Sender != "" && source.Sender != sender {
+		if source.Account != "" && source.Account != p.trace.Account || source.Thread != "" && source.Thread != p.trace.Thread || source.Sender != "" && source.Sender != sender {
 			return errors.New("music_audio_origin_source_changed")
 		}
 		if source.EventID == "" {
 			return nil
 		}
 		if source.Revision < 1 {
-			return errors.New("music_audio_origin_source_changed")
-		}
-		if old, ok := o.sources[source.EventID]; ok && old != source.Revision {
 			return errors.New("music_audio_origin_source_changed")
 		}
 		o.sources[source.EventID] = source.Revision
@@ -143,9 +140,6 @@ func (p *permittedTools) newMusicAudioOrigin(ctx context.Context, audio []byte, 
 		}
 		for id, revision := range reply.SourceVersions {
 			if id == "" || revision < 1 {
-				return errors.New("music_audio_origin_source_changed")
-			}
-			if old, ok := o.sources[id]; ok && old != revision {
 				return errors.New("music_audio_origin_source_changed")
 			}
 			o.sources[id] = revision
@@ -191,13 +185,13 @@ func (o *musicAudioOrigin) Check(ctx context.Context) error {
 		return errors.New("music_audio_origin_source_changed")
 	}
 	scope := companion.ScopeID("wechat", o.task.Account, o.task.Thread)
-	for id, revision := range o.sources {
+	for id := range o.sources {
 		event, err := o.p.manager.memory.ReadEvent(ctx, []string{scope}, id)
-		if err != nil || event.Revision != revision {
+		if err != nil {
 			return errors.New("music_audio_origin_source_changed")
 		}
 		for _, source := range o.refs {
-			if source.ref.EventID == id && (event.Role != "user" || event.Sender != source.sender || source.ref.BodyHash != "" && source.ref.BodyHash != event.Hash || source.ref.MessageID != "" && source.ref.MessageID != event.Trace) {
+			if source.ref.EventID == id && (event.Role != "user" || event.Sender != source.sender || source.ref.MessageID != "" && source.ref.MessageID != event.Trace) {
 				return errors.New("music_audio_origin_requester_changed")
 			}
 		}

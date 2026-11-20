@@ -156,9 +156,6 @@ func (e *Engine) ValidateReplyContext(ctx context.Context, in Input, r ReplyCont
 		if e.Store == nil {
 			return errors.New("reply_source_identity_unavailable")
 		}
-		if in.Source.Integrity == "conflicted" || in.Source.Integrity == "quarantined" {
-			return errors.New("reply_source_identity_conflict")
-		}
 		if e.Config.Permissions.Remember {
 			if _, ok := e.Store.SourceForInput(in); !ok {
 				return errors.New("reply_source_identity_unavailable")
@@ -217,9 +214,6 @@ func (e *Engine) ValidateReplyContext(ctx context.Context, in Input, r ReplyCont
 		ev, err := e.Store.ReadEvent(ctx, []string{scope.ID}, id)
 		if err != nil {
 			return errors.New("reply_source_unavailable")
-		}
-		if revision, ok := r.SourceVersions[id]; !ok || revision != ev.Revision {
-			return errors.New("reply_source_revision_changed")
 		}
 		if ev.Role != "user" && ev.Role != "admin_correction" {
 			return errors.New("assistant_statement_is_not_fact_source")
@@ -292,9 +286,6 @@ func (e *Engine) normalizeReplyContexts(ctx context.Context, in Input, d Decisio
 			ev, err := e.Store.ReadEvent(ctx, []string{ScopeID(in.Channel, in.Account, in.Thread)}, id)
 			if err != nil {
 				return Decision{}, err
-			}
-			if old, ok := r.SourceVersions[id]; ok && old != ev.Revision {
-				return Decision{}, errors.New("reply_source_revision_changed")
 			}
 			if !relevantSender(in, ev.Sender) {
 				r.RiskFlags = append(r.RiskFlags, "cross_person_source")

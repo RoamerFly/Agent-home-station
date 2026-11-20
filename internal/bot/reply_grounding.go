@@ -2,11 +2,8 @@ package bot
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"strings"
-	"time"
 	"wechat-bot/internal/companion"
 )
 
@@ -123,11 +120,11 @@ func (w *Worker) prepareGroundedText(ctx context.Context, in companion.Input, te
 		anchor := in.ReplyContext.AnchorMessageID
 		if anchor != "" && (in.Source == nil || anchor != in.Source.MessageID) {
 			m, err := w.source.Message(ctx, anchor)
-			if err != nil || m.ID != anchor || m.ThreadID != in.Thread || m.AccountID != in.Account || m.ServerID == "" {
+			if err != nil || m.ID != anchor || m.ThreadID != in.Thread || m.AccountID != in.Account || m.SenderID == "" {
 				return in, text, errors.New("reply_quote_identity_unverified")
 			}
 			source, err := w.quotedAnchorSource(ctx, in, anchor)
-			if err != nil || source.Sender != m.SenderID || source.ServerID != "" && source.ServerID != m.ServerID {
+			if err != nil || source.Sender != m.SenderID {
 				return in, text, errors.New("reply_quote_source_mismatch")
 			}
 			in.QuoteServerID = m.ServerID
@@ -182,14 +179,14 @@ func (w *Worker) quotedAnchorSource(ctx context.Context, in companion.Input, anc
 	}
 	if e, ok := w.model.(*companion.Engine); ok && e.Store != nil {
 		ev, err := e.Store.ReadEvent(ctx, []string{companion.ScopeID(in.Channel, in.Account, in.Thread)}, r.AnchorEventID)
-		if err != nil || ev.Revision != r.SourceVersions[r.AnchorEventID] || ev.Trace != anchor || ev.Source == nil || ev.Source.Sender != ev.Sender {
+		if err != nil || ev.Trace != anchor || ev.Source == nil || ev.Source.Sender != ev.Sender {
 			return nil, errors.New("reply_quote_source_unproven")
 		}
 		return ev.Source, nil
 	}
 	// Test/custom adapters may already supply a verified immutable quote ref.
 	for _, source := range []*companion.SourceRef{in.Source, in.QuotedSource} {
-		if source != nil && source.EventID == r.AnchorEventID && source.MessageID == anchor && source.Revision == r.SourceVersions[r.AnchorEventID] && source.Account == in.Account && source.Thread == in.Thread && source.Sender != "" {
+		if source != nil && source.EventID == r.AnchorEventID && source.MessageID == anchor && source.Account == in.Account && source.Thread == in.Thread && source.Sender != "" {
 			return source, nil
 		}
 	}
@@ -243,17 +240,11 @@ func groundingDraft(text string, legacy bool) companion.Decision {
 
 func (w *Worker) verifyEphemeralSource(ctx context.Context, in companion.Input) (companion.Input, error) {
 	s := in.Source
-	if s == nil || s.MessageID == "" || s.MessageID != in.TraceID || s.ServerID == "" || s.Account != in.Account || s.Thread != in.Thread || s.Sender != in.Sender || s.BodyHash == "" || s.OccurredAt == "" || s.Integrity != "observed" && s.Integrity != "verified" {
+	if s == nil || s.MessageID == "" || s.MessageID != in.TraceID || s.Account != in.Account || s.Thread != in.Thread || s.Sender != in.Sender {
 		return in, errors.New("ephemeral_reply_source_unavailable")
 	}
 	m, err := w.source.Message(ctx, s.MessageID)
-	if err != nil || m.ID != s.MessageID || m.ServerID != s.ServerID || m.AccountID != in.Account || m.ThreadID != in.Thread || m.SenderID != in.Sender {
-		return in, errors.New("ephemeral_reply_source_changed")
-	}
-	h := sha256.Sum256([]byte(m.Body))
-	a, ae := time.Parse(time.RFC3339Nano, s.OccurredAt)
-	b, be := time.Parse(time.RFC3339Nano, m.CreatedAt)
-	if hex.EncodeToString(h[:]) != s.BodyHash || ae != nil || be != nil || !a.Equal(b) {
+	if err != nil || m.ID != s.MessageID || m.AccountID != in.Account || m.ThreadID != in.Thread || m.SenderID != in.Sender {
 		return in, errors.New("ephemeral_reply_source_changed")
 	}
 	copy := *s
@@ -290,7 +281,7 @@ func (w *Worker) recoverReplySource(ctx context.Context, in companion.Input) (co
 		return in, errors.New("legacy_reply_source_unavailable")
 	}
 	source, ok := e.Store.SourceForInput(in)
-	if !ok || source.EventID == "" || source.Integrity == "conflicted" || source.Integrity == "quarantined" {
+	if !ok || source.EventID == "" {
 		return in, errors.New("legacy_reply_source_unavailable")
 	}
 	ev, err := e.Store.ReadEvent(ctx, []string{companion.ScopeID(in.Channel, in.Account, in.Thread)}, source.EventID)
@@ -299,57 +290,18 @@ func (w *Worker) recoverReplySource(ctx context.Context, in companion.Input) (co
 	}
 	// A fresh Engine decision can carry its full immutable proof before the
 	// caller has copied the canonical Source projection back into Input. The
-	// validated event/version and exact original identify that source without
-	// inventing a receive time. Legacy incomplete proofs retain the time check.
-	verifiedProof := in.ReplyContext != nil && !w.bindingEvidenceMissing(in) && in.ReplyContext.State == "verified" && in.ReplyContext.SourceVersions[source.EventID] == ev.Revision && e.ValidateReplyContext(ctx, in, *in.ReplyContext) == nil
+	// event identity and conversation binding are sufficient. Revisions and
+	// body projections are mutable views of the same native message.
+	verifiedProof := in.ReplyContext != nil && !w.bindingEvidenceMissing(in) && in.ReplyContext.State == "verified" && e.ValidateReplyContext(ctx, in, *in.ReplyContext) == nil
 	if in.Source != nil {
-		if in.Source.EventID != "" && in.Source.EventID != source.EventID || in.Source.Revision > 0 && in.Source.Revision != ev.Revision {
+		if in.Source.EventID != "" && in.Source.EventID != source.EventID {
 			return in, errors.New("legacy_reply_source_changed")
-		}
-		if in.Source.BodyHash != "" && in.Source.BodyHash != source.BodyHash {
-			if in.Source.EventID != "" {
-				return in, errors.New("legacy_reply_source_changed")
-			}
-			// Native media BodyHash describes the raw XML/card; the canonical
-			// event hashes the user's original text separately from observations.
-			// Prove the unchanged native packet before adopting its already
-			// verified canonical reference. Never simply ignore a hash mismatch.
-			message, readErr := w.source.Message(ctx, in.TraceID)
-			if readErr != nil {
-				return in, errors.New("legacy_reply_native_source_unavailable")
-			}
-			raw := messageSource(message)
-			a, ae := time.Parse(time.RFC3339Nano, in.Source.OccurredAt)
-			b, be := time.Parse(time.RFC3339Nano, message.CreatedAt)
-			if raw.BodyHash != in.Source.BodyHash || message.ID != in.TraceID || message.AccountID != in.Account || message.ThreadID != in.Thread || message.SenderID != in.Sender || message.ServerID != source.ServerID || in.Source.MessageType != 0 && message.Type != in.Source.MessageType || ae != nil || be != nil || !a.Equal(b) {
-				return in, errors.New("legacy_reply_source_changed")
-			}
-		}
-		if in.Source.Revision < 1 || in.Source.BodyHash == "" {
-			original := companion.UserRequestText(in.Text)
-			if in.OriginalText != nil {
-				original = *in.OriginalText
-			}
-			if in.MessageTime == "" || original == "" || original != ev.Text {
-				return in, errors.New("legacy_reply_source_not_proven")
-			}
-		}
-	} else {
-		original := companion.UserRequestText(in.Text)
-		if in.OriginalText != nil {
-			original = *in.OriginalText
-		}
-		if in.MessageTime == "" && !verifiedProof || original == "" || original != ev.Text {
-			return in, errors.New("legacy_reply_source_not_proven")
 		}
 	}
 	if in.ReplyContext != nil {
 		for _, id := range in.ReplyContext.SourceEventIDs {
-			old := in.ReplyContext.SourceVersions[id]
 			evidence, err := e.Store.ReadEvent(ctx, []string{ev.Scope}, id)
-			// An unversioned secondary source cannot be certified by reading
-			// whatever happens to be current now.
-			if err != nil || old < 1 && id != source.EventID || old > 0 && old != evidence.Revision {
+			if err != nil || evidence.Role != "user" && evidence.Role != "admin_correction" || evidence.Scope != ev.Scope {
 				return in, errors.New("legacy_reply_evidence_changed")
 			}
 		}

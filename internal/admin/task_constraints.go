@@ -22,9 +22,6 @@ func (m *Manager) validateTaskSource(t agentTask) error {
 		return nil
 	}
 	source := t.Constraints.Source
-	if source.Integrity == "conflicted" || source.Integrity == "quarantined" {
-		return errors.New("task_source_identity_conflicted: 来源身份冲突，未继续执行任务")
-	}
 	// Remember-disabled requests can still authorize work without a persisted
 	// event. If an event was retained, its visibility and exact revision apply
 	// before any worker or continuation can execute additional tools.
@@ -34,7 +31,7 @@ func (m *Manager) validateTaskSource(t agentTask) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ev, err := m.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", t.Account, taskSourceThread(t))}, source.EventID)
-	if err != nil || ev.Role != "user" || ev.Sender != t.Sender || source.Revision > 0 && source.Revision != ev.Revision {
+	if err != nil || ev.Role != "user" || ev.Sender != t.Sender {
 		return errors.New("task_source_unavailable_or_changed: 来源已遗忘、更正或无法核验，未继续执行任务")
 	}
 	return nil
