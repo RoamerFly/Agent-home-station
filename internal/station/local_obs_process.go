@@ -54,7 +54,11 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 		}
 		studio := filepath.Dir(filepath.Dir(filepath.Dir(r.Executable)))
 		actual, e := os.Stat(filepath.Join(studio, "config"))
-		expected := filepath.Join(stationToolDataDir(s.home.dataDir, "obs-preview"), "obs-preview", "config")
+		// stationToolRoot already resolves the migrated `data/tools/<id>` root.
+		// Adding the tool name again made the post-migration path resolve to
+		// `data/tools/obs-preview/obs-preview/config`, so a correctly registered
+		// external OBS instance could never pass the configuration ownership check.
+		expected := filepath.Join(stationToolRoot(s.home.dataDir, "obs-preview"), "config")
 		if portableConfig != "" {
 			expected = portableConfig
 		}
