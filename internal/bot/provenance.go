@@ -29,11 +29,16 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		source.InstanceID = provider.SourceInstanceID()
 	}
 	in.Source = &source
+	in.QuotedLiteral = ""
 	in.MentionedIDs = append([]string(nil), m.Mentions.IDs...)
 	if m.ResolvedQuote != nil {
-		q := messageSource(*m.ResolvedQuote)
+		original := *m.ResolvedQuote
+		q := messageSource(original)
 		q.InstanceID = source.InstanceID
 		in.QuotedSource = &q
+		if original.Direction == "incoming" && (original.Type == 1 || original.IsQuotedText()) {
+			in.QuotedLiteral = boundedQuoteText(original.Body)
+		}
 		if q.Sender != "" {
 			in.Addressees = []string{q.Sender}
 		}

@@ -345,11 +345,16 @@ func (e *Engine) inputEvidenceFields(in Input) map[string]any {
 	}
 	if in.QuotedSource != nil {
 		quoted := cloneSource(in.QuotedSource)
+		budget := max(512, e.Config.ContextConfig().MaxInputChars/4)
 		if ev, ok := e.replyReferenceEvent(context.Background(), in, quoted); ok {
 			quoted.EventID = ev.ID
 			quoted.Revision = ev.Revision
 			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia}
-			row["quoted_message_evidence"] = e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
+			row["quoted_message_evidence"] = e.turnEvidenceFields(ev.Scope, t, budget)
+		} else if strings.TrimSpace(in.QuotedLiteral) != "" && quoted.Integrity == "observed" && quoted.Account == in.Account && quoted.Thread == in.Thread && quoted.Sender != "" && quoted.MessageID != "" && quoted.MessageID != in.TraceID {
+			at, _ := time.Parse(time.RFC3339Nano, quoted.OccurredAt)
+			t := Turn{Role: "user", Text: in.QuotedLiteral, FullText: in.QuotedLiteral, HasOriginal: true, UserTextState: "verified_original", Sender: quoted.Sender, Time: at, TraceID: quoted.MessageID, Source: quoted}
+			row["quoted_message_evidence"] = e.turnEvidenceFields(ScopeID(in.Channel, in.Account, in.Thread), t, budget)
 		}
 		row["quote_chain"] = quoteRoles(in.Sender, in.Source, quoted)
 		row["quoted_by_id"] = in.Sender

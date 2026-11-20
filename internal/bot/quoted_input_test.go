@@ -119,6 +119,10 @@ func TestNativeQuotedTextPreservesOwnLiteralAndSeparateQuotedAuthor(t *testing.T
 	if !ok || q["sender"] != original.SenderID || q["message_id"] != original.ID {
 		t.Fatal("first context lost separate quote author", model.current)
 	}
+	quoted, ok := model.current["quoted_message_evidence"].(map[string]any)
+	if !ok || quoted["text"] != original.Body || quoted["message_sender_id"] != original.SenderID {
+		t.Fatal("original from the native quote was unavailable before any stored copy existed")
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: m.ThreadID}
 	scope := c.Store.Context(in, c.Config, time.Now())
 	for _, turn := range scope.Messages {

@@ -21,6 +21,9 @@ type Input struct {
 	// PrivateQuote is a host-observed native reference, never quoted text.
 	// It is rechecked against the native message and delivery ledger on use.
 	PrivateQuote string `json:"private_quote,omitempty"`
+	// QuotedLiteral is request-scoped text from a verified same-conversation
+	// native quote. It can provide context when the original is not in memory.
+	QuotedLiteral string `json:"-"`
 	// Set by the host when a reply consumed external request-scoped evidence.
 	RequestScopedReply bool `json:"-"`
 	// GroupShareSummary is set only by the authorized host for one share turn.
