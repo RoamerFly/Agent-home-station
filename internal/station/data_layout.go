@@ -112,23 +112,36 @@ func ApplicationsRoot(dataDir string) string { return stationApplicationsDir(dat
 func PublicToolsRoot(dataDir string) string  { return stationPublicToolsDir(dataDir) }
 func AuthorityRoot(dataDir string) string    { return stationAuthorityDir(dataDir) }
 
+// stationToolDataDir is the compatibility seam for the data/tools migration.
+// A migrated tool can opt into data/tools/<id> one at a time. Legacy homes and
+// tools without a migrated directory continue using data/publictools/<id>.
+func stationToolDataDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		if directoryExists(filepath.Join(dataDir, "tools")) {
+			return filepath.Join(dataDir, "tools")
+		}
+		return stationPublicToolsDir(dataDir)
+	}
+	return dataDir
+}
+
 func stationToolPrivateDir(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool, "private")
+		return filepath.Join(stationToolDataDir(dataDir), tool, "private")
 	}
 	return filepath.Join(dataDir, "station-"+tool)
 }
 
 func stationToolRoot(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool)
+		return filepath.Join(stationToolDataDir(dataDir), tool)
 	}
 	return dataDir
 }
 
 func stationToolLogsDir(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool, "logs")
+		return filepath.Join(stationToolDataDir(dataDir), tool, "logs")
 	}
 	return filepath.Join(dataDir, "station-"+tool+"-logs")
 }
