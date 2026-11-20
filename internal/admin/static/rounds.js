@@ -23,7 +23,7 @@
   const statusGroups = {
     pending: ['received','queued','retrying_tool','retrying_model','retrying_delivery','waiting','waiting_receipt'],
     active: ['running','cancelling','checking_receipt'],
-    done: ['accepted','completed','silent','skipped','blocked','stopped','failed','partially_completed','partially_cancelled','needs_review'],
+    done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
   const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};
@@ -164,7 +164,7 @@
       else if (['retrying_tool', 'waiting_tool_retry'].includes(item.status)) round.status = 'retrying_tool';
       else if (['retrying_model', 'waiting_model_retry'].includes(item.status)) round.status = 'retrying_model';
       else if (['retrying_delivery', 'waiting_delivery_retry'].includes(item.status)) round.status = 'retrying_delivery';
-      else if (item.status === 'needs_review') round.status = 'needs_review';
+      else if (['needs_review', 'expired'].includes(item.status)) round.status = item.status;
       else if (stage(item) === 'delivery' && ['send_outcome_unknown','submission_outcome_unknown','receipt_wait_timeout','receipt_lookup_failed'].includes(item.reason) && item.status === 'failed') {
         // A legacy error without a scheduled lookup is evidence of an unknown
         // result, not a live job. Preserve a lookup already recorded for it.
@@ -202,7 +202,7 @@
         'background_turn_yielded', 'message_progress',
       ].includes(e.event));
       const hasTerminalEvidence = round.entries.some(e =>
-        e.event === 'message_processed' || ['completed', 'accepted', 'failed', 'blocked', 'stopped', 'cancelled', 'needs_review'].includes(e.status));
+        e.event === 'message_processed' || ['completed', 'accepted', 'failed', 'expired', 'blocked', 'stopped', 'cancelled', 'needs_review'].includes(e.status));
       const ageFromLatest = latestEntryTime - Date.parse(round.updated);
       const hasOnlyReceiveProcessing = round.entries.every(e =>
         e.event === 'message_received' || e.event === 'message_processing' || e.category === 'received');

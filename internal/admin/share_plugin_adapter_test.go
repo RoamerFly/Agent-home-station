@@ -199,6 +199,53 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 	}
 }
 
+func TestReceivedShareWithoutMemoryRecordUsesExactNativeCard(t *testing.T) {
+	for _, kind := range []int{5, 51} {
+		f, n, previous, ctx := receivedPolicyFixtureFor(t, false, kind)
+		f.manager.config.Companion.Permissions.Remember = true
+		f.manager.config.Companion.Permissions.ObserveGroups = true
+		n.msg.ThreadID = "synthetic@chatroom"
+		f.manager.config.GroupRules = []GroupRule{{ID: n.msg.ThreadID, Mode: "social"}}
+
+		p, err := f.manager.newReceivedSharePolicyFor(ctx, n.msg, previous.tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := pluginhost.Job{Plugin: "share-reader", Tool: p.tool, Context: p.invocation()}
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+			t.Fatal(err)
+		}
+		scope := companion.ScopeID("wechat", "test", n.msg.ThreadID)
+		if _, err := f.manager.memory.ReadEvent(ctx, []string{scope}, p.source.EventID); err == nil {
+			t.Fatal("native fallback created a memory event")
+		}
+		f.manager.config.Companion.Permissions.ObserveGroups = false
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
+			t.Fatal("fallback allowed reading a group after its observation grant was revoked")
+		}
+		f.manager.config.Companion.Permissions.ObserveGroups = true
+
+		changed := n.msg
+		changed.Body = "different card"
+		if _, err := f.manager.newReceivedSharePolicyFor(ctx, changed, p.tool); err == nil {
+			t.Fatal("fallback accepted content that did not match the native message")
+		}
+		other := companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, TraceID: "another-message", Text: "synthetic text", MessageTime: n.msg.CreatedAt}
+		if err := f.manager.memory.Observe(other, f.manager.config.Companion, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.manager.memory.Clear(scope); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
+			t.Fatal("active fallback survived forgetting")
+		}
+		if _, err := f.manager.newReceivedSharePolicyFor(ctx, n.msg, p.tool); err == nil {
+			t.Fatal("fresh fallback bypassed the scope clear")
+		}
+	}
+}
+
 func TestReceivedShareReadOnlySnapshotIdentity(t *testing.T) {
 	_, _, policy, ctx := receivedPolicyFixture(t, false)
 	installed, err := policy.store.Installed(ctx, "share-reader")

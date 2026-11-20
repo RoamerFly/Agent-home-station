@@ -14,6 +14,7 @@ test('status filters group terminal failures separately from unresolved receipts
   ['task_delivery_updated','decision','partially_completed','','done'],
   ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
   ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
+  ['reminder_overdue','decision','expired','reminder_overdue_while_offline','done'],
   ['send_failed','error','failed','send_outcome_unknown','done'],
   ['message_sent','sent','accepted','','done']
  ];
@@ -25,6 +26,15 @@ test('status filters group terminal failures separately from unresolved receipts
    assert.equal(project([...r.entries,processed])[0].group,'done');
   }
  }
+});
+
+test('an expired reminder leaves the original chat round unchanged', () => {
+ const received = entry(1,{event:'message_received',category:'received',status:'received'});
+ const expired = entry(2,{message_id:'reminder-1',event:'reminder_overdue',category:'decision',status:'expired'});
+ const rounds = project([received, expired]);
+ assert.equal(rounds.length, 2);
+ assert.equal(rounds[0].status, 'expired');
+ assert.equal(rounds[1].status, 'received');
 });
 
 test('only an actual receipt check is shown as Agent work until the receipt arrives',()=>{

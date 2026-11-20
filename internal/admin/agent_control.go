@@ -987,6 +987,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if t.ID != r.PathValue("id") {
 				continue
 			}
+			if t.State == "expired" {
+				fail(w, 409, "这条提醒已过期；如需安排新的时间，请创建新提醒")
+				return
+			}
 			if in.Action == "update" {
 				if t.Reminder != nil {
 					updated, err := s.manager.editReminder(r.Context(), t, in.reminderEdit)

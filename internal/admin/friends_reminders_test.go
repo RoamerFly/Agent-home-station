@@ -294,19 +294,69 @@ func TestExecuteReminderResolvesNamedGroupAndKeepsOrigin(t *testing.T) {
 	}
 }
 
-func TestReminderOverdueAtStartupNeedsOwnerDecision(t *testing.T) {
+func TestReminderOverdueAtStartupExpiresWithoutRescheduling(t *testing.T) {
 	f, p, n := memberReminder(t)
 	task := createReminder(t, p, 3600)
+	now := time.Now()
+	due := now.Add(-time.Minute)
 	f.manager.agent.mu.Lock()
 	stored := f.manager.agent.data.Tasks[task.ID]
-	stored.Reminder.Due = time.Now().Add(-time.Minute)
+	stored.Reminder.Due = due
 	stored.Next = stored.Reminder.Due
 	f.manager.agent.data.Tasks[task.ID] = stored
 	f.manager.agent.mu.Unlock()
-	f.manager.prepareReminderSchedule(time.Now())
+	f.manager.prepareReminderSchedule(now)
+	f.manager.prepareReminderSchedule(now.Add(time.Minute))
 	got := f.manager.agent.list("test", task.Thread)[0]
-	if got.State != "needs_review" || !strings.Contains(got.LastResult, "主人") || len(n.requests) != 0 {
+	if got.State != "expired" || !got.Next.Equal(due) || !got.Reminder.Due.Equal(due) || len(n.requests) != 0 {
 		t.Fatal("overdue startup reminder was executed automatically", got, n.requests)
+	}
+	if _, pending := f.manager.nextReminderDue(); pending {
+		t.Fatal("expired reminder was scheduled again")
+	}
+	raw, err := os.ReadFile(filepath.Join(f.manager.agent.dir, "reminders", task.ID+".json"))
+	var saved agentTask
+	if err != nil || json.Unmarshal(raw, &saved) != nil || saved.State != "expired" || !saved.Reminder.Due.Equal(due) {
+		t.Fatalf("expired reminder was not retained: %v", err)
+	}
+	f.login()
+	code, _, _ := f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "resume"}, true, true)
+	if code != 409 {
+		t.Fatalf("expired reminder could be resumed: HTTP %d", code)
+	}
+}
+
+func TestReminderStartupKeepsPendingReceiptAndRecoversFollowUp(t *testing.T) {
+	for _, mode := range []string{"submitted", "handoff", "legacy-overdue"} {
+		t.Run(mode, func(t *testing.T) {
+			f, p, n := memberReminder(t)
+			task := createReminder(t, p, 3600)
+			expected := "expired"
+			switch mode {
+			case "submitted":
+				task.State, task.Reminder.Job = "waiting_delivery", "synthetic-send"
+				expected = "waiting_delivery"
+			case "handoff":
+				if _, err := f.manager.scheduleReminderFollowUp(task); err != nil {
+					t.Fatal(err)
+				}
+				expected = "completed"
+			case "legacy-overdue":
+				task.State = "needs_review"
+				task.LastResult = "提醒在工作站离线期间已到期，未自动执行；等待主人在执行回合中手动决定"
+			}
+			if err := f.manager.agent.task(task); err != nil {
+				t.Fatal(err)
+			}
+			f.manager.prepareReminderSchedule(task.Reminder.Due.Add(time.Minute))
+			got, _ := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+			if got.State != expected || got.Reminder.Job != task.Reminder.Job || len(n.requests) != 0 {
+				t.Fatalf("unexpected restart result: state=%s job=%s", got.State, got.Reminder.Job)
+			}
+			if mode == "handoff" && got.Reminder.FollowUpTaskID != agentID("reminder-followup", task.ID) {
+				t.Fatal("saved execution round was not linked")
+			}
+		})
 	}
 }
 

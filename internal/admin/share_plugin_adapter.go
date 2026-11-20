@@ -49,6 +49,7 @@ type receivedSharePolicy struct {
 	source             companion.SourceRef
 	fingerprint, epoch string
 	remember           bool
+	nativeRecall       *companion.Input
 	tool               string
 	requestSuffix      string
 	// resolutionSnapshotSuffix distinguishes immutable read-only share parses
@@ -212,18 +213,32 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 					return nil, err
 				}
 			}
-			if !valid {
-				return nil, errors.New("share_persisted_source_unavailable")
+			if valid {
+				ref = *found
+			} else {
+				// A received card can be read directly when its exact native
+				// message is still accessible. Keep this proof out of memory.
+				if explicitPublicURL || (tool != "share.resolve_channels" && tool != "share.resolve_public") {
+					return nil, errors.New("share_persisted_source_unavailable")
+				}
+				p.nativeRecall = &in
+				if err := p.checkNativeRecall(ctx); err != nil {
+					return nil, err
+				}
+				if err := p.checkNativeSource(ctx); err != nil {
+					return nil, err
+				}
 			}
-			ref = *found
 		}
-		if ref.Account != message.AccountID || ref.Thread != message.ThreadID || ref.MessageID != message.ID || ref.Sender != message.SenderID {
-			return nil, errors.New("share_source_scope_mismatch")
+		if p.nativeRecall == nil {
+			if ref.Account != message.AccountID || ref.Thread != message.ThreadID || ref.MessageID != message.ID || ref.Sender != message.SenderID {
+				return nil, errors.New("share_source_scope_mismatch")
+			}
+			p.source = ref
+			return p, nil
 		}
-		p.source = ref
-	} else {
-		p.source = companion.SourceRef{Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, MessageID: message.ID, ServerID: message.ServerID, EventID: "native:" + p.fingerprint, Revision: 1, MessageType: message.Type, OccurredAt: message.CreatedAt}
 	}
+	p.source = companion.SourceRef{Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, MessageID: message.ID, ServerID: message.ServerID, EventID: "native:" + p.fingerprint, Revision: 1, MessageType: message.Type, OccurredAt: message.CreatedAt}
 	return p, nil
 }
 
@@ -342,12 +357,31 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if err != nil || epoch != p.epoch {
 		return errors.New("share_source_changed")
 	}
-	if p.remember {
+	if p.nativeRecall != nil {
+		if err := p.checkNativeRecall(ctx); err != nil {
+			return err
+		}
+	} else if p.remember {
 		ev, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.message.AccountID, p.message.ThreadID)}, p.source.EventID)
 		if err != nil || ev.Sender != p.message.SenderID || ev.Trace != p.message.ID {
 			return errors.New("share_source_changed")
 		}
 	}
+	return p.checkNativeSource(ctx)
+}
+
+func (p *receivedSharePolicy) checkNativeRecall(ctx context.Context) error {
+	if !p.manager.memory.LegacyHistoryAllowed(p.message.AccountID, p.message.ThreadID) {
+		return errors.New("share_source_changed")
+	}
+	allowed, err := p.manager.memory.NativeRecallAllowed(ctx, *p.nativeRecall)
+	if err != nil || !allowed {
+		return errors.New("share_source_changed")
+	}
+	return nil
+}
+
+func (p *receivedSharePolicy) checkNativeSource(ctx context.Context) error {
 	current, err := p.manager.native.Message(ctx, p.message.ID)
 	if err != nil {
 		return errors.New("share_native_source_unavailable")

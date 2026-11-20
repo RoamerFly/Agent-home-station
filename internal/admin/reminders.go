@@ -33,11 +33,11 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "kind=notify (default) sends the saved reminder text at the due time. kind=execute runs the requested tools silently and replies with results. Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline, it is marked needs_review for the owner to decide manually. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. notify only sends the reminder text. execute is owner-only and uses existing task/tool authorization. For a future action such as making a song and sending it to a group, use kind=execute with the full original request in text, and pass the exact WeChat group name in delivery_group; the host resolves the group independently and preserves its ID. No group messages are read to set the target. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. Always list reminders before creating another for an existing or referenced request. For a list, query filters titles and reminder text; follow next_offset while has_more. An inquiry about what another conversation said is read-only; report the saved reminder instead of recreating it. scope=account lets the trusted owner list or edit their own reminders across conversations. To edit an existing reminder, use action=update with the existing id and only changed fields (time, title, text, or delivery_group). An empty delivery_group returns an execute reminder to the source conversation. Ordinary members are restricted to their own reminders in the current conversation. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,title?:string,scope:current|account?,query?:string,offset?:integer,limit?:integer,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "kind=notify (default) sends the saved reminder text at the due time. kind=execute runs the requested tools silently and replies with results. Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline before any execution or delivery, it is marked expired and will not be automatically run or postponed. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. notify only sends the reminder text. execute is owner-only and uses existing task/tool authorization. For a future action such as making a song and sending it to a group, use kind=execute with the full original request in text, and pass the exact WeChat group name in delivery_group; the host resolves the group independently and preserves its ID. No group messages are read to set the target. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. Always list reminders before creating another for an existing or referenced request. For a list, query filters titles and reminder text; follow next_offset while has_more. An inquiry about what another conversation said is read-only; report the saved reminder instead of recreating it. scope=account lets the trusted owner list or edit their own reminders across conversations. To edit an existing reminder, use action=update with the existing id and only changed fields (time, title, text, or delivery_group). An empty delivery_group returns an execute reminder to the source conversation. Ordinary members are restricted to their own reminders in the current conversation. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,title?:string,scope:current|account?,query?:string,offset?:integer,limit?:integer,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 
 func sameReminderFingerprint(t agentTask, account, sender, kind, target, resultGroup, text, runAt string, delay *int64) bool {
-	if t.Reminder == nil || t.Account != account || t.Sender != sender || t.State == "cancelled" || t.State == "completed" {
+	if t.Reminder == nil || t.Account != account || t.Sender != sender || t.State == "cancelled" || t.State == "completed" || t.State == "expired" {
 		return false
 	}
 	r := t.Reminder
@@ -130,6 +130,9 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 	case "cancel":
 		for _, t := range m.agent.list(p.trace.Account, thread) {
 			if t.ID == in.ID && own(t) {
+				if t.State == "expired" {
+					return "", toolInputError("这条提醒已过期，原记录已保留")
+				}
 				if t.State == "completed" {
 					return "", toolInputError("这条提醒已发送，不能取消或撤回")
 				}
@@ -308,19 +311,43 @@ func (m *Manager) wakeReminderSchedule() {
 }
 
 // prepareReminderSchedule runs once when the worker starts. Future reminders
-// stay persisted and are represented only by the next in-memory timer. A
-// reminder already past due while the workstation was offline is deliberately
-// not executed: it is surfaced for the owner to decide manually.
+// stay persisted and are represented only by the next in-memory timer.
 func (m *Manager) prepareReminderSchedule(now time.Time) {
+	m.remindersMu.Lock()
+	defer m.remindersMu.Unlock()
 	for _, t := range m.agent.list(m.native.Account(), "") {
-		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending" && t.State != "waiting_delivery") || now.Before(t.Reminder.Due) {
+		if t.Reminder == nil || now.Before(t.Reminder.Due) || t.Reminder.Job != "" || t.Reminder.FollowUpTaskID != "" {
 			continue
 		}
-		t.State = "needs_review"
-		t.Next = now
-		t.LastResult = "提醒在工作站离线期间已到期，未自动执行；等待主人在执行回合中手动决定"
-		_ = m.agent.task(t)
-		m.record(bot.Record{Event: "reminder_overdue", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "needs_review", Content: t.RequestedText, Reason: "reminder_overdue_while_offline", Origin: "reminder"})
+		legacyOverdue := t.State == "needs_review" && t.LastResult == "提醒在工作站离线期间已到期，未自动执行；等待主人在执行回合中手动决定"
+		if t.State != "waiting" && t.State != "pending" && !legacyOverdue {
+			continue
+		}
+		// A crash can leave the already saved follow-up without its link in
+		// the original reminder. Recover the link without creating a new task.
+		if followUp, ok := m.agent.lookupTask(agentID("reminder-followup", t.ID), t.Account, t.Thread); ok && followUp.ParentID == t.ID {
+			t.Reminder.FollowUpTaskID = followUp.ID
+			t.State = "completed"
+			t.LastResult = "已恢复提醒与原执行回合的关联"
+			if _, err := m.agent.reminderUpdate(t); err != nil {
+				m.log("reminder_due_state_save_failed")
+			}
+			continue
+		}
+		m.expireReminder(t, "reminder_overdue_while_offline", "工作站离线期间错过提醒，已过期")
+	}
+}
+
+func (m *Manager) expireReminder(t agentTask, reason, result string) {
+	t.State = "expired"
+	t.Next = t.Reminder.Due
+	t.LastResult = result
+	saved, err := m.agent.reminderUpdate(t)
+	if err != nil {
+		m.log("reminder_due_state_save_failed")
+	}
+	if saved {
+		m.record(bot.Record{Event: "reminder_overdue", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: "reminder-" + t.ID, Status: "expired", Content: t.RequestedText, Reason: reason, Origin: "reminder"})
 	}
 }
 
@@ -348,9 +375,7 @@ func (m *Manager) processDueReminders(ctx context.Context, now time.Time, _ bool
 		}
 		followUpID, err := m.scheduleReminderFollowUp(t)
 		if err != nil {
-			t.State = "needs_review"
-			t.LastResult = "提醒已到期，但后续执行任务创建失败：" + err.Error()
-			_ = m.agent.task(t)
+			m.expireReminder(t, "reminder_followup_failed", "提醒到期时未能创建执行任务，已过期")
 			continue
 		}
 		if followUpID == "" {
