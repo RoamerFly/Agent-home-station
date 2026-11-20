@@ -52,6 +52,9 @@ func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
 		Body:           "[Chat History] 测试聊天记录\n甲: 第一条测试文字\n乙: 第二条测试文字",
 	}
 	description := CardDescription(message)
+	if text, coverage := historyMessageText(message); text != description || coverage != "forwarded_content" {
+		t.Fatalf("history = %q, %q", text, coverage)
+	}
 	if !strings.Contains(description, "微信合并转发") || !strings.HasSuffix(description, message.Body) {
 		t.Fatal(description)
 	}
@@ -61,5 +64,24 @@ func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
 	message.Body = "[Chat History unavailable]"
 	if description := CardDescription(message); !strings.Contains(description, "正文暂不可用") {
 		t.Fatal(description)
+	}
+}
+
+func TestHistoryKeepsNativeCardMetadataAndDiscardsMiniProgramLocator(t *testing.T) {
+	subtype := 33
+	for _, tc := range []struct {
+		message  linuxnative.Message
+		expected string
+		coverage string
+	}{
+		{linuxnative.Message{Type: 42, Body: "显示名称：合成测试"}, "显示名称", "card_metadata_only"},
+		{linuxnative.Message{Type: 48, Body: "地点：合成公园"}, "合成公园", "card_metadata_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &subtype, Link: &linuxnative.LinkCard{Title: "合成小程序", URL: "https://example.org/PRIVATE"}}, "合成小程序", "card_metadata_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &subtype}, "微信小程序卡片", "card_type_only"},
+	} {
+		text, coverage := historyMessageText(tc.message)
+		if !strings.Contains(text, tc.expected) || strings.Contains(text, "PRIVATE") || coverage != tc.coverage {
+			t.Errorf("kind %d history = %q, %q", tc.message.Type, text, coverage)
+		}
 	}
 }

@@ -73,6 +73,9 @@ func (w *Worker) recordIncoming(m linuxnative.Message) {
 	w.activity(Record{Event: "message_received", Category: "received", ThreadID: m.ThreadID, Sender: m.SenderID, Content: messageSummary(m), MessageID: m.ID, MessageTime: m.CreatedAt, Origin: "wechat", Status: "received"})
 }
 func messageSummary(m linuxnative.Message) string {
+	if label, _ := m.CardContext(); label != "" {
+		return label
+	}
 	if m.IsQuotedText() {
 		m.Type = 1
 		return "[引用回复] " + messageSummary(m)

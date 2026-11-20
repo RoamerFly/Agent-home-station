@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Event contains metadata only. Message content is fetched only after its
@@ -67,6 +69,40 @@ type QuoteReference struct {
 
 func (m Message) IsQuotedText() bool {
 	return m.Type == 49 && (m.Quote != nil || m.AppMessageType != nil && *m.AppMessageType == 57)
+}
+
+func (m Message) IsMiniProgram() bool {
+	return m.Type == 49 && m.AppMessageType != nil && (*m.AppMessageType == 33 || *m.AppMessageType == 36)
+}
+
+// CardContext returns display-only context for cards that have no external
+// content reader. The native bridge projects only explicitly supported fields.
+func (m Message) CardContext() (summary, context string) {
+	switch {
+	case m.Type == 42, m.Type == 48:
+		summary = "[微信名片]"
+		if m.Type == 48 {
+			summary = "[微信位置]"
+		}
+		context = m.Body
+	case m.IsMiniProgram():
+		summary = "[微信小程序卡片]"
+		if m.Link != nil {
+			var fields []string
+			for _, field := range []struct{ label, value string }{
+				{"标题", m.Link.Title}, {"简介", m.Link.Description}, {"来源", m.Link.SourceName},
+			} {
+				if value := strings.TrimSpace(field.value); value != "" {
+					fields = append(fields, field.label+"："+value)
+				}
+			}
+			context = strings.Join(fields, "\n")
+		}
+	}
+	if !utf8.ValidString(context) || len(context) > 12<<10 {
+		context = ""
+	}
+	return summary, context
 }
 
 type LinkCard struct {

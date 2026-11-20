@@ -66,6 +66,12 @@ func (a mediaUnderstanding) AnalyzeWithEvidence(ctx context.Context, m linuxnati
 
 func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) (string, error) {
 	c := a.manager.Config().Behavior
+	if label, details := m.CardContext(); label != "" {
+		if details == "" {
+			return label, nil
+		}
+		return label + "\n" + details, nil
+	}
 	if m.Type == 34 {
 		return a.recognizeVoice(ctx, m)
 	}
@@ -101,9 +107,6 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 			a.manager.record(bot.Record{Event: "shared_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: sharedVideoReadReason(err), Origin: "media"})
 			text = shareMessageDescription(m) + "\n[分享实际内容未取得；可能需要浏览器、登录或App读取，不要根据标题评论或追问视频讲了什么。原因：" + sharedVideoReadReason(err) + "]"
 			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
-		}
-		if m.AppMessageType != nil && (*m.AppMessageType == 33 || *m.AppMessageType == 36) {
-			return "", errors.New("share_miniprogram_content_unavailable")
 		}
 		return shareMessageDescription(m), nil
 	}
