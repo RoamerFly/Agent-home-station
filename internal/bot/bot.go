@@ -297,7 +297,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
 		return
 	}
-	if message.Type == 10000 {
+	if message.IsPassiveNotice() {
 		w.queuePhase(message.ID, "skipped")
 		return
 	}

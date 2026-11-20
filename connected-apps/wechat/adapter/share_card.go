@@ -22,7 +22,7 @@ type PublisherDescription struct {
 // PublisherCardDescription extracts displayable card copy without allowing a
 // card body, URL, or XML to become an instruction or a media observation.
 func PublisherCardDescription(m linuxnative.Message) (PublisherDescription, bool) {
-	if m.Type != 49 || m.IsQuotedText() || m.FileAttachmentName() != "" {
+	if m.Type != 49 || m.IsQuotedText() || m.IsPassiveNotice() || m.FileAttachmentName() != "" {
 		return PublisherDescription{}, false
 	}
 	if isForwardedConversation(m) {

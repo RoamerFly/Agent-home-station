@@ -69,6 +69,7 @@ func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
 
 func TestHistoryKeepsNativeCardMetadataAndDiscardsMiniProgramLocator(t *testing.T) {
 	subtype := 33
+	fileNotice := 74
 	for _, tc := range []struct {
 		message  linuxnative.Message
 		expected string
@@ -78,6 +79,8 @@ func TestHistoryKeepsNativeCardMetadataAndDiscardsMiniProgramLocator(t *testing.
 		{linuxnative.Message{Type: 48, Body: "地点：合成公园"}, "合成公园", "card_metadata_only"},
 		{linuxnative.Message{Type: 49, AppMessageType: &subtype, Link: &linuxnative.LinkCard{Title: "合成小程序", URL: "https://example.org/PRIVATE"}}, "合成小程序", "card_metadata_only"},
 		{linuxnative.Message{Type: 49, AppMessageType: &subtype}, "微信小程序卡片", "card_type_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &fileNotice, Link: &linuxnative.LinkCard{Title: "示例.pdf"}}, "示例.pdf", "notice_only"},
+		{linuxnative.Message{Type: 10000, Body: "合成系统提示"}, "合成系统提示", "notice_only"},
 	} {
 		text, coverage := historyMessageText(tc.message)
 		if !strings.Contains(text, tc.expected) || strings.Contains(text, "PRIVATE") || coverage != tc.coverage {

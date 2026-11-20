@@ -150,7 +150,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(m.ID, "skipped")
 			continue
 		}
-		if m.Type == 10000 {
+		if m.IsPassiveNotice() {
 			w.queuePhase(m.ID, "skipped")
 			continue
 		}

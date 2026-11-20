@@ -71,8 +71,18 @@ func (m Message) IsQuotedText() bool {
 	return m.Type == 49 && (m.Quote != nil || m.AppMessageType != nil && *m.AppMessageType == 57)
 }
 
-func (m Message) IsMiniProgram() bool {
-	return m.Type == 49 && m.AppMessageType != nil && (*m.AppMessageType == 33 || *m.AppMessageType == 36)
+func (m Message) IsPassiveNotice() bool {
+	if m.Type == 10000 {
+		return true
+	}
+	if m.Type != 49 || m.AppMessageType == nil {
+		return false
+	}
+	switch *m.AppMessageType {
+	case 17, 74, 87:
+		return true
+	}
+	return false
 }
 
 // CardContext returns display-only context for cards that have no external
@@ -85,8 +95,23 @@ func (m Message) CardContext() (summary, context string) {
 			summary = "[微信位置]"
 		}
 		context = m.Body
-	case m.IsMiniProgram():
-		summary = "[微信小程序卡片]"
+	case m.Type == 10000:
+		summary, context = "[微信系统通知]", m.Body
+	case m.Type == 49 && m.AppMessageType != nil:
+		switch *m.AppMessageType {
+		case 1:
+			summary = "[微信分享文字]"
+		case 17:
+			summary = "[微信位置共享通知]"
+		case 33, 36:
+			summary = "[微信小程序卡片]"
+		case 74:
+			summary = "[微信文件发送通知]"
+		case 87:
+			summary = "[微信群公告]"
+		default:
+			return "", ""
+		}
 		if m.Link != nil {
 			var fields []string
 			for _, field := range []struct{ label, value string }{

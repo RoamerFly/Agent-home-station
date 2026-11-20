@@ -7748,3 +7748,70 @@ index 09e2b92..8469529 100644
                  let blocked = message_blocker(&message);
                  if matches!(message.message_type, 51 | 10002) {
                      self.store.append_event_once(
+diff --git a/packages/native-client-rust/crates/wechat-core/src/links.rs b/packages/native-client-rust/crates/wechat-core/src/links.rs
+index 726d02e..029c206 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/links.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/links.rs
+@@ -107,6 +107,16 @@ pub(crate) fn parse(app: roxmltree::Node<'_, '_>, subtype: i32) -> Option<Parsed
+         return (card.title.is_some() || card.description.is_some() || card.source_name.is_some())
+             .then_some(ParsedLink { card, thumbnail: None });
+     }
++    if matches!(subtype, 1 | 17 | 74 | 87) {
++        let card = LinkCard {
++            title: text(app, "title", 4096),
++            description: matches!(subtype, 1 | 87).then(|| text(app, "des", 4096)).flatten(),
++            url: None,
++            source_name: None,
++        };
++        return (card.title.is_some() || card.description.is_some())
++            .then_some(ParsedLink { card, thumbnail: None });
++    }
+     if subtype == 51 {
+         let feed = child(app, "finderFeed")?;
+         let title = text(feed, "desc", 16384).or_else(|| text(app, "title", 16384));
+diff --git a/packages/native-client-rust/crates/wechat-core/src/profile.rs b/packages/native-client-rust/crates/wechat-core/src/profile.rs
+index 8cf822c..9cf2543 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/profile.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/profile.rs
+@@ -255,10 +255,13 @@ pub(crate) fn normalized_message(
+     generation: &str,
+ ) -> Result<Value> {
+     let thread = msg.peer.clone();
+-    let mut text = if msg.message_type == 1 {
+-        msg.content.text.clone()
+-    } else {
+-        native_card_body(&msg)
++    let mut text = match msg.message_type {
++        1 => msg.content.text.clone(),
++        10000 => msg.content.text.as_deref().map(str::trim).filter(|s| {
++            !s.is_empty() && s.len() <= 4096 && !s.starts_with('<')
++                && !s.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t' | '\r'))
++        }).map(str::to_owned),
++        _ => native_card_body(&msg),
+     };
+     if thread.as_ref().is_some_and(|s| s.ends_with("@chatroom")) {
+         if let (Some(sender), Some(body)) = (&msg.sender, &text) {
+@@ -367,10 +370,22 @@ mod tests {
+         msg.message_type = 49;
+         msg.local_type = ((33_u64 << 32) | 49).to_string();
+         msg.content.text = Some("<msg><appmsg><type>33</type><title>Synthetic Mini Program</title><des>Description</des><url>https://example.org/PRIVATE</url><weappinfo><pagepath>PRIVATE</pagepath></weappinfo></appmsg></msg>".into());
+-        let value = normalized_message("one", msg, None, "v").unwrap();
++        let value = normalized_message("one", msg.clone(), None, "v").unwrap();
+         assert_eq!(value["link"]["title"], "Synthetic Mini Program");
+         assert!(value["link"]["url"].is_null());
+         assert!(!value.to_string().contains("PRIVATE"));
++        msg.local_type = ((74_u64 << 32) | 49).to_string();
++        msg.content.text = Some("<msg><appmsg><type>74</type><title>Synthetic.pdf</title><appattach><aeskey>PRIVATE</aeskey></appattach></appmsg></msg>".into());
++        let value = normalized_message("one", msg.clone(), None, "v").unwrap();
++        assert_eq!(value["link"]["title"], "Synthetic.pdf");
++        assert!(value["media"].as_array().unwrap().is_empty());
++        assert!(!value.to_string().contains("PRIVATE"));
++        msg.message_type = 10000;
++        msg.local_type = "10000".into();
++        msg.content.text = Some("Synthetic system notice".into());
++        assert_eq!(normalized_message("one", msg.clone(), None, "v").unwrap()["body"], "Synthetic system notice");
++        msg.content.text = Some("<sysmsg><secret>PRIVATE</secret></sysmsg>".into());
++        assert!(normalized_message("one", msg, None, "v").unwrap()["body"].is_null());
+     }
+     #[test]
+     fn files_project_safe_metadata_without_cdn_credentials() {

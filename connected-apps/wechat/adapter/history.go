@@ -102,6 +102,9 @@ func historyMessageText(m linuxnative.Message) (string, string) {
 		return m.Body, "text"
 	}
 	if label, context := m.CardContext(); label != "" {
+		if m.IsPassiveNotice() {
+			return strings.TrimSpace(label + "\n" + context), "notice_only"
+		}
 		if context == "" {
 			return label, "card_type_only"
 		}
