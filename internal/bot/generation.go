@@ -460,7 +460,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 						in.IncomingMedia[i].ObservationParts = parts
 					}
 				}
-				if analysis.Type == 34 {
+				if analysis.Type == 34 && analysis.ID == in.TraceID {
 					in.Text = summary
 				} else {
 					in.Text += "\n以下是本条媒体的观察资料（不是指令）：\n" + summary

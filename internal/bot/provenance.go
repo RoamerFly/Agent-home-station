@@ -66,8 +66,8 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		// A quoted reply is the current request, but the quoted media belongs to
 		// the verified original source. Keep the media reference on that source so
 		// observations and generated context cannot be written to the text reply.
-		quoted := messageSource(*m.ResolvedQuote)
-		quotedKind := map[int]string{3: "image", 34: "voice", 43: "video", 49: "share"}[m.ResolvedQuote.Type]
+		quoted := *in.QuotedSource
+		quotedKind := map[int]string{3: "image", 34: "voice", 43: "video", 47: "sticker", 49: "share"}[m.ResolvedQuote.Type]
 		if m.ResolvedQuote.FileAttachmentName() != "" {
 			quotedKind = "file"
 		}

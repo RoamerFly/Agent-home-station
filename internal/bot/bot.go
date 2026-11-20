@@ -336,7 +336,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
-	analysisMessage, _ := quotedAnalysisMessage(message)
+	analysisMessage, quotedMedia := quotedAnalysisMessage(message)
 	working := quotedPlainBody(message)
 	cardLabel, _ := message.CardContext()
 	if cardLabel != "" {
@@ -347,10 +347,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	groupFile := strings.HasSuffix(message.ThreadID, "@chatroom") && (message.FileAttachmentName() != "" || len(message.Attachments) > 0)
 	isMedia := cardLabel == "" && (groupFile || analysisMessage.Type == 34 || analysisMessage.Type == 3 || analysisMessage.Type == 47 || analysisMessage.Type == 43 || analysisMessage.Type == 49 && !analysisMessage.IsQuotedText())
+	if quotedMedia && !w.observationAllowed(analysisMessage) {
+		isMedia = false
+	}
 	preferredShare := w.preferredGroupShare(analysisMessage)
 	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
 	canAnalyze := isMedia && w.mediaAnalyzer(ctx, analysisMessage) != nil
-	if isMedia && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
+	if isMedia && !message.IsQuotedText() && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
 		if message.Type == 47 {
@@ -420,7 +423,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
 	readMedia := groupFile || isMedia && w.readMediaBeforeDecision(analysisMessage)
 	if (canAnalyze && !onDemandAttachment || groupFile) && w.config.Options != nil {
-		if !groupFile && !w.observationAllowed(message) {
+		if !groupFile && !w.observationAllowed(analysisMessage) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
@@ -503,6 +506,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 				if mediaObservationState == "observed" {
 					input.IncomingMedia[i].ObservedRange = mediaObservationEvidence.ObservedRange
 					input.IncomingMedia[i].ObservationExcerpt = mediaObservationEvidence.Excerpt
+					input.IncomingMedia[i].ObservationParts = append([]companion.ObservationPart(nil), mediaObservationEvidence.Parts...)
 				}
 			}
 		}

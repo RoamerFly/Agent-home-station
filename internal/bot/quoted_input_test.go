@@ -250,6 +250,63 @@ func TestQuotedShareSelectsOriginalForAnalysisAndMediaProvenance(t *testing.T) {
 	}
 }
 
+func TestQuotedNativeVideoPreservesCurrentLiteralAndChecksOriginalPermission(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		enabled bool
+		foreign bool
+	}{
+		{name: "readable", enabled: true},
+		{name: "video disabled"},
+		{name: "different conversation", enabled: true, foreign: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			w, _, base, _ := mediaWorker(t)
+			model := &quotedLiteralModel{}
+			engine, err := companion.New(base.Config, base.Store, model, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine.Config.QuietStart, engine.Config.QuietEnd = "00:00", "00:00"
+			w.model, w.config.Channel = engine, "wechat"
+			w.config.GroupRules = map[string]GroupRule{"room@chatroom": {Mode: "all"}}
+			w.config.Options.ReadVideos = scenario.enabled
+			observer := &typedCountingObservationAnalyzer{}
+			w.config.Analyzer = observer
+			current := fixtureMessage("quote-request", "room@chatroom", "画面有什么？", "incoming")
+			current.Type, current.SenderID = 49, "quoting-member"
+			current.Quote = &linuxnative.QuoteReference{ServerID: "777", Type: 43}
+			original := fixtureMessage("quoted-native-video", current.ThreadID, "", "incoming")
+			original.Type, original.ServerID, original.SenderID = 43, "777", "original-uploader"
+			if scenario.foreign {
+				original.ThreadID = "foreign@chatroom"
+			}
+			w.source = &quotedTestSource{fakeSource: &fakeSource{messages: map[string]linuxnative.Message{current.ID: current}}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: current.ID, ThreadID: current.ThreadID, State: "resolved", Message: &original}}
+			w.handle(t.Context(), fixtureEvent("1", current.ID, current.ThreadID, "incoming", "wechat"))
+			if w.persistErr != nil || model.current["text"] != current.Body || requestActorFromPacket(model.current) != current.SenderID {
+				t.Fatal("current quoted request was lost or rewritten", w.persistErr, model.current)
+			}
+			parts := strings.Join(model.contents, "\n")
+			if scenario.enabled && !scenario.foreign {
+				if observer.calls.Load() != 1 || !strings.Contains(parts, "实际帧内容："+original.ID) || !strings.Contains(parts, companion.ObservationVisualFrames) {
+					t.Fatal("exact original video observation was not available to the model")
+				}
+				obs, _ := model.current["media_observations"].([]any)
+				if len(obs) != 1 {
+					t.Fatal("wrong number of media sources", obs)
+				}
+				media := obs[0].(map[string]any)
+				source := media["source"].(map[string]any)
+				if source["message_id"] != original.ID || media["uploader_id"] != original.SenderID {
+					t.Fatal("video evidence attributed to the quoting user", media)
+				}
+			} else if observer.calls.Load() != 0 || strings.Contains(parts, "实际帧内容：") {
+				t.Fatal("video permission or conversation boundary bypassed")
+			}
+		})
+	}
+}
+
 func TestMediaProvenanceSurvivesRuntimeRecovery(t *testing.T) {
 	w, _, c, in := mediaWorker(t)
 	in.Sender, in.SenderName, in.OriginTraceID, in.TaskID = "alice", "小甲", "original-request", "task-1"

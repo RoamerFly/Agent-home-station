@@ -28,7 +28,7 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		return "\n[本条是引用回复；原消息未能从当前会话核实，不猜测原话]"
 	}
 	original := quote.Message
-	if original.ServerID != m.Quote.ServerID || original.Type != m.Quote.Type || original.ThreadID != m.ThreadID || original.AccountID != w.source.Account() {
+	if original.ID == "" || original.ID == m.ID || m.Quote.ServerID == "" || original.ServerID != m.Quote.ServerID || original.Type != m.Quote.Type || original.ThreadID != m.ThreadID || original.AccountID != w.source.Account() {
 		return "\n[引用身份不匹配；仅处理本条用户新写的文字]"
 	}
 	if original.Direction == "outgoing" && w.config.ProtectQuote != nil && w.config.ProtectQuote(ctx, *original) {
@@ -148,15 +148,23 @@ func quotedPlainBody(m linuxnative.Message) linuxnative.Message {
 
 // quotedAnalysisMessage keeps the user's quoted-reply event as the request
 // identity while selecting the verified original media as the observation
-// target. A type-49/app-57 quote is only a text request; its resolved original
-// card is the share that must enter the media/share reader.
+// target. The original must be an incoming attachment or share in the same
+// conversation, already checked by readQuoteContext.
 func quotedAnalysisMessage(m linuxnative.Message) (linuxnative.Message, bool) {
 	if !m.IsQuotedText() || m.ResolvedQuote == nil {
 		return m, false
 	}
 	original := *m.ResolvedQuote
-	if original.Direction != "incoming" || original.IsQuotedText() || original.Type != 49 || original.Link == nil {
+	if original.Direction != "incoming" || original.IsQuotedText() {
 		return m, false
 	}
-	return original, true
+	switch original.Type {
+	case 3, 34, 43, 47:
+		return original, true
+	case 49:
+		if original.Link != nil {
+			return original, true
+		}
+	}
+	return m, false
 }
