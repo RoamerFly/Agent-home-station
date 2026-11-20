@@ -43,7 +43,10 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		if details != "" {
 			metadata += "\n" + details
 		}
-		const cardFields = "微信卡片字段"
+		cardFields := "微信卡片字段"
+		if details != "" && m.IsForwardedConversation() {
+			cardFields = "微信合并转发正文"
+		}
 		in.IncomingMedia = []companion.IncomingMediaRef{{
 			Source: source, Kind: "card", UploaderID: m.SenderID,
 			Observation: metadata, ObservationState: "observed", ObservationVersion: 1, ObservedRange: cardFields,

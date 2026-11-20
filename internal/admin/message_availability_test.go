@@ -146,7 +146,7 @@ func (observe availabilityObserver) Analyze(ctx context.Context, message linuxna
 }
 
 func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing.T) {
-	for _, kind := range []string{"text", "quoted", "image", "sticker", "sticker-unavailable", "voice", "native-video", "channels-share", "public-share", "file", "file-unavailable", "location-card", "miniprogram-card"} {
+	for _, kind := range []string{"text", "quoted", "image", "sticker", "sticker-unavailable", "voice", "native-video", "channels-share", "public-share", "file", "file-unavailable", "location-card", "miniprogram-card", "forwarded-conversation"} {
 		t.Run(kind, func(t *testing.T) {
 			var f *webFixture
 			if kind == "sticker-unavailable" {
@@ -190,6 +190,9 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 				msg.Type, subtype = 49, 33
 				msg.AppMessageType = &subtype
 				msg.Link = &linuxnative.LinkCard{Title: "合成小程序标题", URL: "https://public.example/?token=synthetic-private-token"}
+			case "forwarded-conversation":
+				msg.Type, subtype = 49, 19
+				msg.AppMessageType = &subtype
 			}
 			if kind != "text" && kind != "quoted" {
 				msg.Body = ""
@@ -197,15 +200,19 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			if kind == "location-card" {
 				msg.Body = "地点：合成公园"
 			}
+			if kind == "forwarded-conversation" {
+				msg.Body = "[Chat History] 模拟转发\n甲：第一条测试内容\n乙：第二条测试内容"
+			}
 			n.message, f.manager.native = msg, n
 			cfg := f.manager.Config().Companion
 			cfg.Enabled, cfg.Permissions.Remember, cfg.Permissions.ObserveGroups = true, true, true
 			cfg.QuietStart, cfg.QuietEnd = "00:00", "00:00"
 			cfg.Conversation = companion.ConversationDefaults()
 			cfg.Conversation.AggregateMS = 0
+			readImages, readVideos := !n.file, !n.file && kind != "forwarded-conversation"
 			f.manager.mu.Lock()
 			f.manager.config.Companion = cfg
-			f.manager.config.Behavior.ReadImages, f.manager.config.Behavior.ReadVideos = !n.file, !n.file
+			f.manager.config.Behavior.ReadImages, f.manager.config.Behavior.ReadVideos = readImages, readVideos
 			f.manager.mu.Unlock()
 			model := &availabilityModel{}
 			engine, err := companion.New(cfg, f.manager.memory, model, "synthetic parent-group availability contract")
@@ -213,7 +220,7 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 				t.Fatal(err)
 			}
 			options := bot.DefaultOptions()
-			options.ReadImages, options.ReadVideos = !n.file, !n.file
+			options.ReadImages, options.ReadVideos = readImages, readVideos
 			options.RandomDelay, options.RecoverBacklog = false, false
 			ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 			defer cancel()
@@ -246,7 +253,7 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			calls, packet, all := model.calls, model.packet, model.all
 			model.mu.Unlock()
 			isPlain := kind == "text" || kind == "quoted"
-			isCard := kind == "location-card" || kind == "miniprogram-card"
+			isCard := kind == "location-card" || kind == "miniprogram-card" || kind == "forwarded-conversation"
 			failed := !isPlain && kind != "file" && !isCard
 			if failed {
 				if !incomplete.Load() || report == "" || settled.Load() || calls != 0 || packet != nil {
@@ -279,7 +286,8 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			}
 			if isCard {
 				_, detail := msg.CardContext()
-				if packet["text"] != "" || !strings.Contains(all, detail) ||
+				detailJSON, _ := json.Marshal(detail)
+				if packet["text"] != "" || !strings.Contains(all, string(detailJSON[1:len(detailJSON)-1])) ||
 					!strings.Contains(all, companion.ObservationPublisherDescription) ||
 					strings.Contains(all, companion.ObservationVisualFrames) {
 					t.Fatal("card fields must reach the model as attributed metadata")

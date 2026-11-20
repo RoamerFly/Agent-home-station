@@ -101,6 +101,12 @@ func historyMessageText(m linuxnative.Message) (string, string) {
 	if m.Type == 1 {
 		return m.Body, "text"
 	}
+	if m.IsForwardedConversation() {
+		if _, body := m.CardContext(); body != "" {
+			return CardDescription(m), "forwarded_content"
+		}
+		return CardDescription(m), "card_type_only"
+	}
 	if label, context := m.CardContext(); label != "" {
 		if m.IsPassiveNotice() {
 			return strings.TrimSpace(label + "\n" + context), "notice_only"
@@ -109,12 +115,6 @@ func historyMessageText(m linuxnative.Message) (string, string) {
 			return label, "card_type_only"
 		}
 		return label + "\n" + context, "card_metadata_only"
-	}
-	if isForwardedConversation(m) {
-		if body := strings.TrimSpace(m.Body); body != "" && body != "[Chat History unavailable]" {
-			return CardDescription(m), "forwarded_content"
-		}
-		return CardDescription(m), "card_type_only"
 	}
 	if m.IsQuotedText() {
 		var quote struct {

@@ -71,6 +71,10 @@ func (m Message) IsQuotedText() bool {
 	return m.Type == 49 && (m.Quote != nil || m.AppMessageType != nil && *m.AppMessageType == 57)
 }
 
+func (m Message) IsForwardedConversation() bool {
+	return m.Type == 49 && m.AppMessageType != nil && *m.AppMessageType == 19
+}
+
 func (m Message) IsPassiveNotice() bool {
 	if m.Type == 10000 {
 		return true
@@ -85,8 +89,8 @@ func (m Message) IsPassiveNotice() bool {
 	return false
 }
 
-// CardContext returns display-only context for cards that have no external
-// content reader. The native bridge projects only explicitly supported fields.
+// CardContext returns display-only fields and text already present in the
+// native projection, including the text carried by a combined forward.
 func (m Message) CardContext() (summary, context string) {
 	switch {
 	case m.Type == 42, m.Type == 48:
@@ -103,6 +107,14 @@ func (m Message) CardContext() (summary, context string) {
 			summary = "[微信分享文字]"
 		case 17:
 			summary = "[微信位置共享通知]"
+		case 19:
+			summary = "[微信合并转发]"
+			body := strings.TrimSpace(m.Body)
+			if utf8.ValidString(body) && len(body) <= 64<<10 &&
+				(body == "[Chat History]" || strings.HasPrefix(body, "[Chat History] ") || strings.HasPrefix(body, "[Chat History]\n")) {
+				return summary, body
+			}
+			return summary, ""
 		case 33, 36:
 			summary = "[微信小程序卡片]"
 		case 74:
