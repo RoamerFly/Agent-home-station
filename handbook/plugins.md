@@ -60,7 +60,15 @@
 }
 ```
 
-需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。主页的 Job 和 Poll 连接接入继续跟踪。
+需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。
+
+### Windows 工作站主页的异步 HTTP 工具
+
+异步工具同样登记在 `connections[].manifest.tools`。声明 `job.id_path` 和 `poll` 时，查询与可选远程取消使用已核验的任务号，例如 `{{result.id}}`。只有 `poll` 声明时，后续查询使用第一次响应中的字段，例如 `{{result.lookup}}`。在 `poll` 中设置 `status_path`、`done_values`、`failed_values`、结果字段与 `interval_seconds`。Job 使用 `job.deadline_seconds` 和 `job.max_polls`。仅 Poll 的任务使用 `timeout_seconds` 和 `poll.max_attempts`。
+
+`station_external_task_catalog` 分页列出工作站上已登记的 Job 和 Poll。Agent 通过 `station_external_task` 提交，使用返回的 `task_id` 查询或取消。主聊天可在后续回合或重启后继续查看同一任务，服务端任务号和 Poll 查询凭据留在宿主私有记录。希望任务完成后自动回到聊天时，用 `local_task_followup` 的 `schedule` 将同一编号填入 `job_id`，将 `result_tool` 设为 `station_external_task`。宿主按登记的间隔、次数和截止时间推进任务。结果未知时返回待核对状态，并保留原任务编号。
+
+有远程取消端点的 Job 返回服务对取消请求的回执。仅 Poll 或未登记远程取消的 Job 会停止本机轮询。取消聊天续办只停止后续聊天处理。已核验完成的任务可继续分页读取正文，符合声明的二进制结果可下载。
 
 ### Windows 工作站主页的 MCP 工具
 

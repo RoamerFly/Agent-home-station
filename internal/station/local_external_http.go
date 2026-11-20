@@ -59,7 +59,7 @@ func (s *localProjectTools) externalRegistration() ([]byte, error) {
 	return bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}), nil
 }
 
-func externalHTTPRegistration(raw []byte) ([]plugins.Installed, *plugins.ExternalBridge, error) {
+func externalBridgeRegistration(raw []byte) ([]plugins.Installed, *plugins.ExternalBridge, error) {
 	config, err := parseLocalExternalRegistration(raw)
 	if err != nil {
 		return nil, nil, err
@@ -69,6 +69,23 @@ func externalHTTPRegistration(raw []byte) ([]plugins.Installed, *plugins.Externa
 		return nil, nil, errors.New("外部工具声明或凭据不完整")
 	}
 	return config.Connections, bridge, nil
+}
+
+func externalConnectionSecrets(connections []plugins.Installed, tool string) []string {
+	for _, connection := range connections {
+		if !strings.HasPrefix(tool, connection.Manifest.ID+"__") {
+			continue
+		}
+		var secrets []string
+		for _, secret := range connection.Secrets {
+			if secret != "" {
+				secrets = append(secrets, secret)
+			}
+		}
+		slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+		return secrets
+	}
+	return nil
 }
 
 func (t *localToolSet) localExternalHTTPTools(ctx context.Context) []mcptools.Tool {
@@ -83,7 +100,7 @@ func (t *localToolSet) localExternalHTTPTools(ctx context.Context) []mcptools.To
 	if err != nil {
 		return nil
 	}
-	_, bridge, err := externalHTTPRegistration(raw)
+	_, bridge, err := externalBridgeRegistration(raw)
 	if err != nil || len(bridge.Protocol().Tools) == 0 {
 		return nil
 	}
@@ -118,7 +135,7 @@ func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, r
 	if err != nil {
 		return "", errors.New("工作站外部工具登记不可读")
 	}
-	connections, bridge, err := externalHTTPRegistration(registration)
+	connections, bridge, err := externalBridgeRegistration(registration)
 	if err != nil {
 		return "", err
 	}
@@ -175,18 +192,8 @@ func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, r
 		Authorization: localCheckpointKey(grant.projectJobAuthorization(), digest), SourceVersions: map[string]int{source.EventID: source.Revision}}
 	binding := localExternalBinding{tools: t, host: host, installed: installed, configRev: config.Revision, grant: grant, source: source,
 		registration: digest, invocation: inv, capability: localExternalHTTPCap, arguments: encoded}
-	policy := &localExternalHTTPPolicy{localExternalBinding: binding, request: request, tool: selected, bridge: bridge}
-	for _, connection := range connections {
-		if strings.HasPrefix(selected.Name, connection.Manifest.ID+"__") {
-			for _, secret := range connection.Secrets {
-				if secret != "" {
-					policy.secrets = append(policy.secrets, secret)
-				}
-			}
-			break
-		}
-	}
-	slices.SortFunc(policy.secrets, func(a, b string) int { return len(b) - len(a) })
+	policy := &localExternalHTTPPolicy{localExternalBinding: binding, request: request, tool: selected, bridge: bridge,
+		secrets: externalConnectionSecrets(connections, selected.Name)}
 	view, output, err := binding.invoke(ctx, policy, localExternalHTTPCall, input.Tool, true, input.Offset > 0)
 	if err != nil {
 		return "", err
@@ -220,52 +227,13 @@ func (t *localToolSet) localExternalHost(ctx context.Context) *localProjectToolH
 }
 
 func (b *localExternalBinding) invoke(ctx context.Context, policy pluginruntime.CallPolicy, tool, target string, checkpoint, readOnly bool) (map[string]any, json.RawMessage, error) {
-	var result pluginruntime.CallResult
-	var err error
-	recorded := slices.ContainsFunc(b.tools.run.Operations, func(op companion.LocalToolCheckpoint) bool {
-		return op.Tool == tool && op.Key == b.invocation.RequestKey
-	})
-	if recorded || checkpoint && b.tools.inspectOnly || readOnly {
-		job, err := b.host.store.JobByRequest(ctx, localExternalPackage, b.invocation.Thread, b.invocation.RequestKey)
-		if err != nil || readOnly && job.State != "completed" || b.Check(ctx, job, pluginhost.Capability{ID: b.capability}) != nil {
-			return nil, nil, errors.New("没有可续读的外部工具结果，请先核对原请求")
-		}
-		result = pluginruntime.CallResult{Job: job, Reused: true}
-	} else {
-		if err := b.host.controller.EnsureStarted(ctx, localExternalPackage, b.installed.Revision); err != nil {
-			return nil, nil, errors.New("工作站外部工具包无法启动")
-		}
-		op := companion.LocalToolCheckpoint{Key: b.invocation.RequestKey, Tool: tool, Grant: b.invocation.Authorization, Target: target}
-		if checkpoint {
-			if err := b.tools.run.Reserve(ctx, op); err != nil {
-				return nil, nil, errors.New("外部请求检查点未保存，请重新核对原请求")
-			}
-			b.tools.run.Operations = append(b.tools.run.Operations, op)
-		}
-		result, err = b.host.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: localExternalPackage,
-			Capability: b.capability, Context: b.invocation, Arguments: b.arguments}, policy)
-		if err != nil {
-			if checkpoint {
-				b.tools.inspectOnly = true
-			}
-			return nil, nil, err
-		}
-		if checkpoint && result.Job.ID != "" {
-			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			saveErr := b.tools.run.RecordResult(saveCtx, b.invocation.RequestKey, result.Job.ID)
-			cancel()
-			if saveErr != nil {
-				b.tools.inspectOnly = true
-				return nil, nil, errors.New("外部请求已登记，请从原请求检查结果")
-			}
-		}
+	result, err := b.invokeJob(ctx, policy, tool, target, checkpoint, readOnly)
+	if err != nil {
+		return nil, nil, err
 	}
 	state := result.Job.State
 	view := map[string]any{"tool": target, "task_id": result.Job.ID, "state": state, "reused": result.Reused}
 	if state != "completed" {
-		if checkpoint {
-			b.tools.inspectOnly = true
-		}
 		view["instruction"] = "外部请求尚无已核验结果，请核对原服务状态后再决定后续操作。"
 		return view, nil, nil
 	}
@@ -276,6 +244,53 @@ func (b *localExternalBinding) invoke(ctx context.Context, policy pluginruntime.
 		return nil, nil, err
 	}
 	return view, output, nil
+}
+
+func (b *localExternalBinding) invokeJob(ctx context.Context, policy pluginruntime.CallPolicy, tool, target string, checkpoint, readOnly bool) (pluginruntime.CallResult, error) {
+	var result pluginruntime.CallResult
+	var err error
+	recorded := slices.ContainsFunc(b.tools.run.Operations, func(op companion.LocalToolCheckpoint) bool {
+		return op.Tool == tool && op.Key == b.invocation.RequestKey
+	})
+	if recorded || checkpoint && b.tools.inspectOnly || readOnly {
+		job, err := b.host.store.JobByRequest(ctx, localExternalPackage, b.invocation.Thread, b.invocation.RequestKey)
+		if err != nil || readOnly && job.State != "completed" || b.Check(ctx, job, pluginhost.Capability{ID: b.capability}) != nil {
+			return result, errors.New("没有可续读的外部工具结果，请先核对原请求")
+		}
+		result = pluginruntime.CallResult{Job: job, Reused: true}
+	} else {
+		if err := b.host.controller.EnsureStarted(ctx, localExternalPackage, b.installed.Revision); err != nil {
+			return result, err
+		}
+		op := companion.LocalToolCheckpoint{Key: b.invocation.RequestKey, Tool: tool, Grant: b.invocation.Authorization, Target: target}
+		if checkpoint {
+			if err := b.tools.run.Reserve(ctx, op); err != nil {
+				return result, errors.New("外部请求检查点未保存，请重新核对原请求")
+			}
+			b.tools.run.Operations = append(b.tools.run.Operations, op)
+		}
+		result, err = b.host.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: localExternalPackage,
+			Capability: b.capability, Context: b.invocation, Arguments: b.arguments}, policy)
+		if err != nil {
+			if checkpoint {
+				b.tools.inspectOnly = true
+			}
+			return result, err
+		}
+		if checkpoint && result.Job.ID != "" {
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			saveErr := b.tools.run.RecordResult(saveCtx, b.invocation.RequestKey, result.Job.ID)
+			cancel()
+			if saveErr != nil {
+				b.tools.inspectOnly = true
+				return result, errors.New("外部请求已登记，请从原请求检查结果")
+			}
+		}
+	}
+	if checkpoint && result.Job.State != "completed" {
+		b.tools.inspectOnly = true
+	}
+	return result, nil
 }
 
 func localExternalTextPage(result json.RawMessage, offset, limit int) (map[string]any, error) {

@@ -71,12 +71,17 @@ func (s *localProjectTools) populateToolBackends(ctx context.Context, host *loca
 	case "share-reader":
 		view.Backends = []pluginhost.ToolBackendView{{Name: "公开链接读取", Kind: "web", State: local.State}}
 	case localExternalPackage:
-		httpState, mcpState := "missing", "missing"
+		httpState, taskState, mcpState := "missing", "missing", "missing"
 		if raw, err := s.externalRegistration(); err == nil {
-			if _, bridge, err := externalHTTPRegistration(raw); err != nil {
-				httpState = "unreadable"
-			} else if len(bridge.Protocol().Tools) != 0 {
-				httpState = "configured"
+			if _, bridge, err := externalBridgeRegistration(raw); err != nil {
+				httpState, taskState = "unreadable", "unreadable"
+			} else {
+				if len(bridge.Protocol().Tools) != 0 {
+					httpState = "configured"
+				}
+				if len(bridge.TaskTools()) != 0 {
+					taskState = "configured"
+				}
 			}
 			config, err := parseLocalExternalRegistration(raw)
 			if err != nil {
@@ -87,14 +92,15 @@ func (s *localProjectTools) populateToolBackends(ctx context.Context, host *loca
 				mcpState = "configured"
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			httpState, mcpState = "unreadable", "unreadable"
+			httpState, taskState, mcpState = "unreadable", "unreadable", "unreadable"
 		}
 		view.Backends = []pluginhost.ToolBackendView{
 			{Name: "同步 HTTP 连接", Kind: "api", State: httpState, Scope: "工作站"},
+			{Name: "异步 Job 和 Poll", Kind: "api", State: taskState, Scope: "工作站"},
 			{Name: "MCP 连接", Kind: "mcp", State: mcpState, Scope: "工作站"},
 		}
-		if view.Installed && view.Enabled && view.RuntimeReady && httpState != "configured" && mcpState != "configured" && view.Reason == "" {
-			view.Reason = "请在工作站私有登记目录配置同步 HTTP 或 MCP 连接。"
+		if view.Installed && view.Enabled && view.RuntimeReady && httpState != "configured" && taskState != "configured" && mcpState != "configured" && view.Reason == "" {
+			view.Reason = "请在工作站私有登记目录配置同步 HTTP、异步 Job/Poll 或 MCP 连接。"
 		}
 	case "speech":
 		view.Backends = []pluginhost.ToolBackendView{{Name: view.Name, Kind: "package", State: "declared"}}

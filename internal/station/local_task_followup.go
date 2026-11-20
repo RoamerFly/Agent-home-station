@@ -39,8 +39,7 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 		}
 		tools := h.tools(store, in)
 		tools.run = run
-		project, err := tools.projectFollowupJob(ctx, job.ResultTool, job.JobID)
-		if err != nil || project.CancelRequested || project.State == "cancelled" {
+		if err := tools.checkFollowupTarget(ctx, job.ResultTool, job.JobID); err != nil {
 			return errors.New("原项目任务已停止或授权已变化")
 		}
 	}
@@ -48,8 +47,8 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 }
 
 func localFollowupTool() mcptools.Tool {
-	return mcptools.NewTool(localFollowupToolName, "为本轮已经提交的本机长任务安排结果续办。schedule使用process_id，或同时提供原job_id和对应查询工具result_tool（RVC、ComfyUI、YuE）。宿主核对原任务和成品后续写本机聊天；登记只表示开始等待。status/cancel用续办id，list按游标查看。cancel只停止续办；停止原任务使用对应工具。结果未知时仅核对原任务。需要自动回看时请实际登记。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["schedule","status","cancel","list"]},"process_id":{"type":"string"},"job_id":{"type":"string"},"result_tool":{"type":"string","enum":["project_rvc_job","project_comfy_job","project_yue_job"]},"id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(localFollowupToolName, "为本轮已提交的长任务安排结果续办。schedule 使用 process_id，或同时提供原 job_id 和对应查询工具 result_tool（RVC、ComfyUI、YuE、异步外部工具）。外部任务的 task_id 填入 job_id。宿主核对原任务和成品后续写本机聊天。status/cancel 使用续办 id，list 按游标查看。cancel 只停止续办，停止原任务使用对应工具。需要自动回看时请实际登记。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["schedule","status","cancel","list"]},"process_id":{"type":"string"},"job_id":{"type":"string"},"result_tool":{"type":"string","enum":["project_rvc_job","project_comfy_job","project_yue_job","station_external_task"]},"id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 type localFollowupInput struct {
@@ -100,8 +99,7 @@ func (t *localToolSet) callFollowup(ctx context.Context, raw json.RawMessage) (s
 			}
 			value, err = t.store.ScheduleLocalTaskFollowup(ctx, in, *source, args.ProcessID, grant.Revision, time.Now().UTC())
 		case args.ProcessID == "" && args.JobID != "" && args.ResultTool != "":
-			project, proofErr := t.projectFollowupJob(ctx, args.ResultTool, args.JobID)
-			if proofErr != nil || project.CancelRequested || project.State == "cancelled" {
+			if err := t.checkFollowupTarget(ctx, args.ResultTool, args.JobID); err != nil {
 				return "", errors.New("该项目任务已停止或不属于本轮已核验的启动操作")
 			}
 			value, err = t.store.ScheduleLocalToolFollowup(ctx, in, *source, args.ResultTool, args.JobID, grant.Revision, time.Now().UTC())
@@ -417,6 +415,9 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 
 func (t *localToolSet) readLocalFollowupResult(ctx context.Context, grant localWorkspaceGrant, job companion.LocalTaskFollowup) (result companion.RecoveryToolResult, state, reason string, delay time.Duration) {
 	result.CallKey, result.ReadOnly = job.ID, true
+	if job.ResultTool == localExternalTaskCall {
+		return t.readExternalTaskFollowup(ctx, job, result)
+	}
 	if job.JobID != "" {
 		query, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
