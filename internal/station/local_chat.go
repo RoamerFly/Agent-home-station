@@ -363,20 +363,19 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 400, "请提供稳定请求编号及 1–65536 字节的有效正文；长资料可分批继续")
 		return
 	}
-	if done := h.followups.interrupt(); done != nil {
-		select {
-		case <-done:
-		case <-r.Context().Done():
+	if !h.tryForegroundTurn(r.Context()) {
+		if r.Context().Err() != nil {
 			websession.Fail(w, 409, "本次请求已取消")
-			return
-		case <-time.After(3 * time.Second):
+		} else {
+			websession.Fail(w, 409, "当前对话正在生成，请等待后查看记录；不会重复提交")
 		}
-	}
-	if !h.turn.TryLock() {
-		websession.Fail(w, 409, "当前对话正在生成，请等待后查看记录；不会重复提交")
 		return
 	}
 	defer h.turn.Unlock()
+	if h.stopping.Load() {
+		websession.Fail(w, http.StatusServiceUnavailable, "本机服务正在停止，未启动新的聊天或工具")
+		return
+	}
 	h.busy.Store(true)
 	defer h.busy.Store(false)
 	store, in, err := h.conversation()
