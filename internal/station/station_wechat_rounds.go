@@ -301,9 +301,12 @@ func (s *stationWechat) wechatRoundMessages(r *http.Request, id, account string,
 		}
 		text, kind, literal := wechatRoundMessageText(original)
 		in := companion.Input{Channel: "wechat", Account: account, Thread: preview.Thread,
-			Sender: original.SenderID, TraceID: preview.Message, MessageTime: original.CreatedAt, OriginalText: &literal,
+			Sender: original.SenderID, TraceID: preview.Message, MessageTime: original.CreatedAt,
 			Source: &companion.SourceRef{MessageID: original.ID, ServerID: original.ServerID}}
-		source, visible := memory.SourceForInput(in)
+		if kind == "text" {
+			in.OriginalText = &literal
+		}
+		source, visible := roundPreviewSource(memory, in)
 		if !visible || source.MessageType != 0 && source.MessageType != original.Type {
 			preview.State = "changed_or_forgotten"
 			continue
@@ -334,7 +337,7 @@ func (s *stationWechat) wechatRoundMessages(r *http.Request, id, account string,
 			preview.State = "no_conversation_grant"
 			continue
 		}
-		if _, visible := memory.SourceForInput(in); !visible || r.Context().Err() != nil {
+		if _, visible := roundPreviewSource(memory, in); !visible || r.Context().Err() != nil {
 			preview.State = "changed_or_forgotten"
 			continue
 		}
@@ -349,7 +352,7 @@ func (s *stationWechat) wechatRoundMessages(r *http.Request, id, account string,
 		worker.mu.Lock()
 		current := worker.policy.Grants[in.Thread].Equal(pendingGrants[index])
 		worker.mu.Unlock()
-		_, visible := memory.SourceForInput(in)
+		_, visible := roundPreviewSource(memory, in)
 		if !accountCurrent || !current || !visible || r.Context().Err() != nil {
 			previews[index].State, previews[index].Text, previews[index].Kind, previews[index].Sender = "changed_or_forgotten", "", "", ""
 			if !current {
@@ -358,6 +361,22 @@ func (s *stationWechat) wechatRoundMessages(r *http.Request, id, account string,
 		}
 	}
 	return previews
+}
+
+func roundPreviewSource(memory *companion.Store, in companion.Input) (*companion.SourceRef, bool) {
+	source, visible := memory.SourceForInput(in)
+	if !visible {
+		return nil, false
+	}
+	// The card represents the observed round. A later native read may refresh
+	// metadata, but must still attest the literal this round processed.
+	if in.OriginalText != nil {
+		literal := sha256.Sum256([]byte(*in.OriginalText))
+		if source.BodyHash != hex.EncodeToString(literal[:]) {
+			return nil, false
+		}
+	}
+	return source, true
 }
 
 func wechatRoundMessageText(message linuxnative.Message) (text, kind, literal string) {

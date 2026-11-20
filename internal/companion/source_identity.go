@@ -156,13 +156,6 @@ func (s *Store) normalizeSource(in Input, body string, now time.Time) (*SourceRe
 	r.EventID = ""
 	return r, nil
 }
-func sourceCollision(t Turn, r *SourceRef, body, stamp string) bool {
-	// A native message may be re-read with a refreshed server timestamp,
-	// transport id, body projection or revision. Those are representations of
-	// the same message, not a second identity. Only the immutable conversation
-	// and sender binding is enforced by Observe before this helper is called.
-	return false
-}
 func markSourceConflict(t *Turn) {
 	if t.Source == nil {
 		t.Source = &SourceRef{EventID: t.EventID, MessageID: t.TraceID, Sender: t.Sender, OccurredAt: memoryTime(t.Time), BodyHash: sourceHash(t.FullText), Revision: 1}
@@ -326,7 +319,7 @@ func (s *Store) SourceForInput(in Input) (*SourceRef, bool) {
 		}
 		var revision int
 		var hash string
-		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
+		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.scope=e.scope AND c.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
 		if err != nil {
 			continue
 		}

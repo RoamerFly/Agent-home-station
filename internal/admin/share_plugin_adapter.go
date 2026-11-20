@@ -355,7 +355,10 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if current.AccountID == "" {
 		current.AccountID = p.manager.native.Account()
 	}
-	if current.ID != p.message.ID || current.AccountID != p.message.AccountID || current.ThreadID != p.message.ThreadID || current.SenderID != p.message.SenderID {
+	// The transport can refresh the server identifier and timestamp. The
+	// content used by an already prepared share or media request must agree.
+	current.ServerID, current.CreatedAt = p.message.ServerID, p.message.CreatedAt
+	if wechatapp.ReceivedSourceFingerprint(current, p.tool) != p.fingerprint {
 		return errors.New("share_native_source_changed")
 	}
 	return nil

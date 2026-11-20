@@ -87,7 +87,7 @@ func (a stationAttachmentAccess) confirmObservationSource(ctx context.Context, s
 	}
 	if ref := a.ref; ref != nil && ref.EventID != "" {
 		in := companion.Input{Channel: "wechat", Account: source.Account, Thread: source.Thread, Sender: source.Sender, TraceID: source.Message, MessageTime: source.Occurred, Source: ref}
-		if current, ok := a.store.SourceForInput(in); !ok || current.Revision != ref.Revision || current.BodyHash != ref.BodyHash {
+		if current, ok := a.store.SourceForInput(in); !ok || current.BodyHash != ref.BodyHash {
 			return wechatapp.ErrAttachmentDenied
 		}
 	}

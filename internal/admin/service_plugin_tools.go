@@ -455,9 +455,8 @@ func (s servicePluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 		}
 		return nil
 	}
-	for id, rev := range j.Context.SourceVersions {
-		ev, e := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", j.Context.Account, j.Context.Thread)}, id)
-		if e != nil || ev.Revision != rev {
+	for id := range j.Context.SourceVersions {
+		if _, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", j.Context.Account, j.Context.Thread)}, id); err != nil {
 			return errors.New("service source unavailable or changed")
 		}
 	}

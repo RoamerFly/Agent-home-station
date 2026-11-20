@@ -25,6 +25,13 @@ func (s *Store) NativeRecallAllowed(ctx context.Context, in Input) (bool, error)
 	if err != nil || in.Channel == "" || in.Account == "" || in.Thread == "" || in.TraceID == "" || in.Sender == "" || s.db == nil {
 		return false, err
 	}
+	requested := in.Source
+	if requested != nil && (requested.Account != "" && requested.Account != in.Account ||
+		requested.Thread != "" && requested.Thread != in.Thread ||
+		requested.Sender != "" && requested.Sender != in.Sender ||
+		requested.MessageID != "" && requested.MessageID != in.TraceID) {
+		return false, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT e.sender,e.at,e.text,e.payload,e.suppressed,
 	 (SELECT COUNT(*) FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)+(SELECT COUNT(*) FROM source_conflicts c WHERE c.scope=e.scope AND c.event_id=e.id)
 	 FROM events e WHERE e.scope=? AND e.trace=? AND e.role='user'`, ScopeID(in.Channel, in.Account, in.Thread), in.TraceID)
@@ -44,12 +51,17 @@ func (s *Store) NativeRecallAllowed(ctx context.Context, in Input) (bool, error)
 		if err != nil || json.Unmarshal(raw, &turn) != nil || sender != in.Sender || suppressed != 0 || blocked != 0 {
 			return false, nil
 		}
-		if in.Source != nil && turn.Source != nil {
-			stored, requested := turn.Source, in.Source
-			sameInstance := requested.InstanceID != "" && requested.InstanceID == stored.InstanceID
-			if requested.InstanceID != "" && !sameInstance || stored.MessageID != requested.MessageID || stored.Account != requested.Account || stored.Thread != requested.Thread || stored.Sender != requested.Sender {
+		if requested != nil && turn.Source != nil {
+			stored := turn.Source
+			if requested.InstanceID != "" && requested.InstanceID != stored.InstanceID ||
+				requested.EventID != "" && requested.EventID != turn.EventID ||
+				stored.MessageID != in.TraceID || stored.Account != in.Account ||
+				stored.Thread != in.Thread || stored.Sender != in.Sender {
 				return false, nil
 			}
+		}
+		if in.OriginalText != nil && text != *in.OriginalText {
+			return false, nil
 		}
 	}
 	return true, rows.Err()

@@ -47,6 +47,15 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.snapshot['tasks']['device-next']['state'], 'queued')
         self.assertEqual(self.snapshot['workflows']['device-synthetic']['effect']['capability'], 'device.observe')
 
+    def test_go_fractional_timestamps_survive_start_and_advance(self):
+        self.now = '2026-11-01T00:00:00.54254Z'
+        task = self.start()
+        self.assertEqual(task['created'], self.now)
+        self.assertEqual(workflow.timestamp(task['created']).microsecond, 542540)
+        self.now = '2026-11-01T00:00:01.4258Z'
+        self.apply('advance')
+        self.assertEqual(self.snapshot['tasks']['device-synthetic']['state'], 'running')
+
     def test_one_effect_per_transition_and_model_finish_fact(self):
         self.start()
         metadata = self.tick()

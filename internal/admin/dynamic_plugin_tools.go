@@ -236,9 +236,8 @@ func (d *dynamicPluginPolicy) Check(ctx context.Context, job pluginhost.Job, cap
 	if err != nil || job.Context.EvidenceEpoch == "" || job.Context.EvidenceEpoch != epoch {
 		return errors.New("dynamic plugin evidence changed")
 	}
-	for id, revision := range job.Context.SourceVersions {
-		event, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", job.Context.Account, job.Context.Thread)}, id)
-		if err != nil || event.Revision != revision {
+	for id := range job.Context.SourceVersions {
+		if _, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", job.Context.Account, job.Context.Thread)}, id); err != nil {
 			return errors.New("dynamic plugin source unavailable or changed")
 		}
 	}

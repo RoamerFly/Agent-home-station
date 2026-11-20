@@ -261,7 +261,7 @@ func (t *stationAttachmentTools) validateCurrentGroupShare(ctx context.Context, 
 		return companion.Input{}, errors.New("share_auto_summary_source_changed")
 	}
 	storedAt, err := time.Parse(time.RFC3339Nano, stored.OccurredAt)
-	if err != nil || !storedAt.Equal(messageAt) || stored.EventID == "" || in.Source.EventID != "" && stored.EventID != in.Source.EventID || in.Source.Revision > 0 && stored.Revision != in.Source.Revision ||
+	if err != nil || !storedAt.Equal(messageAt) || stored.EventID == "" || in.Source.EventID != "" && stored.EventID != in.Source.EventID ||
 		stored.Account != m.AccountID || stored.Thread != m.ThreadID || stored.MessageID != m.ID || stored.Sender != m.SenderID ||
 		stored.ServerID != m.ServerID || stored.MessageType != m.Type {
 		return companion.Input{}, errors.New("share_auto_summary_source_changed")

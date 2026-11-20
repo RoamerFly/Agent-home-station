@@ -311,9 +311,10 @@ func (e *Engine) pendingEventEvidence(ctx context.Context, in Input, updates []C
 		invalid := false
 		if resolved && update.Source != nil {
 			// followupEvidence's native fallback has only message/sender IDs.
-			// A pending plan also carries the full original native reference;
-			// do not let the weaker lookup upgrade its revision or identity.
-			if _, ok := e.replyReferenceEvent(ctx, in, update.Source); !ok {
+			// A pending plan may carry the actual original text digest. Avoid
+			// binding queued wording to a corrected text from the same message.
+			ev, ok := e.replyReferenceEvent(ctx, in, update.Source)
+			if !ok || (update.Source.MessageType == 0 || update.Source.MessageType == 1) && update.Source.BodyHash != "" && ev.Hash != update.Source.BodyHash {
 				invalid = true
 			}
 		}
@@ -334,6 +335,9 @@ func (e *Engine) pendingEventEvidence(ctx context.Context, in Input, updates []C
 		}
 		if source := update.Source; source != nil {
 			invalid = invalid || source.EventID != "" || source.Account != "" && source.Account != in.Account || source.Thread != "" && source.Thread != in.Thread || source.Sender != "" && source.Sender != update.Sender
+			if (source.MessageType == 0 || source.MessageType == 1) && source.BodyHash != "" && source.BodyHash != sourceHash(update.Text) {
+				invalid = true
+			}
 		}
 		// An existing but unreadable/revised source must not re-enter through
 		// the unpersisted native-message fallback after forgetting or collision.

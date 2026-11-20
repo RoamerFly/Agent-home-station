@@ -278,12 +278,12 @@ func TestMusicPluginJobCancellationAndTaskVoiceConstraints(t *testing.T) {
 	}
 }
 
-func TestMusicPluginBindsActualSourceRevisionAndActor(t *testing.T) {
+func TestMusicPluginAllowsSourceRevisionRefreshButBindsActor(t *testing.T) {
 	f, access, p := musicPluginFixture(t)
 	j, cap := musicPluginJob(p)
 	p.invocation.SourceVersions[access.trace.Source.EventID]++
-	if err := p.Check(t.Context(), j, cap); err == nil {
-		t.Fatal("stale source revision accepted")
+	if err := p.Check(t.Context(), j, cap); err != nil {
+		t.Fatal("metadata-only revision blocked the bound request", err)
 	}
 	other := access.trace
 	other.TraceID, other.Sender, other.Text, other.Source = "other-source", "other-user", "synthetic other user request", &companion.SourceRef{MessageID: "other-source"}

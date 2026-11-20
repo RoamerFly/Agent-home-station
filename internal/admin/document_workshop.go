@@ -234,9 +234,8 @@ func (d *documentWorkshopPolicy) Check(ctx context.Context, job pluginhost.Job, 
 	if current, err := p.serviceEvidenceEpoch(ctx); err != nil || current != d.invocation.EvidenceEpoch {
 		return errors.New("document_workshop_evidence_changed")
 	}
-	for id, revision := range d.invocation.SourceVersions {
-		event, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.trace.Account, p.trace.Thread)}, id)
-		if err != nil || event.Revision != revision {
+	for id := range d.invocation.SourceVersions {
+		if _, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.trace.Account, p.trace.Thread)}, id); err != nil {
 			return errors.New("document_workshop_source_changed")
 		}
 	}

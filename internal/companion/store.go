@@ -254,16 +254,15 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 					if sourceReplay(turn.Source, source) {
 						return nil
 					}
-					if sourceCollision(turn, source, original, input.MessageTime) {
+					// Mutable native projections can refresh the same message.
+					// A different sender in the same namespace is an actual collision.
+					if turn.Sender != input.Sender {
 						markSourceConflict(&scope.Messages[i])
 						if source == nil {
 							source = legacyConflictSource(input, original, now, s.SourceInstanceID())
 						}
 						source.Integrity = "conflicted"
 						continue
-					}
-					if turn.Sender != input.Sender {
-						return errors.New("message identity sender changed")
 					}
 					if source != nil {
 						if turn.Source != nil {

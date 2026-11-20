@@ -149,15 +149,7 @@ func validateGroundedText(ctx context.Context, engine replyGroundingEngine, in c
 }
 
 func replyProofMetadataMissing(r *companion.ReplyContext) bool {
-	if r == nil || r.ContextVersion == "" || r.State == "" {
-		return true
-	}
-	for _, id := range r.SourceEventIDs {
-		if r.SourceVersions[id] < 1 {
-			return true
-		}
-	}
-	return false
+	return r == nil || r.ContextVersion == "" || r.State == ""
 }
 
 // The anchor's author is a source identity, not necessarily the outgoing
@@ -165,7 +157,7 @@ func replyProofMetadataMissing(r *companion.ReplyContext) bool {
 // reply to Beta. Audience membership alone never proves an anchor is related.
 func (w *Worker) quotedAnchorSource(ctx context.Context, in companion.Input, anchor string) (*companion.SourceRef, error) {
 	r := in.ReplyContext
-	if r == nil || r.AnchorEventID == "" || r.SourceVersions[r.AnchorEventID] < 1 {
+	if r == nil || r.AnchorEventID == "" {
 		return nil, errors.New("reply_quote_source_unproven")
 	}
 	listed := false
@@ -264,13 +256,8 @@ func bindingNeedsRecovery(in companion.Input) bool {
 	if r.State != "verified" || r.ContextVersion == "" {
 		return true
 	}
-	if in.Sender != "" && in.Mode != "proactive" && (in.Source == nil || in.Source.Revision < 1 || in.Source.BodyHash == "" || len(r.SourceEventIDs) == 0) {
+	if in.Sender != "" && in.Mode != "proactive" && (in.Source == nil || in.Source.BodyHash == "" || len(r.SourceEventIDs) == 0) {
 		return true
-	}
-	for _, id := range r.SourceEventIDs {
-		if r.SourceVersions[id] < 1 {
-			return true
-		}
 	}
 	return false
 }

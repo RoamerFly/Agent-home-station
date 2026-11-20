@@ -168,6 +168,11 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 			if err := p.Check(ctx, foreign, pluginhost.Capability{}); err == nil {
 				t.Fatal("cross room accepted")
 			}
+			n.msg.ServerID = "refreshed-server-id"
+			n.msg.CreatedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+			if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+				t.Fatal("transport metadata refresh blocked the same native content", err)
+			}
 			n.msg.Body = "edited native card"
 			if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
 				t.Fatal("native edit accepted")

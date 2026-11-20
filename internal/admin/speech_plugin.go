@@ -196,9 +196,8 @@ func (p *speechPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap pl
 		if err != nil || current != p.invocation.EvidenceEpoch {
 			return errors.New("speech_plugin_evidence_changed")
 		}
-		for id, revision := range p.invocation.SourceVersions {
-			ev, e := access.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", access.trace.Account, access.trace.Thread)}, id)
-			if e != nil || ev.Revision != revision {
+		for id := range p.invocation.SourceVersions {
+			if _, err := access.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", access.trace.Account, access.trace.Thread)}, id); err != nil {
 				return errors.New("speech_plugin_source_changed")
 			}
 		}

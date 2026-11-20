@@ -22,7 +22,7 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 		return err
 	}
 	job, err := store.GetLocalTaskFollowup(ctx, in, id)
-	if err != nil || job.State != "generating" || job.RequestID != in.TraceID || in.Source == nil || job.Source.EventID != in.Source.EventID || job.Source.Revision != in.Source.Revision || job.Source.BodyHash != in.Source.BodyHash {
+	if err != nil || job.State != "generating" || job.RequestID != in.TraceID || in.Source == nil || job.Source.EventID != in.Source.EventID || job.Source.BodyHash != in.Source.BodyHash {
 		return errors.New("原任务已停止或来源已变化")
 	}
 	grant, err := (&localWorkspaceAccess{home: h.home, fishID: in.Account, ownerID: in.Sender}).resolve()

@@ -465,9 +465,9 @@ func (p *localMusicPluginPolicy) checkBoundCall(ctx context.Context, j pluginhos
 		if err != nil || epoch != p.invocation.EvidenceEpoch {
 			return errors.New("music_local_evidence_changed")
 		}
-		for id, revision := range p.invocation.SourceVersions {
+		for id := range p.invocation.SourceVersions {
 			ev, e := p.p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.invocation.Account, p.invocation.Thread)}, id)
-			if e != nil || ev.Revision != revision {
+			if e != nil {
 				return errors.New("music_local_source_changed")
 			}
 			if source := p.p.trace.Source; source != nil && source.EventID == id && (ev.Role != "user" || ev.Sender != p.p.trace.Sender) {

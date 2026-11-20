@@ -161,8 +161,9 @@ func TestConflictedCurrentSourceNeverCallsModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := *in.Source
-	changed.ServerID = "another-server"
+	changed.Sender = "another-sender"
 	in.Source = &changed
+	in.Sender = changed.Sender
 	in.Text = "different event"
 	model := &countedGroundingModel{}
 	e, err := New(c, s, model, "base")

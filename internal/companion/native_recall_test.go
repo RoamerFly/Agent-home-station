@@ -51,7 +51,8 @@ func TestNativeRecallRespectsIdentityRevisionAndForgetting(t *testing.T) {
 				}
 			}
 			allowed, err := s.NativeRecallAllowed(t.Context(), in)
-			if err != nil || allowed != (action == "unchanged") {
+			want := action == "unchanged" || action == "time" || action == "server"
+			if err != nil || allowed != want {
 				t.Fatal(action, allowed, err)
 			}
 		})

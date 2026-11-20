@@ -11,6 +11,7 @@ ACTIVE = {'queued', 'running'}
 TERMINAL = {'completed', 'cancelled', 'failed', 'stopped', 'needs_review'}
 ACTIONS = {'launch', 'tap', 'swipe', 'text', 'back', 'home', 'capture', 'open_url'}
 ID = re.compile(r'[a-zA-Z0-9_-]{1,128}\Z')
+FRACTIONAL_SECONDS = re.compile(r'(?<=:\d{2})\.(\d{1,9})(?=Z$|[+-]\d{2}:\d{2}$)')
 
 
 def fail(code):
@@ -20,6 +21,9 @@ def fail(code):
 def timestamp(value):
     if not isinstance(value, str):
         fail('device_workflow_time_invalid')
+    # Go's RFC3339Nano omits trailing zeros. Python 3.10 requires three or
+    # six fractional digits, so parse using datetime's microsecond precision.
+    value = FRACTIONAL_SECONDS.sub(lambda match: '.' + match[1][:6].ljust(6, '0'), value)
     try:
         result = datetime.fromisoformat(value.replace('Z', '+00:00'))
     except ValueError:

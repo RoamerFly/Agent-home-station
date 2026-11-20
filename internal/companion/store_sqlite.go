@@ -530,6 +530,20 @@ func eventID(scope string, t Turn, index int) string {
 	return hex.EncodeToString(h[:])
 }
 
+func sameRecallSource(a, b *SourceRef) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	left, right := *a, *b
+	left.Revision, right.Revision = 0, 0
+	return left == right
+}
+
+func sameRecallMedia(a, b IncomingMediaRef) bool {
+	a.Source.Revision, b.Source.Revision = 0, 0
+	return reflect.DeepEqual(a, b)
+}
+
 func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 	if old.Preferences != next.Preferences {
 		if err := bumpRecallEpoch(tx); err != nil {
@@ -586,9 +600,9 @@ func (s *Store) writeScope(tx *sql.Tx, id string, old, next Scope) error {
 			continue
 		}
 		if prev, ok := previous[t.EventID]; ok && t.Role == "user" &&
-			(prev.Text != t.Text || prev.UserTextState != t.UserTextState || prev.FullObservation != t.FullObservation || !reflect.DeepEqual(prev.Source, t.Source) ||
-				!reflect.DeepEqual(prev.QuotedSource, t.QuotedSource) || !reflect.DeepEqual(prev.Addressees, t.Addressees) ||
-				!reflect.DeepEqual(prev.IncomingMedia, t.IncomingMedia)) {
+			(prev.Text != t.Text || prev.UserTextState != t.UserTextState || prev.FullObservation != t.FullObservation || !sameRecallSource(prev.Source, t.Source) ||
+				!sameRecallSource(prev.QuotedSource, t.QuotedSource) || !reflect.DeepEqual(prev.Addressees, t.Addressees) ||
+				!slices.EqualFunc(prev.IncomingMedia, t.IncomingMedia, sameRecallMedia)) {
 			// Changes to an existing user's evidence include refreshed media
 			// observations and attribution, even when the original body is intact.
 			recallChanged = true
