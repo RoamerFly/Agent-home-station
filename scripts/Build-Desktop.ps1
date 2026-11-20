@@ -461,13 +461,37 @@ if($LocalStation){
  New-Item -ItemType Directory -Force -Path $stationRoot | Out-Null
  $station=Join-Path $stationRoot 'agent-home-station-server.exe'
  $oldOS=$env:GOOS; $oldArch=$env:GOARCH
+ $oldGitDir=$env:GIT_DIR; $oldGitWorkTree=$env:GIT_WORK_TREE
  Push-Location $workspace
  try {
   $env:GOOS='windows'; $env:GOARCH='amd64'
   & (Join-Path $workspace 'scripts\Test-WindowsDeviceRetirement.ps1') -SourceDirectory $workspace -Target Station -Test:$Test
-  & go build -trimpath -o $station './cmd/agent-home-station'
+  $gitStamp='-buildvcs=false'
+  $revision=''
+  if(Get-Command git -ErrorAction SilentlyContinue){
+   $env:GIT_DIR=$null; $env:GIT_WORK_TREE=$null
+   $gitRoot=& git rev-parse --show-toplevel 2>$null
+   if($LASTEXITCODE -eq 0 -and [IO.Path]::GetFullPath($gitRoot) -eq [IO.Path]::GetFullPath($workspace)){
+    # Go may otherwise use the enclosing repository to stamp a linked worktree.
+    $env:GIT_DIR=& git rev-parse --absolute-git-dir
+    if($LASTEXITCODE -ne 0){throw 'LocalStation worktree Git metadata is unavailable.'}
+    $env:GIT_WORK_TREE=$workspace
+    $revision=& git rev-parse HEAD
+    if($LASTEXITCODE -ne 0){throw 'LocalStation worktree revision is unavailable.'}
+    $gitStamp='-buildvcs=true'
+   }
+  }
+  & go build $gitStamp -trimpath -o $station './cmd/agent-home-station'
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
- } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
+  if($revision){
+   $metadata=& go version -m $station
+   if($LASTEXITCODE -ne 0 -or -not ($metadata -match ('\bvcs\.revision='+[regex]::Escape($revision)+'$'))){throw 'LocalStation server build revision does not match the worktree.'}
+  }
+ } finally {
+  $env:GOOS=$oldOS; $env:GOARCH=$oldArch
+  $env:GIT_DIR=$oldGitDir; $env:GIT_WORK_TREE=$oldGitWorkTree
+  Pop-Location
+ }
  if($appIDs.Count -and -not $ApplicationPackagesDirectory){
   & $station verify-app-catalog --catalog $applicationCatalog @appIDs
   if($LASTEXITCODE -ne 0){throw 'Connected Apps do not match the built LocalStation server.'}
