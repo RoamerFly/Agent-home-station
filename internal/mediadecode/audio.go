@@ -36,7 +36,8 @@ func extractAudioRange(ctx context.Context, path, out string, start, length floa
 	if err := ensureDecoder(); err != nil {
 		return nil, 0, err
 	}
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "json", path)
+	input, output := decoderPath(path), decoderPath(out)
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "json", input)
 	hideDecoderWindow(probe)
 	var tracks struct {
 		Streams []json.RawMessage `json:"streams"`
@@ -49,7 +50,7 @@ func extractAudioRange(ctx context.Context, path, out string, start, length floa
 		return nil, 0, ErrNoAudioTrack
 	}
 	sec := func(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
-	decode := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", formats, "-threads", "1", "-ss", sec(start), "-i", path, "-map", "0:a:0", "-vn", "-t", sec(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
+	decode := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", formats, "-threads", "1", "-ss", sec(start), "-i", input, "-map", "0:a:0", "-vn", "-t", sec(length), "-threads", "1", "-filter_threads", "1", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", output)
 	hideDecoderWindow(decode)
 	if err := decode.Run(); err != nil {
 		return nil, 0, errors.New("video_audio_decode_failed")
@@ -58,7 +59,7 @@ func extractAudioRange(ctx context.Context, path, out string, start, length floa
 	if err != nil || len(wav) == 0 || len(wav) > 8<<20 {
 		return nil, 0, errors.New("video_audio_limit")
 	}
-	duration := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "wav", "-show_entries", "format=duration", "-of", "csv=p=0", out)
+	duration := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "wav", "-show_entries", "format=duration", "-of", "csv=p=0", output)
 	hideDecoderWindow(duration)
 	raw, err = duration.Output()
 	if err != nil {

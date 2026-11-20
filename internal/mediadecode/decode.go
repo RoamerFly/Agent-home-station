@@ -65,7 +65,7 @@ func ProbeDuration(ctx context.Context, path string) (float64, error) {
 }
 
 func probeDuration(ctx context.Context, path, formats string) (float64, error) {
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-show_entries", "format=duration", "-of", "csv=p=0", path)
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-show_entries", "format=duration", "-of", "csv=p=0", decoderPath(path))
 	hideDecoderWindow(probe)
 	duration, err := probe.Output()
 	if err != nil {
@@ -103,7 +103,7 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 		// A zero-frame decode can exit successfully. Never reuse a previous
 		// iteration's file as evidence for this sampling time.
 		output := filepath.Join(tmp, fmt.Sprintf("frame-%d.jpg", i))
-		command := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-ss", FormatSeconds(at), "-threads", "1", "-i", input, "-map", "0:v:0", "-frames:v", "1", "-threads", "1", "-filter_threads", "1", "-vf", "scale=960:960:force_original_aspect_ratio=decrease", "-q:v", "4", output)
+		command := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-ss", FormatSeconds(at), "-threads", "1", "-i", decoderPath(input), "-map", "0:v:0", "-frames:v", "1", "-threads", "1", "-filter_threads", "1", "-vf", "scale=960:960:force_original_aspect_ratio=decrease", "-q:v", "4", decoderPath(output))
 		if command.Run() != nil {
 			return sample, errors.New("video_frame_extraction_failed")
 		}
@@ -134,7 +134,7 @@ func probeVideo(ctx context.Context, path string, countFrames bool) (Metadata, e
 	if countFrames {
 		arguments = append(arguments, "-count_frames")
 	}
-	arguments = append(arguments, "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path)
+	arguments = append(arguments, "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", decoderPath(path))
 	command := exec.CommandContext(ctx, "ffprobe", arguments...)
 	hideDecoderWindow(command)
 	raw, err := command.Output()
@@ -192,7 +192,7 @@ func ExtractFramesSized(ctx context.Context, path, dir string, start, count, ste
 	filter := fmt.Sprintf("select=between(n\\,%d\\,%d)*not(mod(n-%d\\,%d)),showinfo,scale=%d:%d:force_original_aspect_ratio=decrease", start, end, start, step, dimension, dimension)
 	// Only one output video stream is mapped. The bundled Windows FFmpeg also
 	// predates -fps_mode, so use the equivalent output sync option it supports.
-	command := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", path, "-map", "0:v:0", "-vf", filter, "-vsync", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", filepath.Join(dir, "frame-%06d.jpg"))
+	command := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", decoderPath(path), "-map", "0:v:0", "-vf", filter, "-vsync", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", decoderPath(filepath.Join(dir, "frame-%06d.jpg")))
 	hideDecoderWindow(command)
 	log, err := command.CombinedOutput()
 	if err != nil {
