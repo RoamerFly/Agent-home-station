@@ -32,7 +32,7 @@ def call(python: Path, runtime: Path, payload: dict, environment: dict[str, str]
     # The managed runtime emits UTF-8 JSON irrespective of the Windows console
     # code page. Without an explicit decoder, a successful Chinese result can
     # make this smoke harness fail while reading stdout.
-    result = subprocess.run([str(python), str(runtime)], input=json.dumps(payload, ensure_ascii=False), text=True, encoding="utf-8", errors="replace", capture_output=True, env=environment, timeout=150, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    result = subprocess.run([str(python), "-B", str(runtime)], input=json.dumps(payload, ensure_ascii=False), text=True, encoding="utf-8", capture_output=True, env=environment, timeout=150, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if result.returncode != 0:
         raise RuntimeError(result.stderr)
     return json.loads(result.stdout)
