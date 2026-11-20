@@ -92,9 +92,11 @@ function Assert-NoReparsePointAncestor([string]$Path){
 }
 
 function Get-SourceProvenance {
- $commit=(& git -C $workspace rev-parse HEAD 2>$null | Select-Object -First 1)
+ # Windows PowerShell can stop the native process early when Select-Object
+ # takes its first output line. Read the complete single-value Git response.
+ $commit=(& git -C $workspace rev-parse HEAD 2>$null)
  if($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)){throw 'Unable to determine the canonical source commit.'}
- $remote=(& git -C $workspace config --get remote.origin.url 2>$null | Select-Object -First 1)
+ $remote=(& git -C $workspace config --get remote.origin.url 2>$null)
  $dirty=((& git -C $workspace status --porcelain 2>$null) | Where-Object {$_ -and $_.Trim()}).Count -gt 0
  return [ordered]@{
   source_root=(Split-Path $workspace -Leaf)
