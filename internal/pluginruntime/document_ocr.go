@@ -75,7 +75,11 @@ func RunDocumentOCR(ctx context.Context, spec LaunchSpec, request DocumentOCRReq
 	// already mounted read-only by isolatedCommand. The fixed psm is for a
 	// normal mixed Chinese page; precision changes require a future reviewed
 	// host API rather than arbitrary tool arguments.
-	argv := []string{tesseract, input, "stdout", "--tessdata-dir", tessdata, "-l", "chi_sim+eng", "--oem", "1", "--psm", "6", "tsv"}
+	// Windows extended paths require backslashes. Supply the trailing
+	// separator so Tesseract does not append a forward slash when it loads
+	// the language files. Enable TSV directly to avoid its config-file lookup.
+	argv := []string{tesseract, input, "stdout", "--tessdata-dir", tessdata + string(filepath.Separator),
+		"-l", "chi_sim+eng", "--oem", "1", "--psm", "6", "-c", "tessedit_create_tsv=1"}
 	cmd, cleanup, err := isolatedCommand(spec, argv)
 	if err != nil {
 		return DocumentOCRObservation{}, errors.New("document_ocr_broker_unavailable")
