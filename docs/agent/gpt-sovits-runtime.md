@@ -29,6 +29,8 @@ Python 环境复用同一公共工作区的 Linux music CUDA 包，独立安装 
 可用 `--parameters JSON文件` 调整并透传原生 `TTS.run` 参数，例如 top_k、top_p、temperature、seed、speed_factor、batch_size、sample_steps、cfg_rate、text_split_method 等。明确传入的值不被适配器静默缩小。
 CLI 输出完整 WAV；流式消费用上游 API 或自写代码。缺少指定权重或 CUDA 不可用会明确报错，不换成默认声线或静默回退 CPU。显式 `--device cpu --no-half` 可使用 CPU。
 
+Windows 工作站主页支持在私有登记 `data/publictools/registrations/station-speech.json` 的 `default_voice_id` 填写一个已登记的本机声线编号。`project_speech_voices` 会返回该编号。调用 `project_speech_synthesize` 时可省略 `voice_id` 使用默认声线。显式指定的编号按原编号校验。
+
 普通好友/群友只能使用公共条目；个人声线归档仍由账号管理员访问。获得读取权限不代表任意引擎兼容：GPT-SoVITS 的文本合成不能直接作为 RVC checkpoint 使用。
 
 每轮上下文附带当前公共项目登记摘要，详细参数仍通过 `project_read` 按需取得。历史聊天里的“未安装”只记录当时结论；新请求按当前工具、登记文件和真实执行结果重新判断，不能将旧失败表述成刚执行过。

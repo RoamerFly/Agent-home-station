@@ -55,8 +55,9 @@ type localTTSBackend interface {
 }
 
 type localTTSDeployment struct {
-	Binding string          `json:"binding"`
-	Voices  []localTTSVoice `json:"voices"`
+	Binding        string          `json:"binding"`
+	Voices         []localTTSVoice `json:"voices"`
+	DefaultVoiceID string          `json:"default_voice_id,omitempty"`
 }
 
 // localTTSVoice is intentionally display-only.  Version is a stable opaque
@@ -67,6 +68,7 @@ type localTTSVoice struct {
 	Version  string  `json:"version"`
 	SpeedMin float64 `json:"speed_min"`
 	SpeedMax float64 `json:"speed_max"`
+	Default  bool    `json:"default,omitempty"`
 }
 
 type localTTSRequest struct {
@@ -88,19 +90,20 @@ type localTTSResult struct {
 // easy way to accidentally turn a local configuration into a command channel.
 // All paths stay host-private and are never returned by Info.
 type localTTSRegistration struct {
-	portable      bool
-	SchemaVersion int                         `json:"schema_version"`
-	Enabled       bool                        `json:"enabled"`
-	Project       string                      `json:"project"`
-	Python        string                      `json:"python"`
-	BaseModels    string                      `json:"base_models"`
-	Packages      string                      `json:"packages,omitempty"`
-	Runner        string                      `json:"runner"`
-	RunnerSHA256  string                      `json:"runner_sha256"`
-	Media         string                      `json:"media"`
-	NLTKData      string                      `json:"nltk_data"`
-	Device        string                      `json:"device"`
-	Voices        []localTTSVoiceRegistration `json:"voices"`
+	portable       bool
+	SchemaVersion  int                         `json:"schema_version"`
+	Enabled        bool                        `json:"enabled"`
+	Project        string                      `json:"project"`
+	Python         string                      `json:"python"`
+	BaseModels     string                      `json:"base_models"`
+	Packages       string                      `json:"packages,omitempty"`
+	Runner         string                      `json:"runner"`
+	RunnerSHA256   string                      `json:"runner_sha256"`
+	Media          string                      `json:"media"`
+	NLTKData       string                      `json:"nltk_data"`
+	Device         string                      `json:"device"`
+	Voices         []localTTSVoiceRegistration `json:"voices"`
+	DefaultVoiceID string                      `json:"default_voice_id,omitempty"`
 }
 
 type localTTSVoiceRegistration struct {
@@ -169,10 +172,12 @@ func (s *localTTSService) Info(ctx context.Context, fish string) (localTTSDeploy
 	}
 	voices := make([]localTTSVoice, 0, len(registration.Voices))
 	for _, voice := range registration.Voices {
-		voices = append(voices, voice.view())
+		view := voice.view()
+		view.Default = voice.ID == registration.DefaultVoiceID
+		voices = append(voices, view)
 	}
 	sort.Slice(voices, func(i, j int) bool { return voices[i].ID < voices[j].ID })
-	return localTTSDeployment{Binding: localTTSBinding(registration), Voices: voices}, nil
+	return localTTSDeployment{Binding: localTTSBinding(registration), Voices: voices, DefaultVoiceID: registration.DefaultVoiceID}, nil
 }
 
 func (s *localTTSService) Synthesize(ctx context.Context, fish, binding string, request localTTSRequest) (localTTSResult, error) {
@@ -391,7 +396,7 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 }
 
 func localTTSRegistrationFields(fields map[string]json.RawMessage) bool {
-	allowed := map[string]bool{"schema_version": true, "enabled": true, "project": true, "python": true, "base_models": true, "packages": true, "runner": true, "runner_sha256": true, "media": true, "nltk_data": true, "device": true, "voices": true}
+	allowed := map[string]bool{"schema_version": true, "enabled": true, "project": true, "python": true, "base_models": true, "packages": true, "runner": true, "runner_sha256": true, "media": true, "nltk_data": true, "device": true, "voices": true, "default_voice_id": true}
 	for name := range fields {
 		if !allowed[name] {
 			return false
@@ -480,6 +485,9 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 	}
 	if len(r.Voices) == 0 {
 		return errors.New("station_speech_no_registered_voices")
+	}
+	if r.DefaultVoiceID != "" && !seen[r.DefaultVoiceID] {
+		return errors.New("station_speech_voice_registration_invalid")
 	}
 	return nil
 }

@@ -6484,7 +6484,7 @@
       section.append(appElement("span", "工具包可以先安装；管理员登记并核验本机语音后端和声线后才可启用。"));
       return section;
     }
-    section.append(appElement("span", "只使用宿主登记的本机语音后端和明确指定的声线；不会用默认声线替代。"));
+    section.append(appElement("span", "使用宿主登记的本机语音后端。未指定声线时选用已登记的默认声线。"));
     return section;
   }
   function renderStationSpeechVoices(tool) {
@@ -6497,7 +6497,7 @@
     }
     const list = appElement("div", "", "project-tool-voice-list");
     voices.forEach((voice) => {
-      const label = appElement("span", voice.label.trim(), "project-tool-voice");
+      const label = appElement("span", voice.label.trim() + (voice.default === true ? "（默认）" : ""), "project-tool-voice");
       label.title = voice.id.trim();
       list.append(label);
     });

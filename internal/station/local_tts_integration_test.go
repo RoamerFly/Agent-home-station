@@ -18,15 +18,39 @@ import (
 )
 
 type syntheticLocalTTS struct {
-	voice   localTTSVoice
-	wav     []byte
-	started chan struct{}
-	wrong   bool
-	calls   atomic.Int32
+	voice          localTTSVoice
+	defaultVoiceID string
+	wav            []byte
+	started        chan struct{}
+	wrong          bool
+	calls          atomic.Int32
 }
 
 func (s *syntheticLocalTTS) Info(context.Context, string) (localTTSDeployment, error) {
-	return localTTSDeployment{Binding: strings.Repeat("b", 64), Voices: []localTTSVoice{s.voice}}, nil
+	return localTTSDeployment{Binding: strings.Repeat("b", 64), Voices: []localTTSVoice{s.voice}, DefaultVoiceID: s.defaultVoiceID}, nil
+}
+
+func TestLocalSpeechChatUsesRegisteredDefault(t *testing.T) {
+	f, backend := newLocalTTSFixture(t)
+	backend.defaultVoiceID = backend.voice.ID
+	var observed string
+	installLocalTTSModel(f, localTTSVoicesTool, map[string]any{}, &observed)
+	if code, _ := localChatSend(f, "speech-default-list", "查看默认声线"); code != 200 ||
+		!strings.Contains(observed, "default_voice_id") || !strings.Contains(observed, backend.voice.ID) {
+		t.Fatalf("default voice wasn't returned: %d %s", code, observed)
+	}
+	args := map[string]any{"text": "A synthetic test.", "speed": 0.8, "text_language": "en"}
+	installLocalTTSModel(f, localTTSStartTool, args, &observed)
+	if code, _ := localChatSend(f, "speech-default-use", "使用默认声线"); code != 200 ||
+		!strings.Contains(observed, backend.voice.Version) || backend.calls.Load() != 1 {
+		t.Fatalf("default voice wasn't synthesized: %d %s", code, observed)
+	}
+	args["voice_id"] = "unregistered-voice"
+	installLocalTTSModel(f, localTTSStartTool, args, &observed)
+	if code, _ := localChatSend(f, "speech-default-explicit-unknown", "使用未知声线"); code != 200 ||
+		!strings.Contains(observed, "指定声线未登记或已撤权") || backend.calls.Load() != 1 {
+		t.Fatalf("incorrect explicit selection was accepted: %d %s", code, observed)
+	}
 }
 
 func (s *syntheticLocalTTS) Synthesize(ctx context.Context, _ string, binding string, request localTTSRequest) (localTTSResult, error) {
