@@ -631,7 +631,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		}
 		if externalToolDataID(id) && (in.Action == "enable" || in.Action == "start" || in.Action == "restart") {
 			if err := s.loadExternalToolConfig(ctx, host, current); err != nil {
-				websession.Fail(w, 409, "工具配置暂未加载，请检查 data/publictools/"+id+"/config.json 的必填项、格式，或等待在途任务结束。已有配置保留。")
+				websession.Fail(w, 409, "工具配置暂未加载，请检查该工具配置目录中的 config.json 必填项和格式，或等待在途任务结束。已有配置保留。")
 				return
 			}
 		}

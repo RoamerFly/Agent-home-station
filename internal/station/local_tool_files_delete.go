@@ -93,10 +93,10 @@ func (s *localProjectTools) toolFileDeleteRoute(owner *websession.Store, mux *ht
 			for _, f := range locals {
 				var e error
 				p := filepath.ToSlash(f.Path)
-				if strings.Contains(p, "/publictools/rvc/") && s.rvc != nil {
+				if (strings.Contains(p, "/publictools/rvc/") || strings.Contains(p, "/tools/rvc/")) && s.rvc != nil {
 					e = s.rvc.Stop(r.Context())
 				}
-				if strings.Contains(p, "/publictools/yue/") && s.yue != nil {
+				if (strings.Contains(p, "/publictools/yue/") || strings.Contains(p, "/tools/yue/")) && s.yue != nil {
 					e = s.yue.Stop(r.Context())
 				}
 				if e != nil {

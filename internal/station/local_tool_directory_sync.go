@@ -109,7 +109,7 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 		id := item.Package.ID
 		if externalToolDataID(id) {
 			if err := s.loadExternalToolConfig(ctx, host, item); err != nil {
-				notes[id] = "工具等待配置，请检查 data/publictools/" + id + "/config.json。"
+				notes[id] = "工具等待配置，请检查该工具配置目录中的 config.json。"
 				continue
 			}
 		}
