@@ -4,6 +4,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,51 @@ class HiddenWindowsTests(unittest.TestCase):
             self.assertIn('sandbox_required',result.get('error',''))
             self.assertFalse((workspace/'inside.txt').exists())
             child.wait(timeout=5)
+
+    def test_nested_python_uses_scoped_temp_from_read_only_directory(self):
+        from windows_lpac import launch
+
+        with tempfile.TemporaryDirectory(prefix='lpac-temp-') as base:
+            base = Path(base).resolve()
+            private, readonly, runtime = base/'private', base/'project', base/'runtime'
+            private.mkdir()
+            readonly.mkdir()
+            shutil.copytree(sys.base_prefix, runtime, ignore=shutil.ignore_patterns(
+                'site-packages', '__pycache__', 'Scripts', 'include', 'libs', 'tcl', 'Tools',
+            ))
+            child = """
+from pathlib import Path
+import sys
+import tempfile
+with tempfile.TemporaryDirectory() as path:
+    assert Path(path).parent == Path(sys.argv[1]), path
+    (Path(path) / 'probe').write_text('synthetic')
+"""
+            parent = """
+from pathlib import Path
+import os
+import subprocess
+import sys
+cwd = Path(sys.argv[1])
+# Windows can replace TEMP/TMP with an unavailable AppContainer directory.
+unavailable = str(cwd / 'unavailable')
+env = dict(os.environ, TEMP=unavailable, TMP=unavailable)
+subprocess.run([sys.executable, '-I', '-B', '-c', sys.argv[2], sys.argv[3]], cwd=cwd, env=env,
+               stdout=sys.stdout, stderr=sys.stderr, check=True)
+"""
+            output = base/'output.log'
+            argv = [str(runtime/'python.exe'), '-I', '-B', '-c', parent, str(readonly),
+                    child, str(private/'scratch')]
+            with output.open('wb') as log:
+                process = launch(argv, str(private), [str(private)], [str(readonly), str(runtime)], log,
+                                 music_runtime=True)
+                try:
+                    code = process.wait(timeout=20)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+            self.assertEqual(code, 0, output.read_text(encoding='utf-8', errors='replace'))
 
 
 if __name__=='__main__': unittest.main()

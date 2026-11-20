@@ -216,9 +216,13 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         # extension modules can resolve their matching VCRuntime/Python DLLs;
         # do not inherit a developer, user, or system-wide Python path.
         managed_python_dir = str(Path(argv[0]).resolve(strict=True).parent)
-        env = {"LOCALAPPDATA":str(Path(writable[0])/"scratch"),"APPDATA":str(Path(writable[0])/"scratch"),"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
+        scratch = str(Path(writable[0]) / "scratch")
+        # An AppContainer can replace TEMP/TMP for nested Windows processes.
+        # Python checks TMPDIR first, keeping temporary files in the same
+        # writable scope even when the child runs from a read-only directory.
+        env = {"LOCALAPPDATA":scratch,"APPDATA":scratch,"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
                "PATH": managed_python_dir + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32"),
-               "TEMP": str(Path(writable[0]) / "scratch"), "TMP": str(Path(writable[0]) / "scratch")}
+               "TEMP": scratch, "TMP": scratch, "TMPDIR": scratch}
         if environment:
             permitted = {"DOCUMENT_RUNTIME_ROOT"}
             if music_runtime or speech_runtime:
