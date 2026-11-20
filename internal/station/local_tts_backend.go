@@ -599,6 +599,16 @@ func localTTSReadOnly(registration localTTSRegistration, voice localTTSVoiceRegi
 
 func localTTSEnvironment(registration localTTSRegistration, scratch string) map[string]string {
 	systemRoot := os.Getenv("SystemRoot")
+	numbaCache := filepath.Join(scratch, "numba-cache")
+	// Numba appends a hashed source directory and a temporary filename. The
+	// embedded Windows interpreter can exceed MAX_PATH in a valid private job.
+	if runtime.GOOS == "windows" && !strings.HasPrefix(numbaCache, `\\?\`) {
+		if strings.HasPrefix(numbaCache, `\\`) {
+			numbaCache = `\\?\UNC\` + numbaCache[2:]
+		} else {
+			numbaCache = `\\?\` + numbaCache
+		}
+	}
 	return map[string]string{
 		"PATH":                          registration.Media + string(os.PathListSeparator) + filepath.Join(systemRoot, "System32"),
 		"NLTK_DATA":                     registration.NLTKData,
@@ -608,7 +618,7 @@ func localTTSEnvironment(registration localTTSRegistration, scratch string) map[
 		"PYTHONDONTWRITEBYTECODE":       "1",
 		"PYTHONUTF8":                    "1",
 		"MPLCONFIGDIR":                  filepath.Join(scratch, "matplotlib"),
-		"NUMBA_CACHE_DIR":               filepath.Join(scratch, "numba-cache"),
+		"NUMBA_CACHE_DIR":               numbaCache,
 		"WECHAT_WINDOWS_SPEECH_RUNTIME": "1",
 		"USERNAME":                      "station-speech",
 	}
