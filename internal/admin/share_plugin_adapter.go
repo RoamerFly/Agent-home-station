@@ -499,7 +499,10 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		}
 		link, err := native.ChannelsShareURL(ctx, message.ID, message.ThreadID, source.ObjectID)
 		if err != nil {
-			return "", errors.New("share_native_shortlink_unavailable")
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", channelsShortLinkFailure(err)
 		}
 		return link, nil
 	})
@@ -550,4 +553,15 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		return source, errors.New("share_plugin_handoff_invalid")
 	}
 	return resolved, nil
+}
+
+func channelsShortLinkFailure(err error) error {
+	// Preserve the native identity outcome without exposing the upstream body,
+	// URL or a third-party resolver's error text.
+	switch code := err.Error(); code {
+	case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid":
+		return errors.New(code)
+	default:
+		return errors.New("share_native_shortlink_unavailable")
+	}
 }

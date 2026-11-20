@@ -106,13 +106,33 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 	}
 }
 
-type receivedPluginNative struct{ *bindingChannelsNative }
+type receivedPluginNative struct {
+	*bindingChannelsNative
+	shortLinkFailure error
+}
 
 func (n *receivedPluginNative) ChannelsShareURL(_ context.Context, id, thread, object string) (string, error) {
 	if id != n.msg.ID || thread != n.msg.ThreadID || object != n.source.ObjectID {
 		return "", errors.New("wrong native shortlink request")
 	}
+	if n.shortLinkFailure != nil {
+		return "", n.shortLinkFailure
+	}
 	return "https://weixin.qq.com/sph/synthetic123", nil
+}
+
+func TestChannelsResolverPreservesVerifiedNativeLinkFailure(t *testing.T) {
+	for _, tc := range []struct{ nativeReason, want string }{
+		{"channels_share_identity_missing", "channels_share_identity_missing"},
+		{"channels_share_identity_mismatch", "channels_share_identity_mismatch"},
+		{"resolver error at https://private.invalid/credential", "share_native_shortlink_unavailable"},
+	} {
+		f, n, policy, ctx := receivedPolicyFixture(t, false)
+		f.manager.native.(*receivedPluginNative).shortLinkFailure = errors.New(tc.nativeReason)
+		if _, err := policy.resolve(ctx, n.source); err == nil || err.Error() != tc.want || sharedVideoReadReason(err) != tc.want {
+			t.Fatalf("wrong safe native link failure for %q: %v", tc.want, err)
+		}
+	}
 }
 
 func receivedPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChannelsNative, *receivedSharePolicy, context.Context) {
@@ -134,7 +154,7 @@ func receivedPolicyFixtureFor(t *testing.T, remember bool, kind int) (*webFixtur
 		n.msg.Link = &linuxnative.LinkCard{URL: "https://public.example/share?key=synthetic", Title: "synthetic share"}
 		f.manager.mcp.Enabled, f.manager.mcp.WebFetchEnabled = true, true
 	}
-	f.manager.native = &receivedPluginNative{n}
+	f.manager.native = &receivedPluginNative{bindingChannelsNative: n}
 	ctx := t.Context()
 	if remember {
 		original := ""
