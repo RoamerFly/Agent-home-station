@@ -70,6 +70,40 @@ def mount_granted(path, sid, mode):
         kernel.LocalFree(descriptor)
 
 
+def process_working_directory(kernel, directory):
+    cwd = str(Path(directory))
+
+    def fits(value):
+        # CreateProcessW needs room for a trailing separator and NUL.
+        return len(value.rstrip("\\/").encode("utf-16-le")) // 2 <= 258
+
+    if fits(cwd):
+        return cwd
+    extended = "\\\\?\\"
+    path = cwd if cwd.startswith(extended) else (
+        extended + "UNC\\" + cwd[2:] if cwd.startswith("\\\\") else extended + cwd
+    )
+    short_path = kernel.GetShortPathNameW
+    short_path.argtypes = [w.LPCWSTR, w.LPWSTR, w.DWORD]
+    short_path.restype = w.DWORD
+    size = short_path(path, None, 0)
+    if size:
+        buffer = c.create_unicode_buffer(size)
+        written = short_path(path, buffer, size)
+        if 0 < written < size:
+            short = buffer.value
+            if short.startswith(extended + "UNC\\"):
+                short = "\\\\" + short[len(extended + "UNC\\"):]
+            elif short.startswith(extended):
+                short = short[len(extended):]
+            try:
+                if fits(short) and os.path.samefile(path, short):
+                    return short
+            except OSError:
+                pass
+    raise ValueError("windows_working_directory_too_long（当前目录过长且没有可核验的短路径。请使用更短的工作目录。）")
+
+
 def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_runtime=False, speech_runtime=False, environment=None, input_stream=None):
     """Return a process handle, pid and cleanup. Child inherits only stdio.
 
@@ -81,6 +115,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         raise RuntimeError("windows_lpac_unavailable")
     import msvcrt
     k = c.WinDLL("kernel32", use_last_error=True)
+    process_cwd = process_working_directory(k, cwd)
     u = c.WinDLL("userenv", use_last_error=True)
     adv = c.WinDLL("advapi32", use_last_error=True)
     k.GetCurrentProcess.restype = w.HANDLE
@@ -208,7 +243,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
             raise ValueError("windows_command_line_too_long")
         cmd = c.create_unicode_buffer(line)
         if not k.CreateProcessW(argv[0], cmd, None, None, True, 0x08000000 | 0x80000 | 0x400 | 4,
-                                block, str(cwd), c.byref(si), c.byref(pi)):
+                                block, process_cwd, c.byref(si), c.byref(pi)):
             raise c.WinError(c.get_last_error())
         job=k.CreateJobObjectW(None,None)
         limits=EXTENDED_LIMIT();limits.BasicLimitInformation.LimitFlags=0x2000
