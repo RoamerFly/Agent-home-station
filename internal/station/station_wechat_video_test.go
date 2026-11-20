@@ -816,6 +816,50 @@ func TestPublicGroupVideoEvidenceUsesActualCoverage(t *testing.T) {
 	}
 }
 
+func TestPublicGroupShareImageEvidenceRequiresCurrentVisualGrant(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL32QAAAABJRU5ErkJggg==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked := errors.New("fixture source revoked")
+	var calls int
+	var changeDuringObservation bool
+	var originErr error
+	checkSource := func() error { return originErr }
+	tools := stationAttachmentTools{localVision: stationLocalVision{
+		version: func(context.Context) (string, error) { return "fixture-image-route", nil },
+		observe: func(_ context.Context, _ string, _ string, images []deepseek.Image, _ int, _ func() error) (string, error) {
+			calls++
+			if len(images) != 1 || images[0].MIME != "image/png" || !bytes.Equal(images[0].Data, png) {
+				t.Fatal("the observer did not receive the downloaded image")
+			}
+			if changeDuringObservation {
+				originErr = revoked
+			}
+			return "fixture single-image observation", nil
+		},
+	}}
+	read := func(data []byte) (companion.MediaObservationEvidence, error) {
+		return tools.observePublicGroupShareImage(t.Context(), "fixture-card", data, checkSource)
+	}
+	if evidence, err := read(png); err == nil || len(evidence.Parts) != 0 || calls != 0 {
+		t.Fatal("vision disabled did not prevent image observation")
+	}
+	tools.stationImageVision = true
+	if evidence, err := read([]byte("<html>not an image</html>")); err == nil || len(evidence.Parts) != 0 || calls != 0 {
+		t.Fatal("non-image response reached the observer")
+	}
+	evidence, err := read(png)
+	if err != nil || calls != 1 || len(evidence.Parts) != 1 || !companion.HasFirsthandObservation(evidence.Parts) ||
+		evidence.Parts[0].Kind != companion.ObservationVisualFrames || !strings.Contains(evidence.ObservedRange, "第 1 张画面") {
+		t.Fatalf("single-image evidence: %#v %v", evidence, err)
+	}
+	changeDuringObservation = true
+	if evidence, err = read(png); !errors.Is(err, revoked) || len(evidence.Parts) != 0 || calls != 2 {
+		t.Fatal("source revision during observation was not enforced")
+	}
+}
+
 func TestStationVideoDecoderUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := mediadecode.Probe(t.Context(), "irrelevant.mp4")
