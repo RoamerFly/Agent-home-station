@@ -89,6 +89,119 @@ func TestRegisteredPortableMusicPythonInstalledRelease(t *testing.T) {
 	}
 }
 
+// Exercise the installed music capability against a disposable release-shaped
+// data root. The real packaged interpreter and music bridge run, while the
+// WeChat account, music token, IPC and ComfyUI child are isolated test state.
+func TestLivePortableMusicBridgeThroughInstalledCapability(t *testing.T) {
+	formal := os.Getenv("AHS_WINDOWS_RELEASE_ROOT")
+	if formal == "" {
+		t.Skip("set AHS_WINDOWS_RELEASE_ROOT for installed Windows music acceptance")
+	}
+	for _, port := range []string{"6188", "6208"} {
+		listener, err := net.Listen("tcp4", "127.0.0.1:"+port)
+		if err != nil {
+			t.Fatalf("music acceptance port %s unavailable: %v", port, err)
+		}
+		listener.Close()
+	}
+	root := t.TempDir()
+	adminDir := filepath.Join(root, "data", "applications", "wechat", "legacy-admin")
+	pythonRoot := filepath.Join(root, "env", "windows-python-cli")
+	if err := os.MkdirAll(adminDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(pythonRoot, os.DirFS(filepath.Join(formal, "env", "windows-python-cli"))); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(formal, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), manifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(pythonRoot, "python.exe")
+	if !registeredPortableMusicPython(adminDir, python) {
+		t.Fatal("copied, pinned portable Python not admitted")
+	}
+	formalPython := filepath.Join(formal, "env", "windows-python-cli")
+	formalHelper := filepath.Join(formal, "env", "windows-agent-host")
+	options, _ := json.Marshal(pluginruntime.Options{
+		Python: filepath.Join(formalPython, "python.exe"), Pythonw: filepath.Join(formalPython, "pythonw.exe"),
+		WindowsHelper: filepath.Join(formalHelper, "windows_plugin_host.pyw"),
+		RuntimeRoots:  []string{formalPython, formalHelper}, CatalogDirectory: filepath.Join(formal, "publictools"),
+	})
+	t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", string(options))
+	f, p, _ := musicServiceFixture(t)
+	originalDir := f.manager.dir
+	f.manager.dir = adminDir
+	t.Cleanup(func() { f.manager.dir = originalDir })
+	if err := os.MkdirAll(filepath.Join(f.manager.managedRoot(), "public_workspace"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registration, err := os.ReadFile(filepath.Join(formal, "data", "tools", "yue", "station-yue.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var comfy map[string]any
+	if err := json.Unmarshal(registration, &comfy); err != nil {
+		t.Fatal(err)
+	}
+	comfy["device"] = "cpu"
+	registration, _ = json.Marshal(comfy)
+	comfyFile := filepath.Join(adminDir, "acceptance-comfy.json")
+	if err := os.WriteFile(comfyFile, registration, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ipc := filepath.Join(adminDir, "music-ipc")
+	if err := os.Mkdir(ipc, 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, _ := json.Marshal(windowsMusicConfig{
+		Enabled: true, Policy: windowsMusicPolicy, Python: python,
+		Entry: filepath.Join(formal, "env", "windows-station-rvc", "managed_music_service.py"),
+		Media: filepath.Join(formal, "env", "windows-media"), IPC: ipc,
+		ComfyURL: "http://127.0.0.1:6208", ComfyRegistration: comfyFile,
+	})
+	if err := os.WriteFile(filepath.Join(adminDir, "windows-music.json"), config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.manager.windowsMusicLaunchConfig(); err != nil {
+		t.Fatalf("portable launch registration: %v", err)
+	}
+	started, err := p.controlMusicService(t.Context(), "start")
+	if err != nil || !strings.Contains(started, `"ready":true`) {
+		log, _ := os.ReadFile(filepath.Join(adminDir, "windows-music.log"))
+		t.Fatalf("portable music start: %s %v, service log: %.1200s", started, err, log)
+	}
+	defer func() {
+		if f.manager.windowsMusicStatus().Running {
+			if _, stopErr := p.controlMusicService(context.Background(), "stop"); stopErr != nil {
+				t.Errorf("portable music cleanup: %v", stopErr)
+			}
+		}
+	}()
+	if health := p.probeYuE(t.Context()); !health.Ready || health.BridgeVersion < 1 {
+		t.Fatalf("authenticated portable bridge not ready: %+v", health)
+	}
+	status, err := p.controlMusicService(t.Context(), "status")
+	if err != nil || !strings.Contains(status, `"configured":true`) || !strings.Contains(status, `"running":true`) {
+		t.Fatalf("portable music status: %s %v", status, err)
+	}
+	stopped, err := p.controlMusicService(t.Context(), "stop")
+	if err != nil || !strings.Contains(stopped, `"state":"stopped"`) {
+		t.Fatalf("portable music stop: %s %v", stopped, err)
+	}
+	for _, port := range []string{"6188", "6208"} {
+		connection, dialErr := net.DialTimeout("tcp", "127.0.0.1:"+port, time.Second)
+		if dialErr == nil {
+			connection.Close()
+			t.Fatalf("portable music service left port %s open", port)
+		}
+	}
+	t.Log("installed capability started the pinned portable Python, authenticated the real bridge, reported ready, and stopped both isolated services; no generation or WeChat send")
+}
+
 func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 	f := setup(t)
 	if _, err := f.manager.startWindowsMusic(t.Context()); err == nil || !strings.Contains(err.Error(), "not_installed_or_authorized") {
