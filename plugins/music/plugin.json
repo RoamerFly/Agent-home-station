@@ -49,7 +49,7 @@
     "tests/test_local_music.py": "5494a0a9834cbce83a8cdd9c86f5a0f196ecb239420ff412123c8153f4f02273",
     "ui.schema.json": "56d50eb51aa5db6f23d65a179de61ff4f82c2def68e3e7883515c281654eaa42",
     "tests/test_service_control.py": "c914970f913e8a5f59fa905289af2c94fdb5c247eb98268c9e5d91edfc05165e",
-    "runtime/tool_catalog.json": "88fb1a471af84c62d9c9941eab69ce127a60193fdf9a5542b4cb339e7556919e",
+    "runtime/tool_catalog.json": "7fddb64c874750bdeb0c8bf90129e984add85bb42f7de132b0c6f603c3e11cc5",
     "runtime/native_sampling.json": "a8c460f9529039311f104d953f92b2ade695fe38c8725c2730d56ee3dfd610de",
     "runtime/training/rvc_train_trial.py": "83d363725e15bfd7a2a12ceb22f06cd30bf8390543f52438e5f3790ee762e406",
     "runtime/training/requirements.txt": "37ca2a53842fdf911d0fdca9fdee5bba13019c74bad636fe7fccc0b8d860bd69",

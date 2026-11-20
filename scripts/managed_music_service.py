@@ -84,10 +84,15 @@ def yue_project_paths(public, controls):
 def registered_comfy_command(config_file, url, state):
     """Start an explicitly registered backend as this music service's child."""
     from managed_music_runner import canonical
-    config = json.loads(canonical(config_file).read_text(encoding="utf-8-sig"))
+    registration_path = canonical(config_file)
+    config = json.loads(registration_path.read_text(encoding="utf-8-sig"))
     if config.get("schema_version") != 1 or not config.get("enabled"):
         raise ValueError("music_comfy_registration_disabled")
-    runtime = canonical(config["runtime"])
+    runtime_raw = config.get("runtime")
+    if not isinstance(runtime_raw, str) or not runtime_raw or "\0" in runtime_raw:
+        raise ValueError("music_comfy_registration_path_invalid")
+    runtime_candidate = Path(runtime_raw)
+    runtime = canonical(runtime_candidate if runtime_candidate.is_absolute() else registration_path.parent / runtime_candidate)
     def member(name):
         raw = config.get(name)
         if not isinstance(raw, str) or not raw or "\0" in raw:

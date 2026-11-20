@@ -155,7 +155,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		in.Kind = p.musicDeliveryKind(in.Kind)
 		if in.Duration == 0 {
-			in.Duration = 60
+			in.Duration = 120
 		}
 		if in.Duration < 10 || in.Duration > 600 {
 			return "", toolInputError("歌曲时长须为10至600秒")
