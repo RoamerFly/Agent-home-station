@@ -7,6 +7,17 @@ function Write-PortableReleaseManifest([string]$Root) {
  if(-not(Test-Path -LiteralPath $checker -PathType Leaf)){throw 'Portable release contract checker is missing.'}
  & python -X utf8 $checker --release-root $Root --write-manifest
  if($LASTEXITCODE -ne 0){throw 'Portable release contract check failed.'}
+ $migrationBuilder=Join-Path $PSScriptRoot 'build_migration_manifest.py'
+ $migrationChecker=Join-Path $PSScriptRoot 'validate_migration_manifest.py'
+ if(-not(Test-Path -LiteralPath $migrationBuilder -PathType Leaf) -or -not(Test-Path -LiteralPath $migrationChecker -PathType Leaf)){throw 'Migration manifest tools are missing.'}
+ $registry=Join-Path $Root 'data\main_setting\registry'
+ New-Item -ItemType Directory -Force -Path $registry | Out-Null
+ $migrationManifest=Join-Path $registry 'migration-manifest.json'
+ & python -X utf8 $migrationBuilder --release-root $Root --output $migrationManifest
+ if($LASTEXITCODE -ne 0){throw 'Migration manifest generation failed.'}
+ $migrationReport=Join-Path $registry 'migration-validation.json'
+ & python -X utf8 $migrationChecker --release-root $Root --manifest $migrationManifest --output $migrationReport
+ if($LASTEXITCODE -ne 0){throw 'Migration manifest validation failed.'}
 }
 
 function Get-ToolBusyEvidence([string]$ToolID,[string]$PackageDirectory,[string]$DataRoot) {
