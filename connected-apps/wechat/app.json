@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.66",
+  "version": "0.1.67",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,7 +39,7 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "f6735c17cc45786b18dde10a3b6a22ce41794c23eb0b45db2a8cda056c144aba",
+    "CHANGELOG.md": "9611911518e200d4153c589d94470601e9fb0d3c4e17d563911388eea50afcdd",
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "b5be787cb90288a99331bdcdc28951a461cc8874875e75e108363be6de57546f",
@@ -62,7 +62,7 @@
     "adapter/forward.go": "faf7ddf98301f10637fb84803243a1beddcb5c8043dc598c02bc44b20ca478c1",
     "adapter/group_policy.go": "9e2bdd516a6f25dc3dc5c8198253535dd5c2d3f169accdb5d11b9784461caede",
     "adapter/group_policy_test.go": "19072ebb08361b6fa6cf96dd8f409fb1e21c8d9e705b04f8c3ab4c61f851cdde",
-    "adapter/history.go": "f903db784e987a3a5bd1d05800ec0861de724cf6e6f69df9f1df56fe24416ae7",
+    "adapter/history.go": "ce10610d00a6043ed80c31df0f36f4a558b80f1f92d73212cddc93722fba1453",
     "adapter/identity.go": "762c785291e14b1c621af751c066943efcc1048de4ce3391e183a9b242cf3bef",
     "adapter/legacy_checkpoint.go": "8705923327b80eee0a5bab90a31ecde79327a3ad40e8fc7c18b806e1407ec994",
     "adapter/legacy_checkpoint_test.go": "38c931fed2c7542d09a68f2c6f6cd22695fb95158aa7aa108c2e45b932fa505e",
