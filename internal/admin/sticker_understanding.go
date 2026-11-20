@@ -57,6 +57,7 @@ func (a mediaUnderstanding) understandSticker(ctx context.Context, m linuxnative
 	if err != nil {
 		return unavailable(mediaObservationReason(err))
 	}
+	a.recordVisualEvidence("表情包画面："+scope, text)
 	return "[收到表情包的视觉观察；" + scope + "]\n" + text, nil
 }
 
