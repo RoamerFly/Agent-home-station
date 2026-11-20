@@ -46,7 +46,7 @@ func (s *localProjectTools) loadExternalToolConfig(ctx context.Context, host *lo
 	if err != nil {
 		return err
 	}
-	root, err := workspacefs.EnsurePath(filepath.Join(stationToolDataDir(s.home.dataDir), id))
+	root, err := workspacefs.EnsurePath(filepath.Join(stationToolDataDir(s.home.dataDir, id), id))
 	if err != nil {
 		return err
 	}

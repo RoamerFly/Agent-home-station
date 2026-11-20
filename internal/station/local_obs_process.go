@@ -54,7 +54,7 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 		}
 		studio := filepath.Dir(filepath.Dir(filepath.Dir(r.Executable)))
 		actual, e := os.Stat(filepath.Join(studio, "config"))
-		expected := filepath.Join(stationToolDataDir(s.home.dataDir), "obs-preview", "config")
+		expected := filepath.Join(stationToolDataDir(s.home.dataDir, "obs-preview"), "obs-preview", "config")
 		if portableConfig != "" {
 			expected = portableConfig
 		}
@@ -71,7 +71,7 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 			_ = s.obsProcesses.Stop(stopCtx, "preview")
 		}
 	}()
-	logs := filepath.Join(stationToolDataDir(s.home.dataDir), "obs-preview")
+	logs := filepath.Join(stationToolDataDir(s.home.dataDir, "obs-preview"), "obs-preview")
 	if err = os.MkdirAll(logs, 0700); err != nil {
 		return err
 	}

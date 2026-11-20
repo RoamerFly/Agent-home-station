@@ -147,7 +147,7 @@ func (s *localProjectTools) aliyunBilling(w http.ResponseWriter, r *http.Request
 		websession.Fail(w, 409, "请先准备本机主人身份")
 		return
 	}
-	dir := filepath.Join(stationToolDataDir(s.home.dataDir), "media-understanding")
+	dir := filepath.Join(stationToolDataDir(s.home.dataDir, "media-understanding"), "media-understanding")
 	if r.Method == http.MethodPut {
 		var input struct {
 			aliyunBillingCredential

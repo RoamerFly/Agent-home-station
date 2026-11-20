@@ -22,7 +22,7 @@ func TestStationToolDataDirUsesLegacyUntilToolsDirectoryExists(t *testing.T) {
 		t.Fatalf("registration path moved with tool data = %q", got)
 	}
 
-	if err := makeDir(filepath.Join(data, "tools")); err != nil {
+	if err := makeDir(filepath.Join(data, "tools", "rvc")); err != nil {
 		t.Fatal(err)
 	}
 	if got := stationToolRoot(data, "rvc"); got != filepath.Join(data, "tools", "rvc") {
