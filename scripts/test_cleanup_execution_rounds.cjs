@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
-const { buildPlan, applyPlan, ARCHIVE_SCOPE, archiveBytes } = require('./cleanup_execution_rounds.cjs');
+const { buildPlan, applyPlan, ARCHIVE_SCOPE, archiveBytes, defaultQuarantinePath } = require('./cleanup_execution_rounds.cjs');
 
 function entry(time, values) {
   return { id: values.id || `id-${Math.random()}`, time, thread_id: values.thread_id || 'thread', message_id: values.message_id || '', event: values.event || 'message_received', category: values.category || 'received', status: values.status || 'received', content: values.content || '' };
@@ -25,8 +25,8 @@ function makeStore(active, archived) {
 }
 function testPlanUsesProjectedStatusAndDate() {
   const day = '2026-11-18';
-  const pending = entry('2026-11-18T01:00:00Z', { id: 'pending', message_id: 'pending', status: 'received' });
-  const active = entry('2026-11-18T02:00:00Z', { id: 'active', message_id: 'active', event: 'message_processing', category: 'decision', status: 'running' });
+  const pending = entry('2026-11-18T01:00:00Z', { id: 'pending', message_id: 'pending', status: 'queued' });
+  const active = entry('2026-11-18T02:00:00Z', { id: 'active', message_id: 'active', event: 'generation_started', category: 'decision', status: 'running' });
   const completed = entry('2026-11-18T03:00:00Z', { id: 'done', message_id: 'done', event: 'message_processed', category: 'decision', status: 'completed' });
   const archivedPending = entry('2026-11-18T04:00:00Z', { id: 'archived-pending', message_id: 'archived-pending', status: 'queued' });
   const archivedOld = entry('2026-11-17T04:00:00Z', { id: 'old', message_id: 'old', status: 'queued' });
@@ -38,8 +38,8 @@ function testPlanUsesProjectedStatusAndDate() {
   assert.strictEqual(plan.selected.some(round => round.id.includes('done')), false, 'completed round selected');
 }
 function testApplyQuarantinesRawFilesAndKeepsCompleted() {
-  const pending = entry('2026-11-18T01:00:00Z', { id: 'pending', message_id: 'pending', status: 'received' });
-  const active = entry('2026-11-18T02:00:00Z', { id: 'active', message_id: 'active', event: 'message_processing', category: 'decision', status: 'running' });
+  const pending = entry('2026-11-18T01:00:00Z', { id: 'pending', message_id: 'pending', status: 'queued' });
+  const active = entry('2026-11-18T02:00:00Z', { id: 'active', message_id: 'active', event: 'generation_started', category: 'decision', status: 'running' });
   const completed = entry('2026-11-18T03:00:00Z', { id: 'done', message_id: 'done', event: 'message_processed', category: 'decision', status: 'completed' });
   const archivedPending = entry('2026-11-18T04:00:00Z', { id: 'archived-pending', message_id: 'archived-pending', status: 'queued' });
   const archivedDone = entry('2026-11-18T05:00:00Z', { id: 'archived-done', message_id: 'archived-done', event: 'message_processed', category: 'decision', status: 'completed' });
@@ -70,8 +70,14 @@ function testExpectationMismatchDoesNotWrite() {
   assert.throws(() => buildPlan(root, '2026-11-18', { pending: 32, active: 5 }), /待处理回合数为 1/);
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(root, 'activity.json'))).length, 1);
 }
+function testDefaultQuarantineUsesSystemTemp() {
+  const value = defaultQuarantinePath();
+  assert(value.toLowerCase().startsWith(path.resolve(os.tmpdir()).toLowerCase()), `default quarantine escaped system temp: ${value}`);
+  assert(!value.includes('待删除'), `default quarantine uses manual deletion directory: ${value}`);
+}
 
 testPlanUsesProjectedStatusAndDate();
 testApplyQuarantinesRawFilesAndKeepsCompleted();
 testExpectationMismatchDoesNotWrite();
+testDefaultQuarantineUsesSystemTemp();
 console.log('cleanup execution rounds tests passed');

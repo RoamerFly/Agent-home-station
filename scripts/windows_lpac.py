@@ -297,10 +297,8 @@ class SandboxedProcess:
             sink = getattr(self, "scratch_sink", None)
             if sink is not None and sink.is_file() and not sink.is_symlink():
                 try:
-                    target = Path(r"E:\待删除") / ("process-scratch-"+str(time.time_ns()))
-                    target.mkdir(parents=True, exist_ok=True)
-                    if sink.resolve() == sink.absolute() and target.resolve() == target.absolute():
-                        sink.rename(target / sink.name)
+                    if sink.resolve() == sink.absolute():
+                        sink.unlink()
                 except OSError:
                     pass
         return self.returncode

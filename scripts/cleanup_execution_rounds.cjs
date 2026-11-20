@@ -9,6 +9,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
@@ -41,6 +42,25 @@ function assertOutside(child, parent, label) {
   const a = path.resolve(child).toLowerCase();
   const b = path.resolve(parent).toLowerCase();
   if (a === b || a.startsWith(b + path.sep)) fail(`${label} 不能位于数据目录内`);
+}
+function assertWorkingPath(value) {
+  if (process.platform !== 'win32') return;
+  const manualDeletion = 'e:\\待删除';
+  const target = path.resolve(value);
+  const normalized = target.toLowerCase();
+  if (normalized === manualDeletion || normalized.startsWith(manualDeletion + path.sep)) {
+    fail('待删除区不能用作清理输入或恢复目录');
+  }
+  let current = path.parse(target).root;
+  for (const part of path.relative(current, target).split(path.sep)) {
+    current = path.join(current, part);
+    const item = fs.lstatSync(current, { throwIfNoEntry: false });
+    if (item?.isSymbolicLink()) fail('清理路径不能经过符号链接或目录联接');
+    if (!item) break;
+  }
+}
+function defaultQuarantinePath() {
+  return path.join(os.tmpdir(), 'agent-home-station', `execution-round-cleanup-${Date.now()}-${process.pid}`);
 }
 function atomicWrite(file, bytes) {
   const dir = path.dirname(file);
@@ -114,6 +134,7 @@ function sourceSignature(sources) {
   });
 }
 function buildPlan(dataDir, date, expected) {
+  assertWorkingPath(dataDir);
   const sources = loadSources(dataDir);
   const all = sources.active.concat(...sources.batches.map(batch => batch.entries));
   const rounds = project(all);
@@ -137,6 +158,7 @@ function describePlan(plan) {
 }
 function applyPlan(plan, quarantineDir) {
   const dataDir = path.resolve(plan.dataDir);
+  assertWorkingPath(quarantineDir);
   assertOutside(quarantineDir, dataDir, '恢复目录');
   if (fs.existsSync(quarantineDir)) {
     const st = fs.lstatSync(quarantineDir);
@@ -203,7 +225,7 @@ function applyPlan(plan, quarantineDir) {
 }
 
 function usage(code = 2) {
-  console.error('用法：node scripts/cleanup_execution_rounds.cjs --data-dir <管理端私有目录> --date YYYY-MM-DD [--expect-pending N --expect-active N] [--apply --quarantine E:\\待删除\\... ]');
+  console.error('用法：node scripts/cleanup_execution_rounds.cjs --data-dir <管理端私有目录> --date YYYY-MM-DD [--expect-pending N --expect-active N] [--apply [--quarantine <系统临时目录或其他独立目录>]]');
   process.exit(code);
 }
 function parseArgs(argv) {
@@ -233,11 +255,11 @@ function main(argv = process.argv.slice(2)) {
     console.log(JSON.stringify({ mode: 'dry-run', ...describePlan(plan), apply_hint: '复核数量后追加 --apply，并指定空的 --quarantine 目录' }, null, 2));
     return;
   }
-  const quarantine = path.resolve(args.quarantine || `E:\\待删除\\execution-round-cleanup-${Date.now()}`);
+  const quarantine = path.resolve(args.quarantine || defaultQuarantinePath());
   console.log(JSON.stringify({ mode: 'apply', ...applyPlan(plan, quarantine) }, null, 2));
 }
 
 if (require.main === module) {
   try { main(); } catch (error) { console.error(`清理未执行：${error.message}`); process.exitCode = 1; }
 }
-module.exports = { ARCHIVE_SCOPE, buildPlan, applyPlan, describePlan, archiveBytes, dateKey };
+module.exports = { ARCHIVE_SCOPE, buildPlan, applyPlan, describePlan, archiveBytes, dateKey, defaultQuarantinePath };

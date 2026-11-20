@@ -62,7 +62,7 @@ def archive_completed_intermediates(state, jid, job, pending_root=None):
     # Original downloaded assets and final audio/metadata are never candidates.
     names = [jid+'-source.audio', jid+'-rvc-voice-work', jid+'-character-voice-voice-work']
     moved = []
-    root = Path(pending_root) if pending_root is not None else Path(r'E:\待删除')
+    root = Path(pending_root) if pending_root is not None else state / 'scratch' / 'reclaimed'
     if os.name != 'nt' and pending_root is None:
         return []
     batch = root / ('music-temp-'+jid+'-'+secrets.token_hex(4))

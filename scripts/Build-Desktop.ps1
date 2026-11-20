@@ -1,4 +1,4 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -411,8 +411,7 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
     $busy=Get-ToolBusyEvidence $package.Name $destination $dataRoot
     if($busy.Count){throw ('工具包 '+$package.Name+' 当前不可替换，检测到 '+($busy -join ', ')+ '。请先等待任务完成或停止工具。')}
     if(-not $QuarantineDirectory){
-     $volume=[IO.Path]::GetPathRoot([IO.Path]::GetFullPath($OutputDirectory))
-     $QuarantineDirectory=Join-Path $volume ('待删除\release-tool-replacements-'+(Get-Date -Format 'yyyyMMddHHmmss'))
+     $QuarantineDirectory=Join-Path (Split-Path $OutputDirectory -Parent) ('.release-tool-replacements-'+[Guid]::NewGuid().ToString('N'))
     }
     New-Item -ItemType Directory -Force -Path $QuarantineDirectory | Out-Null
     $retired=Join-Path $QuarantineDirectory ($package.Name+'-'+(Get-Date -Format 'yyyyMMddHHmmssfff'))

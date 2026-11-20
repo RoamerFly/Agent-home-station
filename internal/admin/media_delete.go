@@ -173,14 +173,6 @@ func (m *Manager) deleteMediaResources(ctx context.Context, hashes []string, pre
 						paths[filepath.Join(filepath.Dir(p), entry.Name())] = true
 					}
 				}
-				// Previously auto-cleaned task scratch was moved to this documented
-				// location. An explicit permanent deletion includes those exact batches.
-				batches, _ := filepath.Glob(filepath.Join(`E:\待删除`, "music-temp-"+id+"-*"))
-				for _, batch := range batches {
-					if err := collectDeletionFiles(batch, paths); err != nil {
-						return err
-					}
-				}
 				delete(j, "file")
 				delete(j, "output")
 				delete(j, "result")
