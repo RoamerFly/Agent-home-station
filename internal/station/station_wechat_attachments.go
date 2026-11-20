@@ -109,6 +109,16 @@ func readStationAttachmentRecord(root *os.Root) (stationAttachmentRecord, error)
 	return record, nil
 }
 
+func (record stationAttachmentRecord) matchesSource(source wechatapp.AttachmentSource) bool {
+	if record.ID != source.AssetID() || !record.Source.Grant.Equal(source.Grant) {
+		return false
+	}
+	// JSON can restore the same grant instant with a different time location.
+	// Keep the existing asset ID and compare every other source field exactly.
+	record.Source.Grant = source.Grant
+	return record.Source == source
+}
+
 func (a stationAttachmentAccess) open(ctx context.Context, source wechatapp.AttachmentSource) (stationAttachmentRecord, *os.File, error) {
 	if !a.Allowed(ctx, source.Thread) {
 		return stationAttachmentRecord{}, nil, wechatapp.ErrAttachmentDenied
@@ -119,7 +129,7 @@ func (a stationAttachmentAccess) open(ctx context.Context, source wechatapp.Atta
 	}
 	defer root.Close()
 	record, err := readStationAttachmentRecord(root)
-	if err != nil || record.Source != source {
+	if err != nil || !record.matchesSource(source) {
 		return stationAttachmentRecord{}, nil, errors.New("station_attachment_source_mismatch")
 	}
 	file, err := workspacefs.OpenRegular(root, "original")

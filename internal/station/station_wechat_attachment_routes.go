@@ -102,7 +102,7 @@ func (s *stationWechat) downloadAttachment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	source, err := access.source(ctx, in.Thread, in.Message)
-	if err != nil || source != record.Source {
+	if err != nil || !record.matchesSource(source) {
 		http.NotFound(w, r)
 		return
 	}
