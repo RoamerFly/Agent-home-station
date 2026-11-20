@@ -7175,3 +7175,424 @@ index 7706ac2..7ad8f2a 100644
              ));
          }
          Ok(())
+diff --git a/packages/native-client-rust/crates/wechat-core/src/media.rs b/packages/native-client-rust/crates/wechat-core/src/media.rs
+index f2fa7da..30a3d21 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/media.rs
+@@ -885,6 +885,23 @@ impl Core {
+             if asset.state == "available" && asset.official_writeback != "complete" {
+                 asset = self.repair_cached_asset(account, asset)?;
+             }
++            // Older versions used a generic unsupported result after receiving
++            // a substituted video. Let that exact bound transfer be requested again.
++            if asset.state == "unsupported"
++                && asset.reason.as_deref() == Some("unsupported_media")
++                && kind == MediaKind::Video
++                && variant == MediaVariant::Normal
++                && matches!(&plan, DownloadPlan::Cdn { descriptor }
++                    if descriptor.allows_video_rendition())
++                && asset
++                    .job_id
++                    .as_deref()
++                    .map(|job_id| self.store.media_job(account, job_id))
++                    .transpose()?
++                    .is_some_and(|job| completed_legacy_video_download(&job, &id))
++            {
++                asset.state = "failed".into();
++            }
+             self.authorize_media_record(account, &self.store.media_asset(account, &id)?)?;
+             out.push(asset);
+         }
+@@ -963,15 +980,33 @@ impl Core {
+         let key = format!("download:{}", asset.id);
+         let id = format!("job_{}", uuid::Uuid::new_v4());
+         let hash = digest(asset.id.as_bytes());
+-        let (row, created) = self.store.create_media_job(
++        let download_data = json!({"assetId":asset.id,"completedBytes":0});
++        let (mut row, mut created) = self.store.create_media_job(
+             account,
+             &id,
+             &key,
+             &hash,
+             "download",
+-            &json!({"assetId":asset.id,"completedBytes":0}),
++            &download_data,
+             b"",
+         )?;
++        // Recheck a completed transfer rejected by the previous verifier once.
++        // Repeated requests use the same recovery job.
++        if !created
++            && asset.kind == MediaKind::Video
++            && asset.variant == MediaVariant::Normal
++            && completed_legacy_video_download(&row, &asset.id)
++        {
++            (row, created) = self.store.create_media_job(
++                account,
++                &id,
++                &format!("{key}:normal-video-playback"),
++                &hash,
++                "download",
++                &download_data,
++                b"",
++            )?;
++        }
+         if created && asset.state == "available" {
+             let mut row = row;
+             row.state = "available".into();
+@@ -1207,6 +1242,19 @@ impl Core {
+         mime: &str,
+         actual: Option<MediaVariant>,
+         frames: Option<u32>,
++    ) -> Result<MediaAsset> {
++        self.cache_asset_with_rendition(account, id, bytes, mime, actual, frames, false)
++    }
++
++    fn cache_asset_with_rendition(
++        &self,
++        account: &str,
++        id: &str,
++        bytes: &[u8],
++        mime: &str,
++        actual: Option<MediaVariant>,
++        frames: Option<u32>,
++        video_rendition: bool,
+     ) -> Result<MediaAsset> {
+         let mut asset = self.media_asset(account, id)?;
+         asset.preview = if mime == "image/x-wxgf" {
+@@ -1224,7 +1272,10 @@ impl Core {
+         asset.sha256 = Some(digest(bytes));
+         asset.actual_variant = actual;
+         asset.retryable = false;
+-        asset.reason = None;
++        asset.reason = video_rendition.then(|| "video_cdn_rendition".into());
++        if video_rendition {
++            asset.official_writeback = "unsupported".into();
++        }
+         asset.content_url = Some(format!("/v1/accounts/{account}/media/{id}/content"));
+         asset.animation_frames = if mime == "image/x-wxgf" { None } else { frames };
+         if mime == "image/x-wxgf" {
+@@ -1593,6 +1644,7 @@ impl Core {
+             self.progress_media(account, id, n, t)
+         };
+         let mut official_writeback = None;
++        let mut video_rendition = false;
+         let (bytes, mime, actual, frames) = match plan {
+             DownloadPlan::Cdn { descriptor }
+             | DownloadPlan::LinkThumbnail {
+@@ -1630,7 +1682,11 @@ impl Core {
+                     .transpose()?;
+                 let media =
+                     cdn_transfer(if unlocked { permit } else { None }, self, account, || {
+-                        cdn.download_with_progress(&descriptor, progress)
++                        if asset.kind == MediaKind::Video && asset.variant == MediaVariant::Normal {
++                            cdn.download_video_rendition(&descriptor, progress)
++                        } else {
++                            cdn.download_with_progress(&descriptor, progress)
++                        }
+                     })?;
+                 if let Some(fence) = fence {
+                     self.resume_media_state(account, id, &fence)?;
+@@ -1642,16 +1698,33 @@ impl Core {
+                     );
+                 }
+                 let (mime, frames) = validate_asset_bytes(asset.kind, asset.variant, &media.bytes)?;
+-                let actual = if media
+-                    .substituted_filetype
+-                    .is_none_or(|v| v == descriptor.quality.filetype())
+-                {
+-                    Some(asset.variant)
+-                } else {
+-                    None
+-                };
+-                ensure!(actual == Some(asset.variant), "unsupported_media_variant");
+-                official_writeback = if asset.official_writeback == "unsupported" {
++                let normal_video_rendition = asset.kind == MediaKind::Video
++                    && asset.variant == MediaVariant::Normal
++                    && descriptor.allows_video_rendition();
++                // This substitute type was observed on playable deliveries of
++                // the normal video endpoint. Originals and other types stay strict.
++                let playable_substitute = normal_video_rendition
++                    && media.substituted_filetype == Some(VIDEO_CDN_PLAYABLE_SUBSTITUTE);
++                ensure!(
++                    playable_substitute
++                        || media
++                            .substituted_filetype
++                            .is_none_or(|v| v == descriptor.quality.filetype()),
++                    "unsupported_media_variant"
++                );
++                let actual = Some(asset.variant);
++                video_rendition = normal_video_rendition
++                    && (playable_substitute
++                        || media.advertised_size_matches == Some(false)
++                        || descriptor.expected_md5.as_ref().is_some_and(|expected| {
++                            !media.md5.eq_ignore_ascii_case(expected)
++                        }));
++                if video_rendition {
++                    validate_video_rendition(&media.bytes)?;
++                }
++                // A playable CDN rendition lives only in the managed cache.
++                // The cache write below persists the rendition and reason atomically.
++                official_writeback = if video_rendition || asset.official_writeback == "unsupported" {
+                     None
+                 } else {
+                     match asset.kind {
+@@ -1742,7 +1815,9 @@ impl Core {
+             DownloadPlan::CachedOnly => bail!("unsupported_media_transport"),
+         };
+         self.progress_media(account, id, bytes.len() as u64, Some(bytes.len() as u64))?;
+-        let mut asset = self.cache_asset(account, asset_id, &bytes, &mime, actual, frames)?;
++        let mut asset = self.cache_asset_with_rendition(
++            account, asset_id, &bytes, &mime, actual, frames, video_rendition,
++        )?;
+         if let Some(status) = official_writeback {
+             asset.official_writeback = status.into();
+             self.store
+@@ -2095,6 +2170,7 @@ fn classify_error(error: &anyhow::Error) -> String {
+         "media_integrity_failed",
+         "source_integrity_failed",
+         "unsupported_media_transport",
++        "unsupported_media_variant",
+         "voice_duration_limit",
+         "media_encoder_unavailable",
+         "sticker_source_not_allowed",
+@@ -2109,7 +2185,10 @@ fn classify_error(error: &anyhow::Error) -> String {
+             return code.into();
+         }
+     }
+-    if message.contains("checksum") || message.contains("length mismatch") {
++    if message.contains("checksum")
++        || message.contains("length mismatch")
++        || message.contains("Advertised media size mismatch")
++    {
+         return "media_integrity_failed".into();
+     }
+     if message.contains("unsupported") || message.contains("Unsupported") {
+@@ -2181,6 +2260,61 @@ fn validate_asset_bytes(
+     }
+     validate_media_bytes(kind, bytes)
+ }
++const VIDEO_CDN_PLAYABLE_SUBSTITUTE: u32 = 9;
++
++fn completed_legacy_video_download(row: &MediaJobRecord, asset_id: &str) -> bool {
++    row.kind == "download"
++        && row.phase == "downloading"
++        && !row.cancel_requested
++        && row.data["assetId"].as_str() == Some(asset_id)
++        && row.data["totalBytes"].as_u64().is_some_and(|total| {
++            total > 0 && row.data["completedBytes"].as_u64() == Some(total)
++        })
++        && matches!(
++            (row.state.as_str(), row.error_code.as_deref()),
++            ("failed", Some("media_processing_failed" | "media_integrity_failed"))
++                | ("unsupported", Some("unsupported_media"))
++        )
++}
++
++fn validate_video_rendition(mut bytes: &[u8]) -> Result<()> {
++    ensure!(bytes.get(4..8) == Some(b"ftyp"), "media_integrity_failed");
++    let mut has_media = false;
++    let mut has_movie = false;
++    while !bytes.is_empty() {
++        ensure!(bytes.len() >= 8, "media_integrity_failed");
++        let size = u32::from_be_bytes(bytes[..4].try_into()?);
++        let (size, header) = match size {
++            0 => (bytes.len(), 8),
++            1 => {
++                ensure!(bytes.len() >= 16, "media_integrity_failed");
++                (usize::try_from(u64::from_be_bytes(bytes[8..16].try_into()?))?, 16)
++            }
++            _ => (usize::try_from(size)?, 8),
++        };
++        ensure!(size >= header && size <= bytes.len(), "media_integrity_failed");
++        if size > header {
++            has_media |= &bytes[4..8] == b"mdat";
++            has_movie |= &bytes[4..8] == b"moov";
++        }
++        bytes = &bytes[size..];
++    }
++    ensure!(has_media && has_movie, "media_integrity_failed");
++    Ok(())
++}
++
++#[cfg(test)]
++#[test]
++fn playable_rendition_requires_complete_container_and_media_boxes() {
++    let container = b"\0\0\0\x10ftypisom\0\0\0\0\0\0\0\x09mdatX\0\0\0\x09moovY";
++    assert!(validate_video_rendition(container).is_ok());
++    assert!(validate_video_rendition(&container[..container.len() - 1]).is_err());
++    assert!(validate_video_rendition(&container[..16]).is_err());
++    let mut overrun = *container;
++    overrun[19] = 0x40;
++    assert!(validate_video_rendition(&overrun).is_err());
++}
++
+ fn validate_media_bytes(kind: MediaKind, bytes: &[u8]) -> Result<(String, Option<u32>)> {
+     match kind {
+         MediaKind::Image | MediaKind::Sticker => {
+diff --git a/packages/native-client-rust/crates/wechat-core/src/profile_network.rs b/packages/native-client-rust/crates/wechat-core/src/profile_network.rs
+index f0d6b4e..d683a24 100644
+--- a/packages/native-client-rust/crates/wechat-core/src/profile_network.rs
++++ b/packages/native-client-rust/crates/wechat-core/src/profile_network.rs
+@@ -337,15 +337,18 @@ mod tests {
+                 .unwrap(),
+             before
+         );
+-        use std::os::unix::fs::PermissionsExt;
+-        assert_eq!(
+-            std::fs::metadata(root.join("hostredirect.ini"))
+-                .unwrap()
+-                .permissions()
+-                .mode()
+-                & 0o777,
+-            0o600
+-        );
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::PermissionsExt;
++            assert_eq!(
++                std::fs::metadata(root.join("hostredirect.ini"))
++                    .unwrap()
++                    .permissions()
++                    .mode()
++                    & 0o777,
++                0o600
++            );
++        }
+     }
+     #[test]
+     fn routing_preserves_other_services_and_selected_ini_and_refuses_changed_sources() {
+@@ -403,10 +406,13 @@ mod tests {
+         assert!(std::fs::read_to_string(root.join("host-redirect.xml"))
+             .unwrap()
+             .contains("<!--unknown--><mapping src='localhost' redirect='localhost'/>"));
+-        let alias = tempfile::tempdir().unwrap();
+-        std::os::unix::fs::symlink(temp.path().join(".xwechat"), alias.path().join(".xwechat"))
+-            .unwrap();
+-        assert!(plan_routing(alias.path(), "sglong.wechat.com", "sgshort.wechat.com").is_err());
++        #[cfg(unix)]
++        {
++            let alias = tempfile::tempdir().unwrap();
++            std::os::unix::fs::symlink(temp.path().join(".xwechat"), alias.path().join(".xwechat"))
++                .unwrap();
++            assert!(plan_routing(alias.path(), "sglong.wechat.com", "sgshort.wechat.com").is_err());
++        }
+     }
+     #[test]
+     fn saved_routing_uses_selected_native_files_and_rejects_unsafe_or_ambiguous_pairs() {
+diff --git a/packages/native-client-rust/crates/wechat-protocol/src/media.rs b/packages/native-client-rust/crates/wechat-protocol/src/media.rs
+index 500ea8c..46933fe 100644
+--- a/packages/native-client-rust/crates/wechat-protocol/src/media.rs
++++ b/packages/native-client-rust/crates/wechat-protocol/src/media.rs
+@@ -302,6 +302,14 @@ pub struct MediaDescriptor {
+     pub strict_size: bool,
+     pub expires_at: Option<u64>,
+ }
++impl MediaDescriptor {
++    pub fn allows_video_rendition(&self) -> bool {
++        self.quality == MediaQuality::Video
++            && self.expected_bytes.is_some_and(|size| {
++                (1..=MAX_CDN_TRANSFER_BYTES as u64).contains(&size)
++            })
++    }
++}
+ impl Drop for MediaDescriptor {
+     fn drop(&mut self) {
+         self.aes_key.zeroize();
+@@ -536,10 +544,30 @@ impl CdnClient {
+         self.download_with_transport(descriptor, progress, |path, fields| self.post(path, fields))
+     }
+     fn download_with_transport(
++        &self,
++        descriptor: &MediaDescriptor,
++        progress: impl FnMut(u64, Option<u64>) -> Result<()>,
++        post: impl FnMut(&str, &CdnFields) -> Result<CdnFields>,
++    ) -> Result<DownloadedMedia> {
++        self.download_variant(descriptor, progress, post, false)
++    }
++
++    /// Download the normal viewing rendition of a message-bound video.
++    /// Callers still check the container and keep this separate from a card-verified original.
++    pub fn download_video_rendition(
++        &self,
++        descriptor: &MediaDescriptor,
++        progress: impl FnMut(u64, Option<u64>) -> Result<()>,
++    ) -> Result<DownloadedMedia> {
++        self.download_variant(descriptor, progress, |path, fields| self.post(path, fields), true)
++    }
++
++    fn download_variant(
+         &self,
+         descriptor: &MediaDescriptor,
+         mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
+         mut post: impl FnMut(&str, &CdnFields) -> Result<CdnFields>,
++        allow_video_rendition: bool,
+     ) -> Result<DownloadedMedia> {
+         ensure!(
+             !descriptor.file_id.is_empty()
+@@ -555,6 +583,7 @@ impl CdnClient {
+         let large_video = descriptor.quality == MediaQuality::Video
+             && descriptor.expected_bytes.unwrap_or(0) > MAX_CDN_TRANSFER_BYTES as u64;
+         let strict_transfer = large || large_video;
++        let allow_video_rendition = allow_video_rendition && descriptor.allows_video_rendition();
+         let plaintext_limit = if large {
+             MAX_LARGE_FILE_BYTES
+         } else if descriptor.quality == MediaQuality::Video && descriptor.expected_bytes.is_some() {
+@@ -686,16 +715,12 @@ impl CdnClient {
+         let bytes = decrypt_cdn(&encrypted, &descriptor.aes_key)?;
+         ensure!(bytes.len() <= plaintext_limit, "Decoded CDN body too large");
+         let size_matches = descriptor.expected_bytes.map(|n| n == bytes.len() as u64);
+-        ensure!(
+-            !(strict_transfer || descriptor.strict_size) || size_matches != Some(false),
+-            "Advertised media size mismatch"
+-        );
+         let digest = hex::encode(md5(&bytes));
+         if let Some(expected) = &descriptor.expected_md5 {
+             ensure!(
+                 expected.len() == 32
+                     && expected.bytes().all(|b| b.is_ascii_hexdigit())
+-                    && digest.eq_ignore_ascii_case(expected),
++                    && (digest.eq_ignore_ascii_case(expected) || allow_video_rendition),
+                 "Advertised media checksum mismatch"
+             );
+         }
+@@ -705,6 +730,12 @@ impl CdnClient {
+                 "CDN source checksum mismatch"
+             );
+         }
++        ensure!(
++            !(strict_transfer || descriptor.strict_size)
++                || size_matches != Some(false)
++                || allow_video_rendition,
++            "Advertised media size mismatch"
++        );
+         let sha = hex::encode(sha256(&bytes));
+         Ok(DownloadedMedia {
+             bytes,
+@@ -1558,6 +1589,27 @@ mod tests {
+         }
+         reply
+     }
++    #[test]
++    fn only_explicit_small_video_rendition_allows_card_metadata_difference() {
++        let (mut descriptor, bytes, ciphertext) = download_fixture(70001, MediaQuality::Video);
++        descriptor.expected_bytes = Some(70053);
++        descriptor.expected_md5 = Some("0123456789abcdef0123456789abcdef".into());
++        let download = |descriptor: &MediaDescriptor, allow| {
++            client().download_variant(
++                descriptor,
++                |_, _| Ok(()),
++                |_, fields| Ok(download_reply(fields, descriptor, &ciphertext)),
++                allow,
++            )
++        };
++        assert!(download(&descriptor, false).is_err());
++        let media = download(&descriptor, true).unwrap();
++        assert_eq!(media.bytes, bytes);
++        assert_eq!(media.advertised_size_matches, Some(false));
++        descriptor.quality = MediaQuality::Standard;
++        assert!(download(&descriptor, true).is_err());
++    }
++
+     #[test]
+     fn large_video_keeps_normal_endpoint_type_and_exact_source_bytes() {
+         let (descriptor, raw, ciphertext) =

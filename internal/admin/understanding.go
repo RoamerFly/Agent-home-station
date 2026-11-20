@@ -22,19 +22,19 @@ type incomingReader interface {
 	IncomingMedia(context.Context, string, int64) ([]byte, string, error)
 }
 
-func readIncomingVideo(ctx context.Context, native incomingReader, message string, limit int64) ([]byte, error) {
+func readIncomingVideo(ctx context.Context, native incomingReader, message string, limit int64) ([]byte, string, error) {
 	if verified, ok := native.(interface {
 		StreamVerifiedIncomingMedia(context.Context, string, string, int64, io.Writer) (linuxnative.VerifiedIncomingMedia, error)
 	}); ok {
 		var output bytes.Buffer
-		_, err := verified.StreamVerifiedIncomingMedia(ctx, message, "video", limit, &output)
+		media, err := verified.StreamVerifiedIncomingMedia(ctx, message, "video", limit, &output)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return output.Bytes(), nil
+		return output.Bytes(), media.Variant, nil
 	}
 	data, _, err := native.IncomingMedia(ctx, message, limit)
-	return data, err
+	return data, "", err
 }
 
 func formatSeconds(v float64) string               { return strconv.FormatFloat(v, 'f', 3, 64) }
@@ -143,12 +143,13 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		limit = 50 << 20
 	}
 	var data []byte
+	var videoVariant string
 	var incoming mediaAsset
 	var err error
 	if m.Type == 3 {
 		incoming, data, err = a.rememberIncomingOriginal(ctx, m, "image", limit)
 	} else {
-		data, err = readIncomingVideo(ctx, native, m.ID, limit)
+		data, videoVariant, err = readIncomingVideo(ctx, native, m.ID, limit)
 	}
 	if err != nil {
 		var transfer *linuxnative.IncomingMediaTransferError
@@ -162,7 +163,11 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		if err != nil && (sample.Seconds == 0 || ctx.Err() != nil) {
 			return "", err
 		}
-		return a.observeVideo(ctx, m, data, sample, false)
+		observation, err := a.observeVideo(ctx, m, data, sample, false)
+		if err == nil && videoVariant == linuxnative.VideoCDNRendition {
+			observation = "[来源：微信 CDN 交付的可播放版本，字节与卡片声明的原件不同。]\n" + observation
+		}
+		return observation, err
 	}
 	images := []deepseek.Image{{Data: data, MIME: incoming.MIME}}
 	if c.DirectImageInput {

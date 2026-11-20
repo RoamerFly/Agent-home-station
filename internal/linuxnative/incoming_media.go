@@ -149,6 +149,8 @@ type VerifiedIncomingMedia struct {
 	Variant string
 }
 
+const VideoCDNRendition = "normal_cdn_rendition"
+
 type incomingMediaAsset struct {
 	ID      string `json:"id"`
 	Account string `json:"accountId"`
@@ -160,6 +162,7 @@ type incomingMediaAsset struct {
 	Bytes   int64  `json:"byteLength"`
 	MIME    string `json:"contentType"`
 	SHA256  string `json:"sha256"`
+	Reason  string `json:"reason"`
 }
 
 func (s *Sender) incomingMediaSourceVariants(ctx context.Context, message, kind string) ([]string, error) {
@@ -247,7 +250,11 @@ func (s *Sender) streamVerifiedIncomingMedia(ctx context.Context, messageID, kin
 			asset.State != "available" || asset.Variant != variant || asset.Actual != variant || asset.Bytes <= 0 || asset.Bytes > max || hashErr != nil || len(hash) != sha256.Size {
 			return errors.New("incoming_media_asset_identity_unverified")
 		}
-		expected = VerifiedIncomingMedia{Bytes: asset.Bytes, MIME: asset.MIME, SHA256: hex.EncodeToString(hash), Variant: variant}
+		resultVariant := variant
+		if kind == "video" && variant == "normal" && asset.Reason == "video_cdn_rendition" {
+			resultVariant = VideoCDNRendition
+		}
+		expected = VerifiedIncomingMedia{Bytes: asset.Bytes, MIME: asset.MIME, SHA256: hex.EncodeToString(hash), Variant: resultVariant}
 		return nil
 	})
 	if err != nil {

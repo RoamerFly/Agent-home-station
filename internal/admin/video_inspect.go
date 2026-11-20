@@ -34,6 +34,7 @@ func (p *permittedTools) videoTools() []mcptools.Tool {
 
 type videoInspectionInput struct {
 	sourceFingerprint string
+	sourceVariant     string
 	SourceThread      string  `json:"source_thread_id"`
 	Action            string  `json:"action"`
 	Asset             string  `json:"asset_id"`
@@ -211,7 +212,8 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 			if !ok {
 				return nil, "", errors.New("incoming_media_backend_unavailable")
 			}
-			b, e := readIncomingVideo(ctx, reader, msg.ID, 64<<20)
+			b, variant, e := readIncomingVideo(ctx, reader, msg.ID, 64<<20)
+			in.sourceVariant = variant
 			return b, msg.ID, e
 		}
 		if wechatapp.IsChannelsShare(msg) {
@@ -301,6 +303,12 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		return "", err
 	}
 	out := map[string]any{"source_thread_id": in.SourceThread, "origin_thread_id": p.trace.Thread, "source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
+	if in.sourceVariant != "" {
+		out["source_variant"] = in.sourceVariant
+	}
+	if in.sourceVariant == linuxnative.VideoCDNRendition {
+		out["source_notice"] = "微信 CDN 可播放版本。字节与卡片声明的原件不同。"
+	}
 	out["effective_options"] = map[string]any{"action": in.Action, "batch_size": in.BatchSize, "max_dimension": in.MaxDimension, "analysis_tokens": in.Tokens, "timeout_seconds": seconds}
 	encode := func() (string, error) {
 		if !p.inspectionThreadAllowed(in.SourceThread) {

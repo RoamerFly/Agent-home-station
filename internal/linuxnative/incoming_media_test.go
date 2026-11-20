@@ -70,7 +70,7 @@ func TestIncomingVideoTriesDeclaredFullRenditionAfterTerminalFailure(t *testing.
 				w.WriteHeader(http.StatusBadRequest)
 			}
 		case "media/asset-normal":
-			write(w, fmt.Sprintf(`{"id":"asset-normal","accountId":"test","messageId":"message-one","kind":"video","state":"available","variant":"normal","actualVariant":"normal","byteLength":%d,"contentType":"video/mp4","sha256":"%x"}`, len(verified), sha256.Sum256(verified)))
+			write(w, fmt.Sprintf(`{"id":"asset-normal","accountId":"test","messageId":"message-one","kind":"video","state":"available","variant":"normal","actualVariant":"normal","reason":"video_cdn_rendition","byteLength":%d,"contentType":"video/mp4","sha256":"%x"}`, len(verified), sha256.Sum256(verified)))
 		case "media/asset-normal/content":
 			_, _ = w.Write(verified)
 		default:
@@ -81,7 +81,7 @@ func TestIncomingVideoTriesDeclaredFullRenditionAfterTerminalFailure(t *testing.
 	var output bytes.Buffer
 	result, err := testSender(t, server.URL).StreamVerifiedIncomingMedia(t.Context(), "message-one", "video", 100, &output)
 	server.Close()
-	if err != nil || result.Variant != "normal" || !bytes.Equal(output.Bytes(), verified) || strings.Join(submitted, ",") != "original,normal" {
+	if err != nil || result.Variant != VideoCDNRendition || !bytes.Equal(output.Bytes(), verified) || strings.Join(submitted, ",") != "original,normal" {
 		t.Fatalf("read %q, result %+v, requests %v, error %v", output.Bytes(), result, submitted, err)
 	}
 }

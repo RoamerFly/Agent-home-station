@@ -207,6 +207,10 @@ func (t *stationAttachmentTools) readVideo(ctx context.Context, raw json.RawMess
 		"bytes": record.Bytes, "mime": record.MIME, "sha256": record.SHA256, "variant": record.Variant, "requested_max_bytes": access.maxBytes,
 		"metadata": map[string]any{"duration_seconds": meta.Seconds, "total_frames": meta.Frames, "average_fps": meta.FPS, "width": meta.Width, "height": meta.Height},
 		"coverage": "original_and_metadata", "content_observed": false, "audio_transcribed": false, "content_analysis_tool": "wechat_video_observe"}
+	if record.Variant == linuxnative.VideoCDNRendition {
+		value["coverage"] = "playable_rendition_and_metadata"
+		value["source_notice"] = "微信 CDN 可播放版本。字节与卡片声明的原件不同。"
+	}
 	result, err := json.Marshal(value)
 	return string(result), err
 }
