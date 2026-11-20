@@ -1,4 +1,4 @@
-﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
@@ -7,6 +7,25 @@ function Write-PortableReleaseManifest([string]$Root) {
  if(-not(Test-Path -LiteralPath $checker -PathType Leaf)){throw 'Portable release contract checker is missing.'}
  & python -X utf8 $checker --release-root $Root --write-manifest
  if($LASTEXITCODE -ne 0){throw 'Portable release contract check failed.'}
+}
+
+function Get-ToolBusyEvidence([string]$ToolID,[string]$PackageDirectory,[string]$DataRoot) {
+ $evidence=@()
+ $package=[IO.Path]::GetFullPath($PackageDirectory)
+ $processes=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($package,[StringComparison]::OrdinalIgnoreCase)) -or
+  ($_.CommandLine -and $_.CommandLine.IndexOf($package,[StringComparison]::OrdinalIgnoreCase) -ge 0)
+ }
+ foreach($process in $processes){$evidence+='process '+$process.ProcessId}
+ foreach($jobsRoot in @((Join-Path $DataRoot ('publictools\'+$ToolID+'\jobs')),(Join-Path $DataRoot ('tools\'+$ToolID+'\jobs')))){
+  if(-not(Test-Path -LiteralPath $jobsRoot -PathType Container)){continue}
+  foreach($file in Get-ChildItem -LiteralPath $jobsRoot -Recurse -File -Filter '*.json' -ErrorAction SilentlyContinue){
+   try{$record=Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json}catch{continue}
+   $status=[string]$record.status
+   if($status -in @('queued','pending','running','retrying','waiting_tool','waiting_receipt')){$evidence+='job '+$file.Name}
+  }
+ }
+ return $evidence
 }
 
 # Do not depend on the PowerShell Utility module being auto-loaded. The
@@ -375,8 +394,16 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
    $suffix=$purposes[$package.Name]
    if(-not $suffix){$suffix='公共工具'}
    $destination=Join-Path $publicRoot ($package.Name+'-'+$suffix)
-   if(Test-Path -LiteralPath $destination){throw 'Use a fresh build directory; do not merge live tool packages during build.'}
    if($package.Parent.FullName -ne $stagedRoot){throw 'Unexpected tool source path.'}
+   if(Test-Path -LiteralPath $destination){
+    $dataRoot=Join-Path $OutputDirectory 'data'
+    $busy=Get-ToolBusyEvidence $package.Name $destination $dataRoot
+    if($busy.Count){throw ('工具包 '+$package.Name+' 当前不可替换，检测到 '+($busy -join ', ')+ '。请先等待任务完成或停止工具。')}
+    if(-not $QuarantineDirectory){throw ('工具包 '+$package.Name+' 已存在，但未发现运行进程或未完成任务。请使用干净输出目录，或指定 -QuarantineDirectory 后再替换。外部路径登记和配置缓存不会单独阻止构建。')}
+    New-Item -ItemType Directory -Force -Path $QuarantineDirectory | Out-Null
+    $retired=Join-Path $QuarantineDirectory ($package.Name+'-'+(Get-Date -Format 'yyyyMMddHHmmssfff'))
+    Move-Item -LiteralPath $destination -Destination $retired
+   }
    Move-Item -LiteralPath $package.FullName -Destination $destination
   }
   Remove-Item -LiteralPath $stagedRoot # Empty staging container only.
