@@ -146,7 +146,7 @@ func (observe availabilityObserver) Analyze(ctx context.Context, message linuxna
 }
 
 func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing.T) {
-	for _, kind := range []string{"text", "quoted", "image", "sticker", "sticker-unavailable", "voice", "native-video", "channels-share", "public-share", "file", "file-unavailable"} {
+	for _, kind := range []string{"text", "quoted", "image", "sticker", "sticker-unavailable", "voice", "native-video", "channels-share", "public-share", "file", "file-unavailable", "location-card", "miniprogram-card"} {
 		t.Run(kind, func(t *testing.T) {
 			var f *webFixture
 			if kind == "sticker-unavailable" {
@@ -184,9 +184,18 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 				msg.AppMessageType = &subtype
 				msg.Attachments = []linuxnative.Attachment{{Kind: "file", Filename: "parent-notes.txt", MessageID: msg.ID, State: "identified"}}
 				n.file, n.failFile = true, kind == "file-unavailable"
+			case "location-card":
+				msg.Type = 48
+			case "miniprogram-card":
+				msg.Type, subtype = 49, 33
+				msg.AppMessageType = &subtype
+				msg.Link = &linuxnative.LinkCard{Title: "合成小程序标题", URL: "https://public.example/?token=synthetic-private-token"}
 			}
 			if kind != "text" && kind != "quoted" {
 				msg.Body = ""
+			}
+			if kind == "location-card" {
+				msg.Body = "地点：合成公园"
 			}
 			n.message, f.manager.native = msg, n
 			cfg := f.manager.Config().Companion
@@ -237,7 +246,8 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			calls, packet, all := model.calls, model.packet, model.all
 			model.mu.Unlock()
 			isPlain := kind == "text" || kind == "quoted"
-			failed := !isPlain && kind != "file"
+			isCard := kind == "location-card" || kind == "miniprogram-card"
+			failed := !isPlain && kind != "file" && !isCard
 			if failed {
 				if !incomplete.Load() || report == "" || settled.Load() || calls != 0 || packet != nil {
 					t.Fatalf("failed read incorrectly reached group: report=%q calls=%d", report, calls)
@@ -266,6 +276,14 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 			}
 			if !failed && (packet["request_actor_id"] != msg.SenderID || packet["thread"] != msg.ThreadID || packet["message_id"] != msg.ID) {
 				t.Fatal("current request actor or conversation changed")
+			}
+			if isCard {
+				_, detail := msg.CardContext()
+				if packet["text"] != "" || !strings.Contains(all, detail) ||
+					!strings.Contains(all, companion.ObservationPublisherDescription) ||
+					strings.Contains(all, companion.ObservationVisualFrames) {
+					t.Fatal("card fields must reach the model as attributed metadata")
+				}
 			}
 			if kind == "file" {
 				media, ok := packet["media_observations"].([]any)
@@ -306,7 +324,11 @@ func TestParentGroupMessageAvailabilityRoutesAndRetainsOriginalSource(t *testing
 				if readErr != nil || event.Sender != msg.SenderID || turn.Source == nil || turn.Source.MessageID != msg.ID || turn.Source.MessageType != msg.Type || turn.Source.Account != msg.AccountID || turn.Source.Thread != msg.ThreadID || turn.Source.ServerID != msg.ServerID {
 					t.Fatal("original source identity lost", readErr)
 				}
-				if event.Text != msg.Body {
+				original := msg.Body
+				if isCard {
+					original = ""
+				}
+				if event.Text != original {
 					t.Fatal("observation or placeholder became original user text")
 				}
 				found = true

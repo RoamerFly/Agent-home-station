@@ -14,6 +14,9 @@ import (
 // this exact card is not eligible for automatic handling, even if a stale
 // free-form preference happens to mention sharing.
 func (w *Worker) preferredGroupShare(m linuxnative.Message) bool {
+	if label, _ := m.CardContext(); label != "" {
+		return false
+	}
 	if w.config.PreferredGroupShare != nil {
 		return w.config.ReadPreferredGroupShare != nil && w.config.PreferredGroupShare(m)
 	}
