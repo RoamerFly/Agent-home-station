@@ -60,7 +60,34 @@
 }
 ```
 
-需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。主页的 Job、Poll 和 MCP 连接接入继续跟踪。
+需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。主页的 Job 和 Poll 连接接入继续跟踪。
+
+### Windows 工作站主页的 MCP 工具
+
+在同一私有登记文件添加 `mcp_servers`，可以和 `connections` 并用。以下记录分别登记远程公开文档服务和已安装的本机 MCP 工具包。
+
+```json
+{
+  "mcp_servers": [
+    {
+      "id": "aws_docs",
+      "transport": "http",
+      "url": "https://knowledge-mcp.global.api.aws",
+      "enabled": true,
+      "tools": ["aws___read_documentation"]
+    },
+    {
+      "id": "local_example",
+      "transport": "stdio",
+      "plugin_id": "example-installed-mcp",
+      "enabled": true,
+      "tools": ["echo"]
+    }
+  ]
+}
+```
+
+远程服务可按服务要求登记 `headers` 和 `timeout_seconds`。`tools` 只列出允许执行的名称，留空表示当前连接上的所有工具均获准。本机 stdio 只能选择已安装并启用的 MCP 工具包。工作站使用受控的包入口和隔离环境启动。目录游标只在本轮有效，同一请求中的结果续读沿用原调用。工作站校验并返回文本以及受支持的图片、音频成品。外部服务返回错误时显示服务错误。
 
 ## 编写第一个工具
 

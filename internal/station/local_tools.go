@@ -47,6 +47,7 @@ type localToolSet struct {
 	publications          *localChatService
 	requestTime           time.Time
 	continuationGuard     func(context.Context) error
+	mcpSessions           map[string]*stationMCPSession
 	// catalog is the application index injected with the workspace note. It
 	// carries names and switch state only; no application content is loaded.
 	catalog map[string]any
@@ -138,6 +139,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = append(all, stationLifecycleTools()...)
 	}
 	all = append(all, t.localExternalHTTPTools(ctx)...)
+	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
 		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
 	}
@@ -209,6 +211,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localExternalHTTPList || name == localExternalHTTPCall {
 		return t.callLocalExternalHTTP(ctx, name, raw)
+	}
+	if name == localExternalMCPServers || name == localExternalMCPList || name == localExternalMCPCall {
+		return t.callLocalExternalMCP(ctx, name, raw)
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)

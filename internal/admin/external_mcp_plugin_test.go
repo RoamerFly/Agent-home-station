@@ -76,9 +76,9 @@ func (*externalMCPSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invo
 		var content []map[string]any
 		_ = json.Unmarshal(object["content"], &content)
 		output := struct {
-			Text  string             `json:"text"`
-			Media []externalMCPMedia `json:"media,omitempty"`
-		}{Media: []externalMCPMedia{}}
+			Text  string                     `json:"text"`
+			Media []plugins.ExternalMCPMedia `json:"media,omitempty"`
+		}{Media: []plugins.ExternalMCPMedia{}}
 		texts := []string{}
 		for i, item := range content {
 			kind, _ := item["type"].(string)
@@ -92,7 +92,7 @@ func (*externalMCPSyntheticExecutor) Call(ctx context.Context, _ pluginhost.Invo
 				}
 				ref, _ := item["host_media_ref"].(string)
 				mime, _ := item["mimeType"].(string)
-				output.Media = append(output.Media, externalMCPMedia{Kind: mediaKind, ContentIndex: i, HostMediaRef: ref, MIMEType: mime})
+				output.Media = append(output.Media, plugins.ExternalMCPMedia{Kind: mediaKind, ContentIndex: i, HostMediaRef: ref, MIMEType: mime})
 			}
 		}
 		output.Text = strings.Join(texts, "\n")
@@ -402,13 +402,13 @@ func TestLiveExternalMCPInstalledLPACUsesHostTransport(t *testing.T) {
 func TestExternalMCPMediaReferencesRetainEveryActualBlock(t *testing.T) {
 	data := []byte(`{"content":[{"type":"text","text":"actual"},{"type":"image","data":"AQ==","mimeType":"image/png"},{"type":"audio","data":"Ag==","mimeType":"audio/wav"},{"type":"image","data":"Aw==","mimeType":"image/png"},{"type":"image","data":"BA==","mimeType":"image/png"}]}`)
 	ref := externalHTTPBlobRef{SHA256: namedSpeechSHA(data), Size: int64(len(data))}
-	observation, err := externalMCPObservation(data, ref)
+	observation, err := plugins.ExternalMCPObservation(data, ref)
 	if err != nil || strings.Contains(string(observation), `"data"`) {
 		t.Fatal(string(observation), err)
 	}
 	policy := &externalHTTPPolicy{mcp: &externalMCPAuthority{request: externalMCPArguments{Operation: "call"}}}
 	var result externalMCPWireResult
-	raw, _ := json.Marshal(map[string]any{"observation": ref, "output": map[string]any{"text": "actual", "media": []externalMCPMedia{{Kind: "image", ContentIndex: 1, HostMediaRef: namedSpeechSHA([]byte{1}), MIMEType: "image/png"}, {Kind: "voice", ContentIndex: 2, HostMediaRef: namedSpeechSHA([]byte{2}), MIMEType: "audio/wav"}, {Kind: "image", ContentIndex: 3, HostMediaRef: namedSpeechSHA([]byte{3}), MIMEType: "image/png"}, {Kind: "image", ContentIndex: 4, HostMediaRef: namedSpeechSHA([]byte{4}), MIMEType: "image/png"}}}})
+	raw, _ := json.Marshal(map[string]any{"observation": ref, "output": map[string]any{"text": "actual", "media": []plugins.ExternalMCPMedia{{Kind: "image", ContentIndex: 1, HostMediaRef: namedSpeechSHA([]byte{1}), MIMEType: "image/png"}, {Kind: "voice", ContentIndex: 2, HostMediaRef: namedSpeechSHA([]byte{2}), MIMEType: "audio/wav"}, {Kind: "image", ContentIndex: 3, HostMediaRef: namedSpeechSHA([]byte{3}), MIMEType: "image/png"}, {Kind: "image", ContentIndex: 4, HostMediaRef: namedSpeechSHA([]byte{4}), MIMEType: "image/png"}}}})
 	_ = json.Unmarshal(raw, &result)
 	output, err := policy.mcpResultProof(result, data, ref)
 	if err != nil || len(output.Media) != 4 || output.Media[3].Data[0] != 4 {

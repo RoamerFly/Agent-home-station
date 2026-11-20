@@ -86,6 +86,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	defer stop()
 	tools := h.tools(store, in)
 	tools.run = run
+	defer tools.closeExternalMCP()
 	if err := tools.restoreMemoryEvidence(ctx); err != nil {
 		return fail(409, "原请求的跨来源资料或授权已变化，未调用模型")
 	}

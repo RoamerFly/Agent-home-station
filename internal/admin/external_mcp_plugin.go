@@ -4,11 +4,9 @@ package admin
 // retains transport declarations, caller authority and every actual RPC byte.
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -43,8 +41,6 @@ type externalMCPAuthority struct {
 	mediaKind string
 	admin     *externalMCPAdminAuthority
 }
-
-var externalMCPName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 
 func externalMCPSourceHash(settings mcpSettings, items []plugins.Installed) string {
 	relevant := []plugins.Installed{}
@@ -111,7 +107,7 @@ func (s *Server) externalMCPAdminContext(ctx context.Context, r *http.Request, o
 	return context.WithValue(ctx, externalMCPAdminKey{}, &externalMCPAdminAuthority{Session: session, Operation: operation, Tool: tool})
 }
 func (p *permittedTools) newExternalMCPPolicy(ctx context.Context, operation string, server mcptools.ServerConfig, tool, cursor string, args json.RawMessage) (*externalHTTPPolicy, error) {
-	if operation != "list" && operation != "call" || !externalMCPName.MatchString(server.ID) || operation == "call" && (!externalMCPName.MatchString(tool) || len(server.Tools) > 0 && !slices.Contains(server.Tools, tool)) {
+	if operation != "list" && operation != "call" || !plugins.ExternalMCPName.MatchString(server.ID) || operation == "call" && (!plugins.ExternalMCPName.MatchString(tool) || len(server.Tools) > 0 && !slices.Contains(server.Tools, tool)) {
 		return nil, errors.New("external_mcp_scope_denied")
 	}
 	if p.hub == nil || p.runtime == nil {
@@ -219,7 +215,7 @@ func (p *externalHTTPPolicy) mcpService(ctx context.Context, j pluginhost.Job, c
 	if err = p.captureReply(j, reply, "application/json"); err != nil {
 		return nil, err
 	}
-	observation, err := externalMCPObservation(reply, p.body)
+	observation, err := plugins.ExternalMCPObservation(reply, p.body)
 	if err != nil {
 		return nil, err
 	}
@@ -227,130 +223,12 @@ func (p *externalHTTPPolicy) mcpService(ctx context.Context, j pluginhost.Job, c
 	return append(json.RawMessage(nil), observation...), nil
 }
 
-type externalMCPMedia struct {
-	Kind         string `json:"kind"`
-	ContentIndex int    `json:"content_index"`
-	HostMediaRef string `json:"host_media_ref"`
-	MIMEType     string `json:"mime_type"`
-}
-type externalMCPWireResult struct {
-	Observation externalHTTPBlobRef `json:"observation"`
-	Tools       []mcptools.Tool     `json:"tools,omitempty"`
-	Output      *struct {
-		Text  string             `json:"text"`
-		Media []externalMCPMedia `json:"media,omitempty"`
-	} `json:"output,omitempty"`
-	IsError    bool   `json:"is_error,omitempty"`
-	NextCursor string `json:"next_cursor,omitempty"`
+type externalMCPWireResult = plugins.ExternalMCPWireResult
+
+func (p *externalHTTPPolicy) mcpResultProof(result externalMCPWireResult, data []byte, ref externalHTTPBlobRef) (plugins.Output, error) {
+	return plugins.VerifyExternalMCPResult(p.mcp.server, p.mcp.request.Operation, result, data, ref)
 }
 
-func externalMCPObservation(raw []byte, ref externalHTTPBlobRef) (json.RawMessage, error) {
-	var result map[string]json.RawMessage
-	if json.Unmarshal(raw, &result) != nil || result == nil {
-		return nil, errors.New("external_mcp_response_invalid")
-	}
-	if content, ok := result["content"]; ok {
-		var blocks []map[string]json.RawMessage
-		if json.Unmarshal(content, &blocks) != nil {
-			return nil, errors.New("external_mcp_content_invalid")
-		}
-		for i, block := range blocks {
-			var kind string
-			_ = json.Unmarshal(block["type"], &kind)
-			if kind != "image" && kind != "audio" {
-				continue
-			}
-			var encoded string
-			if json.Unmarshal(block["data"], &encoded) != nil {
-				return nil, errors.New("external_mcp_media_invalid")
-			}
-			data, err := base64.StdEncoding.Strict().DecodeString(encoded)
-			if err != nil {
-				return nil, errors.New("external_mcp_media_invalid")
-			}
-			delete(block, "data")
-			block["host_media_ref"], _ = json.Marshal(namedSpeechSHA(data))
-			block["content_index"], _ = json.Marshal(i)
-		}
-		result["content"], _ = json.Marshal(blocks)
-	}
-	return json.Marshal(map[string]any{"raw_result": result, "body_ref": ref})
-}
-func (p *externalHTTPPolicy) mcpResultProof(result externalMCPWireResult, data []byte, ref externalHTTPBlobRef) (plugins.Output, error) {
-	denied := errors.New("external_mcp_result_changed")
-	if result.Observation != ref || ref.SHA256 != namedSpeechSHA(data) || ref.Size != int64(len(data)) {
-		return plugins.Output{}, denied
-	}
-	if p.mcp.request.Operation == "list" {
-		var page struct {
-			Tools []struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				InputSchema json.RawMessage `json:"inputSchema"`
-			} `json:"tools"`
-			NextCursor string `json:"nextCursor"`
-		}
-		if json.Unmarshal(data, &page) != nil || result.Output != nil || result.IsError || result.NextCursor != page.NextCursor {
-			return plugins.Output{}, denied
-		}
-		expected := []mcptools.Tool{}
-		for _, tool := range page.Tools {
-			if !externalMCPName.MatchString(tool.Name) || len(p.mcp.server.Tools) > 0 && !slices.Contains(p.mcp.server.Tools, tool.Name) {
-				continue
-			}
-			schema := tool.InputSchema
-			if len(schema) == 0 {
-				schema = json.RawMessage(`{"type":"object"}`)
-			}
-			expected = append(expected, mcptools.Tool{Name: p.mcp.server.ID + "__" + tool.Name, Description: tool.Description, InputSchema: schema})
-		}
-		actual, _ := json.Marshal(result.Tools)
-		want, _ := json.Marshal(expected)
-		if !sameJSON(actual, want) {
-			return plugins.Output{}, denied
-		}
-		return plugins.Output{}, nil
-	}
-	var reply struct {
-		Content []struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			Data     string `json:"data"`
-			MIMEType string `json:"mimeType"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
-	}
-	if json.Unmarshal(data, &reply) != nil || result.Output == nil || len(result.Tools) != 0 || result.NextCursor != "" || result.IsError != reply.IsError {
-		return plugins.Output{}, denied
-	}
-	output := plugins.Output{}
-	texts := []string{}
-	expected := []externalMCPMedia{}
-	for i, block := range reply.Content {
-		switch block.Type {
-		case "text":
-			texts = append(texts, block.Text)
-		case "image", "audio":
-			decoded, err := base64.StdEncoding.Strict().DecodeString(block.Data)
-			if err != nil {
-				return output, denied
-			}
-			kind := "image"
-			if block.Type == "audio" {
-				kind = "voice"
-			}
-			expected = append(expected, externalMCPMedia{Kind: kind, ContentIndex: i, HostMediaRef: namedSpeechSHA(decoded), MIMEType: block.MIMEType})
-			output.Media = append(output.Media, plugins.MediaResult{Kind: kind, Data: decoded, MIMEType: block.MIMEType})
-		default:
-			return output, errors.New("external_mcp_content_type_requires_resource_reference")
-		}
-	}
-	output.Text = strings.Join(texts, "\n")
-	if output.Text != result.Output.Text || !slices.Equal(expected, result.Output.Media) {
-		return plugins.Output{}, denied
-	}
-	return output, nil
-}
 func (p *externalHTTPPolicy) validateMCP(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	var result externalMCPWireResult
 	if musicStrictJSON(raw, &result) != nil || !p.requested || len(p.observed) == 0 {
@@ -457,7 +335,7 @@ func (p *permittedTools) externalMCPAdminListed(ctx context.Context, name string
 		return false
 	}
 	serverID, tool, ok := strings.Cut(name, "__")
-	if !ok || !externalMCPName.MatchString(tool) {
+	if !ok || !plugins.ExternalMCPName.MatchString(tool) {
 		return false
 	}
 	for _, server := range p.externalMCPServers() {

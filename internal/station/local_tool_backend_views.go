@@ -71,19 +71,30 @@ func (s *localProjectTools) populateToolBackends(ctx context.Context, host *loca
 	case "share-reader":
 		view.Backends = []pluginhost.ToolBackendView{{Name: "公开链接读取", Kind: "web", State: local.State}}
 	case localExternalPackage:
-		state := "missing"
+		httpState, mcpState := "missing", "missing"
 		if raw, err := s.externalRegistration(); err == nil {
 			if _, bridge, err := externalHTTPRegistration(raw); err != nil {
-				state = "unreadable"
+				httpState = "unreadable"
 			} else if len(bridge.Protocol().Tools) != 0 {
-				state = "configured"
+				httpState = "configured"
+			}
+			config, err := parseLocalExternalRegistration(raw)
+			if err != nil {
+				mcpState = "unreadable"
+			} else if servers, err := registeredStationMCPServers(config); err != nil {
+				mcpState = "unreadable"
+			} else if len(servers) != 0 {
+				mcpState = "configured"
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			state = "unreadable"
+			httpState, mcpState = "unreadable", "unreadable"
 		}
-		view.Backends = []pluginhost.ToolBackendView{{Name: "同步 HTTP 连接", Kind: "api", State: state, Scope: "工作站"}}
-		if view.Installed && view.Enabled && view.RuntimeReady && state != "configured" && view.Reason == "" {
-			view.Reason = "请在工作站私有登记目录配置同步 HTTP 连接。"
+		view.Backends = []pluginhost.ToolBackendView{
+			{Name: "同步 HTTP 连接", Kind: "api", State: httpState, Scope: "工作站"},
+			{Name: "MCP 连接", Kind: "mcp", State: mcpState, Scope: "工作站"},
+		}
+		if view.Installed && view.Enabled && view.RuntimeReady && httpState != "configured" && mcpState != "configured" && view.Reason == "" {
+			view.Reason = "请在工作站私有登记目录配置同步 HTTP 或 MCP 连接。"
 		}
 	case "speech":
 		view.Backends = []pluginhost.ToolBackendView{{Name: view.Name, Kind: "package", State: "declared"}}

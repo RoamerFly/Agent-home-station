@@ -60,11 +60,9 @@ func (s *localProjectTools) externalRegistration() ([]byte, error) {
 }
 
 func externalHTTPRegistration(raw []byte) ([]plugins.Installed, *plugins.ExternalBridge, error) {
-	var config struct {
-		Connections []plugins.Installed `json:"connections"`
-	}
-	if _, err := strictjson.Decode(raw); err != nil || strictjson.DecodeKnownFields(raw, &config) != nil || config.Connections == nil {
-		return nil, nil, errors.New("外部工具登记格式无效")
+	config, err := parseLocalExternalRegistration(raw)
+	if err != nil {
+		return nil, nil, err
 	}
 	bridge, err := plugins.NewExternalBridge(config.Connections)
 	if err != nil {
@@ -74,8 +72,8 @@ func externalHTTPRegistration(raw []byte) ([]plugins.Installed, *plugins.Externa
 }
 
 func (t *localToolSet) localExternalHTTPTools(ctx context.Context) []mcptools.Tool {
-	host := t.projectHostForDiscovery()
-	if host == nil || t.run.CheckSource(ctx) != nil {
+	host := t.localExternalHost(ctx)
+	if host == nil {
 		return nil
 	}
 	if installed, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localExternalPackage}); err != nil || !slices.Contains(installed.Permissions, "network") {
@@ -104,8 +102,8 @@ type localExternalHTTPRequest struct {
 }
 
 func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, raw json.RawMessage) (string, error) {
-	host := t.projectHostForDiscovery()
-	if host == nil || t.run.CheckSource(ctx) != nil {
+	host := t.localExternalHost(ctx)
+	if host == nil {
 		return "", errors.New("当前请求没有工作站外部工具授权")
 	}
 	installed, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localExternalPackage})
@@ -175,8 +173,9 @@ func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, r
 	inv := pluginhost.Invocation{Account: grant.FishID, Thread: grant.OwnerID, Requester: grant.OwnerID,
 		Purpose: "workstation external HTTP", RequestKey: localCheckpointKey("station-external-http", source.EventID, source.Revision, input.Tool, arguments),
 		Authorization: localCheckpointKey(grant.projectJobAuthorization(), digest), SourceVersions: map[string]int{source.EventID: source.Revision}}
-	policy := &localExternalHTTPPolicy{tools: t, host: host, installed: installed, configRev: config.Revision, grant: grant, source: source,
-		registration: digest, invocation: inv, request: request, tool: selected, bridge: bridge}
+	binding := localExternalBinding{tools: t, host: host, installed: installed, configRev: config.Revision, grant: grant, source: source,
+		registration: digest, invocation: inv, capability: localExternalHTTPCap, arguments: encoded}
+	policy := &localExternalHTTPPolicy{localExternalBinding: binding, request: request, tool: selected, bridge: bridge}
 	for _, connection := range connections {
 		if strings.HasPrefix(selected.Name, connection.Manifest.ID+"__") {
 			for _, secret := range connection.Secrets {
@@ -188,53 +187,12 @@ func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, r
 		}
 	}
 	slices.SortFunc(policy.secrets, func(a, b string) int { return len(b) - len(a) })
-	var result pluginruntime.CallResult
-	recorded := slices.ContainsFunc(t.run.Operations, func(op companion.LocalToolCheckpoint) bool {
-		return op.Tool == localExternalHTTPCall && op.Key == inv.RequestKey
-	})
-	if recorded || t.inspectOnly || input.Offset > 0 {
-		job, err := host.store.JobByRequest(ctx, localExternalPackage, inv.Thread, inv.RequestKey)
-		if err != nil || input.Offset > 0 && job.State != "completed" || policy.Check(ctx, job, pluginhost.Capability{ID: localExternalHTTPCap}) != nil {
-			return "", errors.New("没有可续读的外部工具结果，请先核对原请求")
-		}
-		result = pluginruntime.CallResult{Job: job, Reused: true}
-	} else {
-		if err := host.controller.EnsureStarted(ctx, localExternalPackage, installed.Revision); err != nil {
-			return "", errors.New("工作站外部工具包无法启动")
-		}
-		op := companion.LocalToolCheckpoint{Key: inv.RequestKey, Tool: localExternalHTTPCall, Grant: inv.Authorization, Target: input.Tool}
-		if err := t.run.Reserve(ctx, op); err != nil {
-			return "", errors.New("外部请求检查点未保存，请重新核对原请求")
-		}
-		t.run.Operations = append(t.run.Operations, op)
-		result, err = host.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: localExternalPackage,
-			Capability: localExternalHTTPCap, Context: inv, Arguments: encoded}, policy)
-		if err != nil {
-			t.inspectOnly = true
-			return "", err
-		}
-		if result.Job.ID != "" {
-			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			saveErr := t.run.RecordResult(saveCtx, inv.RequestKey, result.Job.ID)
-			cancel()
-			if saveErr != nil {
-				t.inspectOnly = true
-				return "", errors.New("外部请求已登记，请从原请求检查结果")
-			}
-		}
-	}
-	state := result.Job.State
-	view := map[string]any{"tool": input.Tool, "task_id": result.Job.ID, "state": state, "reused": result.Reused}
-	if state != "completed" {
-		t.inspectOnly = true
-		view["instruction"] = "外部请求尚无已核验结果，请核对原服务状态后再决定后续操作。"
-		return localProcessJSON(view)
-	}
-	output, err := host.store.PrivateJobResult(ctx, result.Job, func(ctx context.Context, job pluginhost.Job) error {
-		return policy.Check(ctx, job, pluginhost.Capability{ID: localExternalHTTPCap})
-	})
+	view, output, err := binding.invoke(ctx, policy, localExternalHTTPCall, input.Tool, true, input.Offset > 0)
 	if err != nil {
 		return "", err
+	}
+	if output == nil {
+		return localProcessJSON(view)
 	}
 	page, err := localExternalTextPage(output, input.Offset, input.Limit)
 	if err != nil {
@@ -243,6 +201,81 @@ func (t *localToolSet) callLocalExternalHTTP(ctx context.Context, name string, r
 	view["output"] = page
 	view["untrusted_external_content"] = true
 	return localProcessJSON(view)
+}
+
+func (t *localToolSet) localExternalHost(ctx context.Context) *localProjectToolHost {
+	host := t.projectHostForDiscovery()
+	if host == nil || t.run.CheckSource(ctx) != nil {
+		return nil
+	}
+	grant, err := t.access.resolve()
+	if err != nil {
+		return nil
+	}
+	_, ok := t.store.SourceForInput(companion.Input{Channel: "local", Account: grant.FishID, Thread: grant.OwnerID, Sender: grant.OwnerID, TraceID: t.traceID})
+	if !ok {
+		return nil
+	}
+	return host
+}
+
+func (b *localExternalBinding) invoke(ctx context.Context, policy pluginruntime.CallPolicy, tool, target string, checkpoint, readOnly bool) (map[string]any, json.RawMessage, error) {
+	var result pluginruntime.CallResult
+	var err error
+	recorded := slices.ContainsFunc(b.tools.run.Operations, func(op companion.LocalToolCheckpoint) bool {
+		return op.Tool == tool && op.Key == b.invocation.RequestKey
+	})
+	if recorded || checkpoint && b.tools.inspectOnly || readOnly {
+		job, err := b.host.store.JobByRequest(ctx, localExternalPackage, b.invocation.Thread, b.invocation.RequestKey)
+		if err != nil || readOnly && job.State != "completed" || b.Check(ctx, job, pluginhost.Capability{ID: b.capability}) != nil {
+			return nil, nil, errors.New("没有可续读的外部工具结果，请先核对原请求")
+		}
+		result = pluginruntime.CallResult{Job: job, Reused: true}
+	} else {
+		if err := b.host.controller.EnsureStarted(ctx, localExternalPackage, b.installed.Revision); err != nil {
+			return nil, nil, errors.New("工作站外部工具包无法启动")
+		}
+		op := companion.LocalToolCheckpoint{Key: b.invocation.RequestKey, Tool: tool, Grant: b.invocation.Authorization, Target: target}
+		if checkpoint {
+			if err := b.tools.run.Reserve(ctx, op); err != nil {
+				return nil, nil, errors.New("外部请求检查点未保存，请重新核对原请求")
+			}
+			b.tools.run.Operations = append(b.tools.run.Operations, op)
+		}
+		result, err = b.host.controller.Invoke(ctx, pluginruntime.CallRequest{Plugin: localExternalPackage,
+			Capability: b.capability, Context: b.invocation, Arguments: b.arguments}, policy)
+		if err != nil {
+			if checkpoint {
+				b.tools.inspectOnly = true
+			}
+			return nil, nil, err
+		}
+		if checkpoint && result.Job.ID != "" {
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			saveErr := b.tools.run.RecordResult(saveCtx, b.invocation.RequestKey, result.Job.ID)
+			cancel()
+			if saveErr != nil {
+				b.tools.inspectOnly = true
+				return nil, nil, errors.New("外部请求已登记，请从原请求检查结果")
+			}
+		}
+	}
+	state := result.Job.State
+	view := map[string]any{"tool": target, "task_id": result.Job.ID, "state": state, "reused": result.Reused}
+	if state != "completed" {
+		if checkpoint {
+			b.tools.inspectOnly = true
+		}
+		view["instruction"] = "外部请求尚无已核验结果，请核对原服务状态后再决定后续操作。"
+		return view, nil, nil
+	}
+	output, err := b.host.store.PrivateJobResult(ctx, result.Job, func(ctx context.Context, job pluginhost.Job) error {
+		return b.Check(ctx, job, pluginhost.Capability{ID: b.capability})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return view, output, nil
 }
 
 func localExternalTextPage(result json.RawMessage, offset, limit int) (map[string]any, error) {
@@ -299,7 +332,7 @@ func listLocalExternalHTTP(raw json.RawMessage, tools []plugins.ExternalProtocol
 	return localProcessJSON(map[string]any{"tools": matches[input.Offset:end], "total": len(matches), "next_offset": end, "has_more": end < len(matches)})
 }
 
-type localExternalHTTPPolicy struct {
+type localExternalBinding struct {
 	tools        *localToolSet
 	host         *localProjectToolHost
 	installed    pluginhost.InstalledPackage
@@ -308,10 +341,17 @@ type localExternalHTTPPolicy struct {
 	source       *companion.SourceRef
 	registration string
 	invocation   pluginhost.Invocation
-	request      localExternalHTTPRequest
-	tool         plugins.ExternalProtocolTool
-	bridge       *plugins.ExternalBridge
-	secrets      []string
+	capability   string
+	arguments    json.RawMessage
+	extraCheck   func(context.Context) error
+}
+
+type localExternalHTTPPolicy struct {
+	localExternalBinding
+	request localExternalHTTPRequest
+	tool    plugins.ExternalProtocolTool
+	bridge  *plugins.ExternalBridge
+	secrets []string
 
 	mu       sync.Mutex
 	started  bool
@@ -319,13 +359,13 @@ type localExternalHTTPPolicy struct {
 	observed plugins.ExternalHTTPObservation
 }
 
-func (p *localExternalHTTPPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
+func (p *localExternalBinding) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if job.Plugin != localExternalPackage || job.Tool != localExternalHTTPCap || cap.ID != localExternalHTTPCap ||
+	if job.Plugin != localExternalPackage || job.Tool != p.capability || cap.ID != p.capability ||
 		job.PackageDigest != p.installed.Digest || job.ConfigRevision != strconv.Itoa(p.configRev) ||
-		!reflect.DeepEqual(job.Context, p.invocation) || !strictjson.Matches(job.Arguments, p.request) {
+		!reflect.DeepEqual(job.Context, p.invocation) || !strictjson.Matches(job.Arguments, p.arguments) {
 		return errors.New("外部工具调用来源或参数已变化")
 	}
 	if !p.tools.access.current(p.grant) || p.tools.run.CheckSource(ctx) != nil {
@@ -349,6 +389,9 @@ func (p *localExternalHTTPPolicy) Check(ctx context.Context, job pluginhost.Job,
 			return errors.New("外部工具任务已取消或变化")
 		}
 	}
+	if p.extraCheck != nil {
+		return p.extraCheck(ctx)
+	}
 	return nil
 }
 
@@ -364,23 +407,8 @@ func (p *localExternalHTTPPolicy) Service(ctx context.Context, job pluginhost.Jo
 		return nil, err
 	}
 	p.started = true
-	bound, cancel := context.WithCancel(ctx)
+	bound, cancel := p.watchedContext(ctx, job, cap)
 	defer cancel()
-	go func() {
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-bound.Done():
-				return
-			case <-ticker.C:
-				if p.Check(bound, job, cap) != nil {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
 	reply, err := p.bridge.Execute(bound, plugins.ExternalRequest{Phase: "call", Tool: p.request.Tool, Arguments: p.request.Arguments})
 	if err != nil {
 		return nil, errors.New("外部请求结果未确认，请核对原服务")
@@ -402,6 +430,26 @@ func (p *localExternalHTTPPolicy) Service(ctx context.Context, job pluginhost.Jo
 	return json.Marshal(p.observed)
 }
 
+func (p *localExternalBinding) watchedContext(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) (context.Context, context.CancelFunc) {
+	bound, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-bound.Done():
+				return
+			case <-ticker.C:
+				if p.Check(bound, job, cap) != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return bound, cancel
+}
+
 func (p *localExternalHTTPPolicy) Validate(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -420,7 +468,11 @@ func (p *localExternalHTTPPolicy) Validate(ctx context.Context, job pluginhost.J
 	if err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
-	for _, secret := range p.secrets {
+	return p.saveOutput(ctx, job, cap, p.tool.Name, output, p.secrets, nil)
+}
+
+func (p *localExternalBinding) saveOutput(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability, label string, output plugins.Output, secrets []string, metadata map[string]any) (pluginruntime.VerifiedResult, error) {
+	for _, secret := range secrets {
 		output.Text = strings.ReplaceAll(output.Text, secret, "[已隐藏]")
 		for i := range output.Media {
 			output.Media[i].URL = strings.ReplaceAll(output.Media[i].URL, secret, "[已隐藏]")
@@ -428,9 +480,14 @@ func (p *localExternalHTTPPolicy) Validate(ctx context.Context, job pluginhost.J
 	}
 	var assets []string
 	private := map[string]any{"text": output.Text}
-	for _, media := range output.Media {
+	for name, value := range metadata {
+		private[name] = value
+	}
+	var artifacts []map[string]any
+	var mediaRefs []plugins.MediaResult
+	for index, media := range output.Media {
 		if len(media.Data) == 0 {
-			private["media"] = []plugins.MediaResult{media}
+			mediaRefs = append(mediaRefs, media)
 			continue
 		}
 		if p.tools.access.home.artifacts == nil {
@@ -440,25 +497,36 @@ func (p *localExternalHTTPPolicy) Validate(ctx context.Context, job pluginhost.J
 		if err != nil {
 			return pluginruntime.VerifiedResult{}, err
 		}
-		path := filepath.Join(dir, "external-response.bin")
+		path := filepath.Join(dir, "external-response-"+strconv.Itoa(index+1)+".bin")
 		defer os.Remove(dir)
 		defer os.Remove(path)
 		if err = os.WriteFile(path, media.Data, 0600); err != nil {
 			return pluginruntime.VerifiedResult{}, err
 		}
 		artifact, err := p.tools.access.home.artifacts.publishFile(ctx, localArtifactInput{
-			Key: job.ID, Expected: ref.SHA256, project: localExternalPackage,
+			Key: job.ID, Expected: externalDigest(media.Data), project: localExternalPackage,
 		}, p.source, p.tools.access, p.grant, path, nil)
 		if err != nil {
 			return pluginruntime.VerifiedResult{}, err
 		}
-		private["artifact"], private["content_type"] = artifact.view(), media.MIMEType
+		view := artifact.view()
+		view["content_type"] = media.MIMEType
+		artifacts = append(artifacts, view)
 		assets = append(assets, artifact.ID)
 	}
 	if err := p.Check(ctx, job, cap); err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}
-	public, _ := json.Marshal(map[string]any{"tool": p.tool.Name, "host_observed": true})
+	if len(artifacts) == 1 {
+		private["artifact"] = artifacts[0]
+		private["content_type"] = artifacts[0]["content_type"]
+	} else if len(artifacts) > 1 {
+		private["artifacts"] = artifacts
+	}
+	if len(mediaRefs) != 0 {
+		private["media"] = mediaRefs
+	}
+	public, _ := json.Marshal(map[string]any{"tool": label, "host_observed": true})
 	data, _ := json.Marshal(private)
 	return pluginruntime.VerifiedResult{Result: public, Private: data, Assets: assets}, nil
 }
