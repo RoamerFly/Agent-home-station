@@ -2,6 +2,13 @@
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
 
+function Write-PortableReleaseManifest([string]$Root) {
+ $checker=Join-Path $PSScriptRoot 'check_portable_release.py'
+ if(-not(Test-Path -LiteralPath $checker -PathType Leaf)){throw 'Portable release contract checker is missing.'}
+ & python -X utf8 $checker --release-root $Root --write-manifest
+ if($LASTEXITCODE -ne 0){throw 'Portable release contract check failed.'}
+}
+
 # Do not depend on the PowerShell Utility module being auto-loaded. The
 # Windows PowerShell process started by the Python build/test harness can have
 # a mixed PSModulePath, making Get-FileHash unavailable even though the
@@ -563,6 +570,7 @@ if($Portable){
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
   if($LocalStation){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
+  Write-PortableReleaseManifest $OutputDirectory
   Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length
   [ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}
@@ -584,6 +592,7 @@ if($Portable){
  [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
+if($LocalStation){Write-PortableReleaseManifest $OutputDirectory}
 Invoke-DesktopPackageTests
 Get-Item -LiteralPath $target | Select-Object FullName,Length
 [ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}
