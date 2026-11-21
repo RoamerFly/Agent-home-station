@@ -404,9 +404,8 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	if input.Mode == "social" {
 		input.ReviewRequired = input.ReviewRequired || NeedsQuestionReview(input.Text)
 	}
-	if input.Mode != "direct" && c.Quiet(now) {
-		return silent("quiet_hours"), nil
-	}
+	// Quiet hours govern delivery, not whether an incoming message is read and
+	// understood. Claim checks the live schedule before any reply is sent.
 	if input.Mode == "proactive" && len(scope.Messages) == 0 && len(scope.Notes) == 0 && !input.Preview && !input.Surf {
 		return silent("no_reliable_context"), nil
 	}
