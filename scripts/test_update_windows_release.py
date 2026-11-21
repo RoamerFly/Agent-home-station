@@ -1,6 +1,7 @@
 """Synthetic checks for program replacement and private data preservation."""
 
 import json
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -8,10 +9,81 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from update_windows_release import EXE, MIGRATION, SERVER, Replacement, payload, update
+from update_windows_release import EXE, MIGRATION, SERVER, Replacement, payload, probe_health, stop_release_for_update, update
 
 
 class UpdateTests(unittest.TestCase):
+    def test_running_release_exits_before_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory)
+            with (
+                patch("update_windows_release.running_release_pids", side_effect=[[123], []]),
+                patch("update_windows_release.listeners", return_value=[]),
+                patch("update_windows_release.subprocess.run") as signal,
+            ):
+                self.assertTrue(stop_release_for_update(release, 1))
+            signal.assert_called_once()
+            self.assertEqual(signal.call_args.args[0], [str(release / EXE), "--exit-services"])
+
+    def test_foreign_listener_cannot_trigger_release_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch("update_windows_release.running_release_pids", return_value=[]),
+                patch("update_windows_release.listeners", return_value=[8082]),
+                patch("update_windows_release.subprocess.run") as signal,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "another process"):
+                    stop_release_for_update(Path(directory), 1)
+            signal.assert_not_called()
+
+    def test_healthy_station_does_not_require_wechat_account_online(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory)
+            token = release / "data/applications/wechat/native/api-token"
+            token.parent.mkdir(parents=True)
+            token.write_text("synthetic-token", encoding="utf-8")
+
+            class Response(io.BytesIO):
+                status = 200
+
+            class Opener:
+                def open(self, request, timeout):
+                    url = request if isinstance(request, str) else request.full_url
+                    if url.endswith("/v1/status"):
+                        return Response(b'{"state":"ready"}')
+                    if "/v1/accounts/" in url:
+                        return Response(b'{"authenticated":false,"connection":"disconnected"}')
+                    return Response(b"ok")
+
+            with patch("update_windows_release.urllib.request.build_opener", return_value=Opener()):
+                self.assertFalse(probe_health(release, SimpleNamespace(poll=lambda: None), 1, "desktop"))
+
+    def test_failed_replacement_restores_and_restarts_previous_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release, candidate, work = root / "release", root / "candidate", root / "work"
+            release.mkdir()
+            candidate.mkdir()
+            (release / EXE).write_bytes(b"old")
+            (candidate / EXE).write_bytes(b"new")
+            paths = {Path(EXE): candidate / EXE}
+            with (
+                patch("update_windows_release.payload", return_value=paths),
+                patch("update_windows_release.check", side_effect=[{"applications": [], "public_tools": []}, ValueError("injected")]),
+                patch("update_windows_release.validate", return_value={"ok": True}),
+                patch("update_windows_release.listeners", return_value=False),
+                patch("update_windows_release.subprocess.Popen") as launch,
+                patch("update_windows_release.probe_health", return_value=False),
+            ):
+                with self.assertRaisesRegex(ValueError, "injected"):
+                    update(SimpleNamespace(candidate=candidate, apply=True, keep_stopped=False,
+                                           timeout=1, native_account="desktop"), release, work)
+            self.assertEqual((release / EXE).read_bytes(), b"old")
+            launch.assert_called_once()
+            self.assertEqual(json.loads((work / "result.json").read_text(encoding="utf-8")),
+                             {"updated": False, "rolled_back": True, "restarted": True,
+                              "healthy": True, "native_login": False})
+
     def test_apply_while_stopped_does_not_start_account_services(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

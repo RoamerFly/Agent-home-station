@@ -1,6 +1,8 @@
-"""Stage and update a stopped LocalStation release using same-volume replacements."""
+"""Stage and update a Windows release, restarting its existing workstation."""
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 from build_migration_manifest import build as migration_manifest
@@ -166,6 +169,69 @@ def listeners():
     return result
 
 
+def running_release_pids(launcher):
+    """Find only processes executing this exact release, not another station copy."""
+    if os.name != "nt":
+        raise RuntimeError("Windows process inspection is required")
+    psapi = ctypes.WinDLL("Psapi.dll", use_last_error=True)
+    kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
+    psapi.EnumProcesses.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.DWORD,
+                                   ctypes.POINTER(wintypes.DWORD))
+    psapi.EnumProcesses.restype = wintypes.BOOL
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD,
+                                                  wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+    kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    capacity = 1024
+    while True:
+        pids = (wintypes.DWORD * capacity)()
+        used = wintypes.DWORD()
+        if not psapi.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(used)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if used.value < ctypes.sizeof(pids):
+            break
+        capacity *= 2
+    target = os.path.normcase(os.path.abspath(launcher))
+    matches = []
+    for pid in pids[:used.value // ctypes.sizeof(wintypes.DWORD)]:
+        if not pid:
+            continue
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            continue
+        try:
+            path = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(path))
+            if kernel.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)) and \
+                    os.path.normcase(os.path.abspath(path.value)) == target:
+                matches.append(pid)
+        finally:
+            kernel.CloseHandle(handle)
+    return matches
+
+
+def stop_release_for_update(release, timeout):
+    launcher = release / EXE
+    running = running_release_pids(launcher)
+    if len(running) > 1:
+        raise RuntimeError("Multiple processes own this release; update not started")
+    if not running:
+        if listeners():
+            raise RuntimeError("Workstation ports are in use by another process; update not started")
+        return False
+    subprocess.run([str(launcher), "--exit-services"], cwd=release, timeout=min(timeout, 15),
+                   check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not running_release_pids(launcher) and not listeners():
+            return True
+        time.sleep(0.2)
+    raise RuntimeError("Workstation did not fully exit; update not started")
+
+
 def probe_health(release, process, timeout, account):
     token_path = physical(release / "data/applications/wechat/native/api-token")
     token = token_path.read_text(encoding="utf-8-sig").strip()
@@ -187,10 +253,13 @@ def probe_health(release, process, timeout, account):
             if native_read("/v1/status").get("state") != "ready":
                 last_check = "native service is not ready"
             else:
-                login = native_read(f"/v1/accounts/{account}")
-                if login.get("authenticated") is True and login.get("connection") == "online":
-                    return
-                last_check = "native account is not authenticated and online"
+                try:
+                    login = native_read(f"/v1/accounts/{account}")
+                except urllib.error.HTTPError as error:
+                    if error.code == 404:
+                        return False
+                    raise
+                return login.get("authenticated") is True and login.get("connection") == "online"
         except (OSError, ValueError):
             last_check = "a local health endpoint is unavailable"
         time.sleep(1)
@@ -267,14 +336,19 @@ def update(args, release, work):
     write_json(work / "plan.json", {str(path): digest(physical(source)) for path, source in files.items()})
     if not args.apply:
         return
-    if listeners():
-        raise RuntimeError("Exit the workstation through its desktop controls before applying the update")
     old_report = validate(release, release / MIGRATION)
     write_json(work / "migration-before.json", old_report)
     if not old_report["ok"]:
         raise ValueError("Existing release migration manifest is invalid")
+    if args.keep_stopped:
+        if running_release_pids(release / EXE) or listeners():
+            raise RuntimeError("Stop the workstation before a keep-stopped update")
+    else:
+        stop_release_for_update(release, args.timeout)
     transaction = Replacement(release, work)
     launcher = release / EXE
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     process = None
     try:
         for relative, source in files.items():
@@ -299,11 +373,10 @@ def update(args, release, work):
                 raise RuntimeError("A workstation listener started during the stopped update")
             write_json(work / "result.json", {"updated": True, "kept_stopped": True, "healthy": None, "native_login": None})
             return
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         process = subprocess.Popen([str(launcher)], cwd=release, startupinfo=startup)
-        probe_health(release, process, args.timeout, args.native_account)
-        write_json(work / "result.json", {"updated": True, "healthy": True, "native_login": True})
+        native_login = probe_health(release, process, args.timeout, args.native_account)
+        write_json(work / "result.json", {"updated": True, "restarted": True,
+                                          "healthy": True, "native_login": native_login})
     except (Exception, KeyboardInterrupt):
         if process and process.poll() is None:
             subprocess.run([str(launcher), "--exit-services"], cwd=release, timeout=15,
@@ -312,7 +385,24 @@ def update(args, release, work):
         if listeners():
             raise RuntimeError(f"Services still own the release. Rollback files retained at {work}")
         transaction.restore()
-        write_json(work / "result.json", {"updated": False, "rolled_back": True})
+        if args.keep_stopped:
+            write_json(work / "result.json", {"updated": False, "rolled_back": True,
+                                              "kept_stopped": True, "healthy": None, "native_login": None})
+            raise
+        # A failed update must not strand the old workstation in a stopped
+        # state. The files are fully restored before we launch it again.
+        recovered = None
+        try:
+            recovered = subprocess.Popen([str(launcher)], cwd=release, startupinfo=startup)
+            native_login = probe_health(release, recovered, args.timeout, args.native_account)
+            write_json(work / "result.json", {"updated": False, "rolled_back": True,
+                                              "restarted": True, "healthy": True, "native_login": native_login})
+        except Exception:
+            write_json(work / "result.json", {"updated": False, "rolled_back": True,
+                                              "restart_attempted": True,
+                                              "process_running": recovered is not None and recovered.poll() is None,
+                                              "healthy": False, "native_login": None})
+            raise RuntimeError(f"Previous release restored but its readiness was not confirmed. Evidence: {work}")
         raise
 
 
