@@ -54,6 +54,8 @@ type localToolSet struct {
 	// grants are the owner's general-capability consents for this turn. Groups
 	// the owner withdrew never reach the tool surface.
 	grants localToolGrants
+	// Application turns can call workstation tools, but never manage their lifecycle.
+	publicUseOnly bool
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -134,6 +136,26 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		memoryTools, err := t.memory.List(ctx)
 		return append(memoryTools, localWechatMemorySchema()), err
 	}
+	if t.publicUseOnly {
+		if t.projectTools == nil || t.run == nil || !t.run.Tracked {
+			return nil, nil
+		}
+		all := append([]mcptools.Tool{}, t.localExternalHTTPTools(ctx)...)
+		all = append(all, t.localExternalTaskTools(ctx)...)
+		all = append(all, t.localExternalMCPTools(ctx)...)
+		if t.grants.Documents {
+			all = append(all, t.localDocumentTools(ctx)...)
+		}
+		if t.grants.Media {
+			all = append(all, t.localAudioTools(ctx)...)
+			all = append(all, t.localRVCTools(ctx)...)
+			all = append(all, t.localComfyTools(ctx)...)
+			all = append(all, t.localYuETools(ctx)...)
+			all = append(all, t.localTTSTools(ctx)...)
+			all = append(all, t.localAudioCppTools(ctx)...)
+		}
+		return all, nil
+	}
 	all := []mcptools.Tool{}
 	if t.projectTools != nil && !t.inspectOnly {
 		all = append(all, stationLifecycleTools()...)
@@ -191,6 +213,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if t.publicUseOnly && strings.HasPrefix(name, "station_tool_") {
+		return "", errors.New("公共工具的安装、配置和启停由工作站管理")
+	}
 	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return "", err
 	}

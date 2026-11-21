@@ -128,6 +128,10 @@ func (s *Server) pluginRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/plugins/install", s.protected(func(w http.ResponseWriter, r *http.Request) { s.savePlugin(w, r, true) }))
 	mux.HandleFunc("POST /api/plugins/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) { s.savePlugin(w, r, false) }))
 	mux.HandleFunc("POST /api/plugins/{id}/remove", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, shared := s.manager.sharedStationVision(); shared {
+			fail(w, http.StatusConflict, "公共工具配置请在工作站的项目工具页维护。")
+			return
+		}
 		var input struct{}
 		if !decode(w, r, &input) {
 			return
@@ -164,6 +168,10 @@ func (s *Server) pluginRoutes(mux *http.ServeMux) {
 	}))
 }
 func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request, install bool) {
+	if _, shared := s.manager.sharedStationVision(); shared {
+		fail(w, http.StatusConflict, "公共工具配置请在工作站的项目工具页维护。")
+		return
+	}
 	var input struct {
 		Manifest     *plugins.Manifest `json:"manifest"`
 		Enabled      bool              `json:"enabled"`

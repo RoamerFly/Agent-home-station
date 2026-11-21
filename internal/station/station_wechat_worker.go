@@ -851,6 +851,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		localInput.OriginalText = in.OriginalText
 		localInput.MessageTime = in.MessageTime
 		tools := s.localChat.tools(store, localInput)
+		tools.projectTools = s.localChat.projectTools
+		tools.publicUseOnly = true
 		tools.run = companion.NewGuardedToolRun(func(ctx context.Context) error {
 			if run.Blocked() || ctx.Err() != nil || policy.Grants[in.Thread].IsZero() || !s.ownerBoundToWechat(station.connectionID, in.Account, in) {
 				return apphost.ErrObservationForbidden

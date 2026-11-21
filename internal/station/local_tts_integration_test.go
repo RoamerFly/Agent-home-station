@@ -53,6 +53,43 @@ func TestLocalSpeechChatUsesRegisteredDefault(t *testing.T) {
 	}
 }
 
+func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) {
+	f, _ := newLocalTTSFixture(t)
+	listed := func() map[string]bool {
+		store, input, err := f.handler.chat.conversation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.TraceID = "wechat-public-tool-view"
+		tools := f.handler.chat.tools(store, input)
+		tools.projectTools = f.handler.chat.projectTools
+		tools.publicUseOnly = true
+		tools.run = companion.NewGuardedToolRun(func(context.Context) error { return nil })
+		items, err := tools.List(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := make(map[string]bool, len(items))
+		for _, item := range items {
+			seen[item.Name] = true
+			if strings.HasPrefix(item.Name, "station_tool_") {
+				t.Fatalf("application exposed workstation management tool %s", item.Name)
+			}
+		}
+		return seen
+	}
+	if !listed()[localTTSStartTool] {
+		t.Fatal("enabled workstation speech was unavailable to application")
+	}
+	installed := localProjectToolByID(t, f, localTTSPackage)
+	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("disable workstation speech: %d %#v", code, out)
+	}
+	if listed()[localTTSStartTool] {
+		t.Fatal("application retained workstation speech after it was disabled")
+	}
+}
+
 func (s *syntheticLocalTTS) Synthesize(ctx context.Context, _ string, binding string, request localTTSRequest) (localTTSResult, error) {
 	s.calls.Add(1)
 	if binding != strings.Repeat("b", 64) || request.VoiceID != s.voice.ID || request.Speed == nil || *request.Speed != 0.8 || request.Language != "en" {

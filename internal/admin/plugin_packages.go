@@ -32,41 +32,6 @@ func (m *Manager) packageStore() (*pluginhost.Store, error) {
 	return store, nil
 }
 
-// A shared Station owns visual configuration. The legacy package still owns
-// source-bound audio review, so admit only that narrow private configuration.
-func sharedMediaAudioConfigurationOnly(input pluginhost.ConfigUpdate) bool {
-	if len(input.Values)+len(input.Secrets)+len(input.ClearSecrets) == 0 {
-		return false
-	}
-	for name := range input.Values {
-		if name != "audio_review_endpoint" && name != "audio_review_model" {
-			return false
-		}
-	}
-	for name := range input.Secrets {
-		if name != "audio_review_key" {
-			return false
-		}
-	}
-	for _, name := range input.ClearSecrets {
-		if name != "audio_review_key" {
-			return false
-		}
-	}
-	return true
-}
-
-func mergeSharedMediaAudioConfiguration(current pluginhost.Configuration, input pluginhost.ConfigUpdate) pluginhost.ConfigUpdate {
-	merged := pluginhost.ConfigUpdate{Revision: input.Revision, Values: make(map[string]json.RawMessage, len(current.Values)+len(input.Values)), Secrets: input.Secrets, ClearSecrets: input.ClearSecrets}
-	for name, value := range current.Values {
-		merged.Values[name] = value
-	}
-	for name, value := range input.Values {
-		merged.Values[name] = value
-	}
-	return merged
-}
-
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
@@ -180,17 +145,16 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, result)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/configuration", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, shared := s.manager.sharedStationVision(); shared && r.PathValue("id") != mobileDevicePluginID {
+			fail(w, 409, "公共工具配置请在工作站的项目工具页维护。")
+			return
+		}
 		if s.manager.mobileRetired && r.PathValue("id") == mobileDevicePluginID {
 			fail(w, http.StatusGone, "手机控制已停用；不能修改历史工具配置")
 			return
 		}
 		var input pluginhost.ConfigUpdate
 		if !decode(w, r, &input) {
-			return
-		}
-		if _, shared := s.manager.sharedStationVision(); shared &&
-			(r.PathValue("id") == "web-search" || r.PathValue("id") == "media-understanding" && !sharedMediaAudioConfigurationOnly(input)) {
-			fail(w, 409, "公共工具配置请在工作站的项目工具页维护。")
 			return
 		}
 		if s.manager.draining() {
@@ -200,29 +164,6 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		store, err := s.manager.packageStore()
 		if err != nil {
 			fail(w, 500, "工具存储不可用")
-			return
-		}
-		if _, shared := s.manager.sharedStationVision(); shared && r.PathValue("id") == "media-understanding" {
-			current, err := store.Configuration(r.Context(), "media-understanding")
-			if err != nil {
-				fail(w, 500, "工具配置读取失败")
-				return
-			}
-			if current.Revision != input.Revision {
-				fail(w, 409, "配置已变化，请刷新后重试")
-				return
-			}
-			controller, _, err := s.manager.installedPluginRuntime()
-			if err != nil {
-				fail(w, 503, "工具运行环境不可用")
-				return
-			}
-			value, err := controller.ConfigureIdle(r.Context(), "media-understanding", mergeSharedMediaAudioConfiguration(current, input))
-			if err != nil {
-				fail(w, 409, "配置未保存：请检查字段、保存版本，或等待工具空闲")
-				return
-			}
-			respond(w, 200, value)
 			return
 		}
 		value, err := store.SaveConfiguration(r.Context(), r.PathValue("id"), input)
@@ -442,6 +383,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, prepared)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/install", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, shared := s.manager.sharedStationVision(); shared {
+			fail(w, 409, "公共工具安装与更新请在工作站的项目工具页维护。")
+			return
+		}
 		var input struct {
 			Token       string   `json:"token"`
 			Digest      string   `json:"digest"`

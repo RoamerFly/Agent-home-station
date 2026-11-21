@@ -22,6 +22,10 @@ func (s *Server) pluginMigrationRoutes(mux *http.ServeMux) {
 		respond(w, 200, preview)
 	}))
 	mux.HandleFunc("POST /api/plugin-migrations/apply", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, shared := s.manager.sharedStationVision(); shared {
+			fail(w, http.StatusConflict, "公共工具迁移请在工作站的项目工具页维护。")
+			return
+		}
 		var in struct {
 			Account               string   `json:"account"`
 			Plugin                string   `json:"plugin"`

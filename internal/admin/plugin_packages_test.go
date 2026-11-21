@@ -14,47 +14,30 @@ import (
 	catalog "wechat-bot/plugins"
 )
 
-func TestSharedStationMediaConfigurationAdmitsOnlyLegacyAudioReview(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		input pluginhost.ConfigUpdate
-		want  bool
+func TestSharedStationOwnsAllPublicToolMutations(t *testing.T) {
+	f := setup(t)
+	f.login()
+	password := filepath.Join(t.TempDir(), "station-password")
+	if err := os.WriteFile(password, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_STATION_ADMIN_PASSWORD_FILE", password)
+	for _, request := range []struct {
+		path string
+		body any
 	}{
-		{"audio model", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"audio_review_model": json.RawMessage(`"synthetic-model"`)}}, true},
-		{"audio key", pluginhost.ConfigUpdate{Secrets: map[string]string{"audio_review_key": "synthetic-key"}}, true},
-		{"clear audio key", pluginhost.ConfigUpdate{ClearSecrets: []string{"audio_review_key"}}, true},
-		{"empty", pluginhost.ConfigUpdate{}, false},
-		{"visual key", pluginhost.ConfigUpdate{Secrets: map[string]string{"vision_key": "synthetic-key"}}, false},
-		{"mixed visual", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"audio_review_model": json.RawMessage(`"synthetic-model"`), "vision_model": json.RawMessage(`"synthetic-vision"`)}}, false},
-		{"asr key", pluginhost.ConfigUpdate{Secrets: map[string]string{"asr_key": "synthetic-key"}}, false},
+		{"/api/plugin-packages/speech/configuration", map[string]any{"revision": 0, "values": map[string]string{"tts_model": "stale"}}},
+		{"/api/plugin-packages/music/configuration", map[string]any{"revision": 0, "values": map[string]string{"music_model": "stale"}}},
+		{"/api/plugin-packages/media-understanding/configuration", map[string]any{"revision": 0, "values": map[string]string{"audio_review_model": "stale"}}},
+		{"/api/plugin-packages/install", map[string]any{"confirm": true}},
+		{"/api/plugin-packages/speech/runtime", map[string]any{"action": "start", "revision": 1}},
+		{"/api/plugin-migrations/apply", map[string]any{"confirm": true}},
+		{"/api/plugins/install", map[string]any{}},
+		{"/api/plugins/example/remove", map[string]any{}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := sharedMediaAudioConfigurationOnly(test.input); got != test.want {
-				t.Fatalf("shared Station media configuration accepted=%v want=%v", got, test.want)
-			}
-		})
-	}
-}
-
-func TestSharedStationMediaAudioUpdatePreservesExistingConfiguration(t *testing.T) {
-	current := pluginhost.Configuration{Revision: 4, Values: map[string]json.RawMessage{
-		"asr_backend":  json.RawMessage(`"remote"`),
-		"vision_model": json.RawMessage(`"synthetic-vision"`),
-		"max_tokens":   json.RawMessage(`768`),
-	}}
-	input := pluginhost.ConfigUpdate{Revision: 4, Values: map[string]json.RawMessage{
-		"audio_review_model": json.RawMessage(`"synthetic-audio"`),
-	}, Secrets: map[string]string{"audio_review_key": "synthetic-key"}}
-	merged := mergeSharedMediaAudioConfiguration(current, input)
-	if merged.Revision != 4 || string(merged.Values["asr_backend"]) != `"remote"` ||
-		string(merged.Values["vision_model"]) != `"synthetic-vision"` ||
-		string(merged.Values["max_tokens"]) != `768` ||
-		string(merged.Values["audio_review_model"]) != `"synthetic-audio"` ||
-		merged.Secrets["audio_review_key"] != "synthetic-key" {
-		t.Fatal("audio-only update did not preserve existing configuration")
-	}
-	if _, exists := current.Values["audio_review_model"]; exists {
-		t.Fatal("audio-only update mutated the prior configuration")
+		if code, _, _ := f.request("POST", request.path, request.body, true, true); code != 409 {
+			t.Fatalf("legacy public mutation %s returned %d, want 409", request.path, code)
+		}
 	}
 }
 
