@@ -159,7 +159,8 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool {
 			return tool.Name == localTTSStartTool || tool.Name == localYuEStartTool || tool.Name == localYuEJobTool || tool.Name == localComfyListTool || tool.Name == localComfyStartTool || tool.Name == localComfyJobTool ||
 				tool.Name == localExternalHTTPList || tool.Name == localExternalHTTPCall || tool.Name == localExternalTaskList || tool.Name == localExternalTaskCall ||
-				tool.Name == localExternalMCPServers || tool.Name == localExternalMCPList || tool.Name == localExternalMCPCall
+				tool.Name == localExternalMCPServers || tool.Name == localExternalMCPList || tool.Name == localExternalMCPCall ||
+				tool.Name == localAudioToolName || tool.Name == localAudioCppModelsTool || tool.Name == localAudioCppSynthesizeTool || tool.Name == localAudioCppTranscribeTool
 		})
 		return all, nil
 	}
