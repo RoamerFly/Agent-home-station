@@ -3,6 +3,7 @@ package station
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -55,17 +56,22 @@ func TestLocalSpeechChatUsesRegisteredDefault(t *testing.T) {
 
 func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) {
 	f, _ := newLocalTTSFixture(t)
-	listed := func() map[string]bool {
+	public := newPublicToolFactoryAccess(func(in companion.Input) companion.ToolAccess {
 		store, input, err := f.handler.chat.conversation()
 		if err != nil {
 			t.Fatal(err)
 		}
-		input.TraceID = "wechat-public-tool-view"
+		input.TraceID = in.TraceID
 		tools := f.handler.chat.tools(store, input)
 		tools.projectTools = f.handler.chat.projectTools
 		tools.publicUseOnly = true
 		tools.run = companion.NewGuardedToolRun(func(context.Context) error { return nil })
-		items, err := tools.List(t.Context())
+		return tools
+	}, func(in companion.Input) bool { return in.Sender == "owner" })
+	public.(interface{ SetTrace(companion.Input) }).SetTrace(companion.Input{Channel: "wechat", Sender: "owner", TraceID: "wechat-public-tool-view"})
+	merged := mergeStationToolAccess(nil, public, nil)
+	listed := func() map[string]bool {
+		items, err := merged.List(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,12 +87,19 @@ func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) 
 	if !listed()[localTTSVoicesTool] || listed()[localTTSStartTool] {
 		t.Fatal("application public catalog exposed a source-bound synthesis path")
 	}
+	voiceList, err := merged.Call(t.Context(), localTTSVoicesTool, json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(voiceList, "fixture-voice") {
+		t.Fatalf("application could not execute workstation voice list: %s %v", voiceList, err)
+	}
 	installed := localProjectToolByID(t, f, localTTSPackage)
 	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
 		t.Fatalf("disable workstation speech: %d %#v", code, out)
 	}
 	if listed()[localTTSVoicesTool] {
 		t.Fatal("application retained workstation speech after it was disabled")
+	}
+	if result, err := merged.Call(t.Context(), localTTSVoicesTool, json.RawMessage(`{}`)); err == nil || result != "" {
+		t.Fatalf("application executed disabled workstation tool: %s %v", result, err)
 	}
 }
 

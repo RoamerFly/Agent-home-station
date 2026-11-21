@@ -855,9 +855,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			return nil
 		}
 		localInput.TraceID = in.TraceID
-		localInput.Text = in.Text
-		localInput.OriginalText = in.OriginalText
-		localInput.MessageTime = in.MessageTime
+		// The workstation public tool view does not need the WeChat body or
+		// timestamp. Message reading and reply correlation stay in this adapter.
 		tools := s.localChat.tools(store, localInput)
 		tools.projectTools = s.localChat.projectTools
 		tools.publicUseOnly = true
