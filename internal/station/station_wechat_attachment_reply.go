@@ -31,6 +31,11 @@ func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, boo
 			return j.media(), true
 		}
 	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
+		if j, allowed := t.externalTaskMediaAllowed(t.trace, asset); allowed {
+			return j.media(), true
+		}
+	}
 	if asset, ok := strings.CutPrefix(id, "reply-"); ok && artifactID(asset, "speech-") {
 		p, file, err := t.speechProduct(asset)
 		if err != nil {
@@ -102,6 +107,12 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 			return "", wechatapp.ErrAttachmentDenied
 		}
 		return t.stageRVC(ctx, in, asset)
+	}
+	if strings.HasPrefix(asset, "external-task-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageExternalTask(ctx, in, asset)
 	}
 	if strings.HasPrefix(asset, "external-") {
 		if kind != "file" {

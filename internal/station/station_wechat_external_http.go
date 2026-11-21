@@ -210,6 +210,9 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 	if err != nil {
 		return "", err
 	}
+	if len(arguments) > 8<<10 {
+		return "", mcptools.ArgumentError("$.arguments", "外部工具参数超过协议的 8 KiB 限制")
+	}
 	if t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.allowed() {
 		return "", wechatapp.ErrAttachmentDenied
 	}

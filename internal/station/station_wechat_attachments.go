@@ -492,6 +492,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	if name == localExternalHTTPCall {
 		return t.callPublicExternalHTTP(ctx, raw)
 	}
+	if name == localExternalTaskCall {
+		return t.callPublicExternalTask(ctx, raw)
+	}
 	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {
 		return t.callPublicExternalCatalog(ctx, name, raw)
 	}

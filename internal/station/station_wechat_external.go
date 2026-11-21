@@ -29,6 +29,9 @@ func (t *stationAttachmentTools) publicExternalCatalogTools(ctx context.Context)
 	}
 	if len(taskTools) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalTaskList, "分页查看工作站已启用的异步 Job 和 Poll 工具及输入参数。", `{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`))
+		if t.externalMu != nil && t.store != nil {
+			tools = append(tools, mcptools.NewTool(localExternalTaskCall, "提交、查询或取消工作站已登记的异步任务。每个网络阶段只提交一次；状态结果可分页，回执不明时请核对原服务。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","status","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"task_id":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`))
+		}
 	}
 	if len(servers) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalMCPServers, "列出工作站已启用的 MCP 连接名称、编号和传输类型，不联系服务。", `{"type":"object","properties":{},"additionalProperties":false}`))
