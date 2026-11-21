@@ -290,6 +290,11 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 	if err != nil || status.State != comfyui.Completed || !bytes.Equal(publicProduct.FLAC.Data, flac) || publicProduct.Evidence.SHA256 != sha256Hex(flac) || !publicProduct.Duration.Accepted {
 		t.Fatalf("pure YuE verified result: status=%+v product=%+v err=%v", status, publicProduct.Evidence, err)
 	}
+	backend.flac.SHA256 = strings.Repeat("0", 64)
+	_, rejectedProduct, err := f.handler.chat.projectTools.publicYuEStatus(t.Context(), fish, backend.deploy.Binding, publicID, publicSubmission)
+	if err == nil || len(rejectedProduct.FLAC.Data) != 0 {
+		t.Fatalf("unverified FLAC escaped the workstation: product=%+v err=%v", rejectedProduct.Evidence, err)
+	}
 	enabled := localProjectToolByID(t, f, localYuEPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, enabled)}, true); code != http.StatusOK || backend.stops != 1 {
 		t.Fatalf("disable YuE: %d %#v", code, out)

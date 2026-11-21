@@ -114,6 +114,9 @@ func (s *localProjectTools) publicYuEStatus(ctx context.Context, fish, binding, 
 		product.Evidence, product.Duration, err = verifyPublicYuEFLAC(ctx, s.home.dataDir, deploy, submission, product.FLAC)
 		return err
 	})
+	if err != nil {
+		return status, publicYuEProduct{}, err
+	}
 	return status, product, err
 }
 
