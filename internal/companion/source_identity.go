@@ -318,8 +318,24 @@ func (s *Store) SourceForInput(in Input) (*SourceRef, bool) {
 	if !ok {
 		return nil, false
 	}
+	// A caller without native provenance cannot choose between two retained
+	// messages that reused the same local row and sender.
+	if in.Source == nil && in.TraceID != "" {
+		matches := 0
+		for _, t := range scope.Messages {
+			if t.Role == "user" && t.TraceID == in.TraceID && t.Sender == in.Sender && t.Source != nil {
+				matches++
+				if matches > 1 {
+					return nil, false
+				}
+			}
+		}
+	}
 	for _, t := range scope.Messages {
 		if t.Role != "user" || (t.TraceID != in.TraceID && !sameSourceMessage(t.Source, in.Source)) || t.Sender != in.Sender || t.Source == nil {
+			continue
+		}
+		if in.Source != nil && in.Source.ServerID != "" && t.Source.ServerID != "" && in.Source.ServerID != t.Source.ServerID {
 			continue
 		}
 		if in.Source != nil {

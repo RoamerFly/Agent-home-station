@@ -251,7 +251,10 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 					if !sameSourceInstance(turn.Source, source) {
 						continue
 					}
-					if turn.Sender != input.Sender && distinctSourceMessage(turn.Source, source) {
+					// Distinct platform IDs are separate even for the same sender;
+					// a changed timestamp alone may be a native projection update.
+					if distinctSourceMessage(turn.Source, source) &&
+						(turn.Sender != input.Sender || turn.Source.ServerID != "" && source.ServerID != "") {
 						continue
 					}
 					if sourceReplay(turn.Source, source) {

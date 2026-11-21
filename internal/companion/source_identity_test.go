@@ -166,6 +166,43 @@ func TestReusedNativeRowIDWithDifferentOccurrenceKeepsBothSenders(t *testing.T) 
 		t.Fatal("distinct native events were quarantined", conflicts, err)
 	}
 }
+func TestReusedNativeRowIDWithDifferentPlatformIDsKeepsSameSenderEvents(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	in.TraceID = "same-sender-reused-row"
+	in.Sender = "one-sender"
+	in.Text = "older message"
+	in.MessageTime = now.Add(-time.Hour).Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "platform-old", OccurredAt: in.MessageTime}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	old, ok := s.SourceForInput(in)
+	if !ok {
+		t.Fatal("old platform source missing")
+	}
+	in.Text = "new message"
+	in.MessageTime = now.Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "platform-new", OccurredAt: in.MessageTime}
+	for i := 0; i < 2; i++ {
+		if err := s.Observe(in, c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, ok := s.SourceForInput(in)
+	if !ok || fresh.EventID == old.EventID || fresh.ServerID != "platform-new" {
+		t.Fatal("new platform source was replaced by old row", fresh)
+	}
+	ambiguous := in
+	ambiguous.Source = nil
+	if _, ok := s.SourceForInput(ambiguous); ok {
+		t.Fatal("local row without platform identity selected one of two messages")
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("separate platform IDs were merged or duplicated", count, err)
+	}
+}
 func TestDistinctSourceMessagePrefersPlatformIDOverTimestamp(t *testing.T) {
 	a := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-01T00:00:00Z"}
 	b := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-02T00:00:00Z"}
@@ -181,14 +218,13 @@ func TestSourceVersionUpdateReusesLogicalMessageAndIsIdempotent(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()
 	in.MessageTime = now.Add(-time.Hour).UTC().Format(time.RFC3339)
-	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: "local-57", ServerID: "old-server", OccurredAt: in.MessageTime}
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: "local-57", ServerID: "platform-server", OccurredAt: in.MessageTime}
 	in.TraceID = "local-57"
 	in.Text = "old observation"
 	if e := s.Observe(in, c, now); e != nil {
 		t.Fatal(e)
 	}
 	in.MessageTime = now.UTC().Format(time.RFC3339)
-	in.Source.ServerID = "new-server"
 	in.Source.OccurredAt = in.MessageTime
 	in.Text = "new observation"
 	if e := s.Observe(in, c, now); e != nil {
