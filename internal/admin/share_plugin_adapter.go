@@ -117,7 +117,7 @@ func safeShareResolutionFailure(stage string, err error) *shareResolutionFailure
 		return failure
 	}
 	switch err.Error() {
-	case "share_native_source_required", "share_source_scope_mismatch", "share_persisted_source_unavailable", "source_actor_not_authorized", "source_actor_authorization_changed", "share_request_authorization_changed", "share_plugin_disabled", "share_plugin_snapshot_changed", "share_invocation_changed", "share_source_changed", "share_native_source_unavailable", "share_native_source_changed", "share_source_binding_unavailable", "share_source_binding_changed", "share_route_out_of_order", "share_route_source_mismatch", "share_route_chain_finished", "share_route_response_invalid", "share_route_response_binding_failed", "share_result_binding_failed", "share_bridge_unavailable", "share_bridge_rejected", "share_bridge_response_invalid", "share_bridge_source_mismatch", "share_bridge_timeout_invalid", "share_bridge_already_consumed", "share_bridge_configuration_unavailable", "share_bridge_configuration_invalid":
+	case "share_native_source_required", "share_source_scope_mismatch", "share_persisted_source_unavailable", "source_actor_not_authorized", "source_actor_authorization_changed", "share_request_authorization_changed", "share_plugin_disabled", "share_plugin_snapshot_changed", "share_invocation_changed", "share_source_changed", "share_native_source_unavailable", "share_native_source_changed", "share_source_binding_unavailable", "share_source_binding_changed", "share_route_out_of_order", "share_route_source_mismatch", "share_route_chain_finished", "share_route_response_invalid", "share_route_response_binding_failed", "share_result_binding_failed", "share_bridge_unavailable", "share_bridge_rejected", "share_bridge_response_invalid", "share_bridge_source_mismatch", "share_bridge_timeout_invalid", "share_bridge_already_consumed", "share_bridge_configuration_unavailable", "share_bridge_configuration_invalid", "channels_feed_identity_unverified", "channels_feed_lookup_failed", "channels_media_locator_missing", "channels_playable_link_missing", "channels_resolved_video_mismatch", "channels_resolver_response_invalid", "channels_share_link_invalid", "channels_yuanbao_parse_failed", "channels_decode_key_invalid":
 		failure.code = err.Error()
 	}
 	return failure
@@ -179,7 +179,7 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 		return nil, err
 	}
 	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: wechatapp.ReceivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
-	if tool == "share.resolve_public" {
+	if tool == "share.resolve_public" || tool == "share.resolve_channels" {
 		nonce := companion.ReplayNonce(ctx)
 		if nonce == "" {
 			nonce = companion.ReplayNonceFromContext(ctx)
@@ -452,6 +452,18 @@ func (p *receivedSharePolicy) Validate(ctx context.Context, j pluginhost.Job, ca
 	}()
 	if p.binding == nil {
 		return pluginruntime.VerifiedResult{}, errors.New("share_source_binding_unavailable")
+	}
+	// The packaged parser returns a fixed, non-sensitive code for a failed
+	// read. Preserve only reviewed codes; never journal arbitrary plugin text.
+	var parserResult struct {
+		OK    *bool  `json:"ok"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &parserResult) == nil && parserResult.OK != nil && !*parserResult.OK {
+		switch parserResult.Error {
+		case "channels_feed_identity_unverified", "channels_feed_lookup_failed", "channels_media_locator_missing", "channels_playable_link_missing", "channels_resolved_video_mismatch", "channels_resolver_response_invalid", "channels_share_link_invalid", "channels_yuanbao_parse_failed", "channels_decode_key_invalid":
+			return pluginruntime.VerifiedResult{}, errors.New(parserResult.Error)
+		}
 	}
 	verified, _, err := p.binding.ValidateResult(ctx, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
 	return verified, err
