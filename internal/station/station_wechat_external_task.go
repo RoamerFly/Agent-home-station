@@ -161,7 +161,7 @@ func (t *stationAttachmentTools) externalTaskView(j stationWechatExternalTaskJob
 	case "waiting":
 		view["next_check_at"] = minTime(j.Updated.Add(time.Duration(j.Interval)*time.Second), j.Started.Add(time.Duration(j.Deadline)*time.Second))
 	case "media_pending":
-		view["instruction"] = "外部任务返回了媒体 URL，尚未完成安全领取，不能作为可投递成品。"
+		view["instruction"] = "媒体已在工作站登记但尚未领取；用 status 查询原任务，领取成功后才可投递。"
 		if j.Text != "" {
 			raw, _ := json.Marshal(map[string]string{"text": j.Text})
 			page, err := localExternalTextPage(raw, offset, limit)
@@ -222,6 +222,9 @@ func (t *stationAttachmentTools) callPublicExternalTask(ctx context.Context, raw
 	if err != nil || j.Registration != externalDigest(registration) || def.Protocol.Tool.Fingerprint != j.Ticket.Fingerprint {
 		return localProcessJSON(map[string]any{"tool": j.Tool, "task_id": j.ID, "state": "needs_review",
 			"instruction": "工作站登记或授权已变化，请核对原任务。"})
+	}
+	if j.State == "media_pending" && input.Action == "status" && input.Offset == 0 {
+		return t.collectPublicExternalTaskMedia(ctx, &j, input.Limit)
 	}
 	if j.Pending != "" || j.State != "waiting" || input.Action == "status" && input.Offset != 0 {
 		return t.externalTaskView(j, input.Offset, input.Limit, true)
@@ -332,7 +335,7 @@ func (t *stationAttachmentTools) runPublicExternalTaskPhase(ctx context.Context,
 			}
 		}
 	}()
-	result, callErr := t.projects.publicExternalTaskPhase(bound, j.Fish, j.Registration, j.Tool, phase, j.Arguments, j.Ticket, j.Initial)
+	result, callErr := t.projects.publicExternalTaskPhase(bound, j.Fish, j.Registration, j.Tool, j.ID, phase, j.Arguments, j.Ticket, j.Initial)
 	cancel()
 	<-done
 	j.Pending = ""
@@ -365,6 +368,53 @@ func (t *stationAttachmentTools) runPublicExternalTaskPhase(ctx context.Context,
 		return "", err
 	}
 	if !t.externalTaskAllowed(t.trace, *j) {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	return t.externalTaskView(*j, 0, limit, false)
+}
+
+func (t *stationAttachmentTools) collectPublicExternalTaskMedia(ctx context.Context, j *stationWechatExternalTaskJob, limit int) (string, error) {
+	if !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	bound, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-bound.Done():
+				return
+			case <-ticker.C:
+				if !t.externalTaskAllowed(t.trace, *j) || !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	media, fetchErr := t.projects.publicExternalTaskMedia(bound, j.Fish, j.Registration, j.Tool, j.ID, j.Ticket.Fingerprint)
+	cancel()
+	<-done
+	if fetchErr != nil {
+		base, err := t.externalTaskView(*j, 0, limit, true)
+		if err != nil {
+			return "", err
+		}
+		return publicExternalMediaPending(base, fetchErr)
+	}
+	j.Bytes, j.SHA256, j.DeclaredKind = int64(len(media.Data)), externalDigest(media.Data), media.Kind
+	j.MIME, _, _ = mime.ParseMediaType(media.MIMEType)
+	if j.MIME == "" {
+		j.MIME = "application/octet-stream"
+	}
+	j.State, j.Updated = "completed", time.Now().UTC()
+	if err := t.writeExternalTaskJob(*j, media.Data); err != nil {
+		return "", err
+	}
+	if !t.externalTaskAllowed(t.trace, *j) || !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	return t.externalTaskView(*j, 0, limit, false)

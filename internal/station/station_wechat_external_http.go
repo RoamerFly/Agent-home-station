@@ -25,13 +25,13 @@ import (
 // The WeChat application owns source binding and the durable submit-once
 // journal. The workstation backend receives no WeChat account or message.
 type stationWechatExternalHTTPJob struct {
-	ID, Account, Thread, Sender, Trace, Fish string
-	Source                                   companion.SourceRef
-	Grant, MediaGrant                        time.Time
-	Registration, RequestHash, Tool          string
-	State, Text                              string
-	SHA256, MIME, DeclaredKind               string
-	Bytes                                    int64
+	ID, Account, Thread, Sender, Trace, Fish     string
+	Source                                       companion.SourceRef
+	Grant, MediaGrant                            time.Time
+	Registration, RequestHash, Tool, Fingerprint string
+	State, Text                                  string
+	SHA256, MIME, DeclaredKind                   string
+	Bytes                                        int64
 }
 
 func (j stationWechatExternalHTTPJob) expectedID() string {
@@ -173,6 +173,16 @@ func (t *stationAttachmentTools) externalHTTPView(j stationWechatExternalHTTPJob
 			view["output"] = page
 		}
 		view["untrusted_external_content"] = true
+	} else if j.State == "media_pending" {
+		view["instruction"] = "媒体已在工作站登记但尚未领取；用相同工具和参数查询原任务，领取成功后才可投递。"
+		if j.Text != "" {
+			raw, _ := json.Marshal(map[string]string{"text": j.Text})
+			page, err := localExternalTextPage(raw, offset, limit)
+			if err != nil {
+				return "", err
+			}
+			view["output"], view["untrusted_external_content"] = page, true
+		}
 	} else {
 		view["instruction"] = "请求结果尚未确认；请核对原服务，不要重新提交同一操作。"
 	}
@@ -228,7 +238,7 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 	if index < 0 {
 		return "", mcptools.ArgumentError("$.tool", "该工具未在工作站启用")
 	}
-	if tools[index].MediaURLPath != "" || tools[index].TextPath == "" && tools[index].MediaKind == "" {
+	if tools[index].TextPath == "" && tools[index].MediaKind == "" {
 		return "", errors.New("该工具没有当前微信适配器支持的响应类型")
 	}
 	if tools[index].MediaKind != "" && !t.replyAllowed(t.trace) {
@@ -244,7 +254,7 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 	}
 	j := stationWechatExternalHTTPJob{Account: t.trace.Account, Thread: t.trace.Thread, Sender: t.trace.Sender,
 		Trace: t.trace.TraceID, Fish: owner.FishID, Source: *source, Grant: t.grants[t.trace.Thread], MediaGrant: t.replies[t.trace.Thread],
-		Registration: externalDigest(registration), Tool: input.Tool,
+		Registration: externalDigest(registration), Tool: input.Tool, Fingerprint: tools[index].Fingerprint,
 		RequestHash: localCheckpointKey(input.Tool, arguments), State: "submitting"}
 	j.ID = j.expectedID()
 	previous, previousErr := t.readExternalHTTPJob(j.ID)
@@ -258,6 +268,13 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 		if previous.Registration != j.Registration {
 			return localProcessJSON(map[string]any{"tool": input.Tool, "task_id": previous.ID, "state": "needs_review", "reused": true,
 				"instruction": "工作站登记已变化；请核对原请求，不要重新提交同一操作。"})
+		}
+		if previous.Fingerprint != "" && previous.Fingerprint != j.Fingerprint {
+			return localProcessJSON(map[string]any{"tool": input.Tool, "task_id": previous.ID, "state": "needs_review", "reused": true,
+				"instruction": "工具声明已变化，请核对原请求，不要重新提交。"})
+		}
+		if previous.State == "media_pending" && input.Offset == 0 {
+			return t.collectPublicExternalHTTPMedia(ctx, &previous, input.Limit)
 		}
 		if previous.State == "submitting" {
 			previous.State = "needs_review"
@@ -293,15 +310,18 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 			}
 		}
 	}()
-	output, callErr := t.projects.publicExternalHTTP(bound, owner.FishID, j.Registration, input.Tool, arguments)
+	result, callErr := t.projects.publicExternalHTTP(bound, owner.FishID, j.Registration, input.Tool, j.ID, arguments)
 	cancel()
 	<-done
 	if callErr != nil {
 		j.State = "needs_review"
 	} else {
-		j.State, j.Text = "completed", output.Text
-		if len(output.Media) == 1 {
-			media := output.Media[0]
+		j.State, j.Text = "completed", result.Output.Text
+		if result.MediaPending {
+			j.State = "media_pending"
+		}
+		if len(result.Output.Media) == 1 {
+			media := result.Output.Media[0]
 			j.Bytes = int64(len(media.Data))
 			j.SHA256 = externalDigest(media.Data)
 			j.DeclaredKind = media.Kind
@@ -312,8 +332,8 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 		}
 	}
 	var binary []byte
-	if len(output.Media) == 1 && callErr == nil {
-		binary = output.Media[0].Data
+	if len(result.Output.Media) == 1 && callErr == nil {
+		binary = result.Output.Media[0].Data
 	}
 	if err := t.writeExternalHTTPJob(j, binary); err != nil {
 		return "", err
@@ -322,6 +342,53 @@ func (t *stationAttachmentTools) callPublicExternalHTTP(ctx context.Context, raw
 		return "", wechatapp.ErrAttachmentDenied
 	}
 	return t.externalHTTPView(j, 0, input.Limit, false)
+}
+
+func (t *stationAttachmentTools) collectPublicExternalHTTPMedia(ctx context.Context, j *stationWechatExternalHTTPJob, limit int) (string, error) {
+	if !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) || !validLocalRVCHex(j.Fingerprint, 64) {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	bound, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-bound.Done():
+				return
+			case <-ticker.C:
+				if !t.externalHTTPAllowed(t.trace, *j) || !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	media, fetchErr := t.projects.publicExternalHTTPMedia(bound, j.Fish, j.Registration, j.Tool, j.ID, j.Fingerprint)
+	cancel()
+	<-done
+	if fetchErr != nil {
+		base, err := t.externalHTTPView(*j, 0, limit, true)
+		if err != nil {
+			return "", err
+		}
+		return publicExternalMediaPending(base, fetchErr)
+	}
+	j.Bytes, j.SHA256, j.DeclaredKind = int64(len(media.Data)), externalDigest(media.Data), media.Kind
+	j.MIME, _, _ = mime.ParseMediaType(media.MIMEType)
+	if j.MIME == "" {
+		j.MIME = "application/octet-stream"
+	}
+	j.State = "completed"
+	if err := t.writeExternalHTTPJob(*j, media.Data); err != nil {
+		return "", err
+	}
+	if !t.externalHTTPAllowed(t.trace, *j) || !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	return t.externalHTTPView(*j, 0, limit, false)
 }
 
 func (t *stationAttachmentTools) externalHTTPMediaAllowed(in companion.Input, asset string) (stationWechatExternalHTTPJob, bool) {

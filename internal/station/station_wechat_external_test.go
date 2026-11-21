@@ -124,10 +124,11 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 		}
 	}
 	var requests atomic.Int32
-	var fileRequests, uploads atomic.Int32
+	var fileRequests, uploads, mediaRequests, mediaFetches atomic.Int32
 	const secret = "synthetic-private-key"
 	binary := []byte("synthetic binary external response")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/accounts/synthetic-account/uploads" {
 			file, header, err := r.FormFile("file")
 			if err != nil {
@@ -144,6 +145,17 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 			fmt.Fprintf(w, `{"id":"synthetic-external-upload","name":%q,"byteLength":%d,"sha256":%q}`, header.Filename, len(body), externalDigest(body))
 			return
 		}
+		if r.URL.Path == "/asset" {
+			if r.Header.Get("Authorization") != "" || r.URL.RawQuery != "ticket=private" {
+				t.Error("media request leaked credential or lost signed reference")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mediaFetches.Add(1)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(binary)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("host credential missing")
 		}
@@ -151,6 +163,12 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 			fileRequests.Add(1)
 			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = w.Write(binary)
+			return
+		}
+		if r.URL.Path == "/media" {
+			mediaRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"asset_url":"` + server.URL + `/asset?ticket=private"}`))
 			return
 		}
 		requests.Add(1)
@@ -163,6 +181,9 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 			Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
 			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)},
 			{Name: "file", URL: server.URL + "/file", Method: "GET", MediaKind: "file",
+				Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
+				InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)},
+			{Name: "media", URL: server.URL + "/media", Method: "GET", MediaKind: "file", MediaURLPath: "asset_url",
 				Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
 				InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}}},
 		Enabled: true, Secrets: map[string]string{"api_key": secret}}}}
@@ -230,8 +251,27 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 	if uploaded, err := adapter.stageReply(t.Context(), in, "file", mediaView.Media[0].AssetID); err != nil || uploaded != "synthetic-external-upload" || uploads.Load() != 1 {
 		t.Fatal("binary external result could not be staged", uploaded, err, uploads.Load())
 	}
+	mediaCall := json.RawMessage(`{"tool":"synthetic__media","arguments":{}}`)
+	pending, err := adapter.Call(t.Context(), localExternalHTTPCall, mediaCall)
+	if err != nil || !strings.Contains(pending, `"state":"media_pending"`) || strings.Contains(pending, server.URL) ||
+		mediaRequests.Load() != 1 || mediaFetches.Load() != 0 {
+		t.Fatal("sync media URL was not held privately", pending, err)
+	}
+	collected, err := adapter.Call(t.Context(), localExternalHTTPCall, mediaCall)
+	var collectedView struct {
+		State string                     `json:"state"`
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if err != nil || json.Unmarshal([]byte(collected), &collectedView) != nil || collectedView.State != "completed" ||
+		len(collectedView.Media) != 1 || mediaRequests.Load() != 1 || mediaFetches.Load() != 1 || strings.Contains(collected, server.URL) {
+		t.Fatal("sync media was not collected without resubmission", collected, err)
+	}
+	if uploaded, err := adapter.stageReply(t.Context(), in, "file", collectedView.Media[0].AssetID); err != nil ||
+		uploaded != "synthetic-external-upload" || uploads.Load() != 2 {
+		t.Fatal("collected sync media could not be staged", uploaded, err)
+	}
 	delete(adapter.replies, in.Thread)
-	if _, err := adapter.stageReply(t.Context(), in, "file", mediaView.Media[0].AssetID); err == nil || uploads.Load() != 1 {
+	if _, err := adapter.stageReply(t.Context(), in, "file", mediaView.Media[0].AssetID); err == nil || uploads.Load() != 2 {
 		t.Fatal("revoked media grant still allowed upload")
 	}
 	adapter.replies[in.Thread] = grant

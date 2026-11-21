@@ -40,9 +40,21 @@ func TestWechatExternalJobAndPollUseDurableApplicationTasks(t *testing.T) {
 			t.Fatal(code, out)
 		}
 	}
-	var jobStarts, jobPolls, jobCancels, pollStarts, pollQueries, binaryStarts, unknownStarts atomic.Int32
+	var jobStarts, jobPolls, jobCancels, pollStarts, pollQueries, binaryStarts, unknownStarts, mediaStarts, mediaFetches atomic.Int32
 	const secret = "synthetic-task-secret"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/asset" {
+			if r.Header.Get("Authorization") != "" || r.URL.RawQuery != "ticket=private" {
+				t.Error("media request forwarded a credential or lost its signed URL")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mediaFetches.Add(1)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte("verified-url-media"))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+secret {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -71,6 +83,11 @@ func TestWechatExternalJobAndPollUseDurableApplicationTasks(t *testing.T) {
 		case "/unknown":
 			unknownStarts.Add(1)
 			_, _ = w.Write([]byte(`{"state":"pending"}`))
+		case "/media-job":
+			mediaStarts.Add(1)
+			_, _ = w.Write([]byte(`{"id":"private-media-789","state":"done","asset_url":"` + server.URL + `/asset?ticket=private"}`))
+		case "/bad-media-job":
+			_, _ = w.Write([]byte(`{"id":"private-media-bad","state":"done","asset_url":"http://127.0.0.1:1/unapproved"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -91,8 +108,14 @@ func TestWechatExternalJobAndPollUseDurableApplicationTasks(t *testing.T) {
 	binary.Name, binary.URL, binary.MediaKind = "binary", server.URL+"/binary", "file"
 	unknown := job
 	unknown.Name, unknown.URL = "unknown", server.URL+"/unknown"
+	media := job
+	media.Name, media.URL, media.MediaKind = "media", server.URL+"/media-job", "file"
+	media.Poll = &plugins.PollSpec{URL: server.URL + "/job/{{result.id}}", StatusPath: "state", DoneValues: []string{"done"},
+		MediaURLPath: "asset_url", IntervalSeconds: 1}
+	badMedia := media
+	badMedia.Name, badMedia.URL = "bad_media", server.URL+"/bad-media-job"
 	registration := map[string]any{"connections": []plugins.Installed{{Manifest: plugins.Manifest{ID: "async", Name: "Synthetic async", Version: "1",
-		Tools: []plugins.APITool{job, poll, binary, unknown}}, Enabled: true, Secrets: map[string]string{"key": secret}}}}
+		Tools: []plugins.APITool{job, poll, binary, unknown, media, badMedia}}, Enabled: true, Secrets: map[string]string{"key": secret}}}}
 	path := stationToolRegistrationPath(f.handler.home.dataDir, localExternalRegistration)
 	raw, _ := json.Marshal(registration)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -149,7 +172,8 @@ func TestWechatExternalJobAndPollUseDurableApplicationTasks(t *testing.T) {
 			t.Fatal(action, tool, err)
 		}
 		var view map[string]any
-		if json.Unmarshal([]byte(text), &view) != nil || strings.Contains(text, secret) || strings.Contains(text, "private-job-123") || strings.Contains(text, "private-poll-456") {
+		if json.Unmarshal([]byte(text), &view) != nil || strings.Contains(text, secret) || strings.Contains(text, server.URL) ||
+			strings.Contains(text, "private-job-123") || strings.Contains(text, "private-poll-456") {
 			t.Fatal("task leaked provider state", text)
 		}
 		return view, text
@@ -224,6 +248,35 @@ func TestWechatExternalJobAndPollUseDurableApplicationTasks(t *testing.T) {
 	_ = root.Close()
 	if err != nil || string(data) != "verified-immediate-binary" {
 		t.Fatal("binary result bytes changed", err)
+	}
+	mediaPending, _ := call("start", "async__media", "", "run")
+	mediaID, _ := mediaPending["task_id"].(string)
+	if mediaPending["state"] != "media_pending" || mediaStarts.Load() != 1 || mediaFetches.Load() != 0 {
+		t.Fatal("verified media URL was not held privately", mediaPending)
+	}
+	mediaReady, _ := call("status", "", mediaID, "")
+	if mediaReady["state"] != "completed" || mediaFetches.Load() != 1 {
+		t.Fatal("verified media URL was not collected", mediaReady, mediaFetches.Load())
+	}
+	mediaRoot, err := adapter.externalTaskRoot(mediaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaFile, err := workspacefs.OpenRegular(mediaRoot, "output.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaData, err := io.ReadAll(mediaFile)
+	_ = mediaFile.Close()
+	_ = mediaRoot.Close()
+	if err != nil || string(mediaData) != "verified-url-media" {
+		t.Fatal("collected media bytes changed", err)
+	}
+	badPending, _ := call("start", "async__bad_media", "", "run")
+	badID, _ := badPending["task_id"].(string)
+	badStatus, _ := call("status", "", badID, "")
+	if badStatus["state"] != "media_pending" || mediaFetches.Load() != 1 {
+		t.Fatal("unapproved media origin was fetched", badStatus, mediaFetches.Load())
 	}
 	unknownResult, _ := call("start", "async__unknown", "", "run")
 	if unknownResult["state"] != "needs_review" || unknownStarts.Load() != 1 {

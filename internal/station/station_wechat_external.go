@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"wechat-bot/internal/mcptools"
 )
@@ -24,13 +25,13 @@ func (t *stationAttachmentTools) publicExternalCatalogTools(ctx context.Context)
 	if len(httpTools) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalHTTPList, "分页查看工作站已启用的同步 HTTP 工具及参数，不返回地址、请求头或密钥。", `{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"default":8}},"additionalProperties":false}`))
 		if t.externalMu != nil && t.store != nil {
-			tools = append(tools, mcptools.NewTool(localExternalHTTPCall, "调用工作站已登记的同步 HTTP 工具，返回 JSON 文本或二进制文件。正文可分页；相同消息和参数只提交一次，结果不明时需核对原服务。", `{"type":"object","properties":{"tool":{"type":"string"},"arguments":{"type":"object"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"default":1200}},"required":["tool","arguments"],"additionalProperties":false}`))
+			tools = append(tools, mcptools.NewTool(localExternalHTTPCall, "调用工作站已登记的同步 HTTP 工具，返回正文或文件。媒体待领取时用相同参数查询原任务；相同消息和参数只提交一次，回执不明时需核对原服务。", `{"type":"object","properties":{"tool":{"type":"string"},"arguments":{"type":"object"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"default":1200}},"required":["tool","arguments"],"additionalProperties":false}`))
 		}
 	}
 	if len(taskTools) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalTaskList, "分页查看工作站已启用的异步 Job 和 Poll 工具及输入参数。", `{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`))
 		if t.externalMu != nil && t.store != nil {
-			tools = append(tools, mcptools.NewTool(localExternalTaskCall, "提交、查询或取消工作站已登记的异步任务。每个网络阶段只提交一次；状态结果可分页，回执不明时请核对原服务。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","status","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"task_id":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`))
+			tools = append(tools, mcptools.NewTool(localExternalTaskCall, "提交、查询或取消工作站已登记的异步任务。媒体待领取时用 status 读取原任务。每个请求阶段只提交一次；正文可分页，回执不明时请核对原服务。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","status","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"task_id":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`))
 		}
 	}
 	if len(servers) != 0 {
@@ -71,4 +72,20 @@ func (t *stationAttachmentTools) callPublicExternalCatalog(ctx context.Context, 
 		return localProcessJSON(map[string]any{"servers": views})
 	}
 	return "", errors.New("未知外部工具目录")
+}
+
+func publicExternalMediaPending(base string, fetchErr error) (string, error) {
+	var view map[string]any
+	if json.Unmarshal([]byte(base), &view) != nil {
+		return "", errors.New("外部媒体任务状态不可读")
+	}
+	code := "external_media_fetch_unconfirmed"
+	if fetchErr != nil && strings.HasPrefix(fetchErr.Error(), "external_media_") {
+		code = fetchErr.Error()
+	}
+	view["media_error"] = code
+	if code == "external_media_origin_unapproved" {
+		view["instruction"] = "返回的媒体来源未获工作站登记许可；请人工核对原任务和来源，原请求不会重发。"
+	}
+	return localProcessJSON(view)
 }

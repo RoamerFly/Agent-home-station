@@ -46,7 +46,7 @@ type publicExternalTaskPhaseResult struct {
 
 // A phase is one request using the workstation's current declaration. The
 // caller owns the durable phase reservation, source authorization and cadence.
-func (s *localProjectTools) publicExternalTaskPhase(ctx context.Context, fish, registration, name, phase string,
+func (s *localProjectTools) publicExternalTaskPhase(ctx context.Context, fish, registration, name, taskID, phase string,
 	arguments json.RawMessage, ticket plugins.JobTicket, initial plugins.ExternalResponse) (publicExternalTaskPhaseResult, error) {
 	var result publicExternalTaskPhaseResult
 	host, err := s.forFish(fish)
@@ -194,6 +194,12 @@ func (s *localProjectTools) publicExternalTaskPhase(ctx context.Context, fish, r
 	}
 	result.Ticket = next
 	result.MediaPending = len(next.Output.Media) != 0
+	if result.MediaPending {
+		media := next.Output.Media[0]
+		if err := s.savePublicExternalMedia(taskID, registration, name, ticket.Fingerprint, media.Kind, media.URL); err != nil {
+			return publicExternalTaskPhaseResult{}, errors.New("外部媒体引用尚未安全保存，请核对原任务")
+		}
+	}
 	result.Text = next.Output.Text
 	for _, secret := range externalConnectionSecrets(connections, name) {
 		result.Text = strings.ReplaceAll(result.Text, secret, "[已隐藏]")
