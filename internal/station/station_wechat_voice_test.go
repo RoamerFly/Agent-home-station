@@ -290,6 +290,54 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 			t.Fatal("audio.cpp transcription repeated", second, err)
 		}
 	})
+	t.Run("audio_workshop_prepares_verified_wav_once", func(t *testing.T) {
+		if os.Getenv("AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST") != "1" {
+			t.Skip("set AHS_LOCAL_PROJECT_AUDIO_LPAC_TEST=1 for Windows LPAC integration")
+		}
+		f := localChatFixture(t)
+		f.handler.chat.projectTools.options = localProjectToolWindowsOptionsFor(t, localAudioPackage)
+		if code, out := f.request("GET", "/api/local/project-tools", nil, true); code != http.StatusOK {
+			t.Fatal(code, out)
+		}
+		route := "/api/local/project-tools/" + localAudioPackage
+		for _, action := range []string{"install", "enable"} {
+			input := map[string]any{"action": action}
+			if action == "install" {
+				input["approve_artifacts"] = true
+			} else {
+				input["revision"] = localProjectToolRevision(t, localProjectToolByID(t, f, localAudioPackage))
+			}
+			if code, out := f.request("PUT", route, input, true); code != http.StatusOK {
+				t.Fatal(code, out)
+			}
+		}
+		tools.projects = f.handler.chat.projectTools
+		tools.externalMu = new(sync.Mutex)
+		tools.projectOwnerAllowed = func(in companion.Input) bool { return in.Sender == "alice" }
+		tools.replies = map[string]time.Time{thread: now.Add(-time.Minute)}
+		defer func() {
+			tools.projects, tools.externalMu, tools.projectOwnerAllowed, tools.replies = nil, nil, nil, nil
+		}()
+		fileRef := refFor(messages["audio-wav"])
+		fileInput := companion.Input{Channel: "wechat", Account: account, Thread: thread, Sender: "alice", TraceID: "audio-wav",
+			MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true, Source: fileRef}
+		tools.SetTrace(fileInput)
+		listed, err := tools.List(t.Context())
+		if err != nil || !hasTool(listed, localAudioToolName) {
+			t.Fatal("audio workshop application tool missing", err)
+		}
+		before := originalTransfers.Load()
+		request := json.RawMessage(`{"message_id":"audio-wav","filename":"prepared-mono.wav","start_seconds":0.25,"duration_seconds":0.5,"channels":"mono"}`)
+		first, err := tools.Call(t.Context(), localAudioToolName, request)
+		if err != nil || !strings.Contains(first, `"state":"completed"`) || !strings.Contains(first, `"delivery_kind":"file"`) ||
+			!strings.Contains(first, "prepared-mono.wav") || originalTransfers.Load() != before+1 {
+			t.Fatal("audio workshop did not prepare verified WAV", first, err)
+		}
+		second, err := tools.Call(t.Context(), localAudioToolName, request)
+		if err != nil || !strings.Contains(second, `"reused":true`) || originalTransfers.Load() != before+1 {
+			t.Fatal("audio workshop request repeated", second, err)
+		}
+	})
 
 	requestRef := &companion.SourceRef{Account: account, Thread: thread, MessageID: "request", ServerID: "request-server", Sender: "owner", MessageType: 1, OccurredAt: now.Add(time.Second).Format(time.RFC3339Nano), BodyHash: "request-body"}
 	quoted := companion.Input{Channel: "wechat", Account: account, Thread: thread, Sender: "owner", TraceID: "request", MessageTime: requestRef.OccurredAt, Source: requestRef, QuotedSource: voiceRef}

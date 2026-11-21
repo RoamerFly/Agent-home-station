@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/plugins"
 	"wechat-bot/internal/strictjson"
 	"wechat-bot/internal/workspacefs"
@@ -34,6 +36,7 @@ type stationWechatExternalHTTPJob struct {
 	Tools                                        []mcptools.Tool
 	IsError                                      bool
 	MCPMedia                                     []stationWechatExternalMCPMedia
+	InputSHA256, Filename                        string
 	SHA256, MIME, DeclaredKind                   string
 	Bytes                                        int64
 }
@@ -68,8 +71,12 @@ func (j stationWechatExternalHTTPJob) media() companion.GeneratedMedia {
 	case "application/pdf":
 		extension = ".pdf"
 	}
+	title := "工作站外部结果" + extension
+	if j.Filename != "" && mediaspec.SafeFilename(j.Filename) && strings.EqualFold(filepath.Ext(j.Filename), extension) {
+		title = j.Filename
+	}
 	return companion.GeneratedMedia{ID: "reply-external-" + j.ID, AssetID: "external-" + j.ID,
-		Kind: "file", Title: "工作站外部结果" + extension, CachedMIME: j.MIME}
+		Kind: "file", Title: title, CachedMIME: j.MIME}
 }
 
 func (t *stationAttachmentTools) externalHTTPAllowed(in companion.Input, j stationWechatExternalHTTPJob) bool {

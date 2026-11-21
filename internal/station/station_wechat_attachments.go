@@ -352,6 +352,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	tools = append(tools, t.publicRVCTools(ctx)...)
 	tools = append(tools, t.publicExternalCatalogTools(ctx)...)
 	tools = append(tools, t.publicAudioCppTools(ctx)...)
+	if tool, ok := t.publicAudioPrepareTool(ctx); ok {
+		tools = append(tools, tool)
+	}
 	if !t.allowed() {
 		return tools, nil
 	}
@@ -501,6 +504,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localAudioCppModelsTool || name == localAudioCppSynthesizeTool || name == localAudioCppTranscribeTool {
 		return t.callPublicAudioCpp(ctx, name, raw)
+	}
+	if name == localAudioToolName {
+		return t.callPublicAudioPrepare(ctx, raw)
 	}
 	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {
 		return t.callPublicExternalCatalog(ctx, name, raw)
