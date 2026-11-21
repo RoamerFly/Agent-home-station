@@ -157,7 +157,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		// An application owns its generated-media delivery. Its speech adapter
 		// exposes the same workstation capability after wiring that delivery.
 		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool {
-			return tool.Name == localTTSStartTool || tool.Name == localYuEStartTool || tool.Name == localYuEJobTool || tool.Name == localComfyListTool || tool.Name == localComfyStartTool || tool.Name == localComfyJobTool
+			return tool.Name == localTTSStartTool || tool.Name == localYuEStartTool || tool.Name == localYuEJobTool || tool.Name == localComfyListTool || tool.Name == localComfyStartTool || tool.Name == localComfyJobTool ||
+				tool.Name == localExternalHTTPList || tool.Name == localExternalHTTPCall || tool.Name == localExternalTaskList || tool.Name == localExternalTaskCall ||
+				tool.Name == localExternalMCPServers || tool.Name == localExternalMCPList || tool.Name == localExternalMCPCall
 		})
 		return all, nil
 	}
@@ -218,6 +220,10 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if t.publicUseOnly && (name == localExternalHTTPList || name == localExternalHTTPCall || name == localExternalTaskList || name == localExternalTaskCall ||
+		name == localExternalMCPServers || name == localExternalMCPList || name == localExternalMCPCall) {
+		return "", errors.New("外部工具微信应用入口须由应用工作台处理")
+	}
 	if t.publicUseOnly && (name == localRVCVoicesTool || name == localRVCStartTool || name == localRVCJobTool) {
 		return "", errors.New("RVC 微信应用入口须由应用工作台处理")
 	}

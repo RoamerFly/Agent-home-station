@@ -349,6 +349,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	tools = append(tools, t.publicComfyTools(ctx)...)
 	tools = append(tools, t.publicYuETools(ctx)...)
 	tools = append(tools, t.publicRVCTools(ctx)...)
+	tools = append(tools, t.publicExternalCatalogTools(ctx)...)
 	if !t.allowed() {
 		return tools, nil
 	}
@@ -486,6 +487,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localRVCJobTool {
 		return t.callPublicRVCJob(ctx, raw)
+	}
+	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {
+		return t.callPublicExternalCatalog(ctx, name, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)
