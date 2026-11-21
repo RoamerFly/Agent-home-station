@@ -383,10 +383,6 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, prepared)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/install", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		if _, shared := s.manager.sharedStationVision(); shared {
-			fail(w, 409, "公共工具安装与更新请在工作站的项目工具页维护。")
-			return
-		}
 		var input struct {
 			Token       string   `json:"token"`
 			Digest      string   `json:"digest"`
@@ -408,6 +404,17 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		if err != nil {
 			fail(w, 500, "工具存储不可用")
 			return
+		}
+		if _, shared := s.manager.sharedStationVision(); shared {
+			prepared, prepareErr := store.Prepared(r.Context(), input.Token)
+			if prepareErr != nil || !legacyWechatPackageUpgrade(prepared.Package.ID) {
+				fail(w, 409, "公共工具安装与更新请在工作站的项目工具页维护。")
+				return
+			}
+			if current, currentErr := store.Installed(r.Context(), prepared.Package.ID); currentErr != nil || current.Removed {
+				fail(w, 409, "该微信工具尚未安装，不能在旧管理端新增安装")
+				return
+			}
 		}
 		if s.manager.mobileRetired {
 			prepared, preparedErr := store.Prepared(r.Context(), input.Token)
@@ -434,6 +441,12 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 201, installed)
 	}))
+}
+
+// These WeChat calls still execute through the legacy package host. Keep their
+// installed snapshots upgradable while the Station owns all new public tools.
+func legacyWechatPackageUpgrade(id string) bool {
+	return id == projectPluginID || id == "share-reader"
 }
 
 // An uninstalled package cannot supply a UI declaration. The host retains only

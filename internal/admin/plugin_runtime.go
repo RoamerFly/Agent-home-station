@@ -150,7 +150,7 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			fail(w, 400, "请选择按需启用、启动或停止")
 			return
 		}
-		if _, shared := s.manager.sharedStationVision(); shared && id != mobileDevicePluginID && input.Action != "stop" && input.Action != "stop_session" {
+		if _, shared := s.manager.sharedStationVision(); shared && id != mobileDevicePluginID && !legacyWechatPackageUpgrade(id) && input.Action != "stop" && input.Action != "stop_session" {
 			fail(w, http.StatusConflict, "公共工具启动与配置请在工作站的项目工具页维护。")
 			return
 		}
