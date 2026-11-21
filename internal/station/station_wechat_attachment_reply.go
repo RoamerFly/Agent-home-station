@@ -11,6 +11,14 @@ import (
 )
 
 func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, bool) {
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && artifactID(asset, "speech-") {
+		p, file, err := t.speechProduct(asset)
+		if err != nil {
+			return companion.GeneratedMedia{}, false
+		}
+		file.Close()
+		return p.media(), t.speechProductAllowed(t.trace, p)
+	}
 	if asset, ok := strings.CutPrefix(id, "reply-"); ok && stationDocumentReplyID(asset) {
 		r, err := t.readDocumentReply(asset)
 		if err != nil {
@@ -60,6 +68,12 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
+	if artifactID(asset, "speech-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageSpeech(ctx, in, asset)
+	}
 	if stationDocumentReplyID(asset) {
 		if kind != "file" {
 			return "", wechatapp.ErrAttachmentDenied
@@ -98,6 +112,17 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 }
 
 func (t *stationAttachmentTools) canSubmitMedia(ctx context.Context, in companion.Input, kind, asset string) bool {
+	if artifactID(asset, "speech-") {
+		p, file, err := t.speechProduct(asset)
+		if err != nil || kind != "file" {
+			if file != nil {
+				file.Close()
+			}
+			return false
+		}
+		file.Close()
+		return t.speechProductAllowed(in, p)
+	}
 	if !stationDocumentReplyID(asset) {
 		return true
 	}

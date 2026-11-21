@@ -78,14 +78,14 @@ func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) 
 		}
 		return seen
 	}
-	if !listed()[localTTSStartTool] {
-		t.Fatal("enabled workstation speech was unavailable to application")
+	if !listed()[localTTSVoicesTool] || listed()[localTTSStartTool] {
+		t.Fatal("application public catalog exposed a source-bound synthesis path")
 	}
 	installed := localProjectToolByID(t, f, localTTSPackage)
 	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
 		t.Fatalf("disable workstation speech: %d %#v", code, out)
 	}
-	if listed()[localTTSStartTool] {
+	if listed()[localTTSVoicesTool] {
 		t.Fatal("application retained workstation speech after it was disabled")
 	}
 }

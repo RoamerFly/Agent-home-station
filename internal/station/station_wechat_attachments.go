@@ -10,6 +10,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -271,6 +272,9 @@ type stationAttachmentTools struct {
 	localASR           stationLocalASR
 	localVision        stationLocalVision
 	shareProgress      func(string, string, string)
+	speech             *localProjectTools
+	speechOwnerAllowed func(companion.Input) bool
+	speechMu           *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -335,6 +339,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 		if t.legacyMemoryAvailable(ctx) {
 			tools = append(tools, wechatapp.StationLegacyMemoryTool())
 		}
+	}
+	if tool, ok := t.publicSpeechTool(ctx); ok {
+		tools = append(tools, tool)
 	}
 	if !t.allowed() {
 		return tools, nil
@@ -446,6 +453,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == "wechat_work_reply" {
 		return t.workReply(ctx, raw)
+	}
+	if name == localTTSStartTool {
+		return t.callPublicSpeech(ctx, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)

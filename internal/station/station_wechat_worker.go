@@ -115,6 +115,7 @@ type stationWechatWorker struct {
 	surfCancel       context.CancelFunc
 	rollbackAuditMu  sync.Mutex
 	shareMu          sync.Mutex
+	speechMu         sync.Mutex
 	share            *stationShareHost
 	dir              string
 	runtimeDir       string
@@ -827,6 +828,11 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	attachment.stationImageVision, attachment.stationVideoVision, attachment.localVision = policy.StationImageVision, policy.StationVideoVision, s.localVision
 	attachment.stationLocalAudio, attachment.localASR = policy.StationLocalAudio, s.localASR
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
+	if s.localChat != nil {
+		attachment.speech = s.localChat.projectTools
+		attachment.speechOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
+		attachment.speechMu = &station.speechMu
+	}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}

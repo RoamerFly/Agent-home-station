@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -154,6 +155,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 			all = append(all, t.localTTSTools(ctx)...)
 			all = append(all, t.localAudioCppTools(ctx)...)
 		}
+		// An application owns its generated-media delivery. Its speech adapter
+		// exposes the same workstation capability after wiring that delivery.
+		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool { return tool.Name == localTTSStartTool })
 		return all, nil
 	}
 	all := []mcptools.Tool{}
