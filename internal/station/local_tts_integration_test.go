@@ -90,6 +90,28 @@ func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) 
 	}
 }
 
+func TestPublicSpeechProcessesRequestWithoutApplicationSource(t *testing.T) {
+	f, backend := newLocalTTSFixture(t)
+	backend.defaultVoiceID = backend.voice.ID
+	fish, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	speed := 0.8
+	request := localTTSRequest{Text: "A synthetic test.", Speed: &speed, Language: "en"}
+	result, err := f.handler.chat.projectTools.synthesizePublicSpeech(t.Context(), fish.FishID, request)
+	if err != nil || result.VoiceID != backend.voice.ID || len(result.WAV) == 0 || backend.calls.Load() != 1 {
+		t.Fatalf("public speech did not process request: %#v, %v", result.VoiceID, err)
+	}
+	installed := localProjectToolByID(t, f, localTTSPackage)
+	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("disable workstation speech: %d %#v", code, out)
+	}
+	if _, err := f.handler.chat.projectTools.synthesizePublicSpeech(t.Context(), fish.FishID, request); err == nil || backend.calls.Load() != 1 {
+		t.Fatal("disabled workstation speech was executed")
+	}
+}
+
 func (s *syntheticLocalTTS) Synthesize(ctx context.Context, _ string, binding string, request localTTSRequest) (localTTSResult, error) {
 	s.calls.Add(1)
 	if binding != strings.Repeat("b", 64) || request.VoiceID != s.voice.ID || request.Speed == nil || *request.Speed != 0.8 || request.Language != "en" {
