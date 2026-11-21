@@ -61,25 +61,28 @@ func (b *BoundChannelsRoute) Call(ctx context.Context, store *pluginhost.Store, 
 func (b *BoundChannelsRoute) ValidateResult(ctx context.Context, j pluginhost.Job, raw json.RawMessage, check func(context.Context) error) (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	fail := func() (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
-		return pluginruntime.VerifiedResult{}, linuxnative.ChannelsSource{}, errors.New("share_result_binding_failed")
+	fail := func(code string) (pluginruntime.VerifiedResult, linuxnative.ChannelsSource, error) {
+		return pluginruntime.VerifiedResult{}, linuxnative.ChannelsSource{}, errors.New(code)
 	}
-	if check == nil || b.route.Phase != "complete" || b.route.Resolved == nil || j.Context.Account != b.route.Account || j.Context.Thread != b.route.Thread || j.Context.SourceVersions[b.route.Event] != b.route.Revision || j.Tool != "share.resolve_channels" {
-		return fail()
+	if check == nil || b.route.Phase != "complete" || b.route.Resolved == nil {
+		return fail("share_result_route_incomplete")
+	}
+	if j.Context.Account != b.route.Account || j.Context.Thread != b.route.Thread || j.Context.SourceVersions[b.route.Event] != b.route.Revision || j.Tool != "share.resolve_channels" {
+		return fail("share_result_source_mismatch")
 	}
 	if err := check(ctx); err != nil {
-		return fail()
+		return fail("share_result_source_mismatch")
 	}
 	checkpoint, source, err := b.route.ValidateResult(raw)
 	if err != nil {
-		return fail()
+		return fail(err.Error())
 	}
 	if err := check(ctx); err != nil {
-		return fail()
+		return fail("share_result_source_mismatch")
 	}
 	private, err := json.Marshal(source)
 	if err != nil {
-		return fail()
+		return fail("share_result_binding_failed")
 	}
 	return pluginruntime.VerifiedResult{Result: checkpoint, Private: private}, source, nil
 }

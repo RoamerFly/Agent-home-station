@@ -81,7 +81,7 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 			if !errors.As(err, &diagnostic) || diagnostic.stage != stage || calls != 1 {
 				t.Fatalf("lost host diagnostic: %v, calls=%d", err, calls)
 			}
-			want := map[string]string{"http": "share_plugin_route_http_rejected", "network": "share_plugin_route_network_failed", "provider": "share_route_provider_rejected", "invalid_response": "share_route_response_binding_failed", "source_changed": "share_native_source_changed", "arbitrary_error": "share_plugin_resolution_incomplete", "unreviewed_web_code": "share_plugin_resolution_incomplete", "plugin_error": "share_result_binding_failed", "plugin_parser_error": "channels_feed_identity_unverified"}[mode]
+			want := map[string]string{"http": "share_plugin_route_http_rejected", "network": "share_plugin_route_network_failed", "provider": "share_route_provider_rejected", "invalid_response": "share_route_response_binding_failed", "source_changed": "share_native_source_changed", "arbitrary_error": "share_plugin_resolution_incomplete", "unreviewed_web_code": "share_plugin_resolution_incomplete", "plugin_error": "share_parser_rejected", "plugin_parser_error": "channels_feed_identity_unverified"}[mode]
 			if diagnostic.code != want || sharedVideoReadReason(err) != want {
 				t.Fatalf("wrong safe cause: %+v", diagnostic)
 			}
