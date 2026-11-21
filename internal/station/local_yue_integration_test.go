@@ -404,6 +404,20 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 	if err != nil || !strings.Contains(coverResult, `"state":"queued"`) || backend.submits != beforeCover+1 || backend.uploads != 3 {
 		t.Fatalf("WeChat YuE cover: %s %v submits=%d uploads=%d", coverResult, err, backend.submits, backend.uploads)
 	}
+	var coverQueued struct {
+		JobID string `json:"job_id"`
+	}
+	if json.Unmarshal([]byte(coverResult), &coverQueued) != nil || coverQueued.JobID == "" {
+		t.Fatal("cover job ID missing")
+	}
+	cancelArgs, _ := json.Marshal(map[string]string{"job_id": coverQueued.JobID, "action": "cancel"})
+	cancelResult, err := app.Call(t.Context(), localYuEJobTool, cancelArgs)
+	if err != nil || !strings.Contains(cancelResult, `"state":"cancelled"`) || backend.cancels != 2 {
+		t.Fatalf("WeChat YuE cancellation: %s %v cancels=%d", cancelResult, err, backend.cancels)
+	}
+	if _, err := app.Call(t.Context(), localYuEJobTool, statusArgs); err != nil {
+		t.Fatalf("completed original job lost after cancelling cover: %v", err)
+	}
 	enabled := localProjectToolByID(t, f, localYuEPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, enabled)}, true); code != http.StatusOK || backend.stops != 1 {
 		t.Fatalf("disable YuE: %d %#v", code, out)
