@@ -53,6 +53,12 @@ type localAudioCppEngineRegistration struct {
 	Server  string `json:"server"`
 }
 
+type localAudioCppPhonemizerRegistration struct {
+	Library       string `json:"library"`
+	LibrarySHA256 string `json:"library_sha256"`
+	Data          string `json:"data"`
+}
+
 type localAudioCppModelRegistration struct {
 	ID        string `json:"id"`
 	PackageID string `json:"package_id"`
@@ -93,19 +99,20 @@ type localAudioCppServerConfig struct {
 
 type localAudioCppRegistration struct {
 	portable      bool
-	SchemaVersion int                              `json:"schema_version"`
-	Enabled       bool                             `json:"enabled"`
-	Runtime       string                           `json:"runtime"`
-	Backend       string                           `json:"backend"`
-	Host          string                           `json:"host"`
-	Port          int                              `json:"port"`
-	ModelsRoot    string                           `json:"models_root"`
-	ServerConfig  string                           `json:"server_config"`
-	Engine        localAudioCppEngineRegistration  `json:"engine"`
-	Models        []localAudioCppModelRegistration `json:"models"`
-	Permissions   localAudioCppPermissions         `json:"permissions"`
-	TTSModelID    string                           `json:"tts_model_id"`
-	ASRModelID    string                           `json:"asr_model_id"`
+	SchemaVersion int                                  `json:"schema_version"`
+	Enabled       bool                                 `json:"enabled"`
+	Runtime       string                               `json:"runtime"`
+	Backend       string                               `json:"backend"`
+	Host          string                               `json:"host"`
+	Port          int                                  `json:"port"`
+	ModelsRoot    string                               `json:"models_root"`
+	ServerConfig  string                               `json:"server_config"`
+	Engine        localAudioCppEngineRegistration      `json:"engine"`
+	Phonemizer    *localAudioCppPhonemizerRegistration `json:"phonemizer,omitempty"`
+	Models        []localAudioCppModelRegistration     `json:"models"`
+	Permissions   localAudioCppPermissions             `json:"permissions"`
+	TTSModelID    string                               `json:"tts_model_id"`
+	ASRModelID    string                               `json:"asr_model_id"`
 }
 
 type localAudioCppModelView struct {
@@ -231,7 +238,7 @@ func (s *localAudioCppService) Start(ctx context.Context, fish string) error {
 		return nil
 	}
 	args := []string{"--config", r.ServerConfig, "--ui", "--host", r.Host, "--port", strconv.Itoa(r.Port), "--backend", r.Backend, "--log", "--log-file", logPath}
-	env := localAudioCppEnvironment()
+	env := localAudioCppEnvironment(r)
 	serviceID := localAudioCppServiceIDForFish(fish)
 	_, err = s.services.Start(ctx, serviceID, pluginruntime.ManagedServiceSpec{
 		OwnerPlugin: localAudioCppOwner, Binding: binding, Executable: r.Engine.Server,
@@ -489,6 +496,9 @@ func (s *localAudioCppService) loadRegistration(ctx context.Context) (localAudio
 	if !seen[r.TTSModelID] || !seen[r.ASRModelID] {
 		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_model_selection_invalid")
 	}
+	if r.Phonemizer != nil && !localAudioCppPhonemizerValid(*r.Phonemizer) {
+		return localAudioCppRegistration{}, nil, errors.New("audio_cpp_phonemizer_registration_invalid")
+	}
 	if !r.portable {
 		if err := localAudioCppValidateServerConfig(r); err != nil {
 			return localAudioCppRegistration{}, nil, err
@@ -538,7 +548,32 @@ func (s *localAudioCppService) verifyRegistrationFiles(r localAudioCppRegistrati
 			return errors.New("audio_cpp_model_changed")
 		}
 	}
+	if r.Phonemizer != nil && (!localAudioCppPhonemizerValid(*r.Phonemizer) || !localAudioCppHashMatches(r.Phonemizer.Library, r.Phonemizer.LibrarySHA256)) {
+		return errors.New("audio_cpp_phonemizer_changed")
+	}
 	return nil
+}
+
+func localAudioCppPhonemizerValid(p localAudioCppPhonemizerRegistration) bool {
+	if !filepath.IsAbs(p.Library) || filepath.Clean(p.Library) != p.Library ||
+		strings.ContainsAny(p.Library, ";\r\n") || strings.ContainsAny(p.Data, ";\r\n") ||
+		!strings.EqualFold(filepath.Base(p.Library), "libespeak-ng.dll") ||
+		!localAudioCppRegular(p.Library) || !localAudioCppHex.MatchString(p.LibrarySHA256) ||
+		!filepath.IsAbs(p.Data) || filepath.Clean(p.Data) != p.Data ||
+		!strings.EqualFold(filepath.Base(p.Data), "espeak-ng-data") ||
+		!strings.EqualFold(filepath.Dir(p.Data), filepath.Dir(p.Library)) {
+		return false
+	}
+	info, err := os.Lstat(p.Data)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	for _, name := range []string{"phontab", "phonindex", "phondata"} {
+		if !localAudioCppRegular(filepath.Join(p.Data, name)) {
+			return false
+		}
+	}
+	return true
 }
 
 func localAudioCppHashMatches(path, expected string) bool {
@@ -580,13 +615,20 @@ func validLocalAudioCppFish(fish string) bool {
 	return fish != "" && len(fish) <= 160 && !strings.ContainsAny(fish, `\\/:*?"<>|`)
 }
 
-func localAudioCppEnvironment() []string {
+func localAudioCppEnvironment(r localAudioCppRegistration) []string {
 	keep := []string{"SystemRoot", "WINDIR", "SystemDrive", "PATH", "TEMP", "TMP", "CUDA_PATH"}
 	result := make([]string, 0, len(keep))
 	for _, key := range keep {
-		if value := os.Getenv(key); value != "" {
+		value := os.Getenv(key)
+		if key == "PATH" && r.Phonemizer != nil {
+			value = filepath.Dir(r.Phonemizer.Library) + string(os.PathListSeparator) + value
+		}
+		if value != "" {
 			result = append(result, key+"="+value)
 		}
+	}
+	if r.Phonemizer != nil {
+		result = append(result, "ESPEAK_DATA_PATH="+r.Phonemizer.Data)
 	}
 	return append(result, "AUDIO_CPP_OFFLINE=1")
 }
