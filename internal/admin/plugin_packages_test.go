@@ -14,6 +14,28 @@ import (
 	catalog "wechat-bot/plugins"
 )
 
+func TestSharedStationMediaConfigurationAdmitsOnlyLegacyAudioReview(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input pluginhost.ConfigUpdate
+		want  bool
+	}{
+		{"audio model", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"audio_review_model": json.RawMessage(`"synthetic-model"`)}}, true},
+		{"audio key", pluginhost.ConfigUpdate{Secrets: map[string]string{"audio_review_key": "synthetic-key"}}, true},
+		{"clear audio key", pluginhost.ConfigUpdate{ClearSecrets: []string{"audio_review_key"}}, true},
+		{"empty", pluginhost.ConfigUpdate{}, false},
+		{"visual key", pluginhost.ConfigUpdate{Secrets: map[string]string{"vision_key": "synthetic-key"}}, false},
+		{"mixed visual", pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{"audio_review_model": json.RawMessage(`"synthetic-model"`), "vision_model": json.RawMessage(`"synthetic-vision"`)}}, false},
+		{"asr key", pluginhost.ConfigUpdate{Secrets: map[string]string{"asr_key": "synthetic-key"}}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sharedMediaAudioConfigurationOnly(test.input); got != test.want {
+				t.Fatalf("shared Station media configuration accepted=%v want=%v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPluginPackageUpgradeReportsRequiredConfigurationMigration(t *testing.T) {
 	f := setup(t)
 	f.login()

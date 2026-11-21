@@ -31,6 +31,31 @@ func (m *Manager) packageStore() (*pluginhost.Store, error) {
 	m.packages = store
 	return store, nil
 }
+
+// A shared Station owns visual configuration. The legacy package still owns
+// source-bound audio review, so admit only that narrow private configuration.
+func sharedMediaAudioConfigurationOnly(input pluginhost.ConfigUpdate) bool {
+	if len(input.Values)+len(input.Secrets)+len(input.ClearSecrets) == 0 {
+		return false
+	}
+	for name := range input.Values {
+		if name != "audio_review_endpoint" && name != "audio_review_model" {
+			return false
+		}
+	}
+	for name := range input.Secrets {
+		if name != "audio_review_key" {
+			return false
+		}
+	}
+	for _, name := range input.ClearSecrets {
+		if name != "audio_review_key" {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
@@ -144,16 +169,17 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, result)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/configuration", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		if _, shared := s.manager.sharedStationVision(); shared && (r.PathValue("id") == "media-understanding" || r.PathValue("id") == "web-search") {
-			fail(w, 409, "公共工具配置请在工作站的项目工具页维护。")
-			return
-		}
 		if s.manager.mobileRetired && r.PathValue("id") == mobileDevicePluginID {
 			fail(w, http.StatusGone, "手机控制已停用；不能修改历史工具配置")
 			return
 		}
 		var input pluginhost.ConfigUpdate
 		if !decode(w, r, &input) {
+			return
+		}
+		if _, shared := s.manager.sharedStationVision(); shared &&
+			(r.PathValue("id") == "web-search" || r.PathValue("id") == "media-understanding" && !sharedMediaAudioConfigurationOnly(input)) {
+			fail(w, 409, "公共工具配置请在工作站的项目工具页维护。")
 			return
 		}
 		if s.manager.draining() {
