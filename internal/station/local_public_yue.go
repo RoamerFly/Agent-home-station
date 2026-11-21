@@ -120,6 +120,20 @@ func (s *localProjectTools) publicYuEStatus(ctx context.Context, fish, binding, 
 	return status, product, err
 }
 
+func (s *localProjectTools) cancelPublicYuE(ctx context.Context, fish, binding, jobID string) error {
+	if s == nil || s.yue == nil {
+		return errors.New("本机 YuE 后端不可用")
+	}
+	ref, err := comfyui.NewJobRef(jobID, localYuESaveNode)
+	if err != nil {
+		return err
+	}
+	return s.yue.Use(ctx, fish, binding, false, func(client localComfyAudioClient) error {
+		_, err := client.Cancel(ctx, ref)
+		return err
+	})
+}
+
 func verifyPublicYuEFLAC(ctx context.Context, dataDir string, deploy localYuEDeployment, submission localYuESubmission, flac comfyui.FLAC) (mediadecode.FLACEvidence, stationyue.DurationCheck, error) {
 	var empty mediadecode.FLACEvidence
 	var noDuration stationyue.DurationCheck

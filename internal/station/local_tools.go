@@ -157,7 +157,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		}
 		// An application owns its generated-media delivery. Its speech adapter
 		// exposes the same workstation capability after wiring that delivery.
-		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool { return tool.Name == localTTSStartTool })
+		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool {
+			return tool.Name == localTTSStartTool || tool.Name == localYuEStartTool || tool.Name == localYuEJobTool
+		})
 		return all, nil
 	}
 	all := []mcptools.Tool{}

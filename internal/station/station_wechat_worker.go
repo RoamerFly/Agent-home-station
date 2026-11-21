@@ -116,6 +116,7 @@ type stationWechatWorker struct {
 	rollbackAuditMu  sync.Mutex
 	shareMu          sync.Mutex
 	speechMu         sync.Mutex
+	yueMu            sync.Mutex
 	share            *stationShareHost
 	dir              string
 	runtimeDir       string
@@ -832,6 +833,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		attachment.speech = s.localChat.projectTools
 		attachment.speechOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
 		attachment.speechMu = &station.speechMu
+		attachment.yueMu = &station.yueMu
 	}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}

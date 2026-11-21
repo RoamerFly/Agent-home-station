@@ -275,6 +275,7 @@ type stationAttachmentTools struct {
 	speech             *localProjectTools
 	speechOwnerAllowed func(companion.Input) bool
 	speechMu           *sync.Mutex
+	yueMu              *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -343,6 +344,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if tool, ok := t.publicSpeechTool(ctx); ok {
 		tools = append(tools, tool)
 	}
+	tools = append(tools, t.publicYuETools(ctx)...)
 	if !t.allowed() {
 		return tools, nil
 	}
@@ -456,6 +458,12 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localTTSStartTool {
 		return t.callPublicSpeech(ctx, raw)
+	}
+	if name == localYuEStartTool {
+		return t.callPublicYuEGenerate(ctx, raw)
+	}
+	if name == localYuEJobTool {
+		return t.callPublicYuEJob(ctx, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)
