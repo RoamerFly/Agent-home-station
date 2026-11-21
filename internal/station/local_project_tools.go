@@ -33,6 +33,8 @@ type localProjectTools struct {
 	legacyMu        sync.Mutex
 	legacyAt        time.Time
 	legacyViews     map[string]localProjectToolView
+	mcpMu           sync.Mutex
+	mcpSessions     map[string]publicExternalMCPSession
 	home            *localHomeService
 	options         pluginruntime.Options
 	mu              sync.Mutex
@@ -160,6 +162,12 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 func (s *localProjectTools) close() error {
 	s.update.Lock()
 	defer s.update.Unlock()
+	s.mcpMu.Lock()
+	for key, session := range s.mcpSessions {
+		_ = session.hub.Close()
+		delete(s.mcpSessions, key)
+	}
+	s.mcpMu.Unlock()
 	s.obs.close()
 	s.mu.Lock()
 	defer s.mu.Unlock()

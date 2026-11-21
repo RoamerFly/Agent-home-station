@@ -114,6 +114,12 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 		}
 		return t.stageExternalTask(ctx, in, asset)
 	}
+	if strings.HasPrefix(asset, "external-mcp-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageExternalMCP(ctx, in, asset)
+	}
 	if strings.HasPrefix(asset, "external-") {
 		if kind != "file" {
 			return "", wechatapp.ErrAttachmentDenied

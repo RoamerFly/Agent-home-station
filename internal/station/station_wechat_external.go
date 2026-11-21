@@ -36,6 +36,11 @@ func (t *stationAttachmentTools) publicExternalCatalogTools(ctx context.Context)
 	}
 	if len(servers) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalMCPServers, "列出工作站已启用的 MCP 连接名称、编号和传输类型，不联系服务。", `{"type":"object","properties":{},"additionalProperties":false}`))
+		if t.externalMu != nil && t.store != nil {
+			tools = append(tools,
+				mcptools.NewTool(localExternalMCPList, "读取已授权 MCP 工具目录。用 next_cursor 翻页，同一 cursor 可用 offset、schema_tool 和 text_offset 续读。", `{"type":"object","properties":{"server_id":{"type":"string"},"cursor":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"schema_tool":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["server_id"],"additionalProperties":false}`),
+				mcptools.NewTool(localExternalMCPCall, "调用工作站登记的 MCP 工具。同一微信消息和参数只提交一次；结果不明时核对原服务。", `{"type":"object","properties":{"server_id":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["server_id","tool","arguments"],"additionalProperties":false}`))
+		}
 	}
 	return tools
 }

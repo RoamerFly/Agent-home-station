@@ -30,6 +30,10 @@ type stationWechatExternalHTTPJob struct {
 	Grant, MediaGrant                            time.Time
 	Registration, RequestHash, Tool, Fingerprint string
 	State, Text                                  string
+	Cursor, NextCursor                           string
+	Tools                                        []mcptools.Tool
+	IsError                                      bool
+	MCPMedia                                     []stationWechatExternalMCPMedia
 	SHA256, MIME, DeclaredKind                   string
 	Bytes                                        int64
 }
@@ -155,7 +159,29 @@ func (t *stationAttachmentTools) writeExternalHTTPJob(j stationWechatExternalHTT
 func (t *stationAttachmentTools) externalHTTPView(j stationWechatExternalHTTPJob, offset, limit int, reused bool) (string, error) {
 	view := map[string]any{"tool": j.Tool, "task_id": j.ID, "state": j.State, "reused": reused}
 	if j.State == "completed" {
-		if j.Bytes > 0 {
+		if j.IsError {
+			view["is_error"] = true
+		}
+		if len(j.MCPMedia) != 0 {
+			if !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
+				return "", wechatapp.ErrAttachmentDenied
+			}
+			media := make([]companion.GeneratedMedia, 0, len(j.MCPMedia))
+			for index := range j.MCPMedia {
+				item := j.mcpMedia(index)
+				t.preparedSpeech(item)
+				media = append(media, item)
+			}
+			view["media"], view["delivery_kind"] = media, "file"
+			if j.Text != "" {
+				raw, _ := json.Marshal(map[string]string{"text": j.Text})
+				page, err := localExternalTextPage(raw, offset, limit)
+				if err != nil {
+					return "", err
+				}
+				view["output"] = page
+			}
+		} else if j.Bytes > 0 {
 			if !t.replyAllowed(t.trace) || !j.MediaGrant.Equal(t.replies[t.trace.Thread]) {
 				return "", wechatapp.ErrAttachmentDenied
 			}
@@ -164,6 +190,14 @@ func (t *stationAttachmentTools) externalHTTPView(j stationWechatExternalHTTPJob
 			view["media"] = []companion.GeneratedMedia{media}
 			view["declared_kind"] = j.DeclaredKind
 			view["delivery_kind"] = "file"
+			if j.Text != "" {
+				raw, _ := json.Marshal(map[string]string{"text": j.Text})
+				page, err := localExternalTextPage(raw, offset, limit)
+				if err != nil {
+					return "", err
+				}
+				view["output"] = page
+			}
 		} else {
 			raw, _ := json.Marshal(map[string]string{"text": j.Text})
 			page, err := localExternalTextPage(raw, offset, limit)
