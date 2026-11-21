@@ -250,7 +250,8 @@ def update(args, release, work):
                    "-LocalStation", "-WithWeChatApp", "-WithBilibiliApp", "-WithDouyinApp",
                    "-WithWeChatRuntime", "-WeChatRuntimeDirectory", str(physical(native.absolute())),
                    "-WithDocumentWorkshop", "-WithAudioWorkshop", "-WithRVCBackend", "-WithComfyUI",
-                   "-WithYuE", "-WithStationSpeech", "-WithAudioCpp", "-WithOBSPreview"]
+                   "-WithYuE", "-WithStationSpeech", "-WithAudioCpp", "-WithOBSPreview",
+                   "-WithExternalTools", "-WithProjectDevelopment"]
         if args.media_directory:
             command += ["-Portable", "-MediaDirectory", str(physical(args.media_directory.absolute()))]
         if args.test:
