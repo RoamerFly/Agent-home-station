@@ -259,6 +259,23 @@ func (a *publicToolAccess) Call(ctx context.Context, name string, raw json.RawMe
 		if !a.publicAllowed(ctx) {
 			return "", errors.New("工作站公共工具授权已撤销")
 		}
+		// The workstation can change an installation, grant or configuration
+		// after the model saw this turn's list. Use its current directory at the
+		// point of execution instead of dispatching from the cached name alone.
+		current, err := a.public.List(ctx)
+		if err != nil {
+			return "", err
+		}
+		available := false
+		for _, tool := range current {
+			if tool.Name == name {
+				available = true
+				break
+			}
+		}
+		if !available {
+			return "", errors.New("工作站公共工具当前不可用")
+		}
 		return a.public.Call(ctx, name, raw)
 	}
 	// A name that was only present on the public surface must not fall through

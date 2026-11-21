@@ -97,6 +97,26 @@ func TestMergeStationToolAccessPropagatesTraceAndTimeout(t *testing.T) {
 	}
 }
 
+func TestMergeStationToolAccessUsesCurrentWorkstationDirectoryAtCall(t *testing.T) {
+	primary := &publicToolAccessFixture{tools: []mcptools.Tool{{Name: "wechat_read"}}}
+	public := &publicToolAccessFixture{
+		tools:   []mcptools.Tool{{Name: "project_comfy_run"}},
+		results: map[string]string{"project_comfy_run": "started"},
+	}
+	merged := mergeStationToolAccess(primary, public, nil)
+	if _, err := merged.List(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	public.tools = nil // The workstation disabled the package after discovery.
+	if _, err := merged.Call(t.Context(), "project_comfy_run", json.RawMessage(`{}`)); err == nil || len(public.called) != 0 {
+		t.Fatalf("disabled workstation tool was dispatched: %v, %v", err, public.called)
+	}
+	public.tools = []mcptools.Tool{{Name: "project_comfy_run"}}
+	if got, err := merged.Call(t.Context(), "project_comfy_run", json.RawMessage(`{}`)); err != nil || got != "started" {
+		t.Fatalf("restored workstation tool was unavailable: %q, %v", got, err)
+	}
+}
+
 func TestPublicToolFactoryUsesCurrentTraceAndForks(t *testing.T) {
 	var traces []string
 	factory := newPublicToolFactoryAccess(func(in companion.Input) companion.ToolAccess {
