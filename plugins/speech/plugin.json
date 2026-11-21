@@ -19,7 +19,7 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "dac4182646db51f49ccc5f031659ff29149f324191c73cbc53a265124b5f9435",
+    "capabilities.json": "926649c08ea6d22f7fded5af3a72ee00d11a29325520085e24e8e54dd6c3d055",
     "CHANGELOG.md": "ca6419b2c485d681c96f6d019a8bb7ecb34e4b27e12f69d8761e7dc3a29d1a35",
     "config.schema.json": "bd72c9a2eab30357b83e26bfd39ab679103f46285fbd23e0cf50eb2ad8ad55a5",
     "MIGRATION.md": "31d9e07df23eb44f48e629c4f50eb16f3d568863eb4bc3fb650b7e6017bf21e4",

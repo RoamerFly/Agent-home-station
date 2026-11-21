@@ -298,6 +298,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		return
 	}
 	if message.IsPassiveNotice() {
+		// A notice has no participant request to answer, but it is still an
+		// incoming message that the application must account for. Keep its
+		// content out of the model and record only the native notice kind.
+		w.recordIncoming(message)
+		w.activity(Record{Event: "passive_notice_handled", Category: "system", ThreadID: message.ThreadID,
+			MessageID: message.ID, MessageTime: message.CreatedAt, Content: messageSummary(message),
+			Origin: "wechat", Status: "processed", Reason: "notice_only"})
 		w.queuePhase(message.ID, "skipped")
 		return
 	}
