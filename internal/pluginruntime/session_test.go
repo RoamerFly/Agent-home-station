@@ -130,7 +130,7 @@ func TestSessionContextAndAuthorization(t *testing.T) {
 	}
 }
 
-func TestSessionLegacyInstalledPackageRetainsV1Metadata(t *testing.T) {
+func TestSessionLegacyInstalledPackageNeverReceivesAppContext(t *testing.T) {
 	s := testSession(t)
 	s.pack.CallMetadata = ""
 	raw, err := s.Call(t.Context(), invocation(), "echo", json.RawMessage(`{}`))
@@ -138,8 +138,8 @@ func TestSessionLegacyInstalledPackageRetainsV1Metadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result map[string]json.RawMessage
-	if json.Unmarshal(raw, &result) != nil || result["wechat/context"] == nil || result["station/call_id"] != nil {
-		t.Fatalf("legacy package protocol changed before upgrade: %s", raw)
+	if json.Unmarshal(raw, &result) != nil || result["wechat/context"] != nil || result["station/call_id"] == nil || strings.Contains(string(raw), `"room"`) || strings.Contains(string(raw), `"person"`) {
+		t.Fatalf("legacy package received application provenance: %s", raw)
 	}
 }
 

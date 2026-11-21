@@ -138,20 +138,14 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 		return nil, err
 	}
 	meta := map[string]any{}
-	if s.pack.CallMetadata == "opaque-v1" {
-		bound, err := json.Marshal(c)
-		if err != nil {
-			return nil, errors.New("plugin call identity invalid")
-		}
-		hash := sha256.New()
-		_, _ = hash.Write(s.callSalt[:])
-		_, _ = hash.Write(bound)
-		meta["station/call_id"] = hex.EncodeToString(hash.Sum(nil))
-	} else {
-		// Existing installed package snapshots still use protocol v1 until the
-		// workstation can replace them without losing configuration or jobs.
-		meta["wechat/context"] = rawCopy(c)
+	bound, err := json.Marshal(c)
+	if err != nil {
+		return nil, errors.New("plugin call identity invalid")
 	}
+	hash := sha256.New()
+	_, _ = hash.Write(s.callSalt[:])
+	_, _ = hash.Write(bound)
+	meta["station/call_id"] = hex.EncodeToString(hash.Sum(nil))
 	metadataBytes := 0
 	for key, raw := range metadata {
 		if !safeCallMetadataKey(key) || len(raw) == 0 || !json.Valid(raw) {
@@ -167,7 +161,7 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 		}
 		meta[key] = json.RawMessage(append([]byte(nil), raw...))
 	}
-	// Message provenance remains in the host-side job and policy. The plugin
+	// Application provenance remains in the host-side job and policy. The tool
 	// receives only an opaque identity for replay-sensitive internal operations.
 	return s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": json.RawMessage(append([]byte(nil), args...)), "_meta": meta}, true)
 }
