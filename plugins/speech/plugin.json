@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -19,7 +19,7 @@
   ],
   "dependencies": [],
   "files": {
-    "capabilities.json": "e60b2397feb44406d1f0947394d086867d3eae925bc69b2dac3984eb8e50264e",
+    "capabilities.json": "dac4182646db51f49ccc5f031659ff29149f324191c73cbc53a265124b5f9435",
     "CHANGELOG.md": "ca6419b2c485d681c96f6d019a8bb7ecb34e4b27e12f69d8761e7dc3a29d1a35",
     "config.schema.json": "bd72c9a2eab30357b83e26bfd39ab679103f46285fbd23e0cf50eb2ad8ad55a5",
     "MIGRATION.md": "31d9e07df23eb44f48e629c4f50eb16f3d568863eb4bc3fb650b7e6017bf21e4",
@@ -51,19 +51,6 @@
     "runtime/training-requirements.txt": "00693e9a87adc67be979af91033d1d1257b8c0999e94797c549a8d1bdea79f02",
     "runtime/training_shims/gradio/__init__.py": "6cb0e611f9764a6f93b0524a6f70d7db322489eb51174ef883d308604d21362a"
   },
-  "http_routes": [
-    {
-      "id": "synthesize",
-      "endpoint_config": "tts_endpoint",
-      "permission": "model.invoke",
-      "capabilities": [
-        "speech.synthesize"
-      ],
-      "credential": "tts_key",
-      "credential_header": "Authorization",
-      "credential_prefix": "Bearer ",
-      "optional": true
-    }
-  ],
+  "http_routes": [],
   "call_metadata": "opaque-v1"
 }

@@ -73,7 +73,7 @@ func TestOfficialContracts(t *testing.T) {
 				if d.Name() != "web-search" {
 					want := map[string]bool{"media.observe": true, "media.transcribe": true, "media.listen": true}
 					if d.Name() == "speech" {
-						want = map[string]bool{"speech.synthesize": true, "speech.synthesize_named": true}
+						want = map[string]bool{}
 					}
 					if d.Name() == "music" {
 						want = map[string]bool{"music.bridge_request": true, "music.service_control": true, "music.prepare": true}
@@ -198,20 +198,6 @@ func TestOfficialContracts(t *testing.T) {
 								}[cap.ID]
 								if cap.Async || len(cap.Permissions) != 1 || cap.Permissions[0] != permission {
 									t.Fatal("project capability must use only its corresponding host proxy", cap.ID)
-								}
-							}
-							if d.Name() == "speech" {
-								wantPermissions := []string{"model.invoke"}
-								if cap.ID == "speech.synthesize_named" {
-									wantPermissions = []string{"artifact.read", "model.invoke"}
-								}
-								if cap.Async || len(cap.Permissions) != len(wantPermissions) {
-									t.Fatal("speech capability must remain synchronous with exact proxy permissions", cap.ID)
-								}
-								for i, permission := range wantPermissions {
-									if cap.Permissions[i] != permission {
-										t.Fatal("speech capability permission changed", cap.ID, cap.Permissions)
-									}
 								}
 							}
 							if d.Name() == "media-understanding" && (cap.Async || len(cap.Permissions) != 2 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "model.invoke") {
