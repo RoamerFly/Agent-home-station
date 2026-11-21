@@ -141,28 +141,14 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		if t.projectTools == nil || t.run == nil || !t.run.Tracked {
 			return nil, nil
 		}
-		all := append([]mcptools.Tool{}, t.localExternalHTTPTools(ctx)...)
-		all = append(all, t.localExternalTaskTools(ctx)...)
-		all = append(all, t.localExternalMCPTools(ctx)...)
-		if t.grants.Documents {
-			all = append(all, t.localDocumentTools(ctx)...)
+		// Only this read-only model directory still uses the local owner view.
+		// Execution and document inputs have application-owned source, task and
+		// delivery adapters; exposing their local-chat names here would bind a
+		// WeChat request to an unrelated local conversation.
+		if !t.grants.Media {
+			return nil, nil
 		}
-		if t.grants.Media {
-			all = append(all, t.localAudioTools(ctx)...)
-			all = append(all, t.localComfyTools(ctx)...)
-			all = append(all, t.localYuETools(ctx)...)
-			all = append(all, t.localTTSTools(ctx)...)
-			all = append(all, t.localAudioCppTools(ctx)...)
-		}
-		// An application owns its generated-media delivery. Its speech adapter
-		// exposes the same workstation capability after wiring that delivery.
-		all = slices.DeleteFunc(all, func(tool mcptools.Tool) bool {
-			return tool.Name == localTTSStartTool || tool.Name == localYuEStartTool || tool.Name == localYuEJobTool || tool.Name == localComfyListTool || tool.Name == localComfyStartTool || tool.Name == localComfyJobTool ||
-				tool.Name == localExternalHTTPList || tool.Name == localExternalHTTPCall || tool.Name == localExternalTaskList || tool.Name == localExternalTaskCall ||
-				tool.Name == localExternalMCPServers || tool.Name == localExternalMCPList || tool.Name == localExternalMCPCall ||
-				tool.Name == localAudioToolName || tool.Name == localAudioCppModelsTool || tool.Name == localAudioCppSynthesizeTool || tool.Name == localAudioCppTranscribeTool
-		})
-		return all, nil
+		return slices.DeleteFunc(t.localTTSTools(ctx), func(tool mcptools.Tool) bool { return tool.Name != localTTSVoicesTool }), nil
 	}
 	all := []mcptools.Tool{}
 	if t.projectTools != nil && !t.inspectOnly {
