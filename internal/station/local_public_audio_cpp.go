@@ -70,3 +70,42 @@ func (s *localProjectTools) publicAudioCppSynthesize(ctx context.Context, fish, 
 	}
 	return result, nil
 }
+
+// Transcribe one already decoded PCM WAV page. The application owns the
+// original attachment, its source check, range selection and continuation.
+func (s *localProjectTools) publicAudioCppTranscribe(ctx context.Context, fish, binding string, wav []byte) (string, error) {
+	host, err := s.forFish(fish)
+	if err != nil {
+		return "", err
+	}
+	installed, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localAudioCppPackage, capability: "audio-cpp.transcribe"})
+	if err != nil {
+		return "", err
+	}
+	configuration, err := host.store.Configuration(ctx, localAudioCppPackage)
+	if err != nil {
+		return "", err
+	}
+	info, err := s.publicAudioCppInfo(ctx, fish)
+	if err != nil || info.Binding != binding || binding == "" {
+		return "", errors.New("工作站 audio.cpp 登记已变化")
+	}
+	if len(wav) == 0 || len(wav) > localAudioCppMaxWAV {
+		return "", errors.New("audio.cpp 输入 WAV 大小无效")
+	}
+	if _, _, err := mediaspec.PCM16WAVInfo(wav); err != nil {
+		return "", errors.New("audio.cpp 输入不是 PCM16 WAV")
+	}
+	text, err := s.audio.Transcribe(ctx, fish, binding, wav)
+	if err != nil {
+		return "", err
+	}
+	current, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localAudioCppPackage, capability: "audio-cpp.transcribe"})
+	currentConfig, configErr := host.store.Configuration(ctx, localAudioCppPackage)
+	currentInfo, infoErr := s.audio.Info(ctx, fish)
+	if err != nil || configErr != nil || infoErr != nil || current.Revision != installed.Revision || currentConfig.Revision != configuration.Revision ||
+		currentInfo.Binding != binding || ctx.Err() != nil {
+		return "", errors.New("audio.cpp 转写期间授权或登记已变化")
+	}
+	return text, nil
+}

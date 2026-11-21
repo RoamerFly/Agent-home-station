@@ -3,6 +3,7 @@ package station
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,8 +18,10 @@ import (
 )
 
 type syntheticAudioCppBackend struct {
-	WAV   []byte
-	Calls atomic.Int32
+	WAV             []byte
+	Calls           atomic.Int32
+	Transcription   string
+	TranscribeCalls atomic.Int32
 }
 
 func (b *syntheticAudioCppBackend) Info(context.Context, string) (localAudioCppDeployment, error) {
@@ -32,8 +35,12 @@ func (b *syntheticAudioCppBackend) Synthesize(_ context.Context, _, binding stri
 	b.Calls.Add(1)
 	return localTTSResult{VoiceID: request.VoiceID, Version: binding, WAV: b.WAV}, nil
 }
-func (b *syntheticAudioCppBackend) Transcribe(context.Context, string, string, []byte) (string, error) {
-	return "", nil
+func (b *syntheticAudioCppBackend) Transcribe(_ context.Context, _, _ string, wav []byte) (string, error) {
+	if len(wav) < 4 || string(wav[:4]) != "RIFF" {
+		return "", errors.New("synthetic WAV missing")
+	}
+	b.TranscribeCalls.Add(1)
+	return b.Transcription, nil
 }
 
 func TestWechatAudioCppSynthesisOwnedByApplication(t *testing.T) {

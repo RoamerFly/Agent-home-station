@@ -29,6 +29,9 @@ func (t *stationAttachmentTools) publicAudioCppTools(ctx context.Context) []mcpt
 	if t.replyAllowed(t.trace) && t.externalMu != nil && t.store != nil {
 		tools = append(tools, mcptools.NewTool(localAudioCppSynthesizeTool, "用工作站 audio.cpp 的 Kokoro 模型生成 WAV 文件。应用按原微信消息保存请求及结果；同一请求不重复合成。", `{"type":"object","properties":{"text":{"type":"string","maxLength":12000},"text_language":{"type":"string"}},"required":["text"],"additionalProperties":false}`))
 	}
+	if t.externalMu != nil && t.store != nil && (stationVoiceRef(t.trace.Source) || stationVoiceRef(t.trace.QuotedSource)) {
+		tools = append(tools, mcptools.NewTool(localAudioCppTranscribeTool, "用工作站 audio.cpp 转写当前或引用的微信语音、MP3/WAV/FLAC 音频文件。按起点和时长读取，返回 next_start_seconds 供续读。", `{"type":"object","properties":{"message_id":{"type":"string"},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","exclusiveMinimum":0},"timeout_seconds":{"type":"integer","minimum":0},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["message_id"],"additionalProperties":false}`))
+	}
 	return tools
 }
 
@@ -53,6 +56,9 @@ func (t *stationAttachmentTools) callPublicAudioCpp(ctx context.Context, name st
 			return "", mcptools.ArgumentError("$", "模型列表无需参数")
 		}
 		return localProcessJSON(map[string]any{"models": info.Models, "backend": info.Backend, "version": info.Version})
+	}
+	if name == localAudioCppTranscribeTool {
+		return t.transcribePublicAudioCpp(ctx, raw, owner.FishID, info.Binding)
 	}
 	if t.externalMu == nil {
 		return "", wechatapp.ErrAttachmentDenied

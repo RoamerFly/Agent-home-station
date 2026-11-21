@@ -499,7 +499,7 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	if name == localExternalMCPList || name == localExternalMCPCall {
 		return t.callPublicExternalMCP(ctx, name, raw)
 	}
-	if name == localAudioCppModelsTool || name == localAudioCppSynthesizeTool {
+	if name == localAudioCppModelsTool || name == localAudioCppSynthesizeTool || name == localAudioCppTranscribeTool {
 		return t.callPublicAudioCpp(ctx, name, raw)
 	}
 	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -246,6 +247,49 @@ func TestStationWechatVoiceTranscriptionUsesVerifiedPlayableVoice(t *testing.T) 
 	if normalTransfers.Load() != 1 {
 		t.Fatal("normal playable voice was not requested exactly once", normalTransfers.Load())
 	}
+	t.Run("audio_cpp_application_transcribes_verified_voice_once", func(t *testing.T) {
+		if os.Getenv("AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT") == "" {
+			t.Skip("Windows project-tool runtime required")
+		}
+		f := localChatFixture(t)
+		f.handler.chat.projectTools.options = localProjectToolWindowsOptionsFor(t, localAudioCppPackage)
+		backend := &syntheticAudioCppBackend{Transcription: "audio.cpp 已识别原语音。"}
+		f.handler.chat.projectTools.audio = backend
+		if code, out := f.request("GET", "/api/local/project-tools", nil, true); code != http.StatusOK {
+			t.Fatal(code, out)
+		}
+		route := "/api/local/project-tools/" + localAudioCppPackage
+		for _, action := range []string{"install", "enable"} {
+			input := map[string]any{"action": action}
+			if action == "install" {
+				input["approve_artifacts"] = true
+			} else {
+				input["revision"] = localProjectToolRevision(t, localProjectToolByID(t, f, localAudioCppPackage))
+			}
+			if code, out := f.request("PUT", route, input, true); code != http.StatusOK {
+				t.Fatal(code, out)
+			}
+		}
+		tools.projects = f.handler.chat.projectTools
+		tools.externalMu = new(sync.Mutex)
+		tools.projectOwnerAllowed = func(in companion.Input) bool { return in.Sender == direct.Sender }
+		defer func() { tools.projects, tools.externalMu, tools.projectOwnerAllowed = nil, nil, nil }()
+		tools.SetTrace(direct)
+		listed, err := tools.List(t.Context())
+		if err != nil || !hasTool(listed, localAudioCppTranscribeTool) {
+			t.Fatal("audio.cpp transcribe tool missing", err)
+		}
+		before := normalTransfers.Load()
+		request := json.RawMessage(`{"message_id":"voice-normal","duration_seconds":0.5}`)
+		first, err := tools.Call(t.Context(), localAudioCppTranscribeTool, request)
+		if err != nil || backend.TranscribeCalls.Load() != 1 || normalTransfers.Load() != before+1 || !strings.Contains(first, "audio.cpp 已识别原语音") || !strings.Contains(first, `"state":"completed"`) {
+			t.Fatal("audio.cpp did not transcribe verified voice", first, err)
+		}
+		second, err := tools.Call(t.Context(), localAudioCppTranscribeTool, request)
+		if err != nil || backend.TranscribeCalls.Load() != 1 || normalTransfers.Load() != before+1 || !strings.Contains(second, `"reused":true`) {
+			t.Fatal("audio.cpp transcription repeated", second, err)
+		}
+	})
 
 	requestRef := &companion.SourceRef{Account: account, Thread: thread, MessageID: "request", ServerID: "request-server", Sender: "owner", MessageType: 1, OccurredAt: now.Add(time.Second).Format(time.RFC3339Nano), BodyHash: "request-body"}
 	quoted := companion.Input{Channel: "wechat", Account: account, Thread: thread, Sender: "owner", TraceID: "request", MessageTime: requestRef.OccurredAt, Source: requestRef, QuotedSource: voiceRef}
