@@ -37,9 +37,11 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 	for _, id := range ids {
 		source := sources[id]
 		official, officialErr := catalog.ContractFor(id)
+		item, err := host.store.Installed(ctx, id)
 		if !source.compatible() && !(officialErr == nil && portableManagedTool(id) &&
 			source.Runtime.Transport == "http-adapter" && source.hostCompatible() &&
-			localRVCSafeRegular(filepath.Join(source.directory, filepath.FromSlash(portableRegistrationFile)))) {
+			(localRVCSafeRegular(filepath.Join(source.directory, filepath.FromSlash(portableRegistrationFile))) ||
+				err == nil && !item.Removed)) {
 			continue
 		}
 		grants := source.Permissions
@@ -50,7 +52,6 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 			}
 			grants = officialProjectToolGrants(id, official.Package.Permissions)
 		}
-		item, err := host.store.Installed(ctx, id)
 		if err == nil && item.Removed {
 			continue
 		}
