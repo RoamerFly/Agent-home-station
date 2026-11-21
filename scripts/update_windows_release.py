@@ -19,6 +19,7 @@ import urllib.request
 
 from build_migration_manifest import build as migration_manifest
 from check_portable_release import check_release, digest, safe_relative
+from sync_installed_wechat_tools import sync as sync_installed_wechat_tools
 from validate_migration_manifest import validate
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -404,6 +405,21 @@ def update(args, release, work):
                                               "healthy": False, "native_login": None})
             raise RuntimeError(f"Previous release restored but its readiness was not confirmed. Evidence: {work}")
         raise
+    # Package snapshots live in WeChat's private store, outside the release
+    # payload. Reconcile only after the new program is healthy. A failure here
+    # must leave the new program running rather than roll it back underneath a
+    # partially upgraded private package set.
+    try:
+        synced = sync_installed_wechat_tools(release)
+    except Exception:
+        write_json(work / "result.json", {"updated": True, "restarted": True,
+                                          "healthy": True, "native_login": native_login,
+                                          "installed_wechat_tools_synced": False})
+        raise
+    write_json(work / "result.json", {"updated": True, "restarted": True,
+                                      "healthy": True, "native_login": native_login,
+                                      "installed_wechat_tools_synced": True,
+                                      "installed_wechat_tools_checked": synced})
 
 
 if __name__ == "__main__":

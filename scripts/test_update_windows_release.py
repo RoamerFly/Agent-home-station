@@ -109,6 +109,33 @@ class UpdateTests(unittest.TestCase):
             result = json.loads((work / "result.json").read_text(encoding="utf-8"))
             self.assertEqual(result, {"updated": True, "kept_stopped": True, "healthy": None, "native_login": None})
 
+    def test_private_package_sync_failure_keeps_healthy_new_program(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release, candidate, work = root / "release", root / "candidate", root / "work"
+            release.mkdir()
+            candidate.mkdir()
+            (release / EXE).write_bytes(b"old")
+            (candidate / EXE).write_bytes(b"new")
+            (release / "manifest.json").write_text("{}", encoding="utf-8")
+            with (
+                patch("update_windows_release.payload", return_value={Path(EXE): candidate / EXE}),
+                patch("update_windows_release.check", return_value={"applications": [], "public_tools": []}),
+                patch("update_windows_release.validate", return_value={"ok": True}),
+                patch("update_windows_release.migration_manifest", return_value={"schema_version": 1}),
+                patch("update_windows_release.stop_release_for_update"),
+                patch("update_windows_release.subprocess.Popen"),
+                patch("update_windows_release.probe_health", return_value=True),
+                patch("update_windows_release.sync_installed_wechat_tools", side_effect=RuntimeError("synthetic sync failure")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "synthetic sync failure"):
+                    update(SimpleNamespace(candidate=candidate, apply=True, keep_stopped=False,
+                                           timeout=1, native_account="desktop"), release, work)
+            self.assertEqual((release / EXE).read_bytes(), b"new")
+            self.assertEqual(json.loads((work / "result.json").read_text(encoding="utf-8")),
+                             {"updated": True, "restarted": True, "healthy": True,
+                              "native_login": True, "installed_wechat_tools_synced": False})
+
     def test_payload_updates_indexed_package_files_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
