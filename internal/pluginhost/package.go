@@ -29,6 +29,7 @@ type Package struct {
 	Name          string            `json:"name"`
 	Version       string            `json:"version"`
 	HostProtocol  int               `json:"host_protocol"`
+	CallMetadata string            `json:"call_metadata,omitempty"`
 	Status        string            `json:"status"`
 	Platforms     []string          `json:"platforms"`
 	Runtime       Runtime           `json:"runtime"`
@@ -228,6 +229,9 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 	}
 	if p.SchemaVersion != 1 || p.HostProtocol != Protocol || !identifier.MatchString(p.ID) || strings.TrimSpace(p.Name) == "" || p.Version == "" {
 		return p, errors.New("unsupported package identity or protocol")
+	}
+	if p.CallMetadata != "" && p.CallMetadata != "opaque-v1" {
+		return p, errors.New("unsupported package call metadata")
 	}
 	switch p.Status {
 	case "template", "migration-pending", "ready":

@@ -82,8 +82,8 @@ class Wire:
                     result = {}
                 elif method == "tools/call" and initialized:
                     params = request["params"]
-                    context = params.get("_meta", {}).get("wechat/context", {})
-                    if not all(isinstance(context.get(k), str) and context[k] for k in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id")
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     if params.get("name") == "share.resolve_public":
                         result = parser.resolve(params.get("arguments"), self.get)

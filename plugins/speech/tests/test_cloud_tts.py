@@ -47,7 +47,7 @@ class CloudTTSTests(unittest.TestCase):
         context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
         messages = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": CONFIG}}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "speech.synthesize", "arguments": {"text": "你好"}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "speech.synthesize", "arguments": {"text": "你好"}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "speech-model-1", "result": REPLY},
         ]
         output = io.StringIO()

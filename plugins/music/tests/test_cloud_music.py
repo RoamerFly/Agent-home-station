@@ -16,7 +16,7 @@ class RetiredCloudMusicTests(unittest.TestCase):
         messages = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "music.generate", "arguments": {"prompt": "test"}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "music.generate", "arguments": {"prompt": "test"}, "_meta": {"station/call_id": "a" * 64}}},
         ]
         output = io.StringIO()
         main.Wire(io.StringIO("\n".join(json.dumps(item) for item in messages) + "\n"), output).serve()

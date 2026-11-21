@@ -1,6 +1,5 @@
 """Isolated music plugin. It has no direct network, media, or credential access."""
 import importlib.util
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -81,8 +80,8 @@ class Wire:
             raise ValueError("invalid_host_response")
         return reply["result"]
 
-    def local_request(self, context, arguments):
-        identity = hashlib.sha256(json.dumps({key: context[key] for key in ("account", "thread", "requester", "purpose", "request_key")}, sort_keys=True, ensure_ascii=False).encode('utf8')).digest()
+    def local_request(self, call_id, arguments):
+        identity = ("bridge", call_id)
         if identity in self.local_contexts:
             raise ValueError('music_bridge_request_already_used')
         # Reserve before the host callback: an uncertain outcome is not a
@@ -121,19 +120,19 @@ class Wire:
                     ]}
                 elif method == "tools/call" and initialized:
                     params = request.get("params")
-                    context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
-                    if not all(isinstance(context.get(k), str) and context[k] for k in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id") if isinstance(params, dict) else None
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     if params.get("name") == "music.prepare":
                         result = preparation.prepare(params.get("arguments"))
                     elif params.get("name") == "music.bridge_request":
-                        result = local_music.bridge_request(params.get('arguments'), lambda value: self.local_request(context, value))
+                        result = local_music.bridge_request(params.get('arguments'), lambda value: self.local_request(call_id, value))
                     elif params.get("name") == "music.service_control":
                         arguments = params.get("arguments")
                         if (not isinstance(arguments, dict) or set(arguments) != {"action"}
                                 or arguments["action"] not in ("start", "status", "stop")):
                             raise ValueError("invalid_service_control")
-                        identity = ("service", hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=False).encode("utf8")).digest())
+                        identity = ("service", call_id)
                         if identity in self.local_contexts:
                             raise ValueError("music_service_request_already_used")
                         self.local_contexts.add(identity)

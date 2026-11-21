@@ -114,7 +114,7 @@ class TranscriptionWireTest(unittest.TestCase):
         context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
         incoming = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_model": "synthetic-asr"}}}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "media-model-1", "result": {"output": {"text": "synthetic transcript"}}},
         ]
         output = io.StringIO()
@@ -134,7 +134,7 @@ class TranscriptionWireTest(unittest.TestCase):
         context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
         incoming = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_model": "synthetic-asr"}}}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": {"media_ref": "wrong"}}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": {"media_ref": "wrong"}}, "_meta": {"station/call_id": "a" * 64}}},
         ]
         output = io.StringIO()
         main.Wire(io.StringIO("".join(json.dumps(x)+"\n" for x in incoming)), output).serve()
@@ -150,7 +150,7 @@ class TranscriptionWireTest(unittest.TestCase):
         context = {k: "synthetic" for k in ("account", "thread", "requester", "purpose", "request_key")}
         incoming = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"asr_backend": "local", "local_asr_profile_id": "sensevoice-small-int8"}}, "wechat/host_metadata": local_metadata()}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.transcribe", "arguments": {"audio": ref}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "media-model-1", "result": {"state": "transcribed", "text": "local transcript"}},
         ]
         output = io.StringIO()

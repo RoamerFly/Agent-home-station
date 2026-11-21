@@ -134,7 +134,7 @@ class RuntimeTests(unittest.TestCase):
         context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
         messages = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.discover", "arguments": {"source": self.source()}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.discover", "arguments": {"source": self.source()}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "web-read-1", "result": response('<rss><channel><item><title>合成</title><link>https://example.test/1</link></item></channel></rss>', "https://example.test/feed", "application/xml")},
         ]
         output = io.StringIO()
@@ -215,7 +215,7 @@ class RuntimeTests(unittest.TestCase):
         context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
         messages = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": {"search_backend": "deepseek"}}}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.search", "arguments": {"query": "music"}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web.search", "arguments": {"query": "music"}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "web-route-1", "result": {"results": [{"title": "Official", "url": "https://example.test/official", "summary": "synthetic"}]}},
         ]
         output = io.StringIO()

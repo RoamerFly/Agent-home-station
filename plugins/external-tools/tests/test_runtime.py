@@ -163,7 +163,7 @@ class RuntimeTests(unittest.TestCase):
         incoming=io.StringIO('\n'.join(json.dumps(x) for x in [
             {'jsonrpc':'2.0','id':1,'method':'initialize','params':{}},
             {'jsonrpc':'2.0','id':2,'method':'tools/list','params':{}},
-            {'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'external.http_request','arguments':call,'_meta':{'wechat/context':CONTEXT}}},
+            {'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'external.http_request','arguments':call,'_meta':{'station/call_id':'a' * 64}}},
             {'jsonrpc':'2.0','id':'external-request-1','result':{'content_type':'application/json','body_base64':base64.b64encode(b'{"result":{"text":"ok"}}').decode()}},
         ])+'\n')
         outgoing=io.StringIO(); runtime.Wire(incoming,outgoing).serve(); replies=[json.loads(x) for x in outgoing.getvalue().splitlines()]

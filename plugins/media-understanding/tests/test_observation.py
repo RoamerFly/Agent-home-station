@@ -77,7 +77,7 @@ class ObservationTests(unittest.TestCase):
     def test_stdio_roundtrip_scoped_context_and_no_private_initialization_fields(self):
         ctx={k:"synthetic" for k in ("account","thread","requester","purpose","request_key")}
         messages=[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"wechat/configuration":{"values":CONFIG}}}},
-                  {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"media.observe","arguments":{"images":[IMAGE]},"_meta":{"wechat/context":ctx}}},
+                  {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"media.observe","arguments":{"images":[IMAGE]},"_meta":{"station/call_id":"a" * 64}}},
                   {"jsonrpc":"2.0","id":"media-model-1","result":REPLY}]
         output=io.StringIO();main.Wire(io.StringIO("\n".join(json.dumps(x) for x in messages)+"\n"),output).serve()
         rows=[json.loads(line) for line in output.getvalue().splitlines()]

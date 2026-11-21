@@ -1,6 +1,6 @@
 # 音乐与换声
 
-music 0.5.3 保留本地音乐桥；旧云端 `music.generate` 已退役，作曲由工作站 YuE 处理。
+music 0.5.4 保留本地音乐桥；旧云端 `music.generate` 已退役，作曲由工作站 YuE 处理。
 
 - `music.bridge_request`：宿主内部使用的本地 YuE/RVC 服务协议。工具核验固定路由、解释实际 HTTP 状态和服务错误码；宿主持有完整请求正文、歌词、参考音频、响应音频和任务授权。需要 local_endpoint 和宿主私密 local_token。
 

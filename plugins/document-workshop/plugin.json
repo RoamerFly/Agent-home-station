@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "document-workshop",
   "name": "文档工坊",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -27,12 +27,13 @@
     "README.md": "c1e8d1514b8a1a7a6f8e787f0820b34636f3907dc6702d08920c3c2fea7e9b2b",
     "runtime/document_logic.py": "69a92728c382b095982b157727398c5a46ec1f8b54348d43561f3d51c868eb82",
     "runtime/document_runtime.py": "76311f257a95abf936e5f3b2a5edee284f48dba22dd5527b13b48d4dd2f8efe0",
-    "runtime/main.py": "d484b0e128fb4d7726c300e8e295978deeef1405747f59f171720b479eb77181",
+    "runtime/main.py": "532bf01a39f5651ca6564ead6ad10302b2a5a48b5a8d0ad24a67f05889b95232",
     "runtime/native_pdf.py": "2ca36db51f1aac0ed5a9ae13f7c42c0884ab3c99c022ac620ec60d0e6d714bd3",
-    "runtime/README.md": "d0fbefb574a06f00bb5a7b4a3792bba52e5512b2e676458747b726ee07defc72",
+    "runtime/README.md": "b8fc0dd1d9a0418b07d5ff19017618e99bddefe9d02138bdd1204650eba2dedc",
     "runtime/reportlab_image.py": "1d0ce754bed0007c2a8fea999e6bdc387d81ff926573501490682b6a521599b8",
     "tests/fixtures/layout.json": "852d9f67c2e10e8af6e3a11f2acabacff619c5003ab9fa4a6c40e434a7d2be25",
-    "tests/test_document_workshop.py": "d845130dffe4f734660cc03887382a2df69d4c00f478aee54e3e97c79cf56176",
+    "tests/test_document_workshop.py": "5c011428d304555259116f9834d15bbce51ef44149067f0b8acd5087c2126f43",
     "ui.schema.json": "e604275d64bb3d977d18729c3130286e4aca8179a15b7b1c3f98d1ed615e05ac"
-  }
+  },
+  "call_metadata": "opaque-v1"
 }

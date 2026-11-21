@@ -85,7 +85,7 @@ class DocumentWorkshopTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "sample.pdf"
             source.write_bytes(b"%PDF-1.7 synthetic")
-            meta = {"wechat/context": dict(account="a", thread="t", requester="r", purpose="test", request_key="key"), "wechat/document": {"inputs": [{"artifact_id": "pdf", "path": str(source)}], "input_root": str(root), "output_dir": str(root / "output"), "output_root": str(root / "output")}}
+            meta = {"station/call_id": "a" * 64, "wechat/document": {"inputs": [{"artifact_id": "pdf", "path": str(source)}], "input_root": str(root), "output_dir": str(root / "output"), "output_root": str(root / "output")}}
             with patch.object(main, "_runtime", return_value={"ok": True, "text": "synthetic"}):
                 result = main.call("document.inspect", {"artifact_id": "pdf"}, meta)
             self.assertEqual(result["evidence"]["sha256"], logic.file_digest(source))
@@ -265,7 +265,7 @@ class DocumentWorkshopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             product = logic.reconstruct(self.fixture(), root, "allowed.docx")
-            meta = {"wechat/context": {"account": "a", "thread": "t", "requester": "u", "purpose": "document", "request_key": "k"},
+            meta = {"station/call_id": "a" * 64,
                     "wechat/document": {"input_root": str(root), "output_root": str(root / "output"), "output_dir": str(root / "output"),
                                          "inputs": [{"artifact_id": "asset-safe", "path": product["path"], "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}]}}
             with self.assertRaises(logic.DocumentError) as blocked:
@@ -287,7 +287,7 @@ class DocumentWorkshopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             product = logic.reconstruct(self.fixture(), root, "source.docx")
-            meta = {"wechat/context": {"account": "a", "thread": "t", "requester": "u", "purpose": "document", "request_key": "k"},
+            meta = {"station/call_id": "a" * 64,
                     "wechat/document": {"input_root": str(root), "output_root": str(root / "output"), "output_dir": str(root / "output"),
                                          "inputs": [{"artifact_id": "asset-docx", "path": product["path"], "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}]}}
             # The normal runtime may be provisioned on an integration machine.

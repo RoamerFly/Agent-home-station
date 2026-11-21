@@ -45,14 +45,14 @@ def _inside(root: Path, candidate: Path) -> bool:
         return False
 
 
-def _context(meta: dict) -> tuple[dict, dict]:
-    context = meta.get("wechat/context", {})
+def _context(meta: dict) -> tuple[str, dict]:
+    call_id = meta.get("station/call_id")
     document = meta.get("wechat/document", {})
-    if not isinstance(context, dict) or not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
+    if not isinstance(call_id, str) or len(call_id) != 64:
         raise DocumentError("host_context_required")
     if not isinstance(document, dict) or not isinstance(document.get("inputs"), list):
         raise DocumentError("document_context_required")
-    return context, document
+    return call_id, document
 
 
 def _artifact_id(arguments: dict) -> str:

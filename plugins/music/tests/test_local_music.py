@@ -200,7 +200,7 @@ class LocalMusicTests(unittest.TestCase):
         context = {key: 'synthetic' for key in ('account', 'thread', 'requester', 'purpose', 'request_key')}
         args = self.request('POST', '/jobs')
         init = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'_meta': {'wechat/configuration': {'values': {'local_endpoint': 'http://localhost:1'}}}}}
-        call = {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'music.bridge_request', 'arguments': args, '_meta': {'wechat/context': context}}}
+        call = {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'music.bridge_request', 'arguments': args, '_meta': {'station/call_id': 'a' * 64}}}
         again = copy.deepcopy(call)
         again['id'] = 3
         for host_reply in ({'jsonrpc': '2.0', 'id': 'music-model-1', 'result': reply(200, {'id': 'original'})},

@@ -86,7 +86,7 @@ func testSession(t *testing.T) *session {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestProtocolChild$")
 	cmd.Env = append(os.Environ(), "WECHAT_PLUGIN_PROTOCOL_CHILD=1")
-	p := pluginhost.Package{ID: "sample", Version: "1", Status: "ready"}
+	p := pluginhost.Package{ID: "sample", Version: "1", Status: "ready", CallMetadata: "opaque-v1"}
 	g := pluginhost.Grant{Account: "a", Plugin: "sample", Version: "1"}
 	s, err := startSession(cmd, func() {}, p, g, 1024)
 	if err != nil {
@@ -114,14 +114,32 @@ func TestSessionContextAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result map[string]pluginhost.Invocation
-	if json.Unmarshal(r, &result) != nil || result["wechat/context"].Account != "a" || result["wechat/context"].SourceVersions["source"] != 2 {
-		t.Fatalf("context lost: %s", r)
+	var result map[string]json.RawMessage
+	var callID string
+	if json.Unmarshal(r, &result) != nil || json.Unmarshal(result["station/call_id"], &callID) != nil || len(callID) != 64 || result["wechat/context"] != nil || strings.Contains(string(r), `"room"`) || strings.Contains(string(r), `"person"`) {
+		t.Fatalf("tool runtime received message provenance: %s", r)
+	}
+	r, err = s.Call(ctx, invocation(), "echo", json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(string(r), callID) {
+		t.Fatalf("same host call lost opaque identity: %v %s", err, r)
 	}
 	c := invocation()
 	c.Account = "other"
 	if _, err = s.Call(ctx, c, "echo", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("cross account accepted")
+	}
+}
+
+func TestSessionLegacyInstalledPackageRetainsV1Metadata(t *testing.T) {
+	s := testSession(t)
+	s.pack.CallMetadata = ""
+	raw, err := s.Call(t.Context(), invocation(), "echo", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal(raw, &result) != nil || result["wechat/context"] == nil || result["station/call_id"] != nil {
+		t.Fatalf("legacy package protocol changed before upgrade: %s", raw)
 	}
 }
 
@@ -139,7 +157,7 @@ func TestSessionCarriesHostBoundCallMetadata(t *testing.T) {
 	}
 	var result map[string]json.RawMessage
 	if json.Unmarshal(raw, &result) != nil || !strings.Contains(string(result["wechat/document"]), `asset-synthetic`) ||
-		!strings.Contains(string(result["station/audio"]), `work-synthetic`) || strings.Contains(string(result["wechat/context"]), `private/input`) {
+		!strings.Contains(string(result["station/audio"]), `work-synthetic`) || result["wechat/context"] != nil {
 		t.Fatalf("host metadata not bound separately: %s", raw)
 	}
 }

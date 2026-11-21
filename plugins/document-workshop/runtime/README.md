@@ -1,6 +1,6 @@
 # 运行时协议
 
-`main.py` 是 MCP stdio 入口。它要求宿主在 `_meta.wechat/context` 中绑定账号、会话、请求者、目的和请求键，并在 `_meta.wechat/document` 中绑定本次允许读取的 `inputs` 及受控 `output_dir`。
+`main.py` 是 MCP stdio 入口。宿主仅在 `_meta.station/call_id` 中提供不透明调用标识；账号、会话和消息来源由应用及宿主保存和核对。`_meta.wechat/document` 只绑定本次允许读取的 `inputs` 及受控 `output_dir`。
 
 输入中的 `path` 只允许由宿主传入，模型工具参数只能给 `artifact_id`。输出中的临时路径只用于宿主登记素材，不能回流为下一轮模型可见的自由路径。
 

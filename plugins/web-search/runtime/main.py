@@ -571,8 +571,8 @@ class Wire:
                     pass
                 elif method == "tools/call" and initialized:
                     params = req["params"]
-                    context = params.get("_meta", {}).get("wechat/context", {})
-                    if not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id")
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     action = {"web.search": "search", "web.read": "read", "web.discover": "discover"}.get(params["name"])
                     if not action or not isinstance(params.get("arguments"), dict):

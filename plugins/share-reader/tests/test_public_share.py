@@ -154,7 +154,7 @@ class PublicShareTests(unittest.TestCase):
         self.assertEqual(result["text"], "")
 
     def test_stdio_context_and_host_read_binding(self):
-        call = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"share.resolve_public","arguments":{"url":PAGE},"_meta":{"wechat/context":{k:"synthetic" for k in ["account","thread","requester","purpose","request_key"]}}}}
+        call = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"share.resolve_public","arguments":{"url":PAGE},"_meta":{"station/call_id":"a" * 64}}}
         frames = [{"jsonrpc":"2.0","id":1,"method":"initialize"},call,{"jsonrpc":"2.0","id":"share-read-1","result":response(state())}]
         output=io.StringIO();main.Wire(io.StringIO("\n".join(json.dumps(x) for x in frames)+"\n"),output).serve()
         values=[json.loads(x) for x in output.getvalue().splitlines()]

@@ -103,8 +103,8 @@ class Wire:
                     result = {'tools': [{'name': name, 'description': 'Perform a host-bound project operation.', 'inputSchema': {'type': 'object'}} for name in ('project.workspace_read', 'project.workspace_write', 'project.workspace_execute')]}
                 elif initialized and method == 'tools/call':
                     params = request.get('params', {})
-                    context = params.get('_meta', {}).get('wechat/context', {})
-                    if params.get('name') != {'workspace.read':'project.workspace_read','workspace.write':'project.workspace_write','process.execute':'project.workspace_execute'}.get(TOOLS.get(params.get('arguments', {}).get('tool'), {}).get('permission')) or not all(context.get(key) for key in ('account', 'thread', 'requester', 'purpose', 'request_key')):
+                    call_id = params.get('_meta', {}).get('station/call_id')
+                    if params.get('name') != {'workspace.read':'project.workspace_read','workspace.write':'project.workspace_write','process.execute':'project.workspace_execute'}.get(TOOLS.get(params.get('arguments', {}).get('tool'), {}).get('permission')) or not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError('host_context_required')
                     result = execute(params.get('arguments'), self.host)
                 else:
