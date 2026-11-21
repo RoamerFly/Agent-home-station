@@ -192,7 +192,7 @@ func (t *stationAttachmentTools) bindConnectionVideo(ctx context.Context, in sta
 	contextFor := func(args json.RawMessage) pluginhost.Invocation {
 		key := localCheckpointKey(t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, installed.Digest, installed.Revision, config.Revision, in.Mode, in.AudioStart, in.AudioLength, string(args))
 		return pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: purpose, RequestKey: "station-media-" + key,
-			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
+			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID}
 	}
 	check := mediaobserve.BindSource(host.store, installed, config.Revision, checkSource)
 	bound := stationVideoBackend{check: check, localAudio: localAudio}

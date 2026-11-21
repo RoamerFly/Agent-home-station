@@ -638,15 +638,14 @@ func (m *Manager) pluginMigrationPreviewFor(ctx context.Context, packages map[st
 	}
 	speechStep := migrationStep("speech", packages, speech.TTSEnabled || namedAvailable, speechValues, map[string]pluginMigrationSecret{"tts_key": ttsSecret}, speechUpdate, speechRequired, []string{"asr_*", "music_*", "yue_*", "yue_token"}, "", sources)
 	speechStep.ResourceProof = namedProof
-	musicSecret, musicKey := migrationSecret(speech.Key, "speech-config.json:key")
 	localMusicSecret, localMusicToken := migrationSecret(speech.YuEToken, "speech-config.json:yue_token")
-	musicValues := map[string]json.RawMessage{"music_endpoint": migrationValue(migrationEndpoint(speech.Endpoint, "/api/v1/services/audio/music/generation")), "music_model": migrationValue(speech.MusicModel)}
-	musicSecrets := map[string]pluginMigrationSecret{"music_key": musicSecret, "local_token": localMusicSecret}
-	musicUpdate := pluginhost.ConfigUpdate{Values: musicValues, Secrets: map[string]string{"music_key": musicKey}}
+	musicValues := map[string]json.RawMessage{}
+	musicSecrets := map[string]pluginMigrationSecret{"local_token": localMusicSecret}
+	musicUpdate := pluginhost.ConfigUpdate{Values: map[string]json.RawMessage{}, Secrets: map[string]string{}}
 	musicRequired := []string{}
 	localMusicConfigured := speech.YuEEnabled || speech.YuEEndpoint != "" || speech.YuEToken != ""
-	if speech.MusicEnabled && musicKey == "" && !speech.YuEEnabled {
-		musicRequired = append(musicRequired, "music_key")
+	if speech.MusicEnabled && !speech.YuEEnabled {
+		musicRequired = append(musicRequired, "cloud_music_retired_use_station_yue")
 	}
 	if localMusicConfigured {
 		switch {

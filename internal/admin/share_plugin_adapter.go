@@ -247,8 +247,6 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 	c := pluginhost.Invocation{Account: p.message.AccountID, Thread: p.message.ThreadID, Requester: p.message.SenderID, Purpose: "read received video share", RequestKey: "received-share-" + agentID(p.source.EventID, p.message.ID), SourceVersions: map[string]int{p.source.EventID: p.source.Revision}, EvidenceEpoch: p.epoch, Authorization: p.fingerprint}
 	if p.actor != nil {
 		c.Requester = p.actor.actor
-		c.OriginSourceSender = p.message.SenderID
-		c.RequestThread = p.actor.requestThread
 		c.RequestKey += "-actor-" + agentID(p.actor.actor, p.actor.requestThread, p.actor.taskID, p.actor.requestKey, p.message.ID, p.tool)
 	}
 	if p.requestSuffix != "" {

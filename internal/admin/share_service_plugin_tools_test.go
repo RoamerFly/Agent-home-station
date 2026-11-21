@@ -116,7 +116,7 @@ func TestExplicitShareActorIsDistinctFromUploaderAndRevokesBeforeProvider(t *tes
 		t.Fatal(err)
 	}
 	inv := policy.invocation()
-	if inv.Requester != "alice" || inv.OriginSourceSender != native.msg.SenderID || inv.RequestThread != native.msg.ThreadID || inv.Requester == inv.OriginSourceSender {
+	if inv.Requester != "alice" || policy.message.SenderID != native.msg.SenderID || policy.actor.requestThread != native.msg.ThreadID || inv.Requester == policy.message.SenderID {
 		t.Fatalf("actor/source provenance collapsed: %+v", inv)
 	}
 	// Change the authenticated tool turn before any provider callback. Check

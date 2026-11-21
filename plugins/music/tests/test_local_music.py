@@ -230,13 +230,14 @@ class LocalMusicTests(unittest.TestCase):
         self.assertFalse(config.get('required'))
         self.assertTrue(config['properties']['local_token']['x-host-only'])
         self.assertTrue(config['properties']['local_token']['x-secret'])
-        self.assertEqual(package['permissions'], ['model.invoke', 'network'])
-        self.assertTrue(package['http_routes'][0]['optional'])
+        self.assertEqual(package['permissions'], ['network'])
+        self.assertEqual(package['http_routes'], [])
         local_cap = next(cap for cap in caps if cap['id'] == 'music.bridge_request')
         self.assertEqual(local_cap['permissions'], ['network'])
         self.assertFalse(local_cap.get('async', False))
-        with self.assertRaisesRegex(ValueError, 'music_model_not_configured'):
-            main.cloud_music.generate({'prompt': 'synthetic'}, {'local_endpoint': 'http://localhost:1'}, lambda _: self.fail('cloud called'))
+        cloud_cap = next(cap for cap in caps if cap['id'] == 'music.generate')
+        self.assertEqual(cloud_cap['implementation'], 'migration-pending')
+        self.assertFalse(cloud_cap['discoverable'])
         out = local.bridge_request(self.request(), lambda _: reply())
         self.assertEqual(out['status'], 200)
 

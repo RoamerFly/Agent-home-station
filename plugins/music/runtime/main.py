@@ -7,18 +7,6 @@ import re
 import sys
 
 FRAME_LIMIT = 8 * 1024 * 1024
-TOOL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "prompt": {"type": "string", "maxLength": 2000},
-        "lyrics": {"type": "string", "maxLength": 2000},
-        "timeout_seconds": {"type": "integer", "minimum": 1},
-    },
-    "additionalProperties": False,
-}
-spec = importlib.util.spec_from_file_location("cloud_music", Path(__file__).with_name("cloud_music.py"))
-cloud_music = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cloud_music)
 local_spec = importlib.util.spec_from_file_location("local_music", Path(__file__).with_name("local_music.py"))
 local_music = importlib.util.module_from_spec(local_spec)
 local_spec.loader.exec_module(local_music)
@@ -127,7 +115,10 @@ class Wire:
                 elif method == "ping" and initialized:
                     result = {}
                 elif method == "tools/list" and initialized:
-                    result = {"tools": [{"name": "music.generate", "description": "通过宿主绑定云端接口提交歌曲生成；不下载或发送音频。", "inputSchema": TOOL_SCHEMA}]}
+                    result = {"tools": [
+                        {"name": name, "description": "工作站本地音乐桥内部能力", "inputSchema": {"type": "object"}}
+                        for name in ("music.bridge_request", "music.service_control", "music.prepare")
+                    ]}
                 elif method == "tools/call" and initialized:
                     params = request.get("params")
                     context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
@@ -147,8 +138,6 @@ class Wire:
                             raise ValueError("music_service_request_already_used")
                         self.local_contexts.add(identity)
                         result = self.host("wechat/service_control", arguments)
-                    elif params.get("name") == "music.generate":
-                        result = cloud_music.generate(params.get("arguments"), configuration, lambda value: self.host("wechat/model_request", value))
                     else:
                         raise ValueError("capability_unavailable")
                 else:

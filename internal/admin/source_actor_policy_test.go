@@ -17,7 +17,7 @@ func TestExplicitSourceActorKeepsActorAndOriginSeparateAndRechecks(t *testing.T)
 		t.Fatal(err)
 	}
 	invocation := policy.invocation()
-	if invocation.Requester != "current-actor" || invocation.OriginSourceSender != native.msg.SenderID || invocation.RequestThread != native.msg.ThreadID || invocation.RequestKey == "" {
+	if invocation.Requester != "current-actor" || policy.message.SenderID != native.msg.SenderID || policy.actor.requestThread != native.msg.ThreadID || invocation.RequestKey == "" {
 		t.Fatalf("actor provenance was not retained: %#v", invocation)
 	}
 	policy.tool = "media.observe"
@@ -75,7 +75,7 @@ func TestExplicitSourceActorSupportsAuthorizedSurfFactoryShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := policy.invocation(); got.Requester != "host:surf" || got.OriginSourceSender != native.msg.SenderID || got.RequestThread != native.msg.ThreadID {
+	if got := policy.invocation(); got.Requester != "host:surf" || policy.message.SenderID != native.msg.SenderID || policy.actor.requestThread != native.msg.ThreadID {
 		t.Fatalf("surf actor provenance invalid: %#v", got)
 	}
 	if !policy.actor.active() {

@@ -78,7 +78,9 @@ func (m *Manager) musicPluginConfigured(ctx context.Context) bool {
 	}
 	i, err := s.Installed(ctx, "music")
 	inv := pluginhost.Invocation{Account: s.Account(), Thread: "host", Requester: "administrator", Purpose: "inspect music readiness", RequestKey: "host-readiness"}
-	if err != nil || !i.Enabled || i.Removed || pluginhost.Authorize(i.Package, pluginhost.Grant{Account: s.Account(), Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, inv, []string{"model.invoke"}) != nil || s.CheckConfiguration(ctx, "music") != nil {
+	// An installed 0.5.2 snapshot may still declare the retired cloud entry.
+	// Only the current catalog generation can advertise music capabilities.
+	if err != nil || i.Package.Version != "0.5.3" || !i.Enabled || i.Removed || pluginhost.Authorize(i.Package, pluginhost.Grant{Account: s.Account(), Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, inv, []string{"model.invoke"}) != nil || s.CheckConfiguration(ctx, "music") != nil {
 		return false
 	}
 	var endpoint, model string

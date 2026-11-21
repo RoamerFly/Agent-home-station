@@ -164,7 +164,7 @@ func (h *stationShareHost) resolve(ctx context.Context, a stationAttachmentAcces
 		return empty, videoReadError("share_source_binding_invalid", "校验原卡片解析入口")
 	}
 	key := localCheckpointKey(a.requester, a.requestTrace, original.AssetID(), epoch, installed.Digest, installed.Revision, configuration.Revision, string(args))
-	inv := pluginhost.Invocation{Account: original.Account, Thread: original.Thread, Requester: a.requester, Purpose: "resolve authorized received Channels video", RequestKey: "station-channels-" + key, SourceVersions: map[string]int{ref.EventID: 1}, EvidenceEpoch: epoch, Authorization: original.AssetID(), OriginSourceSender: original.Sender, RequestThread: original.Thread}
+	inv := pluginhost.Invocation{Account: original.Account, Thread: original.Thread, Requester: a.requester, Purpose: "resolve authorized received Channels video", RequestKey: "station-channels-" + key, SourceVersions: map[string]int{ref.EventID: 1}, EvidenceEpoch: epoch, Authorization: original.AssetID()}
 	policy := &stationSharePolicy{host: h, binding: binding, invocation: inv, installed: installed, config: configuration.Revision, sourceCheck: check}
 	if err = h.controller.EnsureStarted(ctx, wechatapp.ShareReaderToolID, installed.Revision); err != nil {
 		return empty, videoReadError("share_reader_runtime_unavailable", "启动隔离解析工具")

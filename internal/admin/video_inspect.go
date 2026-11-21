@@ -435,7 +435,6 @@ func (p *permittedTools) inspectVideoFrameRange(ctx context.Context, path, dir s
 			Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(),
 			Purpose: "inspect authorized video frames", RequestKey: agentID(baseKey, prompt),
 			EvidenceEpoch: epoch, Authorization: authorization, SourceVersions: sources,
-			RequestThread: p.trace.Thread,
 		}
 		policy, e := p.manager.newBoundMediaVisualObservationPolicy(actorCtx, images, inv, 1, check, prompt, tokens)
 		if e != nil {
