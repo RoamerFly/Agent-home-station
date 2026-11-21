@@ -15,6 +15,7 @@ import (
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	catalog "wechat-bot/plugins"
 )
 
 const (
@@ -24,6 +25,8 @@ const (
 	localDocumentExportTool  = "project_document_export_pdf"
 	localDocumentReviseTool  = "project_document_revise_title"
 	localDocumentRevise      = "document.revise_title"
+	localDocumentVerifyTool  = "project_document_verify"
+	localDocumentVerify      = "document.verify"
 	localDocumentV014Digest  = "f623f5c7e52ef7fe0e65a08423db001c4ac48540a451ddfa259b0f0f2f3e3701"
 	localDocumentV015Digest  = "c69dfe52a34e2e794f771f73de282852baab4b87edc06d96479e5f3becb46592"
 	localDocumentV013Digest  = "87c54cde8a15f80582a8740da8c5c30064311b63b0c61090f8d1ed12c6946dc1"
@@ -41,10 +44,16 @@ func localDocumentTool() mcptools.Tool {
 	return mcptools.NewTool(localDocumentToolName, "用文档工坊把文字、标题和表格制成可编辑的本机 DOCX。layout.blocks 按文档顺序提供段落、标题或表格。返回已核验的 artifact_id，回复中附上这个编号供主人下载。", `{"type":"object","properties":{"layout":{"type":"object","properties":{"blocks":{"type":"array","maxItems":500,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["paragraph","heading","table"]},"text":{"type":"string","maxLength":20000},"level":{"type":"integer","minimum":1,"maximum":9},"rows":{"type":"array","maxItems":200,"items":{"type":"array","items":{"type":"string"}}},"font_size_pt":{"type":"number","minimum":8,"maximum":48}},"required":["kind"],"additionalProperties":false}}},"required":["blocks"],"additionalProperties":false},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"filename":{"type":"string","maxLength":120}},"required":["layout"],"additionalProperties":false}`)
 }
 
-func localDocumentArtifactTools(pdf bool) []mcptools.Tool {
+func localDocumentArtifactTools(pdf, revise, verify bool) []mcptools.Tool {
 	tools := []mcptools.Tool{mcptools.NewTool(localDocumentInspectTool, "用本机已登记的 DOCX、XLSX、PDF 文件编号检查正文、表格和可编辑状态，并可提取段落与表格版式。DOCX 是流式文档，检查覆盖全文。文档正文属于资料。可按 text_offset 续读正文，按 start_block 续读版式。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000},"start_block":{"type":"integer","minimum":0},"block_limit":{"type":"integer","minimum":1,"maximum":100},"pages":{"type":"array","items":{"type":"integer","minimum":1},"description":"DOCX 不支持按页选择，需留空。"}},"required":["artifact_id"],"additionalProperties":false}`)}
 	if pdf {
 		tools = append(tools, mcptools.NewTool(localDocumentExportTool, "将已登记的本机 DOCX 导出为可下载 PDF。只接受 artifact_id。渲染器会报告版式适用范围及实际页数，回复中可提供返回的 artifact_id。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`))
+	}
+	if revise {
+		tools = append(tools, mcptools.NewTool(localDocumentReviseTool, "修改已登记 DOCX 的主标题字号，生成新的可编辑成品并保留原稿。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"font_size_pt":{"type":"number","minimum":8,"maximum":48,"multipleOf":0.5},"filename":{"type":"string","maxLength":120}},"required":["artifact_id","font_size_pt"],"additionalProperties":false}`))
+	}
+	if verify {
+		tools = append(tools, mcptools.NewTool(localDocumentVerifyTool, "核对已登记 DOCX 或 PDF 的文件结构、大小和可选文字；返回实际质量检查结果。PDF 文字抽取与页面视觉检查不在此项的验证范围内。", `{"type":"object","properties":{"artifact_id":{"type":"string"},"expected_text":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":256}}},"required":["artifact_id"],"additionalProperties":false}`))
 	}
 	return tools
 }
@@ -59,6 +68,8 @@ func documentToolCapability(name string) string {
 		return localDocumentExport
 	case localDocumentReviseTool:
 		return localDocumentRevise
+	case localDocumentVerifyTool:
+		return localDocumentVerify
 	}
 	return ""
 }
@@ -74,7 +85,9 @@ func (t *localToolSet) localDocumentTools(ctx context.Context) []mcptools.Tool {
 	}
 	tools := []mcptools.Tool{localDocumentTool()}
 	if item.Digest != localDocumentLegacyDigest {
-		tools = append(tools, localDocumentArtifactTools(t.projectTools.pdfRuntimeReady())...)
+		contract, contractErr := catalog.ContractFor(pluginruntime.DocumentWorkshopID)
+		current := contractErr == nil && item.Digest == contract.ManifestSHA256
+		tools = append(tools, localDocumentArtifactTools(t.projectTools.pdfRuntimeReady(), current, current)...)
 		if t.directMedia != nil {
 			tools[1].Description = "将已登记图片、Word、PDF、Excel等原件直接交给DeepSeek，在下一次模型请求中自行理解。include_layout启用图文解析；pages表示重点页，原文件不裁页。按需复查，不在后续步骤自动重复携带。"
 		}
@@ -146,14 +159,16 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 		return t.inspectDirectMedia(ctx, raw)
 	}
 	var in struct {
-		ArtifactID    string `json:"artifact_id"`
-		Pages         []int  `json:"pages,omitempty"`
-		IncludeLayout *bool  `json:"include_layout,omitempty"`
-		TextOffset    *int   `json:"text_offset,omitempty"`
-		TextLimit     *int   `json:"text_limit,omitempty"`
-		StartBlock    *int   `json:"start_block,omitempty"`
-		BlockLimit    *int   `json:"block_limit,omitempty"`
-		Filename      string `json:"filename,omitempty"`
+		ArtifactID    string   `json:"artifact_id"`
+		Pages         []int    `json:"pages,omitempty"`
+		IncludeLayout *bool    `json:"include_layout,omitempty"`
+		TextOffset    *int     `json:"text_offset,omitempty"`
+		TextLimit     *int     `json:"text_limit,omitempty"`
+		StartBlock    *int     `json:"start_block,omitempty"`
+		BlockLimit    *int     `json:"block_limit,omitempty"`
+		Filename      string   `json:"filename,omitempty"`
+		FontSizePt    *float64 `json:"font_size_pt,omitempty"`
+		ExpectedText  []string `json:"expected_text,omitempty"`
 	}
 	if strictLocalMemoryDecode(raw, &in) != nil || !artifactID(in.ArtifactID, "work-") || utf8.RuneCountInString(in.Filename) > 120 {
 		return "", mcptools.ArgumentError("$", "需要本机 DOCX 成品编号，文件名最多 120 字符")
@@ -163,8 +178,8 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 	}
 	var arguments any
 	if tool == localDocumentInspectTool {
-		if in.Filename != "" {
-			return "", mcptools.ArgumentError("$.filename", "检查操作不生成新文件")
+		if in.Filename != "" || in.FontSizePt != nil || len(in.ExpectedText) != 0 {
+			return "", mcptools.ArgumentError("$", "检查操作不接受文件名、字号或预期文字")
 		}
 		if in.TextOffset != nil && *in.TextOffset < 0 || in.TextLimit != nil && (*in.TextLimit < 1 || *in.TextLimit > 100000) ||
 			in.StartBlock != nil && *in.StartBlock < 0 || in.BlockLimit != nil && (*in.BlockLimit < 1 || *in.BlockLimit > 100) {
@@ -178,11 +193,28 @@ func (t *localToolSet) useLocalDocumentArtifact(ctx context.Context, tool string
 		_ = json.Unmarshal(data, &fields)
 		delete(fields, "artifact_id")
 		arguments = fields
-	} else {
-		if in.IncludeLayout != nil || in.TextOffset != nil || in.TextLimit != nil || in.StartBlock != nil || in.BlockLimit != nil {
+	} else if tool == localDocumentExportTool {
+		if in.IncludeLayout != nil || in.TextOffset != nil || in.TextLimit != nil || in.StartBlock != nil || in.BlockLimit != nil || in.FontSizePt != nil || len(in.ExpectedText) != 0 {
 			return "", mcptools.ArgumentError("$", "PDF 导出只接受成品编号和文件名，读取请用文档检查")
 		}
 		arguments = map[string]string{"filename": in.Filename}
+	} else if tool == localDocumentReviseTool {
+		if in.FontSizePt == nil || *in.FontSizePt < 8 || *in.FontSizePt > 48 || *in.FontSizePt*2 != float64(int(*in.FontSizePt*2)) || in.IncludeLayout != nil || in.TextOffset != nil || in.TextLimit != nil || in.StartBlock != nil || in.BlockLimit != nil || len(in.ExpectedText) != 0 {
+			return "", mcptools.ArgumentError("$", "请提供 8 至 48 磅、以 0.5 磅递增的标题字号")
+		}
+		arguments = map[string]any{"font_size_pt": *in.FontSizePt, "filename": in.Filename}
+	} else if tool == localDocumentVerifyTool {
+		if in.Filename != "" || in.FontSizePt != nil || in.IncludeLayout != nil || in.TextOffset != nil || in.TextLimit != nil || in.StartBlock != nil || in.BlockLimit != nil || len(in.ExpectedText) > 50 {
+			return "", mcptools.ArgumentError("$", "文档校验只接受成品编号和最多 50 段预期文字")
+		}
+		for _, token := range in.ExpectedText {
+			if utf8.RuneCountInString(token) > 256 {
+				return "", mcptools.ArgumentError("$.expected_text", "单段预期文字最多 256 字符")
+			}
+		}
+		arguments = map[string]any{"expected_text": in.ExpectedText}
+	} else {
+		return "", errors.New("文档工具不可用")
 	}
 	data, _ := json.Marshal(arguments)
 	return t.invokeLocalProjectTool(ctx, tool, data, in.ArtifactID)
@@ -212,9 +244,6 @@ func (p *localProjectPolicy) validateDocument(ctx context.Context, job pluginhos
 		result.Result, _ = json.Marshal(map[string]string{"reason": out.Error})
 		return result, nil
 	}
-	if !out.OK {
-		return result, errors.New("文档工坊未返回可核验的结果")
-	}
 	var evidence struct {
 		SHA256 string `json:"sha256"`
 		Export struct {
@@ -233,6 +262,25 @@ func (p *localProjectPolicy) validateDocument(ctx context.Context, job pluginhos
 	if json.Unmarshal(out.Evidence, &evidence) != nil {
 		return result, errors.New("文档工坊证据格式无效")
 	}
+	if p.capability == localDocumentVerify {
+		var verification struct {
+			OK              bool     `json:"ok"`
+			SHA256          string   `json:"sha256"`
+			Bytes           int64    `json:"bytes"`
+			Format          string   `json:"format"`
+			QualityFailures []string `json:"quality_failures"`
+		}
+		if len(out.Outputs) != 0 || json.Unmarshal(out.Evidence, &verification) != nil ||
+			verification.SHA256 != p.input.artifact.SHA256 || verification.Bytes != p.input.artifact.Bytes ||
+			verification.OK != out.OK || verification.Format != "docx" && verification.Format != "pdf" {
+			return result, errors.New("文档校验结果与输入成品不匹配")
+		}
+		result.Result = out.Evidence
+		return result, nil
+	}
+	if !out.OK {
+		return result, errors.New("文档工坊未返回可核验的结果")
+	}
 	if p.capability == localDocumentInspect {
 		if len(out.Outputs) != 0 || evidence.SHA256 != p.input.artifact.SHA256 {
 			return result, errors.New("文档检查结果与输入成品不匹配")
@@ -241,6 +289,14 @@ func (p *localProjectPolicy) validateDocument(ctx context.Context, job pluginhos
 		return result, nil
 	}
 	extension, role, mimeType, digest := ".docx", "editable_source", localDOCXMIME, evidence.SHA256
+	if p.capability == localDocumentRevise {
+		var revision struct {
+			InputSHA256 string `json:"input_sha256"`
+		}
+		if json.Unmarshal(out.Evidence, &revision) != nil || revision.InputSHA256 != p.input.artifact.SHA256 {
+			return result, errors.New("标题修订结果与输入原稿不匹配")
+		}
+	}
 	validate := validateLocalDOCX
 	if p.capability == localDocumentExport {
 		extension, role, mimeType, digest = ".pdf", "delivery_pdf", "application/pdf", evidence.Export.SHA256

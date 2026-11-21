@@ -264,7 +264,7 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	if name == "project_document_memory" {
 		return t.documentMemory(ctx, raw)
 	}
-	if name == localDocumentInspectTool || name == localDocumentExportTool {
+	if name == localDocumentInspectTool || name == localDocumentExportTool || name == localDocumentReviseTool || name == localDocumentVerifyTool {
 		return t.useLocalDocumentArtifact(ctx, name, raw)
 	}
 	if name == localAudioToolName {

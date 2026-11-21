@@ -188,7 +188,7 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         product = reconstruct(arguments.get("layout"), output, arguments.get("filename", "document.docx"), arguments.get("title", ""), _images(document, arguments), arguments.get("title_font_size_pt"))
         return {"ok": True, "summary": "editable_docx_created", "evidence": {"sha256": product["sha256"], "text_characters": len(product["text"])}, "outputs": [_safe_output(Path(product["path"]), output, "editable_source", product["mime_type"])]}
     if name == "document.revise_title":
-        if set(arguments) - {"artifact_id", "font_size_pt", "filename"}:
+        if set(arguments) - {"artifact_id", "artifact", "font_size_pt", "filename"}:
             raise DocumentError("document_arguments_invalid")
         path, item = _input(document, arguments)
         if path.suffix.lower() != ".docx":

@@ -117,8 +117,11 @@ func (t *localToolSet) invokeLocalProjectTool(ctx context.Context, tool string, 
 		artifact := input.artifact
 		ext := strings.ToLower(filepath.Ext(artifact.Name))
 		validExt := strings.EqualFold(ext, operation.inputExt)
-		if capability == localDocumentInspect {
+		if capability == localDocumentInspect || capability == localDocumentVerify {
 			validExt = ext == ".docx" || ext == ".xlsx" || ext == ".pdf"
+			if capability == localDocumentVerify {
+				validExt = ext == ".docx" || ext == ".pdf"
+			}
 		}
 		if !validExt || artifact.Bytes > operation.inputLimit {
 			return "", mcptools.ArgumentError("$.artifact_id", fmt.Sprintf("需要不超过 %d MiB 的已登记 %s 成品", operation.inputLimit>>20, operation.inputExt))
@@ -207,8 +210,18 @@ func (t *localToolSet) localProjectResult(ctx context.Context, tool string, job 
 	if job.State != "completed" || ctx.Err() != nil || t.run.CheckSource(ctx) != nil {
 		return view
 	}
-	if tool == localDocumentInspectTool && len(job.Artifacts) == 0 {
-		view["status"], view["evidence"] = "inspected", json.RawMessage(job.Result)
+	if (tool == localDocumentInspectTool || tool == localDocumentVerifyTool) && len(job.Artifacts) == 0 {
+		status := "inspected"
+		if tool == localDocumentVerifyTool {
+			status = "verified"
+			var result struct {
+				OK bool `json:"ok"`
+			}
+			if json.Unmarshal(job.Result, &result) != nil || !result.OK {
+				status = "quality_failed"
+			}
+		}
+		view["status"], view["evidence"] = status, json.RawMessage(job.Result)
 		return view
 	}
 	if len(job.Artifacts) != 1 {
@@ -447,8 +460,14 @@ func (p *localProjectPolicy) CallMetadata(ctx context.Context, job pluginhost.Jo
 	metadata := map[string]any{"inputs": []any{}, "output_dir": mount, "output_root": mount}
 	if p.input != nil {
 		artifact := p.input.artifact
+		mimeType := localDOCXMIME
+		if strings.EqualFold(filepath.Ext(artifact.Name), ".pdf") {
+			mimeType = "application/pdf"
+		} else if strings.EqualFold(filepath.Ext(artifact.Name), ".xlsx") {
+			mimeType = localXLSXMIME
+		}
 		metadata["inputs"] = []map[string]string{{"artifact_id": artifact.ID, "sha256": artifact.SHA256,
-			"path": windowsProjectToolPath(p.inputPath), "mime_type": localDOCXMIME}}
+			"path": windowsProjectToolPath(p.inputPath), "mime_type": mimeType}}
 		metadata["input_root"] = windowsProjectToolPath(filepath.Dir(p.inputPath))
 	}
 	data, _ := json.Marshal(metadata)

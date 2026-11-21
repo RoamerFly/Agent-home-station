@@ -264,14 +264,14 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 		t.Error("project tool result did not return a registered artifact id", localModelHistory(turns))
 		return ""
 	}
-	var artifact, pdfArtifact string
+	var artifact, pdfArtifact, revisedArtifact string
 	calls := 0
 	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
 		return localModelFunc(func(_ context.Context, system string, turns []map[string]string) (string, error) {
 			calls++
 			switch calls {
 			case 1:
-				for _, tool := range []string{"project_document_create", "project_document_inspect", "project_document_export_pdf"} {
+				for _, tool := range []string{"project_document_create", "project_document_inspect", "project_document_export_pdf", "project_document_revise_title", "project_document_verify"} {
 					if !strings.Contains(system, tool) {
 						t.Errorf("local chat did not disclose the installed project document tool: %s", tool)
 					}
@@ -286,11 +286,28 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 					t.Error("DOCX inspection did not return the actual editable text and layout evidence", all)
 				}
 				return localToolCall("project_document_export_pdf", map[string]any{"artifact_id": artifact, "filename": "local-project-acceptance.pdf"}), nil
-			default:
+			case 4:
 				for _, candidate := range captureArtifacts(turns) {
 					if candidate != artifact {
 						pdfArtifact = candidate
 					}
+				}
+				return localToolCall(localDocumentReviseTool, map[string]any{"artifact_id": artifact, "font_size_pt": 26.5, "filename": "revised.docx"}), nil
+			case 5:
+				for _, candidate := range captureArtifacts(turns) {
+					if candidate != artifact && candidate != pdfArtifact {
+						revisedArtifact = candidate
+					}
+				}
+				return localToolCall(localDocumentVerifyTool, map[string]any{"artifact_id": revisedArtifact, "expected_text": []string{paragraph, cell}}), nil
+			case 6:
+				if !strings.Contains(localModelHistory(turns), `\"status\":\"verified\"`) {
+					t.Error("revised DOCX was not verified", localModelHistory(turns))
+				}
+				return localToolCall(localDocumentVerifyTool, map[string]any{"artifact_id": pdfArtifact}), nil
+			default:
+				if strings.Count(localModelHistory(turns), `\"status\":\"verified\"`) < 2 {
+					t.Error("PDF was not verified", localModelHistory(turns))
 				}
 				return `{"action":"reply","messages":["文档和 PDF 已生成并登记：` + artifact + `、` + pdfArtifact + `。"]}`, nil
 			}
@@ -299,8 +316,8 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	if code, out := localChatSend(f, "local-document-project-tool", "做一份可编辑的中文文档并保存成品"); code != http.StatusOK || out["status"] != "completed" {
 		t.Fatalf("normal local chat document flow: %d %#v", code, out)
 	}
-	if calls != 4 || !artifactID(artifact, "work-") || !artifactID(pdfArtifact, "work-") || artifact == pdfArtifact {
-		t.Fatalf("unexpected local document calls=%d DOCX=%q PDF=%q", calls, artifact, pdfArtifact)
+	if calls != 7 || !artifactID(artifact, "work-") || !artifactID(pdfArtifact, "work-") || !artifactID(revisedArtifact, "work-") || artifact == pdfArtifact || revisedArtifact == artifact || revisedArtifact == pdfArtifact {
+		t.Fatalf("unexpected local document calls=%d DOCX=%q PDF=%q revised=%q", calls, artifact, pdfArtifact, revisedArtifact)
 	}
 	if code, view := f.request("GET", "/api/local/artifacts/"+artifact, nil, true); code != http.StatusOK || view["filename"] != filename || view["status"] != "registered" {
 		t.Fatalf("registered local document artifact missing: %d %#v", code, view)
@@ -308,6 +325,13 @@ func TestLiveLocalProjectToolCreatesImmutableDocumentThroughChat(t *testing.T) {
 	xml := localDOCXDocumentXML(t, localArtifactDownload(t, f, artifact))
 	if !strings.Contains(xml, paragraph) || !strings.Contains(xml, cell) || !strings.Contains(xml, "<w:tbl") {
 		t.Fatalf("downloaded DOCX is not an editable Chinese document: %s", xml)
+	}
+	revisedXML := localDOCXDocumentXML(t, localArtifactDownload(t, f, revisedArtifact))
+	if !strings.Contains(revisedXML, paragraph) || !strings.Contains(revisedXML, cell) || !strings.Contains(revisedXML, "<w:tbl") || !strings.Contains(revisedXML, `w:sz w:val="53"`) {
+		t.Fatalf("title revision lost document content or font size: %s", revisedXML)
+	}
+	if xml != localDOCXDocumentXML(t, localArtifactDownload(t, f, artifact)) {
+		t.Fatal("title revision changed original artifact")
 	}
 	if code, view := f.request("GET", "/api/local/artifacts/"+pdfArtifact, nil, true); code != http.StatusOK || view["filename"] != "local-project-acceptance.pdf" || view["input_artifact_id"] != artifact || view["input_sha256"] == "" {
 		t.Fatalf("PDF did not preserve DOCX provenance: %d %#v", code, view)
