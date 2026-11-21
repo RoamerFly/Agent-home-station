@@ -284,12 +284,17 @@ def main():
             bridge += ["--singing-voice-config", str(voice)]
         # The token-bearing HTTP bridge is trusted control code outside the
         # inference mount, using the same managed interpreter and clean startup.
-        children.append(subprocess.Popen(bridge, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
+        # Keep the bridge's startup traceback in the account's private job
+        # directory; the supervisor log otherwise only reports a child exit.
+        with (state / "jobs" / "bridge-stderr.log").open("ab") as bridge_log:
+            children.append(subprocess.Popen(bridge, stderr=bridge_log,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
         while not stopping.is_set() and all(child.poll() is None for child in children):
             time.sleep(1)
         if stopping.is_set():
             return
-        raise RuntimeError("music_child_exited")
+        failed = [(index, child.returncode) for index, child in enumerate(children) if child.poll() is not None]
+        raise RuntimeError(f"music_child_exited:{failed}")
     finally:
         try:
             stop()
