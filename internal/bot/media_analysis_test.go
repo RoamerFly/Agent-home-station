@@ -109,6 +109,39 @@ func TestMediaAnalysisPersistsOriginalBeforeParsingAndReusesIdentity(t *testing.
 	}
 }
 
+func TestShareMediaReadIgnoresOlderReusedNativeRow(t *testing.T) {
+	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		t.Fatal("source check must not call the model")
+		return "", nil
+	}))
+	old := fixtureMessage("reused-native-row", "synthetic@chatroom", "", "incoming")
+	old.Type, old.AccountID, old.SenderID = 43, w.source.Account(), "old-sender"
+	old.CreatedAt = time.Now().UTC().Add(-17 * 24 * time.Hour).Format(time.RFC3339)
+	original := ""
+	prior := companion.Input{Channel: w.config.Channel, Account: old.AccountID, Thread: old.ThreadID, Sender: old.SenderID,
+		TraceID: old.ID, MessageTime: old.CreatedAt, Text: messageSummary(old), OriginalText: &original}
+	bindInputSource(&prior, old, e)
+	if err := e.Store.Observe(prior, e.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	oldSource, ok := e.Store.SourceForInput(prior)
+	if !ok {
+		t.Fatal("old source missing")
+	}
+	share := fixtureMessage(old.ID, old.ThreadID, "", "incoming")
+	share.Type, share.AccountID, share.SenderID, share.ServerID = 49, old.AccountID, "new-sender", "new-platform-id"
+	w.config.Analyzer = sourceCheckingAnalyzer(func(ctx context.Context, current linuxnative.Message) (string, error) {
+		ref, ok := companion.MediaSourceFromContext(ctx)
+		if !ok || ref.Sender != current.SenderID || ref.ServerID != current.ServerID || ref.EventID == oldSource.EventID {
+			t.Fatal("share inherited old source", ref)
+		}
+		return "synthetic share observation", nil
+	})
+	if text, err := w.analyzeIncomingMedia(t.Context(), share); err != nil || text != "synthetic share observation" {
+		t.Fatal("new share was blocked by old local row", text, err)
+	}
+}
+
 func TestMediaAnalysisRejectsForgottenAndForeignSources(t *testing.T) {
 	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return "", nil }))
 	m := fixtureMessage("forgotten-share", "filehelper", "", "incoming")
