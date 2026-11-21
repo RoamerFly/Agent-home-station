@@ -459,10 +459,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				return reviewSurf(silent("invalid_model_decision"))
 			}
 		}
-		// Review failures are host-authored observations. A model response must
-		// never be able to manufacture an operator error, its detail, or a
-		// provider diagnostic through the ordinary decision protocol.
-		response.Decision.ReviewFailure = nil
+		// Model JSON cannot carry host-signed reply proof, even when it echoes
+		// fields from an earlier result. Validate proposed IDs and mint proof
+		// against the current input only after parsing.
+		clearModelReplyProof(&response.Decision)
 		if code := decisionShape(response.Decision, e.Config.MaxBubbles); code != "" {
 			if repairFormat(code, answer) {
 				continue

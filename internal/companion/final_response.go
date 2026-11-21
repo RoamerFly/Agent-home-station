@@ -41,6 +41,7 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		if json.Unmarshal([]byte(answer), &d) != nil && len(answer) > 0 && len(answer) <= 1<<20 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
 			d = Decision{Action: "reply", Messages: []string{answer}}
 		}
+		clearModelReplyProof(&d)
 		if len(answer) > 1<<20 || (d.Action != "reply" && d.Action != "silent" && d.Action != "wait") || decisionShape(d, r.Config.MaxBubbles) != "" {
 			return silent("invalid_model_decision"), nil
 		}
