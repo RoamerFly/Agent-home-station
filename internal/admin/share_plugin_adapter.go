@@ -206,8 +206,9 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 			found, valid := m.memory.SourceForInput(in)
 			if !valid {
 				// The caller has read the actual native message. Repair only the
-				// old false collision with an unknown legacy namespace; explicit
-				// quarantine, forgetting and current-dataset conflicts stay blocked.
+				// old false collision with an unknown legacy namespace or a
+				// distinctly older native row; explicit quarantine and forgetting
+				// remain blocked.
 				found, valid, err = m.memory.ReconcileLegacySource(ctx, in)
 				if err != nil {
 					return nil, err
