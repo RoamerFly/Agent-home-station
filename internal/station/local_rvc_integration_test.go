@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/linuxnative"
 )
 
 // fakeLocalRVCBackend is deliberately a bridge-level fixture.  It validates
@@ -237,6 +239,7 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 	if enabled := localProjectToolByID(t, f, localRVCPackage); enabled["enabled"] != true || enabled["state"] != "idle" {
 		t.Fatalf("RVC enable state: %#v", enabled)
 	}
+	checkWechatRVCVoiceAdapter(t, f, fake)
 
 	_, home := f.request("GET", "/api/local/home", nil, true)
 	inputPath := filepath.Join(home["directory"].(string), "Project Tools", "synthetic-rvc-source.wav")
@@ -338,6 +341,67 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 		t.Fatalf("wrong voice reached RVC submit: %d -> %d", before, fake.submits)
 	}
 	fake.mu.Unlock()
+}
+
+func checkWechatRVCVoiceAdapter(t *testing.T, f *localHomeFixture, backend *fakeLocalRVCBackend) {
+	t.Helper()
+	key := filepath.Join(t.TempDir(), "native-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner",
+		TraceID: "synthetic-rvc-message", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	adapter := &stationAttachmentTools{native: native, projects: f.handler.chat.projectTools,
+		grants: map[string]time.Time{in.Thread: now.Add(-time.Minute)}, blocked: func() bool { return false },
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+	adapter.SetTrace(in)
+	if tool, ok := adapter.publicRVCVoicesTool(t.Context()); !ok || tool.Name != localRVCVoicesTool {
+		t.Fatal("workstation RVC voices absent from WeChat application")
+	}
+	result, err := adapter.Call(t.Context(), localRVCVoicesTool, json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(result, backend.voice.ID) || !strings.Contains(result, backend.voice.LegacyVoiceID) {
+		t.Fatalf("WeChat RVC voice lookup: %q %v", result, err)
+	}
+	if _, err := adapter.Call(t.Context(), localRVCVoicesTool, json.RawMessage(`{"unexpected":true}`)); err == nil {
+		t.Fatal("RVC voices accepted unknown application arguments")
+	}
+	localStore, localInput, err := f.handler.chat.conversation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := f.handler.chat.tools(localStore, localInput)
+	public.publicUseOnly = true
+	public.run = companion.NewGuardedToolRun(func(context.Context) error { return nil })
+	listed, err := public.List(t.Context())
+	if err != nil || hasTool(listed, localRVCVoicesTool) || hasTool(listed, localRVCStartTool) || hasTool(listed, localRVCJobTool) {
+		t.Fatal("source-bound RVC chat tools leaked into application", err)
+	}
+	if _, err := public.Call(t.Context(), localRVCStartTool, json.RawMessage(`{}`)); err == nil {
+		t.Fatal("application bypassed its RVC task adapter")
+	}
+	installed := localProjectToolByID(t, f, localRVCPackage)
+	route := "/api/local/project-tools/rvc"
+	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("disable workstation RVC: %d %#v", code, out)
+	}
+	if _, ok := adapter.publicRVCVoicesTool(t.Context()); ok {
+		t.Fatal("application retained disabled RVC voices")
+	}
+	if _, err := adapter.Call(t.Context(), localRVCVoicesTool, json.RawMessage(`{}`)); err == nil {
+		t.Fatal("application called disabled RVC voices")
+	}
+	installed = localProjectToolByID(t, f, localRVCPackage)
+	if code, out := f.request("PUT", route, map[string]any{"action": "enable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("restore workstation RVC: %d %#v", code, out)
+	}
+	if _, ok := adapter.publicRVCVoicesTool(t.Context()); !ok {
+		t.Fatal("application did not pick up restored RVC voices")
+	}
 }
 
 // TestLocalRVCRecoversLostSubmitReceipt proves that a network failure after

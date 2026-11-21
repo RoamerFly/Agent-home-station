@@ -149,7 +149,6 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		}
 		if t.grants.Media {
 			all = append(all, t.localAudioTools(ctx)...)
-			all = append(all, t.localRVCTools(ctx)...)
 			all = append(all, t.localComfyTools(ctx)...)
 			all = append(all, t.localYuETools(ctx)...)
 			all = append(all, t.localTTSTools(ctx)...)
@@ -219,6 +218,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if t.publicUseOnly && (name == localRVCVoicesTool || name == localRVCStartTool || name == localRVCJobTool) {
+		return "", errors.New("RVC 微信应用入口须由应用工作台处理")
+	}
 	if t.publicUseOnly && strings.HasPrefix(name, "station_tool_") {
 		return "", errors.New("公共工具的安装、配置和启停由工作站管理")
 	}

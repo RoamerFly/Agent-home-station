@@ -347,6 +347,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	}
 	tools = append(tools, t.publicComfyTools(ctx)...)
 	tools = append(tools, t.publicYuETools(ctx)...)
+	if tool, ok := t.publicRVCVoicesTool(ctx); ok {
+		tools = append(tools, tool)
+	}
 	if !t.allowed() {
 		return tools, nil
 	}
@@ -475,6 +478,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localYuEJobTool {
 		return t.callPublicYuEJob(ctx, raw)
+	}
+	if name == localRVCVoicesTool {
+		return t.callPublicRVCVoices(ctx, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)
