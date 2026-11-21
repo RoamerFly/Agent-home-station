@@ -446,7 +446,12 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 // These WeChat calls still execute through the legacy package host. Keep their
 // installed snapshots upgradable while the Station owns all new public tools.
 func legacyWechatPackageUpgrade(id string) bool {
-	return id == projectPluginID || id == "share-reader"
+	switch id {
+	case "document-workshop", "media-understanding", "music", projectPluginID, "rvc", "share-reader", "speech", "web-search", "yue":
+		return true
+	default:
+		return false
+	}
 }
 
 // An uninstalled package cannot supply a UI declaration. The host retains only
