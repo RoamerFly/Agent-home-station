@@ -118,6 +118,7 @@ type stationWechatWorker struct {
 	speechMu         sync.Mutex
 	yueMu            sync.Mutex
 	comfyMu          sync.Mutex
+	rvcMu            sync.Mutex
 	share            *stationShareHost
 	dir              string
 	runtimeDir       string
@@ -836,6 +837,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		attachment.speechMu = &station.speechMu
 		attachment.yueMu = &station.yueMu
 		attachment.comfyMu = &station.comfyMu
+		attachment.rvcMu = &station.rvcMu
 	}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}

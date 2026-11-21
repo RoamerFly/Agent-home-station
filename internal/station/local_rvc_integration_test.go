@@ -8,12 +8,16 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -341,6 +345,113 @@ func TestLocalRVCConversionThroughChatPinsVoiceAndPublishesArtifact(t *testing.T
 		t.Fatalf("wrong voice reached RVC submit: %d -> %d", before, fake.submits)
 	}
 	fake.mu.Unlock()
+	checkWechatRVCConversionAdapter(t, f, fake, inputID, output)
+}
+
+func checkWechatRVCConversionAdapter(t *testing.T, f *localHomeFixture, backend *fakeLocalRVCBackend, inputID string, output []byte) {
+	t.Helper()
+	key := filepath.Join(t.TempDir(), "native-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var uploads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/accounts/synthetic-account/uploads" || r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		actual, err := io.ReadAll(file)
+		if err != nil || !bytes.Equal(actual, output) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		uploads.Add(1)
+		fmt.Fprintf(w, `{"id":"synthetic-rvc-upload","name":%q,"byteLength":%d,"sha256":"%s"}`, header.Filename, len(actual), sha256Hex(actual))
+	}))
+	defer server.Close()
+	native, err := linuxnative.New(linuxnative.Config{URL: server.URL, TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner",
+		TraceID: "synthetic-rvc-conversion", Text: "请换声", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	in.Source = &companion.SourceRef{InstanceID: store.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account,
+		Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime}
+	config := companion.Defaults()
+	config.Permissions.Remember = true
+	if err := store.Observe(in, config, now); err != nil {
+		t.Fatal(err)
+	}
+	in.Source, _ = store.SourceForInput(in)
+	if in.Source == nil {
+		t.Fatal("synthetic WeChat source was not observed")
+	}
+	grant := now.Add(-time.Minute)
+	adapter := &stationAttachmentTools{native: native, store: store, dir: t.TempDir(), projects: f.handler.chat.projectTools,
+		grants: map[string]time.Time{in.Thread: grant}, replies: map[string]time.Time{in.Thread: grant},
+		blocked: func() bool { return false }, rvcMu: new(sync.Mutex),
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+	adapter.SetTrace(in)
+	tools, err := adapter.List(t.Context())
+	if err != nil || !hasTool(tools, localRVCStartTool) || !hasTool(tools, localRVCJobTool) {
+		t.Fatal("WeChat RVC conversion tools unavailable", err)
+	}
+	args, _ := json.Marshal(map[string]any{"artifact_id": inputID, "voice_profile_id": backend.voice.ID, "title": backend.title})
+	started, err := adapter.Call(t.Context(), localRVCStartTool, args)
+	if err != nil {
+		t.Fatal("application RVC submit failed", err)
+	}
+	var view struct {
+		ID    string `json:"job_id"`
+		State string `json:"state"`
+		Media []companion.GeneratedMedia
+	}
+	if json.Unmarshal([]byte(started), &view) != nil || !validLocalRVCHex(view.ID, 64) || view.State != "queued" {
+		t.Fatal("application RVC submit result invalid", started)
+	}
+	backend.mu.Lock()
+	submits := backend.submits
+	backend.mu.Unlock()
+	if again, err := adapter.Call(t.Context(), localRVCStartTool, args); err != nil || again != started {
+		t.Fatal("application RVC replay did not reuse original task", again, err)
+	}
+	backend.mu.Lock()
+	if backend.submits != submits {
+		t.Fatal("application RVC replay submitted a duplicate")
+	}
+	backend.mu.Unlock()
+	query, _ := json.Marshal(map[string]string{"job_id": view.ID, "action": "status"})
+	completed, err := adapter.Call(t.Context(), localRVCJobTool, query)
+	if err != nil || json.Unmarshal([]byte(completed), &view) != nil || view.State != "completed" || len(view.Media) != 1 {
+		t.Fatal("application RVC product unavailable", completed, err)
+	}
+	if _, ok := adapter.Media(view.Media[0].ID); !ok {
+		t.Fatal("application cannot read verified RVC media")
+	}
+	if uploaded, err := adapter.stageReply(t.Context(), in, "file", view.Media[0].AssetID); err != nil || uploaded != "synthetic-rvc-upload" || uploads.Load() != 1 {
+		t.Fatal("application RVC media upload failed", uploaded, err)
+	}
+	changed := in
+	changed.Sender = "other-member"
+	adapter.SetTrace(changed)
+	if _, ok := adapter.Media(view.Media[0].ID); ok {
+		t.Fatal("another member inherited RVC media")
+	}
+	if _, err := adapter.stageReply(t.Context(), changed, "file", view.Media[0].AssetID); err == nil || uploads.Load() != 1 {
+		t.Fatal("another member uploaded RVC media", err)
+	}
 }
 
 func checkWechatRVCVoiceAdapter(t *testing.T, f *localHomeFixture, backend *fakeLocalRVCBackend) {

@@ -277,6 +277,7 @@ type stationAttachmentTools struct {
 	speechMu            *sync.Mutex
 	yueMu               *sync.Mutex
 	comfyMu             *sync.Mutex
+	rvcMu               *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -347,9 +348,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	}
 	tools = append(tools, t.publicComfyTools(ctx)...)
 	tools = append(tools, t.publicYuETools(ctx)...)
-	if tool, ok := t.publicRVCVoicesTool(ctx); ok {
-		tools = append(tools, tool)
-	}
+	tools = append(tools, t.publicRVCTools(ctx)...)
 	if !t.allowed() {
 		return tools, nil
 	}
@@ -481,6 +480,12 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localRVCVoicesTool {
 		return t.callPublicRVCVoices(ctx, raw)
+	}
+	if name == localRVCStartTool {
+		return t.callPublicRVCConvert(ctx, raw)
+	}
+	if name == localRVCJobTool {
+		return t.callPublicRVCJob(ctx, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)
