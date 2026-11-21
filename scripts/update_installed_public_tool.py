@@ -53,9 +53,9 @@ def main():
     if installed['digest'] == digest:
         print(json.dumps({'tool': args.tool, 'state': 'already_current', 'digest': digest}))
         return
-    permissions = installed['permissions']
-    if set(package['permissions']) != set(installed['package']['permissions']):
+    if not set(package['permissions']).issubset(installed['package']['permissions']):
         raise RuntimeError('permission_declarations_changed_review_required')
+    permissions = [name for name in installed['permissions'] if name in package['permissions']]
     # Tool roots also contain models/runtimes. Import only declared code files;
     # do not copy those resources into the installed execution snapshot.
     archive = io.BytesIO()
@@ -85,10 +85,12 @@ def main():
         if enabled and not current['enabled']:
             request(path + '/runtime', {'action': 'enable_on_demand', 'revision': current['revision']})
     after = request(path)
-    if after['installed']['digest'] != digest or before['configuration'] != after['configuration']:
+    if (after['installed']['digest'] != digest or before['configuration'] != after['configuration']
+            or after['installed']['permissions'] != permissions):
         raise RuntimeError('installed_digest_or_configuration_mismatch')
     print(json.dumps({'tool': args.tool, 'state': 'updated', 'digest': digest,
-                      'enabled': after['installed']['enabled'], 'configuration_preserved': True}))
+                      'enabled': after['installed']['enabled'], 'configuration_preserved': True,
+                      'permissions': permissions}))
 
 
 if __name__ == '__main__':
