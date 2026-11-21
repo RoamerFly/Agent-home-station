@@ -29,11 +29,6 @@ def main():
         raise RuntimeError('expected_one_deployed_tool')
     manifest, package = candidates[0]
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    private = release / 'data/applications/wechat/legacy-admin'
-    password = next((p.read_text(encoding='utf-8-sig').strip() for p in
-                     (private / 'admin-password', private / 'admin-token') if p.is_file()), None)
-    if not password:
-        raise RuntimeError('local_admin_not_ready')
     base = 'http://127.0.0.1:8080'
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
@@ -46,7 +41,16 @@ def main():
         data = body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None
         with opener.open(urllib.request.Request(base + path, data=data, headers=headers), timeout=90) as r:
             return json.load(r)
-    csrf = request('/api/login', {'password': password})['csrf']
+    session = request('/api/session')
+    if session.get('authenticated'):
+        csrf = session['csrf']
+    else:
+        private = release / 'data/applications/wechat/legacy-admin'
+        password = next((p.read_text(encoding='utf-8-sig').strip() for p in
+                         (private / 'admin-password', private / 'admin-token') if p.is_file()), None)
+        if not password:
+            raise RuntimeError('local_admin_not_ready')
+        csrf = request('/api/login', {'password': password})['csrf']
     path = '/api/plugin-packages/' + args.tool
     before = request(path)
     installed = before['installed']

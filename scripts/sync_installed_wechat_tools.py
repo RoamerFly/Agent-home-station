@@ -21,11 +21,6 @@ WECHAT_RUNTIME_TOOLS = frozenset({
 
 
 def installed_tool_ids(release):
-    private = release / 'data/applications/wechat/legacy-admin'
-    password = next((path.read_text(encoding='utf-8-sig').strip() for path in
-                     (private / 'admin-password', private / 'admin-token') if path.is_file()), None)
-    if not password:
-        raise RuntimeError('local_admin_not_ready')
     base = 'http://127.0.0.1:8080'
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -34,12 +29,21 @@ def installed_tool_ids(release):
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), NoRedirect())
-    login = urllib.request.Request(base + '/api/login',
-        data=json.dumps({'password': password}).encode(),
-        headers={'Origin': base, 'Content-Type': 'application/json'})
-    with opener.open(login, timeout=20) as response:
-        if not json.load(response).get('authenticated'):
-            raise RuntimeError('local_admin_login_rejected')
+    with opener.open(urllib.request.Request(base + '/api/session',
+                     headers={'Origin': base}), timeout=20) as response:
+        authenticated = json.load(response).get('authenticated')
+    if not authenticated:
+        private = release / 'data/applications/wechat/legacy-admin'
+        password = next((path.read_text(encoding='utf-8-sig').strip() for path in
+                         (private / 'admin-password', private / 'admin-token') if path.is_file()), None)
+        if not password:
+            raise RuntimeError('local_admin_not_ready')
+        login = urllib.request.Request(base + '/api/login',
+            data=json.dumps({'password': password}).encode(),
+            headers={'Origin': base, 'Content-Type': 'application/json'})
+        with opener.open(login, timeout=20) as response:
+            if not json.load(response).get('authenticated'):
+                raise RuntimeError('local_admin_login_rejected')
     with opener.open(urllib.request.Request(base + '/api/plugin-packages',
                      headers={'Origin': base}), timeout=20) as response:
         rows = json.load(response)['installed']
