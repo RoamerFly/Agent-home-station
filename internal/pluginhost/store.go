@@ -128,6 +128,9 @@ func snapshot(ctx context.Context, source, destination string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("package links forbidden")
 		}
+		if entry.IsDir() && entry.Name() == "__pycache__" {
+			return fs.SkipDir
+		}
 		target := filepath.Join(destination, filepath.FromSlash(name))
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0700)

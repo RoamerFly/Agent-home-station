@@ -56,6 +56,17 @@ func sharedMediaAudioConfigurationOnly(input pluginhost.ConfigUpdate) bool {
 	return true
 }
 
+func mergeSharedMediaAudioConfiguration(current pluginhost.Configuration, input pluginhost.ConfigUpdate) pluginhost.ConfigUpdate {
+	merged := pluginhost.ConfigUpdate{Revision: input.Revision, Values: make(map[string]json.RawMessage, len(current.Values)+len(input.Values)), Secrets: input.Secrets, ClearSecrets: input.ClearSecrets}
+	for name, value := range current.Values {
+		merged.Values[name] = value
+	}
+	for name, value := range input.Values {
+		merged.Values[name] = value
+	}
+	return merged
+}
+
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
@@ -189,6 +200,29 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		store, err := s.manager.packageStore()
 		if err != nil {
 			fail(w, 500, "工具存储不可用")
+			return
+		}
+		if _, shared := s.manager.sharedStationVision(); shared && r.PathValue("id") == "media-understanding" {
+			current, err := store.Configuration(r.Context(), "media-understanding")
+			if err != nil {
+				fail(w, 500, "工具配置读取失败")
+				return
+			}
+			if current.Revision != input.Revision {
+				fail(w, 409, "配置已变化，请刷新后重试")
+				return
+			}
+			controller, _, err := s.manager.installedPluginRuntime()
+			if err != nil {
+				fail(w, 503, "工具运行环境不可用")
+				return
+			}
+			value, err := controller.ConfigureIdle(r.Context(), "media-understanding", mergeSharedMediaAudioConfiguration(current, input))
+			if err != nil {
+				fail(w, 409, "配置未保存：请检查字段、保存版本，或等待工具空闲")
+				return
+			}
+			respond(w, 200, value)
 			return
 		}
 		value, err := store.SaveConfiguration(r.Context(), r.PathValue("id"), input)

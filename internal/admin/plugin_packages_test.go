@@ -36,6 +36,28 @@ func TestSharedStationMediaConfigurationAdmitsOnlyLegacyAudioReview(t *testing.T
 	}
 }
 
+func TestSharedStationMediaAudioUpdatePreservesExistingConfiguration(t *testing.T) {
+	current := pluginhost.Configuration{Revision: 4, Values: map[string]json.RawMessage{
+		"asr_backend":  json.RawMessage(`"remote"`),
+		"vision_model": json.RawMessage(`"synthetic-vision"`),
+		"max_tokens":   json.RawMessage(`768`),
+	}}
+	input := pluginhost.ConfigUpdate{Revision: 4, Values: map[string]json.RawMessage{
+		"audio_review_model": json.RawMessage(`"synthetic-audio"`),
+	}, Secrets: map[string]string{"audio_review_key": "synthetic-key"}}
+	merged := mergeSharedMediaAudioConfiguration(current, input)
+	if merged.Revision != 4 || string(merged.Values["asr_backend"]) != `"remote"` ||
+		string(merged.Values["vision_model"]) != `"synthetic-vision"` ||
+		string(merged.Values["max_tokens"]) != `768` ||
+		string(merged.Values["audio_review_model"]) != `"synthetic-audio"` ||
+		merged.Secrets["audio_review_key"] != "synthetic-key" {
+		t.Fatal("audio-only update did not preserve existing configuration")
+	}
+	if _, exists := current.Values["audio_review_model"]; exists {
+		t.Fatal("audio-only update mutated the prior configuration")
+	}
+}
+
 func TestPluginPackageUpgradeReportsRequiredConfigurationMigration(t *testing.T) {
 	f := setup(t)
 	f.login()

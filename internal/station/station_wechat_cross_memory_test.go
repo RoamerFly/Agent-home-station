@@ -190,8 +190,13 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv := httptest.NewServer(h)
-		t.Cleanup(srv.Close)
-		t.Cleanup(func() { _ = h.Close() })
+		t.Cleanup(func() {
+			// Stop HTTP handlers before closing their SQLite-backed host.
+			srv.Close()
+			if err := h.Close(); err != nil {
+				t.Error("station host cleanup failed", err)
+			}
+		})
 		jar, _ := cookiejar.New(nil)
 		return &localHomeFixture{t: t, server: srv, client: &http.Client{Jar: jar}, handler: h, dir: data, root: home}
 	}

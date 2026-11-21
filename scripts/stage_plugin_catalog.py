@@ -85,6 +85,9 @@ def _read_package(directory, descriptor="plugin.json"):
         root = Path(current)
         if _reparse(root) or any(_reparse(root / child) for child in directories + files):
             raise StageError("plugin_links_forbidden")
+        # Interpreter caches are generated beside source files during local
+        # verification; only manifest-indexed source enters the catalog.
+        directories[:] = [child for child in directories if child != "__pycache__"]
         for filename in files:
             path = root / filename
             if not _regular(path):

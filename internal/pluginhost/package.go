@@ -293,6 +293,11 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 			if descriptor == "app.json" && p.ID == "wechat" && full == wechatRuntime {
 				return filepath.SkipDir
 			}
+			// Python may compile an adjacent cache while a developer verifies a
+			// source package. Cache bytes are never package members or snapshots.
+			if d.Name() == "__pycache__" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, e := d.Info()
