@@ -130,6 +130,42 @@ func TestLegacyRowIDDoesNotQuarantineFreshNativeDataset(t *testing.T) {
 		})
 	}
 }
+func TestReusedNativeRowIDWithDifferentOccurrenceKeepsBothSenders(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	in.TraceID = "reused-native-row"
+	in.Sender = "old-sender"
+	in.Text = "old video"
+	in.MessageTime = now.Add(-17 * 24 * time.Hour).Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, OccurredAt: in.MessageTime, MessageType: 43}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	old, ok := s.SourceForInput(in)
+	if !ok {
+		t.Fatal("old source unavailable")
+	}
+	in.Sender = "new-sender"
+	in.Text = "new share"
+	in.MessageTime = now.Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "new-server", OccurredAt: in.MessageTime, MessageType: 49}
+	for i := 0; i < 2; i++ {
+		if err := s.Observe(in, c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, ok := s.SourceForInput(in)
+	if !ok || fresh.Integrity == "conflicted" || fresh.EventID == old.EventID {
+		t.Fatal("distinct native message was lost", fresh)
+	}
+	var count, conflicts int
+	if err := s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("expected two retained events", count, err)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM source_conflicts WHERE event_id IN (SELECT id FROM events WHERE trace=?)", in.TraceID).Scan(&conflicts); err != nil || conflicts != 0 {
+		t.Fatal("distinct native events were quarantined", conflicts, err)
+	}
+}
 func TestSourceVersionUpdateReusesLogicalMessageAndIsIdempotent(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()

@@ -251,6 +251,9 @@ func (s *Store) Observe(input Input, c Config, now time.Time) error {
 					if !sameSourceInstance(turn.Source, source) {
 						continue
 					}
+					if turn.Sender != input.Sender && distinctSourceMessage(turn.Source, source) {
+						continue
+					}
 					if sourceReplay(turn.Source, source) {
 						return nil
 					}

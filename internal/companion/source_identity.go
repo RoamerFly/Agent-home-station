@@ -115,6 +115,17 @@ func sameSourceInstance(a, b *SourceRef) bool {
 	}
 	return instance(a) == instance(b)
 }
+
+// A native client can reuse a local row ID while the durable memory store
+// keeps the same instance ID. Distinct platform IDs or occurrence times prove
+// these are separate messages; missing metadata remains conservative.
+func distinctSourceMessage(a, b *SourceRef) bool {
+	if a == nil || b == nil || !sameSourceInstance(a, b) {
+		return false
+	}
+	return a.ServerID != "" && b.ServerID != "" && a.ServerID != b.ServerID ||
+		a.OccurredAt != "" && b.OccurredAt != "" && a.OccurredAt != b.OccurredAt
+}
 func legacyConflictSource(in Input, body string, now time.Time, instance string) *SourceRef {
 	return &SourceRef{InstanceID: instance, MessageID: in.TraceID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime, ReceivedAt: memoryTime(now), BodyHash: sourceHash(body), Revision: 1, Integrity: "conflicted"}
 }
