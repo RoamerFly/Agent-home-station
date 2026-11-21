@@ -270,9 +270,32 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 	if err != nil || failed.State != "failed" || failed.Diagnostic == nil || failed.Diagnostic.Code != "recipe_validation_failed" || backend.submits != beforeSubmits {
 		t.Fatalf("invalid recipe was not closed before dispatch: %+v %v", failed, err)
 	}
+	// The shared music operation accepts only a recipe and optional audio. Its
+	// caller, rather than the backend, owns any message provenance and delivery.
+	publicID := strings.Repeat("a", 64)
+	publicRequest := stationyue.Request{Mode: stationyue.ModeOriginal, Style: "folk", Lyrics: "test", DurationSeconds: 1, Seed: 7}
+	publicDeploy, publicSubmission, err := f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, publicID, publicRequest, nil)
+	wantPublicRef, _ := comfyui.NewJobRef(publicID, localYuESaveNode)
+	if err != nil || publicDeploy.Binding != backend.deploy.Binding || publicSubmission.Effective.Seed != 7 || backend.ref != wantPublicRef || backend.submits != beforeSubmits+1 {
+		t.Fatalf("pure YuE submission: deploy=%s submission=%+v err=%v ref=%+v submits=%d", publicDeploy.Binding, publicSubmission, err, backend.ref, backend.submits)
+	}
+	publicRequest.Mode = stationyue.ModeCover
+	publicID = strings.Repeat("c", 64)
+	_, publicSubmission, err = f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, publicID, publicRequest, backend.wav)
+	if err != nil || publicSubmission.Effective.ReferenceSHA256 != sha256Hex(backend.wav) || backend.uploads != 2 || backend.submits != beforeSubmits+2 {
+		t.Fatalf("pure YuE cover submission: submission=%+v err=%v uploads=%d submits=%d", publicSubmission, err, backend.uploads, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	status, publicProduct, err := f.handler.chat.projectTools.publicYuEStatus(t.Context(), fish, backend.deploy.Binding, publicID, publicSubmission)
+	if err != nil || status.State != comfyui.Completed || !bytes.Equal(publicProduct.FLAC.Data, flac) || publicProduct.Evidence.SHA256 != sha256Hex(flac) || !publicProduct.Duration.Accepted {
+		t.Fatalf("pure YuE verified result: status=%+v product=%+v err=%v", status, publicProduct.Evidence, err)
+	}
 	enabled := localProjectToolByID(t, f, localYuEPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, enabled)}, true); code != http.StatusOK || backend.stops != 1 {
 		t.Fatalf("disable YuE: %d %#v", code, out)
+	}
+	if _, _, err := f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, strings.Repeat("d", 64), publicRequest, backend.wav); err == nil || backend.submits != beforeSubmits+2 {
+		t.Fatalf("disabled workstation YuE accepted a new public request: err=%v submits=%d", err, backend.submits)
 	}
 	if !bytes.Equal(localArtifactDownload(t, f, downloaded), flac) {
 		t.Fatal("disable changed previously verified song")
