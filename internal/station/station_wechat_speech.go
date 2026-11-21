@@ -39,21 +39,21 @@ func (p stationWechatSpeechProduct) media() companion.GeneratedMedia {
 }
 
 func (t *stationAttachmentTools) publicSpeechTool(ctx context.Context) (mcptools.Tool, bool) {
-	if t.speech == nil || t.speechOwnerAllowed == nil || !t.speechOwnerAllowed(t.trace) || !t.replyAllowed(t.trace) {
+	if t.projects == nil || t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.replyAllowed(t.trace) {
 		return mcptools.Tool{}, false
 	}
-	record, err := t.speech.home.identity.Read()
-	if err != nil || record.LocalOwner == nil || t.speech.tts == nil {
+	record, err := t.projects.home.identity.Read()
+	if err != nil || record.LocalOwner == nil || t.projects.tts == nil {
 		return mcptools.Tool{}, false
 	}
-	host, err := t.speech.forFish(record.FishID)
+	host, err := t.projects.forFish(record.FishID)
 	if err != nil {
 		return mcptools.Tool{}, false
 	}
 	if _, err = installedLocalProject(ctx, host, localProjectOperation{pkg: localTTSPackage, capability: localTTSCapability}); err != nil {
 		return mcptools.Tool{}, false
 	}
-	info, err := t.speech.tts.Info(ctx, record.FishID)
+	info, err := t.projects.tts.Info(ctx, record.FishID)
 	if err != nil || info.Binding == "" || len(info.Voices) == 0 {
 		return mcptools.Tool{}, false
 	}
@@ -74,7 +74,7 @@ func (t *stationAttachmentTools) publicSpeechTool(ctx context.Context) (mcptools
 }
 
 func (t *stationAttachmentTools) speechProductAllowed(in companion.Input, p stationWechatSpeechProduct) bool {
-	if t.speechOwnerAllowed == nil || !t.speechOwnerAllowed(in) || !t.replyAllowed(in) || t.store == nil ||
+	if t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(in) || !t.replyAllowed(in) || t.store == nil ||
 		p.ID != p.id() || p.Account != in.Account || p.Thread != in.Thread || p.Sender != in.Sender ||
 		p.Trace != in.TraceID || !p.MediaGrant.Equal(t.replies[in.Thread]) {
 		return false
@@ -189,11 +189,11 @@ func (t *stationAttachmentTools) callPublicSpeech(ctx context.Context, raw json.
 		t.preparedSpeech(media)
 		return localProcessJSON(map[string]any{"status": "prepared", "media": []companion.GeneratedMedia{media}, "reused": true})
 	}
-	record, err := t.speech.home.identity.Read()
+	record, err := t.projects.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return "", errors.New("工作站身份不可用")
 	}
-	result, err := t.speech.synthesizePublicSpeech(ctx, record.FishID, request)
+	result, err := t.projects.synthesizePublicSpeech(ctx, record.FishID, request)
 	if err != nil {
 		return "", err
 	}

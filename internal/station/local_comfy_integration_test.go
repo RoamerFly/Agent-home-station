@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"wechat-bot/internal/comfyui"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 type syntheticLocalComfy struct {
@@ -140,6 +143,51 @@ func setUpLocalComfyChat(t *testing.T, f *localHomeFixture, backend localComfyBa
 	installed := localProjectToolByID(t, f, localComfyPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "enable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
 		t.Fatalf("enable ComfyUI: %d %#v", code, out)
+	}
+}
+
+func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testing.T) {
+	f := localChatFixture(t)
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	setUpLocalComfyChat(t, f, &syntheticLocalComfy{root: root, fish: record.FishID})
+	key := filepath.Join(t.TempDir(), "api-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner",
+		TraceID: "synthetic-message", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	adapter := &stationAttachmentTools{native: native, grants: map[string]time.Time{in.Thread: now.Add(-time.Minute)},
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools,
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+	adapter.SetTrace(in)
+	items, err := adapter.List(t.Context())
+	if err != nil || !slices.ContainsFunc(items, func(tool mcptools.Tool) bool { return tool.Name == localComfyListTool }) {
+		t.Fatalf("application catalog did not expose workstation ComfyUI workflows: %v", err)
+	}
+	out, err := adapter.Call(t.Context(), localComfyListTool, json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(out, "Offline smoke") {
+		t.Fatalf("application did not execute pure workstation catalog: %s %v", out, err)
+	}
+	installed := localProjectToolByID(t, f, localComfyPackage)
+	if code, result := f.request("PUT", "/api/local/project-tools/comfyui", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("workstation disable failed: %d %#v", code, result)
+	}
+	items, _ = adapter.List(t.Context())
+	if slices.ContainsFunc(items, func(tool mcptools.Tool) bool { return tool.Name == localComfyListTool }) {
+		t.Fatal("application retained disabled workstation workflow catalog")
+	}
+	if out, err := adapter.Call(t.Context(), localComfyListTool, json.RawMessage(`{}`)); err == nil || out != "" {
+		t.Fatalf("application called disabled workstation catalog: %s %v", out, err)
 	}
 }
 

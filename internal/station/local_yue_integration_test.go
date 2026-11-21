@@ -349,8 +349,8 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 		t.Fatal("synthetic WeChat source not observed")
 	}
 	app := &stationAttachmentTools{native: native, store: memory, dir: t.TempDir(), replies: map[string]time.Time{in.Thread: now.Add(-time.Minute)},
-		blocked: func() bool { return false }, speech: f.handler.chat.projectTools, yueMu: new(sync.Mutex),
-		speechOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools, yueMu: new(sync.Mutex),
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
 	app.SetTrace(in)
 	listed, err := app.List(t.Context())
 	if err != nil {

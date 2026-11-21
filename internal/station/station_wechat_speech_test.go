@@ -78,8 +78,8 @@ func TestWechatSpeechUsesWorkstationToolAndKeepsSourceInApplication(t *testing.T
 	grant := now.Add(-time.Minute)
 	adapter := &stationAttachmentTools{native: native, store: store, dir: t.TempDir(),
 		replies: map[string]time.Time{in.Thread: grant},
-		blocked: func() bool { return false }, speech: f.handler.chat.projectTools, speechMu: new(sync.Mutex),
-		speechOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools, speechMu: new(sync.Mutex),
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
 	adapter.SetTrace(in)
 	items, err := adapter.List(t.Context())
 	if err != nil {

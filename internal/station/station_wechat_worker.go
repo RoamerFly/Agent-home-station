@@ -830,8 +830,8 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	attachment.stationLocalAudio, attachment.localASR = policy.StationLocalAudio, s.localASR
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
 	if s.localChat != nil {
-		attachment.speech = s.localChat.projectTools
-		attachment.speechOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
+		attachment.projects = s.localChat.projectTools
+		attachment.projectOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
 		attachment.speechMu = &station.speechMu
 		attachment.yueMu = &station.yueMu
 	}

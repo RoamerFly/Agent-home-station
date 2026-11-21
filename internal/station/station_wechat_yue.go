@@ -42,21 +42,21 @@ func (j stationWechatYuEJob) media() companion.GeneratedMedia {
 }
 
 func (t *stationAttachmentTools) publicYuETools(ctx context.Context) []mcptools.Tool {
-	if t.speech == nil || t.speech.yue == nil || t.speechOwnerAllowed == nil || !t.speechOwnerAllowed(t.trace) || !t.replyAllowed(t.trace) {
+	if t.projects == nil || t.projects.yue == nil || t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.replyAllowed(t.trace) {
 		return nil
 	}
-	record, err := t.speech.home.identity.Read()
+	record, err := t.projects.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return nil
 	}
-	host, err := t.speech.forFish(record.FishID)
+	host, err := t.projects.forFish(record.FishID)
 	if err != nil {
 		return nil
 	}
 	if _, err = installedLocalProject(ctx, host, localProjectOperation{pkg: localYuEPackage, capability: localYuECapability}); err != nil {
 		return nil
 	}
-	if info, err := t.speech.yue.Info(ctx, record.FishID); err != nil || info.Binding == "" {
+	if info, err := t.projects.yue.Info(ctx, record.FishID); err != nil || info.Binding == "" {
 		return nil
 	}
 	caps, err := host.store.Capabilities(ctx, localYuEPackage)
@@ -79,7 +79,7 @@ func (t *stationAttachmentTools) publicYuETools(ctx context.Context) []mcptools.
 }
 
 func (t *stationAttachmentTools) yueJobAllowed(in companion.Input, j stationWechatYuEJob) bool {
-	if t.speechOwnerAllowed == nil || !t.speechOwnerAllowed(in) || !t.replyAllowed(in) ||
+	if t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(in) || !t.replyAllowed(in) ||
 		j.ID != j.expectedID() || j.Account != in.Account || j.Thread != in.Thread || j.Sender != in.Sender ||
 		!j.MediaGrant.Equal(t.replies[in.Thread]) || t.store == nil {
 		return false
@@ -202,7 +202,7 @@ func (t *stationAttachmentTools) callPublicYuEGenerate(ctx context.Context, raw 
 	if !ok {
 		return "", errors.New("微信原消息来源已变化")
 	}
-	record, err := t.speech.home.identity.Read()
+	record, err := t.projects.home.identity.Read()
 	if err != nil || record.LocalOwner == nil {
 		return "", errors.New("工作站身份不可用")
 	}
@@ -231,12 +231,12 @@ func (t *stationAttachmentTools) callPublicYuEGenerate(ctx context.Context, raw 
 	}
 	var reference []byte
 	if in.Reference != "" {
-		access := &localWorkspaceAccess{home: t.speech.home, fishID: record.FishID, ownerID: record.LocalOwner.ID}
+		access := &localWorkspaceAccess{home: t.projects.home, fishID: record.FishID, ownerID: record.LocalOwner.ID}
 		grant, err := access.resolve()
 		if err != nil {
 			return "", err
 		}
-		bound, err := t.speech.home.artifacts.bindProjectArtifact(ctx, in.Reference, access, grant)
+		bound, err := t.projects.home.artifacts.bindProjectArtifact(ctx, in.Reference, access, grant)
 		if err != nil {
 			return "", err
 		}
@@ -248,7 +248,7 @@ func (t *stationAttachmentTools) callPublicYuEGenerate(ctx context.Context, raw 
 	if err := t.writeYuEJob(j, nil); err != nil {
 		return "", err
 	}
-	deploy, submission, submitErr := t.speech.submitPublicYuE(ctx, j.Fish, j.ID, request, reference)
+	deploy, submission, submitErr := t.projects.submitPublicYuE(ctx, j.Fish, j.ID, request, reference)
 	j.Binding, j.Submission = deploy.Binding, submission
 	switch {
 	case submitErr == nil:
@@ -299,12 +299,12 @@ func (t *stationAttachmentTools) callPublicYuEJob(ctx context.Context, raw json.
 		return t.yueJobView(j), nil
 	}
 	if in.Action == "cancel" {
-		if err := t.speech.cancelPublicYuE(ctx, j.Fish, j.Binding, j.ID); err != nil {
+		if err := t.projects.cancelPublicYuE(ctx, j.Fish, j.Binding, j.ID); err != nil {
 			return "", err
 		}
 		j.State = "cancelled"
 	} else if j.Binding != "" && j.Submission.GraphSHA256 != "" {
-		status, product, err := t.speech.publicYuEStatus(ctx, j.Fish, j.Binding, j.ID, j.Submission)
+		status, product, err := t.projects.publicYuEStatus(ctx, j.Fish, j.Binding, j.ID, j.Submission)
 		if err != nil {
 			return "", err
 		}

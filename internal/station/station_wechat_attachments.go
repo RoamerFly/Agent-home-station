@@ -248,34 +248,34 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	crossHost          *stationWechat
-	crossConnection    string
-	cross              *stationWechatCrossTurn
-	native             *linuxnative.Sender
-	store              *companion.Store
-	dir                string
-	grants             map[string]time.Time
-	replies            map[string]time.Time
-	reads              map[string]time.Time
-	readCursors        wechatapp.HistoryCursors
-	legacyReadCursors  map[string]stationLegacyReadCursor
-	blocked            func() bool
-	trace              companion.Input
-	prepared           map[string]companion.GeneratedMedia
-	work               *stationWorkAccess
-	fetchVideo         stationVideoFetch
-	shareHost          func() (*stationShareHost, error)
-	documents          stationDocumentTools
-	stationImageVision bool
-	stationVideoVision bool
-	stationLocalAudio  bool
-	localASR           stationLocalASR
-	localVision        stationLocalVision
-	shareProgress      func(string, string, string)
-	speech             *localProjectTools
-	speechOwnerAllowed func(companion.Input) bool
-	speechMu           *sync.Mutex
-	yueMu              *sync.Mutex
+	crossHost           *stationWechat
+	crossConnection     string
+	cross               *stationWechatCrossTurn
+	native              *linuxnative.Sender
+	store               *companion.Store
+	dir                 string
+	grants              map[string]time.Time
+	replies             map[string]time.Time
+	reads               map[string]time.Time
+	readCursors         wechatapp.HistoryCursors
+	legacyReadCursors   map[string]stationLegacyReadCursor
+	blocked             func() bool
+	trace               companion.Input
+	prepared            map[string]companion.GeneratedMedia
+	work                *stationWorkAccess
+	fetchVideo          stationVideoFetch
+	shareHost           func() (*stationShareHost, error)
+	documents           stationDocumentTools
+	stationImageVision  bool
+	stationVideoVision  bool
+	stationLocalAudio   bool
+	localASR            stationLocalASR
+	localVision         stationLocalVision
+	shareProgress       func(string, string, string)
+	projects            *localProjectTools
+	projectOwnerAllowed func(companion.Input) bool
+	speechMu            *sync.Mutex
+	yueMu               *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -342,6 +342,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 		}
 	}
 	if tool, ok := t.publicSpeechTool(ctx); ok {
+		tools = append(tools, tool)
+	}
+	if tool, ok := t.publicComfyWorkflowTool(ctx); ok {
 		tools = append(tools, tool)
 	}
 	tools = append(tools, t.publicYuETools(ctx)...)
@@ -458,6 +461,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localTTSStartTool {
 		return t.callPublicSpeech(ctx, raw)
+	}
+	if name == localComfyListTool {
+		return t.callPublicComfyWorkflows(ctx, raw)
 	}
 	if name == localYuEStartTool {
 		return t.callPublicYuEGenerate(ctx, raw)

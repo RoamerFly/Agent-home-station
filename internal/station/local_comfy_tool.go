@@ -62,10 +62,14 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 		return []mcptools.Tool{jobTool}
 	}
 	return []mcptools.Tool{
-		mcptools.NewTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`),
+		localComfyWorkflowTool(),
 		mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。依据工作流的输出类型，从任务查询取得 PNG 或 MP4。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`),
 		jobTool,
 	}
+}
+
+func localComfyWorkflowTool() mcptools.Tool {
+	return mcptools.NewTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`)
 }
 
 type localComfyInvocation struct {
