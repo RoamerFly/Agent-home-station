@@ -1,8 +1,11 @@
 package station
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,20 +124,47 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 		}
 	}
 	var requests atomic.Int32
+	var fileRequests, uploads atomic.Int32
 	const secret = "synthetic-private-key"
+	binary := []byte("synthetic binary external response")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
+		if r.URL.Path == "/v1/accounts/synthetic-account/uploads" {
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			defer file.Close()
+			body, err := io.ReadAll(file)
+			if err != nil || !bytes.Equal(body, binary) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			uploads.Add(1)
+			fmt.Fprintf(w, `{"id":"synthetic-external-upload","name":%q,"byteLength":%d,"sha256":%q}`, header.Filename, len(body), externalDigest(body))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+secret {
 			t.Errorf("host credential missing")
 		}
+		if r.URL.Path == "/file" {
+			fileRequests.Add(1)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(binary)
+			return
+		}
+		requests.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"result":"first second synthetic-private-key"}`))
 	}))
 	defer server.Close()
 	registration := map[string]any{"connections": []plugins.Installed{{Manifest: plugins.Manifest{ID: "synthetic", Name: "Synthetic", Version: "1.0.0",
-		Tools: []plugins.APITool{{Name: "lookup", URL: server.URL, Method: "GET", TextPath: "result",
+		Tools: []plugins.APITool{{Name: "lookup", URL: server.URL + "/text", Method: "GET", TextPath: "result",
 			Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
-			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}}},
+			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)},
+			{Name: "file", URL: server.URL + "/file", Method: "GET", MediaKind: "file",
+				Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
+				InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}}},
 		Enabled: true, Secrets: map[string]string{"api_key": secret}}}}
 	path := stationToolRegistrationPath(f.handler.home.dataDir, localExternalRegistration)
 	raw, _ := json.Marshal(registration)
@@ -148,7 +178,7 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: key, Account: "synthetic-account"})
+	native, err := linuxnative.New(linuxnative.Config{URL: server.URL, TokenFile: key, Account: "synthetic-account"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +200,7 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 	in.Source, _ = memory.SourceForInput(in)
 	grant := now.Add(-time.Minute)
 	adapter := &stationAttachmentTools{native: native, store: memory, dir: t.TempDir(), projects: f.handler.chat.projectTools,
-		grants: map[string]time.Time{in.Thread: grant}, blocked: func() bool { return false }, externalMu: new(sync.Mutex),
+		grants: map[string]time.Time{in.Thread: grant}, replies: map[string]time.Time{in.Thread: grant}, blocked: func() bool { return false }, externalMu: new(sync.Mutex),
 		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
 	adapter.SetTrace(in)
 	listed, err := adapter.List(t.Context())
@@ -185,6 +215,32 @@ func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
 	second, err := adapter.Call(t.Context(), localExternalHTTPCall, json.RawMessage(`{"tool":"synthetic__lookup","arguments":{},"text_offset":6}`))
 	if err != nil || requests.Load() != 1 || !strings.Contains(second, "reused\":true") || strings.Contains(second, secret) {
 		t.Fatal("continuation repeated request or leaked secret", second, err, requests.Load())
+	}
+	fileResult, err := adapter.Call(t.Context(), localExternalHTTPCall, json.RawMessage(`{"tool":"synthetic__file","arguments":{}}`))
+	var mediaView struct {
+		State string                     `json:"state"`
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if err != nil || json.Unmarshal([]byte(fileResult), &mediaView) != nil || mediaView.State != "completed" || len(mediaView.Media) != 1 || fileRequests.Load() != 1 {
+		t.Fatal("binary external result was not prepared", fileResult, err, fileRequests.Load())
+	}
+	if _, ok := adapter.Media(mediaView.Media[0].ID); !ok {
+		t.Fatal("binary external result was not bound to original message")
+	}
+	if uploaded, err := adapter.stageReply(t.Context(), in, "file", mediaView.Media[0].AssetID); err != nil || uploaded != "synthetic-external-upload" || uploads.Load() != 1 {
+		t.Fatal("binary external result could not be staged", uploaded, err, uploads.Load())
+	}
+	delete(adapter.replies, in.Thread)
+	if _, err := adapter.stageReply(t.Context(), in, "file", mediaView.Media[0].AssetID); err == nil || uploads.Load() != 1 {
+		t.Fatal("revoked media grant still allowed upload")
+	}
+	adapter.replies[in.Thread] = grant
+	if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := adapter.Call(t.Context(), localExternalHTTPCall, call)
+	if err != nil || !strings.Contains(changed, "needs_review") || requests.Load() != 1 {
+		t.Fatal("registration change resubmitted original request", changed, err, requests.Load())
 	}
 	installed := localProjectToolByID(t, f, localExternalPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {

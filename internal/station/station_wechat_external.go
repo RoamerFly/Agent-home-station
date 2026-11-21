@@ -24,7 +24,7 @@ func (t *stationAttachmentTools) publicExternalCatalogTools(ctx context.Context)
 	if len(httpTools) != 0 {
 		tools = append(tools, mcptools.NewTool(localExternalHTTPList, "分页查看工作站已启用的同步 HTTP 工具及参数，不返回地址、请求头或密钥。", `{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"default":8}},"additionalProperties":false}`))
 		if t.externalMu != nil && t.store != nil {
-			tools = append(tools, mcptools.NewTool(localExternalHTTPCall, "调用工作站已登记的同步 HTTP 文本工具。外部正文可分页；相同消息和参数只提交一次，结果不明时需核对原服务。", `{"type":"object","properties":{"tool":{"type":"string"},"arguments":{"type":"object"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"default":1200}},"required":["tool","arguments"],"additionalProperties":false}`))
+			tools = append(tools, mcptools.NewTool(localExternalHTTPCall, "调用工作站已登记的同步 HTTP 工具，返回 JSON 文本或二进制文件。正文可分页；相同消息和参数只提交一次，结果不明时需核对原服务。", `{"type":"object","properties":{"tool":{"type":"string"},"arguments":{"type":"object"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"default":1200}},"required":["tool","arguments"],"additionalProperties":false}`))
 		}
 	}
 	if len(taskTools) != 0 {
