@@ -287,7 +287,11 @@ def main():
         # Keep the bridge's startup traceback in the account's private job
         # directory; the supervisor log otherwise only reports a child exit.
         with (state / "jobs" / "bridge-stderr.log").open("ab") as bridge_log:
-            children.append(subprocess.Popen(bridge, stderr=bridge_log,
+            # Only the supervisor owns the desktop control pipe. Give the
+            # broker independent standard streams so it cannot inherit that
+            # live pipe or the supervisor's output handles on Windows.
+            children.append(subprocess.Popen(bridge, stdin=subprocess.DEVNULL,
+                stdout=bridge_log, stderr=bridge_log,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
         while not stopping.is_set() and all(child.poll() is None for child in children):
             time.sleep(1)
