@@ -117,6 +117,7 @@ type stationWechatWorker struct {
 	shareMu          sync.Mutex
 	speechMu         sync.Mutex
 	yueMu            sync.Mutex
+	comfyMu          sync.Mutex
 	share            *stationShareHost
 	dir              string
 	runtimeDir       string
@@ -834,6 +835,7 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		attachment.projectOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
 		attachment.speechMu = &station.speechMu
 		attachment.yueMu = &station.yueMu
+		attachment.comfyMu = &station.comfyMu
 	}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
@@ -854,9 +856,9 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 		if err != nil {
 			return nil
 		}
-		localInput.TraceID = in.TraceID
-		// The workstation public tool view does not need the WeChat body or
-		// timestamp. Message reading and reply correlation stay in this adapter.
+		// The workstation receives an independent request identity. WeChat
+		// message IDs, body, source and reply correlation stay in this adapter.
+		localInput.TraceID = identity.RandomToken()
 		tools := s.localChat.tools(store, localInput)
 		tools.projectTools = s.localChat.projectTools
 		tools.publicUseOnly = true

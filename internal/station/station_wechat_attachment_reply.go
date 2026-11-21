@@ -11,6 +11,11 @@ import (
 )
 
 func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, bool) {
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && strings.HasPrefix(asset, "comfy-") {
+		if j, index, allowed := t.comfyMediaAllowed(t.trace, asset); allowed {
+			return j.media(index), true
+		}
+	}
 	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
 		if j, allowed := t.yueMediaAllowed(t.trace, asset); allowed {
 			return j.media(), true
@@ -73,6 +78,9 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
+	if strings.HasPrefix(asset, "comfy-") {
+		return t.stageComfy(ctx, in, kind, asset)
+	}
 	if strings.HasPrefix(asset, "yue-") {
 		if kind != "file" {
 			return "", wechatapp.ErrAttachmentDenied
@@ -123,6 +131,10 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 }
 
 func (t *stationAttachmentTools) canSubmitMedia(ctx context.Context, in companion.Input, kind, asset string) bool {
+	if strings.HasPrefix(asset, "comfy-") {
+		j, index, allowed := t.comfyMediaAllowed(in, asset)
+		return allowed && j.Products[index].Kind == kind
+	}
 	if strings.HasPrefix(asset, "yue-") {
 		_, allowed := t.yueMediaAllowed(in, asset)
 		return kind == "file" && allowed

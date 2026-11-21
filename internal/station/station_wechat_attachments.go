@@ -276,6 +276,7 @@ type stationAttachmentTools struct {
 	projectOwnerAllowed func(companion.Input) bool
 	speechMu            *sync.Mutex
 	yueMu               *sync.Mutex
+	comfyMu             *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -344,9 +345,7 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if tool, ok := t.publicSpeechTool(ctx); ok {
 		tools = append(tools, tool)
 	}
-	if tool, ok := t.publicComfyWorkflowTool(ctx); ok {
-		tools = append(tools, tool)
-	}
+	tools = append(tools, t.publicComfyTools(ctx)...)
 	tools = append(tools, t.publicYuETools(ctx)...)
 	if !t.allowed() {
 		return tools, nil
@@ -464,6 +463,12 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localComfyListTool {
 		return t.callPublicComfyWorkflows(ctx, raw)
+	}
+	if name == localComfyStartTool {
+		return t.callPublicComfyRun(ctx, raw)
+	}
+	if name == localComfyJobTool {
+		return t.callPublicComfyJob(ctx, raw)
 	}
 	if name == localYuEStartTool {
 		return t.callPublicYuEGenerate(ctx, raw)

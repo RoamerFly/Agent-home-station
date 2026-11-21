@@ -9,17 +9,49 @@ import (
 )
 
 func (t *stationAttachmentTools) publicComfyWorkflowTool(ctx context.Context) (mcptools.Tool, bool) {
-	if t.projects == nil || t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.allowed() {
+	fish, ok := t.publicComfyInstalled(ctx)
+	if !ok {
 		return mcptools.Tool{}, false
 	}
-	record, err := t.projects.home.identity.Read()
-	if err != nil || record.LocalOwner == nil {
-		return mcptools.Tool{}, false
-	}
-	if _, err = t.projects.publicComfyWorkflows(ctx, record.FishID); err != nil {
+	if _, err := t.projects.publicComfyWorkflows(ctx, fish); err != nil {
 		return mcptools.Tool{}, false
 	}
 	return localComfyWorkflowTool(), true
+}
+
+func (t *stationAttachmentTools) publicComfyInstalled(ctx context.Context) (string, bool) {
+	if t.projects == nil || t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.allowed() {
+		return "", false
+	}
+	record, err := t.projects.home.identity.Read()
+	if err != nil || record.LocalOwner == nil {
+		return "", false
+	}
+	host, err := t.projects.forFish(record.FishID)
+	if err != nil {
+		return "", false
+	}
+	if _, err = installedLocalProject(ctx, host, localProjectOperation{pkg: localComfyPackage, capability: localComfyCapability}); err != nil {
+		return "", false
+	}
+	return record.FishID, true
+}
+
+func (t *stationAttachmentTools) publicComfyTools(ctx context.Context) []mcptools.Tool {
+	workflow, ok := t.publicComfyWorkflowTool(ctx)
+	tools := []mcptools.Tool{}
+	if ok {
+		tools = append(tools, workflow)
+	}
+	if t.comfyMu != nil && t.replyAllowed(t.trace) {
+		if ok {
+			tools = append(tools, localComfyStartToolSpec())
+		}
+		if _, installed := t.publicComfyInstalled(ctx); installed {
+			tools = append(tools, localComfyJobToolSpec())
+		}
+	}
+	return tools
 }
 
 func (t *stationAttachmentTools) callPublicComfyWorkflows(ctx context.Context, raw json.RawMessage) (string, error) {
