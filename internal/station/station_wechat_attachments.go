@@ -278,6 +278,7 @@ type stationAttachmentTools struct {
 	yueMu               *sync.Mutex
 	comfyMu             *sync.Mutex
 	rvcMu               *sync.Mutex
+	externalMu          *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -487,6 +488,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localRVCJobTool {
 		return t.callPublicRVCJob(ctx, raw)
+	}
+	if name == localExternalHTTPCall {
+		return t.callPublicExternalHTTP(ctx, raw)
 	}
 	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {
 		return t.callPublicExternalCatalog(ctx, name, raw)

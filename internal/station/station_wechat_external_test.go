@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,5 +96,101 @@ func TestWechatExternalCatalogUsesCurrentWorkstationRegistration(t *testing.T) {
 	}
 	if _, err := adapter.Call(t.Context(), localExternalHTTPList, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("disabled workstation catalog remained callable")
+	}
+}
+
+func TestWechatExternalHTTPTextSubmitOnce(t *testing.T) {
+	if os.Getenv("AHS_LOCAL_PROJECT_TOOL_RUNTIME_ROOT") == "" {
+		t.Skip("Windows project-tool runtime is required")
+	}
+	f := localChatFixture(t)
+	f.handler.chat.projectTools.options = localProjectToolWindowsOptionsFor(t, localExternalPackage)
+	if code, out := f.request("GET", "/api/local/project-tools", nil, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	route := "/api/local/project-tools/" + localExternalPackage
+	for _, action := range []string{"install", "enable"} {
+		input := map[string]any{"action": action}
+		if action == "install" {
+			input["approve_artifacts"] = true
+		} else {
+			input["revision"] = localProjectToolRevision(t, localProjectToolByID(t, f, localExternalPackage))
+		}
+		if code, out := f.request("PUT", route, input, true); code != http.StatusOK {
+			t.Fatal(code, out)
+		}
+	}
+	var requests atomic.Int32
+	const secret = "synthetic-private-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+secret {
+			t.Errorf("host credential missing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":"first second synthetic-private-key"}`))
+	}))
+	defer server.Close()
+	registration := map[string]any{"connections": []plugins.Installed{{Manifest: plugins.Manifest{ID: "synthetic", Name: "Synthetic", Version: "1.0.0",
+		Tools: []plugins.APITool{{Name: "lookup", URL: server.URL, Method: "GET", TextPath: "result",
+			Headers:     map[string]string{"Authorization": "Bearer {{secret.api_key}}"},
+			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}}},
+		Enabled: true, Secrets: map[string]string{"api_key": secret}}}}
+	path := stationToolRegistrationPath(f.handler.home.dataDir, localExternalRegistration)
+	raw, _ := json.Marshal(registration)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(t.TempDir(), "native-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memory.Close()
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner", TraceID: "synthetic-http", Text: "查找",
+		MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	in.Source = &companion.SourceRef{InstanceID: memory.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account,
+		Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime}
+	config := companion.Defaults()
+	config.Permissions.Remember = true
+	if err := memory.Observe(in, config, now); err != nil {
+		t.Fatal(err)
+	}
+	in.Source, _ = memory.SourceForInput(in)
+	grant := now.Add(-time.Minute)
+	adapter := &stationAttachmentTools{native: native, store: memory, dir: t.TempDir(), projects: f.handler.chat.projectTools,
+		grants: map[string]time.Time{in.Thread: grant}, blocked: func() bool { return false }, externalMu: new(sync.Mutex),
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+	adapter.SetTrace(in)
+	listed, err := adapter.List(t.Context())
+	if err != nil || !hasTool(listed, localExternalHTTPCall) {
+		t.Fatal("external HTTP call not available", err)
+	}
+	call := json.RawMessage(`{"tool":"synthetic__lookup","arguments":{},"text_limit":6}`)
+	first, err := adapter.Call(t.Context(), localExternalHTTPCall, call)
+	if err != nil || requests.Load() != 1 || !strings.Contains(first, "first ") || strings.Contains(first, secret) {
+		t.Fatal("first call failed", first, err, requests.Load())
+	}
+	second, err := adapter.Call(t.Context(), localExternalHTTPCall, json.RawMessage(`{"tool":"synthetic__lookup","arguments":{},"text_offset":6}`))
+	if err != nil || requests.Load() != 1 || !strings.Contains(second, "reused\":true") || strings.Contains(second, secret) {
+		t.Fatal("continuation repeated request or leaked secret", second, err, requests.Load())
+	}
+	installed := localProjectToolByID(t, f, localExternalPackage)
+	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	if _, err := adapter.Call(t.Context(), localExternalHTTPCall, call); err == nil || requests.Load() != 1 {
+		t.Fatal("disabled external HTTP call remained available")
 	}
 }
