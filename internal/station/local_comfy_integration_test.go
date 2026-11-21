@@ -191,6 +191,37 @@ func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testin
 	}
 }
 
+func TestPublicComfyGenerationWithoutApplicationSource(t *testing.T) {
+	f := localChatFixture(t)
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 48, 24))); err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: record.FishID, image: comfyui.Image{
+		Data: data.Bytes(), SHA256: localComfyDigest(data.Bytes()), Width: 48, Height: 24}}
+	setUpLocalComfyChat(t, f, backend)
+	jobID := strings.Repeat("a", 64)
+	submission, err := f.handler.chat.projectTools.submitPublicComfy(t.Context(), record.FishID, jobID, "smoke",
+		map[string]json.RawMessage{"width": json.RawMessage(`48`)})
+	if err != nil || backend.submits != 1 || submission.Workflow != "smoke" || submission.Binding == "" {
+		t.Fatalf("source-free submit failed: %+v %v calls=%d", submission, err, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	state, product, err := f.handler.chat.projectTools.publicComfyStatus(t.Context(), record.FishID, jobID, submission)
+	if err != nil || state != comfyui.Completed || len(product.Images) != 2 || product.Images[0].SHA256 != backend.image.SHA256 {
+		t.Fatalf("source-free result failed: state=%s images=%d err=%v", state, len(product.Images), err)
+	}
+	if err := f.handler.chat.projectTools.settlePublicComfy(t.Context(), record.FishID, jobID, submission); err != nil {
+		t.Fatal(err)
+	}
+}
+
 const localComfyFixturePrompt = "运行登记的离线测试工作流"
 
 func requestLocalComfyJob(t *testing.T, f *localHomeFixture, requestID string) string {
