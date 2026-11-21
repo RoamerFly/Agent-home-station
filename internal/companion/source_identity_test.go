@@ -166,6 +166,17 @@ func TestReusedNativeRowIDWithDifferentOccurrenceKeepsBothSenders(t *testing.T) 
 		t.Fatal("distinct native events were quarantined", conflicts, err)
 	}
 }
+func TestDistinctSourceMessagePrefersPlatformIDOverTimestamp(t *testing.T) {
+	a := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-01T00:00:00Z"}
+	b := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-02T00:00:00Z"}
+	if distinctSourceMessage(a, b) {
+		t.Fatal("same platform ID must retain conflict protection")
+	}
+	b.ServerID = "platform-2"
+	if !distinctSourceMessage(a, b) {
+		t.Fatal("different platform IDs must remain separate")
+	}
+}
 func TestSourceVersionUpdateReusesLogicalMessageAndIsIdempotent(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()

@@ -123,8 +123,10 @@ func distinctSourceMessage(a, b *SourceRef) bool {
 	if a == nil || b == nil || !sameSourceInstance(a, b) {
 		return false
 	}
-	return a.ServerID != "" && b.ServerID != "" && a.ServerID != b.ServerID ||
-		a.OccurredAt != "" && b.OccurredAt != "" && a.OccurredAt != b.OccurredAt
+	if a.ServerID != "" && b.ServerID != "" {
+		return a.ServerID != b.ServerID
+	}
+	return a.OccurredAt != "" && b.OccurredAt != "" && a.OccurredAt != b.OccurredAt
 }
 func legacyConflictSource(in Input, body string, now time.Time, instance string) *SourceRef {
 	return &SourceRef{InstanceID: instance, MessageID: in.TraceID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime, ReceivedAt: memoryTime(now), BodyHash: sourceHash(body), Revision: 1, Integrity: "conflicted"}
