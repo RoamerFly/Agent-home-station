@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "web-search",
   "name": "联网检索",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -37,10 +37,10 @@
     "MIGRATION.md": "5c4eafc26d4544ceb5e34417d1102412200e741a6fb5ab3a0327e2671df33be1",
     "PERMISSIONS.md": "b94e7f7ab566aa56c95ff81b376335bf4774d7cee2dc1d1e1391962d8098e55a",
     "README.md": "68daef6fe822eed6bbb971a640ba1a0eae1eda3aa41e6499e64f3999e62fcb2a",
-    "runtime/main.py": "b7c98a327643b7ba6650ec8d0a194578e517a932181340c9a23e27808411c618",
+    "runtime/main.py": "81f1847f424e43cafd52ae942d5d6ec576e7e0486c445ed91dc3b2a6c288dd22",
     "runtime/README.md": "71de7c1acc9eb5cfd5c8e14243cc18ddaeaf52bcbad119c66bea6207a9dffbe3",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
-    "tests/test_runtime.py": "2afe3cb5b7147b8a9169c5e1e7afba903459146c39152dff29c192dfedf3cd54",
+    "tests/test_runtime.py": "ee55b8c0680f9c97d1dd0f72e23fe765efdcc3c2683ca74c9f00504de062d94b",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
   },
   "call_metadata": "opaque-v1"
