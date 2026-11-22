@@ -504,7 +504,9 @@ namespace WechatAgent.Desktop {
                 var stage = Deployment.Text(record, "stage");
                 var code = Deployment.Text(record, "error_code");
                 var detail = Deployment.Text(record, "error_message");
+                var state = Deployment.Text(record, "status");
                 var updated = Deployment.Text(record, "updated_at");
+                if (state == "running" && String.IsNullOrEmpty(code) && String.IsNullOrEmpty(detail)) return fallback;
                 var lines = new List<string>();
                 if (!String.IsNullOrEmpty(stage)) lines.Add("阶段：" + stage);
                 if (!String.IsNullOrEmpty(code)) lines.Add("错误码：" + code);

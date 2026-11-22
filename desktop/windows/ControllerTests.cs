@@ -160,11 +160,10 @@ namespace WechatAgent.Desktop {
                                 } while (!ready && DateTime.UtcNow < deadline);
                                 Assert(ready, "native-enabled station is ready");
                                 using (var denied = client.GetAsync(d.Url + "/api/apps").GetAwaiter().GetResult())
-                                    Assert(denied.StatusCode == HttpStatusCode.Unauthorized, "native applications require owner login");
+                                    Assert(denied.StatusCode == HttpStatusCode.Unauthorized, "native applications require a local session");
                                 client.DefaultRequestHeaders.Add("Origin", d.Url);
-                                using (var body = new StringContent(Deployment.Json.Serialize(new { password }), System.Text.Encoding.UTF8, "application/json"))
-                                using (var login = client.PostAsync(d.Url + "/api/login", body).GetAwaiter().GetResult()) {
-                                    Assert(login.IsSuccessStatusCode, "native-enabled station owner login");
+                                using (var login = client.GetAsync(d.Url + "/api/session").GetAwaiter().GetResult()) {
+                                    Assert(login.IsSuccessStatusCode, "native-enabled station local session");
                                     var session = Deployment.Json.Deserialize<Dictionary<string, object>>(login.Content.ReadAsStringAsync().GetAwaiter().GetResult());
                                     client.DefaultRequestHeaders.Add("X-CSRF-Token", Deployment.Text(session, "csrf"));
                                 }
@@ -601,11 +600,8 @@ namespace WechatAgent.Desktop {
                 // moving the root here would turn portable ownership repair into
                 // an external-data case and test the wrong security boundary.
                 try {
-                    // The first real desktop login has no credential file and
-                    // therefore proves that the inherited environment reaches
-                    // both the Go child and ServiceController.Login. Before
-                    // the restart, install the legacy token plus managed
-                    // password; the managed value must win over that same env.
+                    // The local session works before any credential file exists.
+                    // Retained legacy credentials remain untouched across restart.
                     Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", environmentPassword);
                     d.Url = CycleUrl();
                     do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
@@ -635,7 +631,7 @@ namespace WechatAgent.Desktop {
                             }
                         }
                     }
-                    Console.WriteLine("LocalStation real ServiceController login passed env-only then managed-password precedence across restart; wx opt-in remained disabled."); return 0;
+                    Console.WriteLine("LocalStation real ServiceController automatic session passed two restarts; wx opt-in remained disabled."); return 0;
                 } finally { Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", priorPassword); }
             }
             if (args.Length == 2 && args[0] == "--cycle") {

@@ -396,10 +396,17 @@ namespace WechatAgent.Desktop {
             }
         }
         internal async Task Login(CancellationToken token) {
-            string password;
             if (d.LocalStation) {
-                password = Deployment.LocalStationPassword(d.Root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD") ?? "");
-            } else if (d.Windows) {
+                var session = await Request("/api/session", null);
+                csrf = Deployment.Text(session, "csrf");
+                if (csrf == "") throw new InvalidOperationException("本机工作站未返回安全会话令牌。");
+                var runtime = await Request("/api/local/runtime", null);
+                if (Deployment.Text(runtime, "kind") != "local-station" || Convert.ToInt32(runtime["pid"]) != station.PID || !String.Equals(WindowsRuntime.ComparablePath(Deployment.Text(runtime, "data_directory")), WindowsRuntime.ComparablePath(d.Root), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("本机成长站实例身份不匹配，拒绝接管。");
+                return;
+            }
+            string password;
+            if (d.Windows) {
                 var path = Path.Combine(d.Root, "admin", "admin-password");
                 var fallback = Path.Combine(d.Root, "admin", "admin-token");
                 if (!File.Exists(path)) path = fallback;
@@ -410,12 +417,6 @@ namespace WechatAgent.Desktop {
             }
             var login = await Request("/api/login", new { password = password });
             csrf = Deployment.Text(login, "csrf");
-            if (d.LocalStation) {
-                var runtime = await Request("/api/local/runtime", null);
-                if (Deployment.Text(runtime, "kind") != "local-station" || Convert.ToInt32(runtime["pid"]) != station.PID || !String.Equals(WindowsRuntime.ComparablePath(Deployment.Text(runtime, "data_directory")), WindowsRuntime.ComparablePath(d.Root), StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("本机成长站实例身份不匹配，拒绝接管。");
-                return;
-            }
             var status = await Request("/api/status", null);
             if (Deployment.Text(status, "account") != d.Account) throw new InvalidOperationException("端口上的账号与部署配置不符；拒绝管理其他实例。");
         }
