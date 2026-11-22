@@ -60,7 +60,7 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 				continue
 			}
 			found = true
-			if !strings.Contains(strings.ToLower(v.Engine), "rvc") || v.ProfileID == "" {
+			if !voiceSupportsRVC(v) {
 				return "", toolInputError("selected_voice_engine_not_rvc: " + v.Engine + "；已能访问声线，但需对应的歌声转换模型，未提交默认声线替代")
 			}
 			if in.VoiceProfile != "" && in.VoiceProfile != v.ProfileID {
@@ -89,7 +89,7 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 		}
 		known := false
 		for _, v := range voices {
-			known = known || v.ProfileID == in.VoiceProfile && strings.Contains(strings.ToLower(v.Engine), "rvc")
+			known = known || v.ProfileID == in.VoiceProfile && voiceSupportsRVC(v)
 		}
 		if !known {
 			return "", toolInputError("voice_profile_not_registered_use_voice_library_list_and_read")

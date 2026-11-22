@@ -498,7 +498,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 	}
 	index := -1
 	for i, a := range items {
-		if a.ID == id && a.Account == p.trace.Account && a.Scope == assetScope(p.trace) {
+		if a.ID == id && a.Account == p.trace.Account && (a.Scope == assetScope(p.trace) || librarySong(a, p.trace.Account)) {
 			index = i
 			break
 		}

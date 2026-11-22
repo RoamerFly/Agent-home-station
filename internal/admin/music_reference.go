@@ -48,7 +48,7 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 		return mediaAsset{}, nil, err
 	}
 	for _, a := range items {
-		if a.ID != id || a.Account != p.trace.Account || a.Scope != assetScope(p.trace) {
+		if a.ID != id || a.Account != p.trace.Account || a.Scope != assetScope(p.trace) && !librarySong(a, p.trace.Account) {
 			continue
 		}
 		if !strings.HasPrefix(a.MIME, "audio/") || a.Hash == "" {

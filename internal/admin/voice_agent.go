@@ -16,6 +16,18 @@ import (
 type voiceFile = mediaspec.VoiceFile
 type voiceEntry = mediaspec.VoiceEntry
 
+func voiceSupportsRVC(v voiceEntry) bool {
+	if v.ProfileID == "" {
+		return false
+	}
+	for _, weight := range v.Weights {
+		if strings.EqualFold(weight.Kind, "rvc") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(v.Engine), "rvc")
+}
+
 func readVoiceEntries(dir string) ([]voiceEntry, error) {
 	if _, err := os.Lstat(dir); os.IsNotExist(err) {
 		return nil, nil
@@ -174,14 +186,14 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 		if name == "voice_library_read" {
 			row := voiceSummary(v)
 			row["notes"], row["files"], row["recommended_weights"], row["synthesis_instruction"] = v.Notes, files, v.Recommended, v.Instruction
-			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": strings.Contains(strings.ToLower(v.Engine), "rvc") && v.ProfileID != "", "instruction": "GPT-SoVITS权重用于对应TTS引擎，不是RVC歌声转换权重；能读取不等于可用作原曲换声。指定声线未兼容时不要提交默认声音冒充，也不要把格式差异说成主人权限不足。"}
+			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": voiceSupportsRVC(v), "instruction": "同一声线可同时登记 GPT-SoVITS 朗读权重和 RVC 换声权重；按实际可用的权重选择工具。"}
 			row["usage"] = "voice_library_prepare取得可读模型和参考，然后project_list/project_read定位相应引擎。GPT-SoVITS、RVC和百炼音色不互换；权重齐全不等于运行环境和听感已经验证。"
 			if strings.EqualFold(v.Engine, "GPT-SoVITS") {
 				row["project_id"] = "gpt-sovits"
 				row["speech_synthesize"] = map[string]string{"voice_id": v.ID, "text": "填写本次需要合成的原文"}
 				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；优先speech_synthesize(voice_id,text)。自定义命令在Windows使用server_windows_process(global=true,gpu=true)，Linux使用server_process(global=true,gpu=true)，工作目录选账号受管工作区；不需要访问源码仓库根目录。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。生成后核验实际音频再发送。"
 			}
-			if v.ProfileID != "" {
+			if voiceSupportsRVC(v) {
 				row["music_rvc_start"] = map[string]string{"voice_id": v.ID, "voice_profile_id": v.ProfileID}
 				row["spoken_text"] = map[string]string{"tool": "speech_synthesize", "rvc_target_id": v.ID, "usage": "朗读文字时直接传 text 和 rvc_target_id。voice_id 仅选择底稿 TTS；仅有本地语音时需选一个可用 GPT-SoVITS 底稿声线。底稿不投递。"}
 			}

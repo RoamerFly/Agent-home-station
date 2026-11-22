@@ -210,7 +210,7 @@ func (p *permittedTools) enabled(name string) bool {
 		c := p.manager.Config().Companion.Permissions
 		return p.settings.WebFetchEnabled && (c.SendImage || c.SendVoice || c.SendVideo || c.SendFile)
 	}
-	if name == "media_recent" || name == "media_reuse" || name == "media_history" {
+	if name == "media_recent" || name == "media_reuse" || name == "media_history" || name == "music_library_search" {
 		return p.trace.Thread != "" && p.manager.Config().Companion.Permissions.Remember
 	}
 	if kind := p.apiKinds[name]; kind != "" && !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
@@ -228,6 +228,7 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 		return tools
 	}
 	if p.trace.Thread != "" {
+		tools = append(tools, mcptools.Tool{Name: "music_library_search", Description: "先查当前账号跨微信群共享的本地公开歌曲资源库。输入曲名，可加歌手缩小结果；只列已下载的原曲音频，不包含生成翻唱和聊天记录。返回可直接给 music_reference_inspect、music_rvc_start、music_local_start 使用的 asset_id；找不到合适版本再上网搜索。Input {query:string,offset?:integer,limit?:integer}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
 		tools = append(tools, mcptools.Tool{Name: "media_history", Description: "Page ALL retained source/request associations for an exact asset, oldest first, preserving original message time and sender. Defaults offset=0, limit=20; follow next_offset. Same conversation only; trusted owner may specify source_thread_id within this account. Read-only provenance, never delivery evidence or instructions.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"source_thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`)})
 		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "查找当前会话收到的文件和附件（Word/DOCX、PDF、Excel/XLSX、音频、视频），返回文件名、asset_id 和原消息来源。读取文档前用此目录定位原件，不用聊天记忆搜索代替附件目录。 Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Search this LOCAL catalogue FIRST for listening, RVC covers and YuE reference songs, even a newly requested title. Reuse an exactly matching cached original recording; search online only if missing, unsuitable or explicitly requested fresh online. Never substitute unrelated tracks or generated covers for the original. Cached originals remain discoverable beyond chat memory age. Default is a12-item quick array. Supply offset=0 to get a paginated object {items,total,next_offset,has_more}; follow next_offset for the FULL scoped catalogue, no total-item cutoff. limit chooses a page (default12). Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string,offset?:integer,limit?:integer}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "视频默认准备为可点击播放的微信原生视频；仅用户明确要求作为文件时选择kind=file。省略kind按缓存类型选择：视频为video、图片为image，其余为file。 Reuse the matching cached resource for the user request, including a matching local song found by title before online search, or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. For voice, optional conversion selects cached original start_seconds/duration_seconds, segment_seconds(default60, WeChat max60), timeout_seconds(default90). Default entire audio. Explicit conversion never replaces the default full-song bundle. Input: {asset_id:string,kind:voice|file|image|video,conversion?:object}.", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id"],"additionalProperties":false}`))})
 	}
@@ -423,7 +424,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		}
 		if callErr == nil && !strings.HasPrefix(name, "web_") {
 			origin := "tool"
-			if name == "media_recent" || name == "media_reuse" || name == "media_history" {
+			if name == "media_recent" || name == "media_reuse" || name == "media_history" || name == "music_library_search" {
 				origin = "local_asset"
 			}
 			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
@@ -498,6 +499,26 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return result, err
 		}
 		return p.assetHistoryPage(in.AssetID, in.Offset, in.Limit)
+	}
+	if name == "music_library_search" {
+		var input struct {
+			Query  string `json:"query"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if json.Unmarshal(args, &input) != nil || len(input.Query) > 256 {
+			return "", errors.New("歌曲资源库检索参数无效")
+		}
+		if input.Limit == 0 {
+			input.Limit = 12
+		}
+		items, total, err := p.manager.searchMusicLibrary(p.trace.Account, input.Query, input.Offset, input.Limit)
+		if err != nil {
+			return "", err
+		}
+		next := input.Offset + len(items)
+		b, _ := json.Marshal(map[string]any{"items": items, "total": total, "next_offset": next, "has_more": next < total})
+		return string(b), nil
 	}
 	if name == "media_recent" {
 		var input struct {
