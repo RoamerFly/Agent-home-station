@@ -4,7 +4,7 @@
 
 ## 依赖与安装
 
-此包不包含 ComfyUI、模型、节点、Python、GPU 驱动或服务地址。Windows 站点管理员可将已经审核的本机 ComfyUI 便携安装登记给宿主；宿主自行启动、停止并只连接本机 loopback broker。当前验证的外部安装可为 Windows x64 ComfyUI 0.37.2，但该软件和模型绝不随本工具包分发。
+源码目录不提交第三方运行时或模型。本机安装包的 `runtime/engine` 包含独立的 ComfyUI 核心和 Python，模型放在本包 `models`；GPU 驱动仍由系统提供。可在本包目录运行 `./run-service.ps1 -Help` 检查入口，或运行 `./run-service.ps1` 在独立端口启动服务。工作站通过私有登记文件使用同一包内运行时，并将生成素材放入 `release/data`。
 
 `runtime/managed-service.json` 是固定的宿主协议声明，不是可直接执行的启动文件。循环回环地址、工作流登记、输入字段校验、幂等键、取消、输出文件核验和素材登记均由站点宿主负责。
 

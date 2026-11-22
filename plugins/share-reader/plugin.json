@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "share-reader",
   "name": "分享内容读取",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -39,7 +39,8 @@
     "tests/test_channels.py": "7fae2bf1cfe1a66b103509c61676c49921755355348333f3d85c1de3e338c751",
     "tests/test_public_share.py": "2aa6d3174d39e7e37b132eb4cacb10280dc9000c936735242639baf4e3c816fd",
     "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
-    "tests/test_bilibili.py": "c32e2bcb2522df53c3b48935bbf0c58f6f1695571fb3b11eacc262b6fa852114"
+    "tests/test_bilibili.py": "c32e2bcb2522df53c3b48935bbf0c58f6f1695571fb3b11eacc262b6fa852114",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "http_routes": [
     {

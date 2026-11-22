@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "project-development",
   "name": "项目开发",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -40,7 +40,8 @@
     "dev/repair-acceptance/repair_file_flags_linux.go.in": "22b272295ca94ee73805359a6f9585bdd7ce6a22d78677c4a6c0c26431d1260a",
     "dev/repair-acceptance/repair_file_flags_other.go.in": "53da68db4ba6aef300ba68304271699e31affd160725e13c96f2cafc0d876940",
     "dev/repair-acceptance/repair_file_linux_test.go.in": "18d532bcb94143744829d8ce48b795fe7901874c020c74173308d3c733b1f288",
-    "dev/repair-acceptance/run_contract.py": "75ac0edb7bacbba4b36a12d8629fc6df9684c2f33691d3b6f9c03d4b82721fb9"
+    "dev/repair-acceptance/run_contract.py": "75ac0edb7bacbba4b36a12d8629fc6df9684c2f33691d3b6f9c03d4b82721fb9",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }

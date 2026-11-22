@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "speech",
   "name": "语音生成",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -49,7 +49,8 @@
     "dev/legacy-sdk/audition/live_voice_design_test.go.in": "4c47659adc3c7d3a231b9b090f0eff2a8f927dee1a07774c51824a91a84ac7a0",
     "dev/legacy-sdk/audition/run_audition.py": "8fb02a8c892fd462cb0372192c3a35e5e19471c441ee18d5c6caf83ab28225d3",
     "runtime/training-requirements.txt": "00693e9a87adc67be979af91033d1d1257b8c0999e94797c549a8d1bdea79f02",
-    "runtime/training_shims/gradio/__init__.py": "6cb0e611f9764a6f93b0524a6f70d7db322489eb51174ef883d308604d21362a"
+    "runtime/training_shims/gradio/__init__.py": "6cb0e611f9764a6f93b0524a6f70d7db322489eb51174ef883d308604d21362a",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "http_routes": [],
   "call_metadata": "opaque-v1"

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "web-search",
   "name": "联网检索",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -41,7 +41,8 @@
     "runtime/README.md": "71de7c1acc9eb5cfd5c8e14243cc18ddaeaf52bcbad119c66bea6207a9dffbe3",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_runtime.py": "ee55b8c0680f9c97d1dd0f72e23fe765efdcc3c2683ca74c9f00504de062d94b",
-    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }

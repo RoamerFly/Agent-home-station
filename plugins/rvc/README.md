@@ -10,7 +10,9 @@
 
 独立命令行接受明确的本机文件路径，生成结果只写到指定输出文件。`rvc.convert` 是另一条由工作站宿主管理的任务接口：管理员安装并授权 GPU 后，宿主才可启动受管服务并映射已登记的声线版本。未安装、声线不存在、GPU 不可用或服务不健康时，宿主应返回实际阶段的可恢复状态；不得改用默认声线。
 
-`assets/uvr5_weights/HP2_all_vocals.pth` 是旧 UVR5 格式，不能按 `pymss` 模型名加载；`Unknown pymss model` 表示分离器与模型格式不匹配，并非缺少 RVC Python。`run-rvc.ps1` 对已经分好的人声直接换声，不执行人声分离。
+对尚未分离的歌曲，运行 `./run-separate.ps1 -InputFile "<歌曲.wav>" -OutputDirectory "<输出目录>"`，默认使用包内 `models/separation` 的 `MGM_MAIN_v4.pth`，输出人声与伴奏。可用 `-Model` 选另一个已下载且在 `pymss` 清单内的模型，`-Device cpu` 可避免占用显卡。此入口为 `pymss` 加载包内 `tools` 模块和 FFmpeg，不依赖 `release/env`。
+
+`assets/uvr5_weights/HP2_all_vocals.pth` 是旧 UVR5 格式，当前 `pymss` 模型清单和 VR 元数据均不接受它；报 `Unknown pymss model` 不是缺少 Python。独立分离改用上面的兼容模型；`run-rvc.ps1` 对分离后的人声换声。
 
 `runtime/managed-service.json` 只是固定的宿主 broker 协议说明：没有 URL、命令、配置项或凭据，也不能由通用 MCP 执行器启动。循环回环地址、进程、请求幂等键、取消和结果核验均由 Go 宿主负责。
 

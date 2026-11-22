@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "document-workshop",
   "name": "文档工坊",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -33,7 +33,8 @@
     "runtime/reportlab_image.py": "1d0ce754bed0007c2a8fea999e6bdc387d81ff926573501490682b6a521599b8",
     "tests/fixtures/layout.json": "852d9f67c2e10e8af6e3a11f2acabacff619c5003ab9fa4a6c40e434a7d2be25",
     "tests/test_document_workshop.py": "5c011428d304555259116f9834d15bbce51ef44149067f0b8acd5087c2126f43",
-    "ui.schema.json": "e604275d64bb3d977d18729c3130286e4aca8179a15b7b1c3f98d1ed615e05ac"
+    "ui.schema.json": "e604275d64bb3d977d18729c3130286e4aca8179a15b7b1c3f98d1ed615e05ac",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "external-tools",
   "name": "外部工具连接",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -28,7 +28,8 @@
     "runtime/main.py": "e3d6828d9db80a5313c25a17e0ed051bb9de4ee62ae1d5812b2a56cff68adab2",
     "tests/test_runtime.py": "d9da6e0440ff56bc14477da1ee74735d0db1acf8193857c2483ef848eac429a6",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
-    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722"
+    "ui.schema.json": "ecd1151d326502617666864eee310255d0c1d00d438f06f24e89c6386e57e722",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }

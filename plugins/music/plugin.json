@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "music",
   "name": "音乐与换声",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -42,7 +42,8 @@
     "tests/test_training.py": "5cabe970aec7163e7e7bec9ee6684f719106b2012333e7ca2c87f719915f8f41",
     "runtime/training/README.md": "f725d765206d6c6c7eccaa3eafe86f13a0544a25b8f66da7daf3f6850642b628",
     "runtime/preparation.py": "08e7ac6217d862792dfb7ca0bb695dffdb8105e4f93ea9abf4e7af7e30f1235c",
-    "tests/test_preparation.py": "8698e15836072c605bfa9bc3cf376249be91fdf7bcef5cf95e9f3c11793003c5"
+    "tests/test_preparation.py": "8698e15836072c605bfa9bc3cf376249be91fdf7bcef5cf95e9f3c11793003c5",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }

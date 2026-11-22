@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "media-understanding",
   "name": "媒体理解",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -37,7 +37,8 @@
     "tests/test_observation.py": "52f3733a757bcd8bcf755bcfbea18e8b38946526e8e5fae7b3e901f00875d138",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "runtime/transcription.py": "c75d783e7d3dd9e83e1348b972f4320bd02424e592bea297a74b0406ad0f0dab",
-    "tests/test_transcription.py": "cf31052d10060517967d4ab39efa95c398e1d9472af4a908fb5720275e0053fb"
+    "tests/test_transcription.py": "cf31052d10060517967d4ab39efa95c398e1d9472af4a908fb5720275e0053fb",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "http_routes": [
     {

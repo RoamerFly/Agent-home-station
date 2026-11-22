@@ -262,8 +262,8 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
  if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw 'The trusted local speech runner is missing from plugins/speech/runtime.'}
  Assert-NoReparsePointAncestor $source
  $hash=Get-Sha256Hex $source
- $runtimeRoot=Join-Path $PackageDirectory 'env'
- $destination=Join-Path $runtimeRoot 'windows-station-speech'
+ $runtimeRoot=Join-Path $PackageDirectory 'publictools\station-speech-站内语音\runtime'
+ $destination=Join-Path $runtimeRoot 'control'
  $manifestPath=Join-Path $destination 'runtime-manifest.json'
  Assert-NoReparsePointAncestor $PackageDirectory
  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -547,7 +547,7 @@ function Invoke-DesktopPackageTests {
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
 foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw','windows_speech_compat.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 if($WithRVCBackend){
- $control=Join-Path $OutputDirectory 'env\windows-station-rvc'
+ $control=Join-Path $OutputDirectory 'publictools\rvc-换声\runtime\windows-station-rvc'
  $files=[ordered]@{}
  foreach($name in @('managed_music_runner.py','managed_music_service.py','managed_music_ipc.py','music_unix_client.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
                     'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
@@ -603,6 +603,10 @@ if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWo
   & python -X utf8 (Join-Path $PSScriptRoot 'prepare_document_runtime.py') @documentArgs
   if($LASTEXITCODE -ne 0){throw 'Project-local native document runtime preparation failed.'}
  }
+}
+if($LocalStation -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
+ & python -X utf8 (Join-Path $PSScriptRoot 'prepare_public_tool_runtimes.py') --release $OutputDirectory
+ if($LASTEXITCODE -ne 0){throw 'Standalone public tool Python preparation failed.'}
 }
 if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $ApplicationPackagesDirectory)){
  $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))

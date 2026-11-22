@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -72,12 +74,25 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 			}
 		}
 		runtimeRoots := append([]string(nil), options.RuntimeRoots...)
-		environment := map[string]string(nil)
-		if p.ID == "document-workshop" && options.DocumentRuntimeRoot != "" {
-			runtimeRoots = append(runtimeRoots, options.DocumentRuntimeRoot)
-			environment = map[string]string{"DOCUMENT_RUNTIME_ROOT": options.DocumentRuntimeRoot}
+		python, pythonw := options.Python, options.Pythonw
+		documentRoot := options.DocumentRuntimeRoot
+		if runtime.GOOS == "windows" && p.Runtime.Transport == "mcp-stdio" {
+			if root := packagePythonRoot(options.CatalogDirectory, p); root != "" {
+				python, pythonw = filepath.Join(root, "python.exe"), filepath.Join(root, "pythonw.exe")
+				runtimeRoots = append(runtimeRoots, root)
+				if p.ID == "document-workshop" {
+					if native := filepath.Join(filepath.Dir(root), "native"); packageDocumentRuntimeReady(native) {
+						documentRoot = native
+					}
+				}
+			}
 		}
-		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: runtimeRoots, Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Environment: environment, Configuration: &config}, nil
+		environment := map[string]string(nil)
+		if p.ID == "document-workshop" && documentRoot != "" {
+			runtimeRoots = append(runtimeRoots, documentRoot)
+			environment = map[string]string{"DOCUMENT_RUNTIME_ROOT": documentRoot}
+		}
+		return LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: runtimeRoots, Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Environment: environment, Configuration: &config}, nil
 	}}
 }
 

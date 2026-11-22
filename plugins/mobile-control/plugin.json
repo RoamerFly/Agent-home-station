@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "mobile-control",
   "name": "手机控制",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -51,7 +51,8 @@
     "dev/legacy-sdk/repository_test.go": "1fe42cc368825e54a0f726983565039a7aee7970b109d69ef7b22897b08160ad",
     "dev/legacy-sdk/step.go": "3c90866baf94f910af21943a4bfd5b799632eca6d4c29d78922f54c4131182ba",
     "dev/legacy-sdk/step_test.go": "6eea658cd6db7b400c0a6a8fbc427d867a6c65791caa111f871718b3ceb3c175",
-    "dev/legacy-sdk/types.go": "b128362e29eb9bd4c390f487dcf897471555e02cd7647c331eb633a16c314ac5"
+    "dev/legacy-sdk/types.go": "b128362e29eb9bd4c390f487dcf897471555e02cd7647c331eb633a16c314ac5",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
   },
   "call_metadata": "opaque-v1"
 }
