@@ -135,12 +135,18 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 		req.Header.Set("X-CSRF-Token", session.CSRF)
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
+	timeout := 90 * time.Second
+	limit := int64(8 << 20)
+	if path == stationSpeechRoute && method == http.MethodPost {
+		timeout = 5 * time.Minute
+		limit = 45 << 20
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return nil, errors.New("station_tool_request_unavailable")
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var failure struct {
 			Error string `json:"error"`

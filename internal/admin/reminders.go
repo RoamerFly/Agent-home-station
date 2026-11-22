@@ -33,7 +33,7 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "kind=notify (default) sends the saved reminder text at the due time. kind=execute runs the requested tools silently and replies with results. Create, list, update or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and when due while the workstation is running, appears as a reminder-class execution item for Agent processing without sending a separate reminder message or waiting for a WeChat receipt. If it became overdue while offline before any execution or delivery, it is marked expired and will not be automatically run or postponed. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. notify only sends the reminder text. execute is owner-only and uses existing task/tool authorization. For a future action such as making a song and sending it to a group, use kind=execute with the full original request in text, and pass the exact WeChat group name in delivery_group; the host resolves the group independently and preserves its ID. No group messages are read to set the target. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT processed. Always list reminders before creating another for an existing or referenced request. For a list, query filters titles and reminder text; follow next_offset while has_more. An inquiry about what another conversation said is read-only; report the saved reminder instead of recreating it. scope=account lets the trusted owner list or edit their own reminders across conversations. To edit an existing reminder, use action=update with the existing id and only changed fields (time, title, text, or delivery_group). An empty delivery_group returns an execute reminder to the source conversation. Ordinary members are restricted to their own reminders in the current conversation. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,title?:string,scope:current|account?,query?:string,offset?:integer,limit?:integer,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "Only use action=create when the user explicitly asks for a reminder or a future scheduled time. A request to make or retry a song now is continuous work: start it immediately, inspect the existing music job and use agent_task for its checkpoint; never invent a delayed reminder. kind=notify sends reminder text at due time; kind=execute performs explicitly scheduled work. Use agent_clock for actual local time. List existing reminders before creating another. scope=account lets the owner inspect reminders across conversations. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,title?:string,scope:current|account?,query?:string,offset?:integer,limit?:integer,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 
 func sameReminderFingerprint(t agentTask, account, sender, kind, target, resultGroup, text, runAt string, delay *int64) bool {
@@ -45,6 +45,22 @@ func sameReminderFingerprint(t agentTask, account, sender, kind, target, resultG
 		return false
 	}
 	return (delay == nil && r.DelaySeconds == 0) || (delay != nil && r.DelaySeconds == *delay)
+}
+
+func songNeedsImmediateWork(request string) bool {
+	music := false
+	for _, word := range []string{"做歌", "唱歌", "翻唱", "换声", "歌曲", "音乐"} {
+		music = music || strings.Contains(request, word)
+	}
+	if !music {
+		return false
+	}
+	for _, word := range []string{"提醒我", "定时", "预约", "明天", "后天", "下周", "今晚", "凌晨", "点钟", "点再", "小时后", "分钟后"} {
+		if strings.Contains(request, word) {
+			return false
+		}
+	}
+	return true
 }
 func (a *agentControl) writeReminderFile(t agentTask) error {
 	dir := filepath.Join(a.dir, "reminders")
@@ -146,6 +162,9 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		}
 		return "", toolInputError("未找到你在本会话创建的提醒")
 	case "create":
+		if songNeedsImmediateWork(p.voiceRequestText()) {
+			return "", mcptools.ArgumentError("$.action", "做歌与重试是当前持续任务：先查询现有音乐任务和 job_id，直接执行或续办；用户没有指定未来时间，不创建提醒")
+		}
 		if thread == "" {
 			return "", mcptools.ArgumentError("$.scope", "新提醒应绑定当前发言会话")
 		}

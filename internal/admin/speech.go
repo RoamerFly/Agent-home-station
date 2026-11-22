@@ -175,7 +175,14 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 	// the general workspace permission alone cannot enable a legacy fallback.
 	defaultSpeechReady := stateErr == nil && installed && p.manager.speechPluginConfigured(context.Background())
 	namedSpeechReady := p.workspaceExecutionAllowed() && p.manager.agent.config().Host.Mode == "full" && p.manager.namedSpeechPluginConfigured(context.Background())
-	if permissions.SendVoice && (defaultSpeechReady || namedSpeechReady) {
+	stationCtx, cancelStation := context.WithTimeout(context.Background(), 3*time.Second)
+	stationVoices, stationErr := p.stationSpeechCatalog(stationCtx)
+	cancelStation()
+	stationSpeechReady := stationErr == nil && len(stationVoices.Voices) != 0
+	if stationSpeechReady {
+		out = append(out, agentTool("station_speech_voices", "列出工作站当前登记声线、默认声线和模型版本。管理员私聊可直接选用，不需要读取私有模型目录。输入 {}。", `{"type":"object","properties":{},"additionalProperties":false}`))
+	}
+	if permissions.SendVoice && (defaultSpeechReady || namedSpeechReady || stationSpeechReady) {
 		description := "Synthesize actual spoken audio through the installed speech plugin. Omit voice_id for the configured default; select an authorized NAMED voice with voice_library_list/read then pass voice_id."
 		// A named voice is a local GPT-SoVITS request, not a cloud-TTS voice.
 		// Keep the route in one discoverable tool, but make the incompatible
@@ -194,8 +201,13 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2000},"instruction":{"type":"string","maxLength":1500},"timeout_seconds":{"type":"integer","minimum":1}},"required":["text"],"additionalProperties":false}`
 			input = "Input {text,instruction?,timeout_seconds?}."
 		}
-		description += " Returns prepared media IDs, not delivery; final reply.media_ids sends voice. Private voices require trusted owner; no substitution. Named file_ids selects exact weights/references; parameters adjusts inference without changing source identity. Named timeout defaults600, cloud180, adjustable; named device defaults cuda, cpu explicit. " + input
-		if p.enabled("music_rvc_start") {
+		if stationSpeechReady {
+			description = "用工作站已登记声线合成说话音频。省略 voice_id 使用当前默认声线；先调用 station_speech_voices 可查看当前版本。合成后返回待发送的媒体编号。"
+			schema = `{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":12000},"voice_id":{"type":"string"},"speed":{"type":"number","exclusiveMinimum":0},"text_language":{"type":"string"}},"required":["text"],"additionalProperties":false}`
+			input = "输入 {text,voice_id?,speed?,text_language?}。"
+		}
+		description += " Returns prepared media IDs, not delivery; final reply.media_ids sends voice. " + input
+		if p.enabled("music_rvc_start") && !stationSpeechReady {
 			schema = strings.Replace(schema, `"properties":{`, `"properties":{"rvc_target_id":{"type":"string","minLength":1,"description":"Final registered RVC voice ID for spoken text. The source recording is never sent."},`, 1)
 			description += " For a spoken request in an RVC character voice, pass rvc_target_id from voice_library_read. In this mode voice_id selects only the source TTS (required if cloud TTS is unavailable). Returns the conversion job for automatic follow-up."
 		}
@@ -212,7 +224,7 @@ func (p *permittedTools) speechTools() []mcptools.Tool {
 // generic tool-schema normalizer and privilegedCall.  The former otherwise
 // hides the useful instruction-specific correction behind a generic undefined
 // field error; the latter would turn it into an ambiguous durable operation.
-func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) error {
+func (p *permittedTools) preflightSpeechArgs(ctx context.Context, name string, args json.RawMessage) error {
 	if name != "speech_synthesize" {
 		return nil
 	}
@@ -225,6 +237,13 @@ func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) 
 	base, target, err := splitRVCTarget(args)
 	if err != nil {
 		return err
+	}
+	if target == "" {
+		if catalog, err := p.stationSpeechCatalog(ctx); err == nil {
+			if _, ok := catalog.voice(selected.VoiceID); ok {
+				return nil
+			}
+		}
 	}
 	if selected.VoiceID != "" {
 		if _, err := decodeNamedSpeechRequest(base); err != nil {
@@ -243,11 +262,22 @@ func (p *permittedTools) preflightSpeechArgs(name string, args json.RawMessage) 
 }
 
 func (p *permittedTools) callSpeech(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if name == "station_speech_voices" {
+		if strings.TrimSpace(string(args)) != "{}" {
+			return "", toolInputError("station_speech_voices_no_arguments")
+		}
+		catalog, err := p.stationSpeechCatalog(ctx)
+		if err != nil {
+			return "", err
+		}
+		data, err := json.Marshal(catalog)
+		return string(data), err
+	}
 	// A named local voice has a strict, side-effect-free public contract.  Do
 	// this before privilegedCall claims a durable operation: a schema typo must
 	// be a normal tool-input correction, never an ambiguous "needs_review"
 	// operation that tells the Agent to inspect a synthesis which never started.
-	if err := p.preflightSpeechArgs(name, args); err != nil {
+	if err := p.preflightSpeechArgs(ctx, name, args); err != nil {
 		return "", err
 	}
 	if name == "speech_synthesize" {
@@ -283,6 +313,11 @@ func (p *permittedTools) generateSpeech(ctx context.Context, name string, args j
 		}
 		if json.Unmarshal(args, &selected) != nil {
 			return "", toolInputError("语音参数无效")
+		}
+		if catalog, err := p.stationSpeechCatalog(ctx); err == nil {
+			if _, ok := catalog.voice(selected.VoiceID); ok {
+				return p.synthesizeStationSpeech(ctx, args, catalog)
+			}
 		}
 		voices, err := p.accessibleVoices()
 		if err != nil {

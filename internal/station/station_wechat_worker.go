@@ -136,13 +136,32 @@ type stationWechatWorker struct {
 func (s *stationWechat) addBoundOwnerReplyGrant(connection, account string, policy stationWechatPolicy) stationWechatPolicy {
 	state, err := s.wechatOwnerState(connection, account)
 	grants := make(map[string]time.Time, len(policy.Grants)+1)
+	attachments := make(map[string]time.Time, len(policy.AttachmentGrants)+1)
+	mediaReplies := make(map[string]time.Time, len(policy.MediaReplyGrants)+1)
 	for thread, granted := range policy.Grants {
 		grants[thread] = granted
 	}
+	for thread, granted := range policy.AttachmentGrants {
+		attachments[thread] = granted
+	}
+	for thread, granted := range policy.MediaReplyGrants {
+		mediaReplies[thread] = granted
+	}
+	grantOwner := func(sender string, at time.Time) {
+		if grants[sender].IsZero() || grants[sender].Before(at) {
+			grants[sender] = at
+		}
+		if attachments[sender].IsZero() || attachments[sender].Before(at) {
+			attachments[sender] = at
+		}
+		if mediaReplies[sender].IsZero() || mediaReplies[sender].Before(at) {
+			mediaReplies[sender] = at
+		}
+	}
 	if err == nil && state.Binding != nil && !state.Binding.BoundAt.IsZero() {
 		ownerInput := companion.Input{Channel: wechatapp.ID, Account: account, Thread: state.Binding.Sender, Sender: state.Binding.Sender, Directed: true, Mode: "direct"}
-		if s.ownerBoundToWechat(connection, account, ownerInput) && (grants[state.Binding.Sender].IsZero() || grants[state.Binding.Sender].Before(state.Binding.BoundAt)) {
-			grants[state.Binding.Sender] = state.Binding.BoundAt
+		if s.ownerBoundToWechat(connection, account, ownerInput) {
+			grantOwner(state.Binding.Sender, state.Binding.BoundAt)
 		}
 	}
 	// Older single-account releases have a trusted legacy agent-config.json
@@ -151,11 +170,18 @@ func (s *stationWechat) addBoundOwnerReplyGrant(connection, account string, poli
 	// does not get treated as an ordinary unlisted contact. Other contacts
 	// remain subject to explicit reply grants.
 	for _, sender := range s.legacyOwnerReplyIDs() {
-		if grants[sender].IsZero() {
-			grants[sender] = time.Unix(0, 0).UTC()
+		if err == nil && state.Binding != nil && state.Binding.Sender != sender {
+			continue
 		}
+		at := grants[sender]
+		if at.IsZero() {
+			at = time.Unix(0, 0).UTC()
+		}
+		grantOwner(sender, at)
 	}
 	policy.Grants = grants
+	policy.AttachmentGrants = attachments
+	policy.MediaReplyGrants = mediaReplies
 	return policy
 }
 
@@ -196,7 +222,21 @@ func (s *stationWechat) ownerBoundToWechat(connection, account string, in compan
 		return false
 	}
 	state, err := s.wechatOwnerState(connection, account)
-	return err == nil && state.Binding != nil && state.Binding.Sender == in.Sender && state.Binding.Fish == owner.FishID && state.Binding.Owner == owner.ID
+	if err == nil && state.Binding != nil {
+		return state.Binding.Sender == in.Sender && state.Binding.Fish == owner.FishID && state.Binding.Owner == owner.ID
+	}
+	if err != nil {
+		return false
+	}
+	// Older single-account installations identified the owner in the trusted
+	// legacy configuration. Keep that binding usable for workstation tools
+	// until an explicit owner-binding record replaces it.
+	for _, sender := range s.legacyOwnerReplyIDs() {
+		if sender == in.Sender {
+			return true
+		}
+	}
+	return false
 }
 
 func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, shareOptions pluginruntime.Options, localASR stationLocalASR, localVision stationLocalVision, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {

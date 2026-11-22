@@ -453,7 +453,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	// Keep strict named-voice argument diagnostics visible to the Agent.  This
 	// precedes generic schema normalization so an unsupported cloud-only field
 	// never turns into an opaque schema failure or a durable side-effect claim.
-	if err := p.preflightSpeechArgs(name, args); err != nil {
+	if err := p.preflightSpeechArgs(ctx, name, args); err != nil {
 		return "", err
 	}
 	normalized, validationErr := p.normalizeToolArgs(name, args)

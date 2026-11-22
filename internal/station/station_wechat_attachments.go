@@ -347,6 +347,9 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 	if tool, ok := t.publicSpeechTool(ctx); ok {
 		tools = append(tools, tool)
 	}
+	if tool, ok := t.publicSpeechVoicesTool(ctx); ok {
+		tools = append(tools, tool)
+	}
 	tools = append(tools, t.publicComfyTools(ctx)...)
 	tools = append(tools, t.publicYuETools(ctx)...)
 	tools = append(tools, t.publicRVCTools(ctx)...)
@@ -468,6 +471,9 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	}
 	if name == localTTSStartTool {
 		return t.callPublicSpeech(ctx, raw)
+	}
+	if name == localTTSVoicesTool {
+		return t.callPublicSpeechVoices(ctx, raw)
 	}
 	if name == localComfyListTool {
 		return t.callPublicComfyWorkflows(ctx, raw)

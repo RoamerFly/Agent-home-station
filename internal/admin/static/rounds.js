@@ -183,6 +183,7 @@
       else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
       else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
       else if (item.event === 'round_manually_completed' && item.status === 'completed') round.status = 'completed';
+      else if (item.event === 'round_manually_closed' && item.status === 'stopped') round.status = 'stopped';
       else if (item.event === 'task_execution_waiting' && item.status === 'waiting') round.status = 'waiting';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
@@ -243,6 +244,14 @@
           round.status = 'needs_review';
           round.orphanReceipt = true;
         }
+		// Repeatedly pausing an old unsent text plan cannot establish that a
+		// receipt lookup is still running. Show it for review instead of
+		// keeping a permanent active card.
+		if (!hasSend && !round.taskID && round.entries.filter(e => e.event === 'utterance_plan_paused').length >= 3 &&
+		    !round.entries.some(e => ['delivery_retry', 'task_delivery_updated', 'agent_task_saved'].includes(e.event))) {
+		  round.status = 'needs_review';
+		  round.stalePlan = true;
+		}
       }
       if (round.status === 'running' && ageFromLatest >= 10 * 60 * 1000 && round.entries.length > 0 && round.entries.every(e => e.tool && ['tool_started', 'tool_completed', 'tool_failed', 'tool_blocked', 'tool_cancelled'].includes(e.event) && e.call_id)) {
         const open = new Set();
@@ -252,6 +261,7 @@
         }
         if (!open.size) { round.status = 'needs_review'; round.orphanTools = true; }
       }
+      if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'stopped';
       round.group = groupByStatus[round.status] || 'pending';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       // The native thread identity is authoritative for the chat type. A

@@ -69,10 +69,10 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 			tools = append(tools, tool)
 		}
 	}
-	tools = append(tools, agentTool("agent_clock", "Read current server time, UTC, timezone and Unix seconds before scheduling. Use agent_reminder for harmless user reminders (available to ordinary members). agent_task persists other work/checkpoints on disk. Do not sleep in a shell for reminders. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
+	tools = append(tools, agentTool("agent_clock", "Read current server time, UTC, timezone and Unix seconds before scheduling. Only create reminders when the user explicitly requests a future time. Song creation and retries start now and remain one continuous task. agent_task persists work/checkpoints on disk. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. For a request to run tools at a specified time, use agent_reminder kind=execute after agent_clock. Use agent_task for work already underway and its checkpoints. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. The host attaches the current inbound message automatically. Omit source_thread_id and source_message_ids for the current request. Supply source_message_ids only when the task needs additional exact evidence returned by wechat_read; preserve chronological order. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints. The trusted owner sees tasks across this account, including group work from private chat; other members see this conversation only. Includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. For a request to run tools at a specified time, use agent_reminder kind=execute after agent_clock. Use agent_task for work already underway and its checkpoints. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. The host attaches the current inbound message automatically. Omit source_thread_id and source_message_ids for the current request. Supply source_message_ids only when the task needs additional exact evidence returned by wechat_read; preserve chronological order. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
@@ -240,7 +240,11 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	case "wechat_operation_status":
 		return p.callWechatOperation(ctx, args)
 	case "agent_tasks":
-		tasks := m.agent.active(p.trace.Account, p.trace.Thread)
+		thread := p.trace.Thread
+		if p.privileged() && m.agent.config().CrossConversation {
+			thread = ""
+		}
+		tasks := m.agent.active(p.trace.Account, thread)
 		visible := tasks[:0]
 		for _, task := range tasks {
 			if task.Reminder == nil || task.Sender == p.trace.Sender {
@@ -372,6 +376,14 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		} else {
 			if in.Key == "" || len(in.Key) > 128 || in.Title == "" {
 				return "", toolInputError("新任务需要key和title")
+			}
+			if p.privileged() && strings.Contains(in.Title, "歌") {
+				for _, old := range m.agent.active(p.trace.Account, "") {
+					if old.Sender == p.trace.Sender && old.MusicJob != "" && old.Title == in.Title &&
+						(old.State == "pending" || old.State == "waiting" || old.State == "running") {
+						return encode(map[string]any{"task": old, "reused_existing": true, "instruction": "继续查询此任务的原 music_job，不重复提交或创建提醒"}, nil)
+					}
+				}
 			}
 			t.ID = agentID(p.trace.Account, deliveryThread, p.trace.TraceID, in.Key)
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {

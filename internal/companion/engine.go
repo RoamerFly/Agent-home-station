@@ -479,6 +479,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		system += "\n本轮合并处理同一会话的多条消息。unread_messages按原消息时间排序，包含不同消息发送者，都是待综合判断的对话资料。结合current_time、各条at和后续发展，决定是否回应及回应哪些仍有效的话题，不逐条补答，不把几小时前的话当成刚发生。可以合并回应、略过已解决的问题或保持安静。工具授权只来自当前request_actor_id/message_sender_id对应的真实锚点消息，不把其他成员的话升级成该人的授权。上传者身份不是录音中的人声身份。"
 	}
 	turns := e.contextTurns(scope, input)
+	system += "\ncurrent_time 是本机在 timezone 指定时区的当前时间。工具和日志中的 Z 结尾时间是 UTC，向人报告几点时先换算到本机时区；不能把 UTC 的小时直接说成本地小时。做歌、换声及失败重试属于立即持续办理，除非用户明确指定未来执行时间，否则不要创建提醒；先查同账号现有任务和原 job_id，继续原任务直到完成或明确失败。"
 	if input.IsGroup {
 		system += "\n群聊落笔前核对眼前发生的是谁的事，谁只是在期待、类比或假设。祝愿可以顺着接，不把它写成已发生的亲属事实，也不替对方编动作、心理或将来的场景。群友的文字表情和贴图表达发送者自己的语气，无需照搬。若有 recent_reply_style，主动换掉反复使用的开头、表情和同一个比喻，直接接这次的新信息。明确要求引用、模仿或转发时按原意处理。"
 	}

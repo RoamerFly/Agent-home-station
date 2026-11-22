@@ -73,6 +73,33 @@ func (t *stationAttachmentTools) publicSpeechTool(ctx context.Context) (mcptools
 	return mcptools.Tool{}, false
 }
 
+func (t *stationAttachmentTools) publicSpeechVoicesTool(ctx context.Context) (mcptools.Tool, bool) {
+	if _, ok := t.publicSpeechTool(ctx); !ok {
+		return mcptools.Tool{}, false
+	}
+	return mcptools.Tool{Name: localTTSVoicesTool,
+		Description: "列出工作站已登记声线、当前默认声线及模型版本；训练时间以模型记录为准。",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)}, true
+}
+
+func (t *stationAttachmentTools) callPublicSpeechVoices(ctx context.Context, raw json.RawMessage) (string, error) {
+	if strictLocalMemoryDecode(raw, &struct{}{}) != nil {
+		return "", mcptools.ArgumentError("$", "声线列表不需要参数")
+	}
+	if _, ok := t.publicSpeechVoicesTool(ctx); !ok {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	record, err := t.projects.home.identity.Read()
+	if err != nil || record.LocalOwner == nil {
+		return "", wechatapp.ErrAttachmentDenied
+	}
+	info, err := t.projects.tts.Info(ctx, record.FishID)
+	if err != nil {
+		return "", err
+	}
+	return localProcessJSON(map[string]any{"voices": info.Voices, "default_voice_id": info.DefaultVoiceID})
+}
+
 func (t *stationAttachmentTools) speechProductAllowed(in companion.Input, p stationWechatSpeechProduct) bool {
 	if t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(in) || !t.replyAllowed(in) || t.store == nil ||
 		p.ID != p.id() || p.Account != in.Account || p.Thread != in.Thread || p.Sender != in.Sender ||

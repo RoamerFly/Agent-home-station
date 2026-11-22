@@ -42,11 +42,12 @@ def main():
     p.add_argument('--pitch-overlap-seconds',type=float,default=1,help='Pitch context on each side, aligned to the 10 ms model grid')
     p.add_argument('--conversion-chunk-seconds',type=float,default=8,help='Core vocal conversion slice; 0 keeps upstream whole-recording behavior')
     p.add_argument('--conversion-context-seconds',type=float,default=1,help='Vocal context around each slice, removed before joining')
+    p.add_argument('--conversion-crossfade-seconds',type=float,default=.08,help='Blend adjacent converted slices across their shared context')
     args=p.parse_args()
     from rvc_pitch import pitch_parameters
     pitch_parameters(args.pitch_chunk_seconds,args.pitch_overlap_seconds)
     from rvc_windows import conversion_parameters
-    conversion_options=conversion_parameters(args.conversion_chunk_seconds,args.conversion_context_seconds)
+    conversion_options=conversion_parameters(args.conversion_chunk_seconds,args.conversion_context_seconds,args.conversion_crossfade_seconds)
     if not -12<=args.semitones<=12 or not 0<=args.index_rate<=1 or not 0<=args.protect<=.5:raise ValueError('invalid_conversion_parameters')
     project=Path(args.project).resolve();model=Path(args.model).resolve();source=Path(args.source).resolve();output=Path(args.output).resolve()
     index=str(Path(args.index).resolve()) if args.index else ''
@@ -124,7 +125,7 @@ def main():
         finally:
             rvc_modules.load_audio=original_loader
             vc.pipeline.t_max=previous_max
-    rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,progress=pitch_progress)
+    rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,crossfade_seconds=args.conversion_crossfade_seconds,progress=pitch_progress)
     if os.name=='nt' and index and args.index_rate>0 and not index_reads:
         raise RuntimeError('selected_rvc_index_was_not_used')
     output.parent.mkdir(parents=True,exist_ok=True);wavfile.write(str(output),rate,audio)
