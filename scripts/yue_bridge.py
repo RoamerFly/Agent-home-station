@@ -618,10 +618,9 @@ def main():
             if not self.allowed():return
             if station:return self.get_station_rvc()
             if self.path=='/rvc-health':
-                try:
-                    voice=singing_profile(args.singing_voice_config)
-                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'profile':voice['profile'] if voice else None,'resume_same_job':True})
-                except Exception:return self.reply(200,{'ready':False,'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'resume_same_job':True})
+                # A default singing voice is optional. Named profiles are checked
+                # against the submitted request in submit_rvc().
+                return self.reply(200,{'ready':True,'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'resume_same_job':True})
             if self.path=='/parameters':
                 try:
                     info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}

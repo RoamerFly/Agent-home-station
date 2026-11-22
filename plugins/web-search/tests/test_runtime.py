@@ -33,6 +33,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(r["fallback_used"])
         self.assertEqual([i["url"] for i in r["items"]], ["https://www.bilibili.com/video/BV0000000002/"])
 
+    def test_bilibili_search_timeout_uses_public_index(self):
+        calls = []
+        def get(url, *_):
+            calls.append(url)
+            if url.startswith("https://api.bilibili.com/"):
+                return {"ok": False, "error": "network_timeout"}
+            rss = "<rss><channel><item><title>歌手 歌名</title><link>https://www.bilibili.com/video/BV0000000002/</link></item></channel></rss>"
+            return response(rss, url, "text/xml")
+        result = plugin.search({"source": "bilibili", "query": "歌手 歌名"}, get)
+        self.assertTrue(result["ok"] and result["fallback_used"])
+        self.assertEqual(result["items"][0]["url"], "https://www.bilibili.com/video/BV0000000002/")
+        self.assertEqual(len(calls), 2)
+
     def test_bilibili_search_uses_third_public_index_after_two_transport_failures(self):
         calls = []
         def get(url, *_):

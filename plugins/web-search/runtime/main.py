@@ -445,7 +445,7 @@ def search(args, get, route=None, configuration=None):
         result = bilibili_search(args, get)
         if result.get("ok") and (result.get("items") or args.get("offset", 0) > 0):
             return result
-        if not result.get("ok") and result.get("error") not in ("http_status", "bilibili_search_unavailable"):
+        if not result.get("ok") and result.get("error") == "request_cancelled":
             return result
         return public_search({k:v for k,v in args.items() if k != "source"}, get, bilibili_only=True)
     backend = (configuration or {}).get("search_backend", "public")
