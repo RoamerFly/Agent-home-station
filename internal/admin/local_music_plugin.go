@@ -365,8 +365,10 @@ func (p *permittedTools) newLocalMusicPluginPolicy(ctx context.Context, method, 
 	}
 	policy := &localMusicPluginPolicy{p: p, store: s, digest: i.Digest, version: i.Package.Version, configRevision: cfg.Revision, post: localMusicHTTP}
 	policy.admin = authority
-	_ = json.Unmarshal(cfg.Values["local_endpoint"], &policy.endpoint)
-	_ = json.Unmarshal(cfg.Values["local_token"], &policy.token)
+	policy.endpoint, policy.token, err = p.manager.localMusicPluginConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
 	grant, _ := json.Marshal(i.Permissions)
 	policy.grants = string(grant)
 	if authority != nil {
