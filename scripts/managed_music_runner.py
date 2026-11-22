@@ -255,10 +255,18 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
         raise ValueError("music_argv_invalid")
     binary = canonical(argv[0])
     runtime_root = public / ("runtime" if (public / "plugin.json").is_file() else "runtimes")
-    if not binary.is_relative_to(runtime_root):
+    rvc_package = public.parent / "rvc-换声" if (public / "plugin.json").is_file() else None
+    rvc_runtime = rvc_package / "runtime" if rvc_package is not None else None
+    packaged_rvc = (rvc_package is not None and
+                    (rvc_package / "plugin.json").is_file() and
+                    json.loads((rvc_package / "plugin.json").read_text(encoding="utf-8")).get("id") == "rvc" and
+                    binary == canonical(rvc_runtime / "windows-music-python" / "python.exe"))
+    if not binary.is_relative_to(runtime_root) and not packaged_rvc:
         raise ValueError("music_interpreter_not_managed")
     training = training_readonly(public, argv)
     readonly = [str(public)]
+    if packaged_rvc:
+        readonly.append(str(canonical(rvc_package)))
     control = canonical(Path(__file__).parent)
     control_converter = len(argv) >= 2 and canonical(argv[1]) == control / "singing_voice.py"
     if control_converter:
@@ -311,8 +319,9 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
             continue
     if station_rvc:
         packaged_control = runtime_root / "windows-station-rvc"
+        sibling_control = rvc_runtime / "windows-station-rvc" if packaged_rvc else None
         if (control.name != "windows-station-rvc" or
-                (control.is_relative_to(public.parent) and control != packaged_control) or
+                control not in (packaged_control, sibling_control) or
                 not control_converter):
             raise ValueError("station_rvc_converter_not_packaged")
     from windows_lpac import launch
