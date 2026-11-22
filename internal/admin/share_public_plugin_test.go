@@ -180,6 +180,49 @@ func TestExplicitPublicURLPolicyBindsActualTriggerWithoutForgingShare(t *testing
 	}
 }
 
+func TestPublicBVPagePermitsOnlyItsVerifiedPlaybackRead(t *testing.T) {
+	f, n, _, ctx := receivedPolicyFixtureFor(t, false, 4)
+	n.msg.Type, n.msg.AppMessageType, n.msg.Link, n.msg.Body = 1, nil, nil, "查看公开 BV 视频"
+	page := "https://www.bilibili.com/video/BV1qP4y187Lf/"
+	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, page, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_public", Context: policy.invocation()}
+	playback := "https://api.bilibili.com/x/player/playurl?bvid=BV1qP4y187Lf&cid=12&qn=32&fnval=0&fourk=0"
+	reads := 0
+	policy.read = func(_ context.Context, raw string, _ int64, _ time.Duration) ([]byte, string, string, error) {
+		reads++
+		if reads == 1 && raw == page {
+			return []byte(`<script>window.__INITIAL_STATE__={"videoData":{"bvid":"BV1qP4y187Lf","cid":12,"title":"合成作品","pages":[{"cid":12,"part":"一"}]}};</script>`), "text/html", page, nil
+		}
+		if reads == 2 && raw == playback {
+			return []byte(`{"code":0,"data":{"durl":[]}}`), "application/json", playback, nil
+		}
+		t.Fatalf("unexpected public read: %d", reads)
+		return nil, "", "", nil
+	}
+	read := func(raw string) error {
+		args, _ := json.Marshal(map[string]any{"url": raw, "max_bytes": 1024, "timeout_seconds": 2})
+		_, err := policy.Service(ctx, job, pluginhost.Capability{}, "wechat/http_read", args)
+		return err
+	}
+	if read(playback) == nil || reads != 0 {
+		t.Fatal("playback URL accepted without page evidence")
+	}
+	if err := read(page); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{strings.Replace(playback, "cid=12", "cid=13", 1), strings.Replace(playback, "api.bilibili.com", "api.bilibili.com.evil.invalid", 1)} {
+		if read(raw) == nil || reads != 1 {
+			t.Fatal("unverified playback URL accepted")
+		}
+	}
+	if err := read(playback); err != nil || reads != 2 {
+		t.Fatal("verified playback URL rejected", err)
+	}
+}
+
 func TestExplicitPublicURLPolicyRejectsForgottenSource(t *testing.T) {
 	f, n, _, ctx := receivedPolicyFixtureFor(t, true, 4)
 	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, "https://public.example/video", true)

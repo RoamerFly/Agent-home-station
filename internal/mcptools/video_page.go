@@ -58,6 +58,34 @@ func parseBiliPage(body []byte, bvid string, part int) (biliPage, error) {
 	return selectBiliPart(out, bvid, part)
 }
 
+// VerifiedBilibiliPlaybackURL permits the one public playback metadata read
+// derived from an already fetched BV page. It grants no arbitrary API URL.
+func VerifiedBilibiliPlaybackURL(raw string, body []byte) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" || (u.Hostname() != "www.bilibili.com" && u.Hostname() != "bilibili.com") {
+		return ""
+	}
+	match := biliVideoPath.FindStringSubmatch(u.Path)
+	if match == nil {
+		return ""
+	}
+	part := 1
+	if values := u.Query()["p"]; len(values) > 0 {
+		if len(values) != 1 {
+			return ""
+		}
+		part, err = strconv.Atoi(values[0])
+		if err != nil || part < 1 {
+			return ""
+		}
+	}
+	page, err := parseBiliPage(body, match[1], part)
+	if err != nil || page.Video.CID <= 0 || len(page.Video.Pages) > 0 && part == 1 && page.Video.Pages[0].CID != page.Video.CID {
+		return ""
+	}
+	return "https://api.bilibili.com/x/player/playurl?bvid=" + match[1] + "&cid=" + strconv.FormatInt(page.Video.CID, 10) + "&qn=32&fnval=0&fourk=0"
+}
+
 func selectBiliPart(out biliPage, bvid string, part int) (biliPage, error) {
 	if out.Video.BVID != bvid || out.Video.CID <= 0 || strings.TrimSpace(out.Video.Title) == "" || len(out.Video.Title) > 1024 || part < 1 {
 		return out, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_metadata"}

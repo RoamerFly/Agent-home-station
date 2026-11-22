@@ -63,6 +63,7 @@ type publicSharePolicy struct {
 	bytes         int64
 	pages         map[string]string
 	locators      map[string]bool
+	allowedReads  map[string]bool
 }
 
 func decodeShareJSON(raw []byte) (any, error) { return strictjson.Decode(raw) }
@@ -74,7 +75,7 @@ func (m *Manager) newPublicSharePolicy(ctx context.Context, message linuxnative.
 	if err != nil {
 		return nil, err
 	}
-	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: message.Link.URL, videoRequired: *message.AppMessageType == 4, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}}, nil
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: message.Link.URL, videoRequired: *message.AppMessageType == 4, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}}, nil
 }
 
 // newExplicitPublicSharePolicy keeps an actual incoming source as evidence,
@@ -90,7 +91,7 @@ func (m *Manager) newExplicitPublicSharePolicy(ctx context.Context, source linux
 		return nil, err
 	}
 	base.requestSuffix = agentID("explicit-public-url", requestedURL, strconv.FormatBool(videoRequired))
-	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: requestedURL, videoRequired: videoRequired, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}}, nil
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: requestedURL, videoRequired: videoRequired, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}}, nil
 }
 
 func (p *publicSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
@@ -213,7 +214,7 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 		return nil, errors.New("share_initial_source_mismatch")
 	}
 	_, knownPage := p.pages[sharePublicURL(requested)]
-	if p.reads > 0 && !p.locators[requested] && !knownPage {
+	if p.reads > 0 && !p.locators[requested] && !knownPage && !p.allowedReads[requested] {
 		return nil, errors.New("share_followup_source_unverified")
 	}
 	// This bounds host-side proof accumulation, not video length/download size.
@@ -241,6 +242,11 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 	p.bytes += int64(len(body))
 	p.reads++
 	p.pages[sharePublicURL(final)] = kind
+	if strings.Contains(strings.ToLower(kind), "html") {
+		if playback := mcptools.VerifiedBilibiliPlaybackURL(final, body); playback != "" {
+			p.allowedReads[playback] = true
+		}
+	}
 	for locator := range publicShareLocations(body, final) {
 		p.locators[locator] = true
 	}
