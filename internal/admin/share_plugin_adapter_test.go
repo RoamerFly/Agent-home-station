@@ -201,6 +201,23 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 			if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
 				t.Fatal(err)
 			}
+			if remember {
+				before := p.epoch
+				other := companion.Input{Channel: "wechat", Account: "test", Thread: "separate-thread", Sender: "another-user", TraceID: "another-message", Text: "separate message"}
+				if err := f.manager.memory.Observe(other, f.manager.config.Companion, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.manager.memory.Clear(companion.ScopeID("wechat", "test", "separate-thread")); err != nil {
+					t.Fatal(err)
+				}
+				after, err := f.manager.memory.RecallEpoch(ctx)
+				if err != nil || after == before {
+					t.Fatal("separate memory update did not advance epoch", err)
+				}
+				if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+					t.Fatal("unrelated memory update blocked the original card", err)
+				}
+			}
 			foreign := j
 			foreign.Context.Thread = "another-room"
 			if err := p.Check(ctx, foreign, pluginhost.Capability{}); err == nil {

@@ -353,10 +353,6 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if string(a) != string(b) {
 		return errors.New("share_invocation_changed")
 	}
-	epoch, err := p.manager.memory.RecallEpoch(ctx)
-	if err != nil || epoch != p.epoch {
-		return errors.New("share_source_changed")
-	}
 	if p.nativeRecall != nil {
 		if err := p.checkNativeRecall(ctx); err != nil {
 			return err
