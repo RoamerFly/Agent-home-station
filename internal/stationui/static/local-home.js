@@ -11,14 +11,14 @@
   let desktopControl = { available: false, enabled: false, busy: false };
   let directoryPickerSequence = 0;
   const pendingDirectoryPickers = new Map();
-  const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
-  const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
-  const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
+  const connectionView = $("#connection-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
+  const initializeButton = $("#initialize-button"), accessButton = $("#access-button");
+  const settingsAccessButton = $("#settings-access-button"), chatStream = $("#chat-stream");
 
   function showMessage(text, kind = "") { message.textContent = text || ""; message.className = `page-message${kind ? ` is-${kind}` : ""}`; }
   function safeServerMessage(body, fallback) { const value = body && (body.error || body.message || body.detail); return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : fallback; }
   function responseMessage(status) {
-    if (status === 401 || status === 403) return "登录状态已失效，请重新验证。";
+    if (status === 401 || status === 403) return "本机连接暂时不可用，请重试。";
     if (status === 409) return "当前请求正在处理，或已被新的状态替代。";
     if (status === 503) return "还没有可用的聊天模型，请先完成模型设置。";
     if (status === 502) return "模型暂时没有返回结果。可以稍后手动重试这条消息。";
@@ -37,6 +37,15 @@
     let response;
     try { response = await fetch(url, { ...fetchOptions, headers, credentials: "same-origin" }); }
     catch (_) { const error = new Error("无法连接本机服务。"); error.status = 0; throw error; }
+    if (response.status === 401 && url !== "/api/session") {
+      const renewal = await fetch("/api/session", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (renewal.ok) {
+        const session = await renewal.json();
+        state.csrf = String(session.csrf || "");
+        if (state.csrf && options.method && options.method !== "GET") headers.set("X-CSRF-Token", state.csrf);
+        response = await fetch(url, { ...fetchOptions, headers, credentials: "same-origin" });
+      }
+    }
     let body = null;
     try { body = await response.json(); } catch (_) { /* Do not render non-JSON error bodies. */ }
     if (!response.ok) { const error = new Error(safeServerMessage(body, responseMessage(response.status))); error.status = response.status; error.body = body; throw error; }
@@ -45,7 +54,7 @@
   function authenticated(session) { return Boolean(session && (session.authenticated || session.logged_in || session.csrf)); }
   function setBusy(busy) {
     state.busy = busy;
-    for (const node of [loginSubmit, initializeButton, accessButton, logoutButton, settingsAccessButton, settingsLogoutButton]) node.disabled = busy;
+    for (const node of [initializeButton, accessButton, settingsAccessButton]) node.disabled = busy;
   }
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
@@ -187,8 +196,8 @@
   function appSessionExpired(results) {
     if (!results.some((result) => result.status === "rejected" && result.reason?.status === 401)) return false;
     state.csrf = "";
-    showLogin();
-    showMessage("登录状态已失效，请重新验证。", "warn");
+    showConnection();
+    showMessage("本机连接暂时不可用，请重试。", "warn");
     return true;
   }
   function appRows(result, key) {
@@ -2196,7 +2205,7 @@
       }
     } catch (error) {
       if (current === memory && generation === current.sourcesGeneration) {
-        if (error.status === 401) { showLogin(); return; }
+        if (error.status === 401) { showConnection(); return; }
         current.error = error.message; renderMemoryPage();
       }
     } finally { if (current === memory && generation === current.sourcesGeneration) button.disabled = false; }
@@ -2285,7 +2294,7 @@
       if (current.selected && !current.source) void readMemoryDetail();
     } catch (error) {
       if (current !== memory || generation !== current.generation) return;
-      if (error.status === 401) { showLogin(); return; }
+      if (error.status === 401) { showConnection(); return; }
       current.error = error.message;
     } finally {
       if (current === memory && generation === current.generation) { current.loading = false; renderMemoryPage(); }
@@ -2373,7 +2382,7 @@
       if (!current.source) panel.append(memoryButton("返回原会话", "button compact secondary", () => { setActiveView("chat"); $("#chat-tab").focus(); }));
     } catch (error) {
       if (current !== memory || generation !== current.detailGeneration) return;
-      if (error.status === 401) { showLogin(); return; }
+      if (error.status === 401) { showConnection(); return; }
       panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message),
         memoryButton(current.source ? "刷新来源记忆" : "重新读取", "button compact secondary", current.source ? refreshMemoryScope : () => void readMemoryDetail()));
     }
@@ -5818,8 +5827,8 @@
       if (current !== apps) return;
       if (error.status === 401 || error.status === 403) {
         state.csrf = "";
-        showLogin();
-        showMessage("登录状态已失效，请重新验证。", "warn");
+        showConnection();
+        showMessage("本机连接暂时不可用，请重试。", "warn");
       } else {
         appFeedback(error.message, true);
         if (error.status === 409) {
@@ -6696,7 +6705,7 @@
     } catch (error) {
       if (current !== projectTools || generation !== preview.generation) return;
       clearOBSPreview();
-      if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); return; }
+      if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); return; }
       current.obsPreview.error = error.message || "无法读取 OBS 预览状态。";
     } finally {
       if (current === projectTools && generation === preview.generation) { preview.loading = false; renderProjectTools(); scheduleOBSPreviewFrame(); }
@@ -6738,7 +6747,7 @@
       if (action === "start") projectToolsFeedback("正在显示 OBS 当前节目画面。");
     } catch (error) {
       if (current !== projectTools || generation !== preview.generation) return;
-      if (error.status === 401 || error.status === 403) { clearOBSPreview(); state.csrf = ""; showLogin(); return; }
+      if (error.status === 401 || error.status === 403) { clearOBSPreview(); state.csrf = ""; showConnection(); return; }
       preview.error = error.message || "OBS 预览操作未完成。";
       if (action === "stop" || action === "frame") { clearOBSPreview(); updateOBSPreviewPanel(); }
     } finally {
@@ -7193,7 +7202,7 @@
       }
     }
   }
-  function showLogin() {
+  function showConnection() {
     window.clearTimeout(liveSafety.timer);
     liveSafety.reading?.abort();
     liveSafety = newLiveSafety();
@@ -7222,22 +7231,11 @@
     projectToolsFeedback("");
     setActiveView("chat");
     document.body.classList.remove("is-home-ready");
-    localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
+    localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; connectionView.hidden = false;
   }
-  $("#change-password-form").addEventListener("submit", async event => {
- event.preventDefault();
- const form = event.currentTarget, button = form.querySelector("button"), feedback = $("#password-feedback");
- if ($("#new-password").value !== $("#confirm-password").value) { feedback.textContent = "两次新密码不一致。"; return; }
- button.disabled = true;
- try {
- await request("/api/password", { method: "POST", body: JSON.stringify({ current_password: $("#current-password").value, new_password: $("#new-password").value }) });
- form.reset(); window.location.reload();
- } catch (error) { feedback.textContent = error.message || "密码修改失败。"; }
- finally { button.disabled = false; }
- });
   function shortId(id, fallback) { const value = String(id || ""); return value ? `${value.slice(0, 11)}…${value.slice(-6)}` : fallback; }
   function showHome(home) {
-    state.home = home; loginView.hidden = true; homeView.hidden = false;
+    state.home = home; connectionView.hidden = true; homeView.hidden = false;
     const initialized = Boolean(home.initialized), enabled = Boolean(home.home_access), chatAvailable = home.chat_available !== false;
     $("#status-kicker").textContent = initialized ? "本地相处" : "准备中";
     $("#status-title").textContent = initialized ? "大肥鱼在家" : "为大肥鱼准备家";
@@ -7507,8 +7505,8 @@
   async function loadSession() {
     try {
       const session = await request("/api/session"); state.csrf = String(session.csrf || session.csrf_token || "");
-      if (!authenticated(session)) { showLogin(); return; } await loadHome();
-    } catch (error) { if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); return; } showLogin(); showMessage("暂时无法连接本机服务，请稍后再试。", "error"); }
+      if (!authenticated(session)) { showConnection(); return; } await loadHome();
+    } catch (error) { if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); return; } showConnection(); showMessage("暂时无法连接本机服务，请稍后再试。", "error"); }
   }
   async function saveHome(action) {
     if (state.busy || !state.home) return; setBusy(true); showMessage("");
@@ -7518,7 +7516,7 @@
       showMessage(action === "initialize" ? "大肥鱼的家已经准备好。" : "工作空间授权已更新。", "success");
     } catch (error) {
       if (error.status === 409) { try { await loadHome(); } catch (_) {} showMessage("状态已经更新，已刷新当前信息。", "warn"); }
-      else if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); showMessage("登录状态已失效，请重新验证。", "warn"); }
+      else if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); showMessage("本机连接暂时不可用，请重试。", "warn"); }
       else showMessage(error.message || responseMessage(error.status), "error");
     } finally { setBusy(false); }
   }
@@ -7542,20 +7540,10 @@
       else showMessage(error.message || responseMessage(error.status), "error");
     } finally { button.disabled = false; }
   }
-  async function logout() {
-    if (state.busy) return; setBusy(true);
-    try { await request("/api/logout", { method: "POST" }); state.csrf = ""; selectedToolFiles.clear(); $("#tool-files-list").replaceChildren(); updateFileSelection(); showLogin(); showMessage("已退出登录。", "success"); }
-    catch (_) { showMessage("退出登录未完成，请重试。", "error"); } finally { setBusy(false); }
-  }
-  $("#login-form").addEventListener("submit", async (event) => {
-    event.preventDefault(); if (state.busy) return; setBusy(true); showMessage("");
-    try { const session = await request("/api/login", { method: "POST", body: JSON.stringify({ password: $("#login-password").value }) }); state.csrf = String(session.csrf || session.csrf_token || ""); await loadHome(); showMessage("验证完成。", "success"); }
-    catch (error) { showMessage(error.status === 401 || error.status === 403 ? "密码不正确，请重新输入。" : (error.message || responseMessage(error.status)), "error"); } finally { setBusy(false); }
-  });
+  $("#connection-retry").addEventListener("click", loadSession);
   initializeButton.addEventListener("click", () => saveHome("initialize"));
   accessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   settingsAccessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
-  logoutButton.addEventListener("click", logout); settingsLogoutButton.addEventListener("click", logout); $("#local-logout-button").addEventListener("click", logout);
   $("#open-memory-button").addEventListener("click", () => { setActiveView("memory"); $("#memory-tab").focus(); });
   $("#memory-source-load").addEventListener("click", () => void loadMemorySources());
   $("#memory-source").addEventListener("change", (event) => {

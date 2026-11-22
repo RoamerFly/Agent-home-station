@@ -912,7 +912,16 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		respond(w, 200, report)
 	}))
 	mux.HandleFunc("GET /api/agent", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(s.manager.native.Account(), ""), "history_count": len(s.manager.agent.taskHistory(s.manager.native.Account(), "")), "operations": s.manager.agent.operations(), "host_os_paths": true, "workspace": s.manager.managedLayoutStatus()})
+		account := s.manager.native.Account()
+		all := s.manager.agent.list(account, "")
+		reminders := make([]agentTask, 0)
+		for _, task := range all {
+			activeSchedule := task.State != "completed" && task.State != "cancelled" && task.State != "stopped" && task.State != "expired" && task.OwnerRequested && !task.Next.IsZero() && task.PluginJob == nil && task.Delivery == nil
+			if task.Reminder != nil || task.ReminderDue || activeSchedule {
+				reminders = append(reminders, task)
+			}
+		}
+		respond(w, 200, map[string]any{"settings": s.manager.agent.config(), "tasks": s.manager.agent.active(account, ""), "reminders": reminders, "history_count": len(s.manager.agent.taskHistory(account, "")), "operations": s.manager.agent.operations(), "host_os_paths": true, "workspace": s.manager.managedLayoutStatus()})
 	}))
 	mux.HandleFunc("POST /api/agent/config", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var c agentSettings

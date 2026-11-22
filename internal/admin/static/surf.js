@@ -13,18 +13,23 @@
  function render(){const box=$('#surf-list'),pos=box.scrollTop;box.replaceChildren();const origin=$('#surf-origin').value,status=$('#surf-status').value,query=$('#surf-search').value.trim().toLowerCase();const consolidated=[],calls=new Map();for(const x of state.items){if(x.call_id){if(calls.has(x.call_id)){consolidated[calls.get(x.call_id)]=x;continue}calls.set(x.call_id,consolidated.length)}consolidated.push(x)}const items=consolidated.filter(x=>(origin==='all'||x.origin===origin)&&(status==='all'||x.status===status)&&(!query||[x.source,x.tool,x.query,x.target_url,x.reason,x.content,toolDetails(x)].join(' ').toLowerCase().includes(query))).slice().reverse();$('#surf-count').textContent=items.length+' 条活动';if(!items.length)node(box,'p','暂无匹配的上网活动。','empty');for(const item of items){const row=node(box,'article',undefined,'surf-activity');node(row,'time',time(item.time));const flow=node(row,'div',undefined,'surf-flow');node(flow,'strong',kinds[item.origin]||'自主分享');node(flow,'span',names[item.event==='surf_source'?item.event:(item.tool||item.event)]||item.tool||item.event);if(item.event==='surf_source'&&item.content)node(flow,'span',item.content);if(item.query)node(flow,'span',item.query,'surf-query');const target=window.WechatRounds.activityTarget(item);if(target){const a=node(flow,target.kind==='service'?'span':'a',target.label);if(target.href){a.href=target.href;a.target='_blank';a.rel='noopener noreferrer'}else a.title=target.detail}node(flow,'span',item.status==='silent'&&surfReasons[item.reason]?surfReasons[item.reason]:statuses[item.status]||item.status,'surf-status '+(item.status==='failed'?'error':''));const details=node(row,'details');node(details,'summary','详情');node(details,'p',[item.source,item.reason==='quiet_hours'?'进入Agent安静时段，停止自主浏览':(surfReasons[item.reason]||item.reason),toolDetails(item),item.duration_ms?item.duration_ms+' ms':'',item.bytes?Math.round(item.bytes/1024)+' KiB':'',item.media_count?'暂存 '+item.media_count+' 个附件':'',item.content].filter(Boolean).join(' / '));}box.scrollTop=pos}
  function reminderStatus(t, tasks){
   let status = t.state;
+  let current = t;
   if (status === 'completed' && t.reminder?.follow_up_task_id && !t.reminder.server_id) {
-   status = tasks.get(t.reminder.follow_up_task_id)?.state || 'handed_off';
-   if (status === 'pending') status = 'handed_off';
+   current = tasks.get(t.reminder.follow_up_task_id) || t;
+   status = current === t ? 'handed_off' : current.state;
   }
-  const labels = {waiting:'未到期',pending:'待处理',running:'执行中',needs_review:'等待主人决定',handed_off:'已进入执行回合',completed:'已完成',expired:'已过期',cancelled:'已取消',failed:'失败',stopped:'已停止'};
+  const due = new Date(current.reminder?.due_at || current.next || t.reminder?.due_at || t.next);
+  const overdue = Number.isFinite(due.getTime()) && due.getTime() <= Date.now();
+  const labels = {waiting:current.reminder_due?'待继续 · 未完成':overdue?'已逾期 · 未完成':'未到期',pending:overdue?'已逾期 · 待处理':'待处理',running:'执行中',needs_review:'等待主人决定',handed_off:'已进入执行回合 · 未完成',completed:'已完成',expired:'已过期',cancelled:'已取消',failed:'失败',stopped:'已停止'};
   return {label:(labels[status] || status || '状态未知') + (t.reminder_due ? ' · 提醒类消息' : ''), completed:status === 'completed'};
  }
  function renderReminders() {
   const box = $('#reminder-list');
   box.replaceChildren();
-  const items = state.reminders.slice().sort((a,b) => new Date(b.updated || 0) - new Date(a.updated || 0));
-  const tasks = new Map(items.map(item => [item.id, item]));
+  const all = state.reminders.slice();
+  const tasks = new Map(all.map(item => [item.id, item]));
+  const children = new Set(all.filter(item => item.reminder?.follow_up_task_id).map(item => item.reminder.follow_up_task_id));
+  const items = all.filter(item => !children.has(item.id)).sort((a,b) => new Date(b.updated || 0) - new Date(a.updated || 0));
   $('#reminder-state').textContent = items.length ? '共 ' + items.length + ' 条提醒任务' : '暂无提醒任务';
   if (!items.length) {
    node(box, 'p', '还没有保存的提醒任务。', 'empty');
@@ -38,11 +43,14 @@
    node(head, 'small', status.label, status.completed ? 'reminder-completed' : '');
    const due = item.reminder?.due_at || item.next;
    if (due) node(card, 'p', '到期：' + time(due));
+   const followUp = item.reminder?.follow_up_task_id && tasks.get(item.reminder.follow_up_task_id);
+   if (followUp && ['waiting','pending'].includes(followUp.state) && followUp.next) node(card, 'p', '下次检查：' + time(followUp.next));
    if (item.reminder?.result_group) {
     node(card, 'p', '发送到：' + window.WechatNames.display(item.reminder.result_group), 'hint');
    }
    node(card, 'p', item.requested_text || item.checkpoint || '未记录提醒内容');
    if (item.last_result) node(card, 'p', item.last_result, 'hint');
+   if (followUp?.checkpoint) node(card, 'p', followUp.checkpoint, 'hint');
    const actions = node(card, 'div', undefined, 'inline-actions');
    if (['waiting','pending','needs_review'].includes(item.state) && !item.reminder?.job_id && !item.reminder?.follow_up_task_id) {
     const edit = node(actions, 'button', item.reminder ? '修改提醒' : '修改时间', 'secondary');
@@ -151,7 +159,7 @@
   try {
    const data = await api('/api/agent');
    if ($('#reminder-list form')) return;
-   state.reminders = (data.tasks || []).filter(x => x.reminder || x.reminder_due || (x.owner_requested && x.next && !x.plugin_job && !x.delivery));
+   state.reminders = data.reminders || (data.tasks || []).filter(x => x.reminder || x.reminder_due || (x.owner_requested && x.next && !x.plugin_job && !x.delivery));
    renderReminders();
   } catch (err) {
    $('#reminder-state').textContent = '读取失败：' + err.message;
