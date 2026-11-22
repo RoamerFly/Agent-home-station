@@ -51,6 +51,30 @@ func TestLocalTTSRegistrationRejectsPrivateRuntimeMounts(t *testing.T) {
 	}
 }
 
+func TestLocalTTSVoiceFilesCanLiveInStationData(t *testing.T) {
+	dataDir, editableRoot, executableDir, registration := localTTSRegistrationFixture(t)
+	voice := &registration.Voices[0]
+	destination := filepath.Join(dataDir, "voices", "station-speech", voice.ID)
+	if err := os.MkdirAll(destination, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []*string{&voice.GPT, &voice.SoVITS, &voice.Reference, &voice.Prompt} {
+		data, err := os.ReadFile(*field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(destination, filepath.Base(*field))
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		*field = path
+	}
+	localTTSWriteRegistration(t, dataDir, registration)
+	if _, err := newLocalTTSBackendAt(dataDir, editableRoot, executableDir).Info(context.Background(), localTTSFixtureFishID()); err != nil {
+		t.Fatalf("private voice in station data: %v", err)
+	}
+}
+
 func localTTSFixtureFishID() string { return "fish-" + strings.Repeat("a", 48) }
 
 func TestLocalTTSRequestLimitsAndCanonicalPrompt(t *testing.T) {

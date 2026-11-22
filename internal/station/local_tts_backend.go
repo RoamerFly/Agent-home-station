@@ -459,11 +459,12 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 			return errors.New("station_speech_voice_registration_invalid")
 		}
 		seen[voice.ID] = true
+		privateVoiceRoot := filepath.Join(dataDir, "voices", "station-speech")
 		for _, file := range []struct {
 			path, hash string
 			prompt     bool
 		}{{voice.GPT, voice.GPTSHA256, false}, {voice.SoVITS, voice.SoVITSSHA256, false}, {voice.Reference, voice.ReferenceSHA256, false}, {voice.Prompt, voice.PromptSHA256, true}} {
-			if !localTTSHexPattern.MatchString(file.hash) || localTTSRegularPath(file.path, false) != nil || localTTSPathsOverlap(file.path, editableRoot) || localTTSPathsOverlap(file.path, dataDir) {
+			if !localTTSHexPattern.MatchString(file.hash) || localTTSRegularPath(file.path, false) != nil || localTTSPathsOverlap(file.path, editableRoot) || localTTSPathsOverlap(file.path, dataDir) && !localTTSWithin(file.path, privateVoiceRoot) {
 				return errors.New("station_speech_voice_registration_invalid")
 			}
 			if file.prompt {
