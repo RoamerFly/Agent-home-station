@@ -387,6 +387,9 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	public, voiceConfig := config.PublicRoot, config.SingingVoiceConfig
 	comfyURL, comfyInput := config.ComfyURL, config.ComfyInput
+	if err := m.selectWindowsMusicEndpoint(ctx); err != nil {
+		return "", err
+	}
 	localEndpoint, localToken, err := m.localMusicPluginConnection(ctx)
 	if err != nil {
 		return "", err
@@ -501,6 +504,37 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	m.touchWindowsMusic()
 	return `{"state":"starting_or_active","backend":"windows-native","instruction":"用music_service_status核对模型就绪；启动不代表任务完成。"}`, nil
+}
+
+// The music plugin records a preferred loopback port, but another desktop
+// application may claim it before the music service starts. Keep a process
+// local replacement so every bound music request uses the same live endpoint.
+func (m *Manager) selectWindowsMusicEndpoint(ctx context.Context) error {
+	if m.windowsMusicStatus().Running {
+		return nil
+	}
+	endpoint, _, err := m.localMusicPluginConnection(ctx)
+	if err != nil {
+		return err
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" {
+		return toolInputError("windows_music_requires_loopback_endpoint")
+	}
+	listener, err := net.Listen("tcp", u.Host)
+	if err == nil {
+		return listener.Close()
+	}
+	listener, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return toolInputError("windows_music_no_free_loopback_port")
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	m.musicEndpointMu.Lock()
+	m.musicEndpoint = "http://127.0.0.1:" + strconv.Itoa(port)
+	m.musicEndpointMu.Unlock()
+	return nil
 }
 
 // Only the currently installed, enabled plugin configuration confers launch

@@ -140,6 +140,11 @@ func (p *musicServiceControlPolicy) Validate(ctx context.Context, j pluginhost.J
 }
 
 func (p *permittedTools) controlMusicService(ctx context.Context, action string) (string, error) {
+	if action == "start" && runtime.GOOS == "windows" {
+		if _, err := p.startMusicServiceHost(ctx); err != nil {
+			return "", err
+		}
+	}
 	policy, err := p.newMusicServiceControlPolicy(ctx, action)
 	if err != nil {
 		return "", err
@@ -148,9 +153,6 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 		// The Windows supervisor is already bound to the installed music package
 		// by startWindowsMusic. Starting it through the plugin callback can lose
 		// the host result and strand an otherwise valid local launch.
-		if _, err := p.startMusicServiceHost(ctx); err != nil {
-			return "", err
-		}
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		base := policy.base

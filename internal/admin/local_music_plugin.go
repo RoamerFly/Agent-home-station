@@ -195,6 +195,11 @@ func (m *Manager) localMusicPluginConnection(ctx context.Context) (string, strin
 	if json.Unmarshal(cfg.Values["local_endpoint"], &endpoint) != nil || json.Unmarshal(cfg.Values["local_token"], &token) != nil || !localMusicEndpoint(endpoint) || strings.TrimSpace(token) == "" {
 		return "", "", toolInputError("music_local_plugin_configuration_required")
 	}
+	m.musicEndpointMu.RLock()
+	if m.musicEndpoint != "" {
+		endpoint = m.musicEndpoint
+	}
+	m.musicEndpointMu.RUnlock()
 	return endpoint, token, nil
 }
 

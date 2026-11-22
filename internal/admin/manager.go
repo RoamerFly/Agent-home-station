@@ -106,6 +106,8 @@ type Manager struct {
 	packageRuntimeReady bool
 	managedServices     *pluginruntime.ManagedServices
 	managedServicesOnce sync.Once
+	musicEndpointMu     sync.RWMutex
+	musicEndpoint       string
 	musicIdleMu         sync.Mutex
 	musicIdleTimer      *time.Timer
 	musicIdleGeneration uint64

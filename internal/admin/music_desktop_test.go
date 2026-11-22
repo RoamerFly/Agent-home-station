@@ -266,8 +266,12 @@ func TestWindowsMusicPolicyScopeAndForeignPortRefused(t *testing.T) {
 		writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
 	}
 	installLegacyLocalMusicPlugin(t, f.manager)
-	if _, err := f.manager.startWindowsMusic(t.Context()); err == nil || !strings.Contains(err.Error(), "port_occupied") {
-		t.Fatal("foreign listener adopted", err)
+	if _, err := f.manager.startWindowsMusic(t.Context()); err == nil {
+		t.Fatal("synthetic executable unexpectedly started")
+	}
+	selected, _, err := f.manager.localMusicPluginConnection(t.Context())
+	if err != nil || selected == "http://"+listener.Addr().String() {
+		t.Fatal("foreign listener was selected for music", selected, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
