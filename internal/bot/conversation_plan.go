@@ -42,6 +42,11 @@ func (w *Worker) pendingConversationThread(thread string) bool {
 	}
 	for _, p := range w.runtime.Plans {
 		if p.Input.Thread == thread && !p.terminal() && !(p.MediaCaption && w.mediaTraceOnlyUnknown(p.Input.TraceID)) {
+			// Receipt-only reconciliation keeps the original send intent alive,
+			// but it must not occupy the conversation for every later task.
+			if d := w.planDelivery(p); d != nil && d.State == "waiting" && d.UncertainRounds > 0 {
+				continue
+			}
 			return true
 		}
 	}

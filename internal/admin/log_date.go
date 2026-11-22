@@ -2,8 +2,50 @@ package admin
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
+
+// A scheduled task execution uses a new trace on each attempt. The stable
+// task ID is the part before the timestamp, and its persisted state is the
+// authority for the execution-round card after the last log entry.
+func continuationTaskID(trace string) string {
+	if !strings.HasPrefix(trace, "task-") || len(trace) > 512 {
+		return ""
+	}
+	cut := strings.LastIndexByte(trace, '-')
+	if cut <= len("task-") || cut == len(trace)-1 {
+		return ""
+	}
+	if _, err := time.Parse("20060102T150405.000000000", trace[cut+1:]); err != nil {
+		return ""
+	}
+	return trace[len("task-"):cut]
+}
+
+type logTaskState struct {
+	State   string    `json:"state"`
+	Updated time.Time `json:"updated"`
+}
+
+func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
+	states := map[string]logTaskState{}
+	account := s.manager.native.Account()
+	for _, item := range items {
+		id := continuationTaskID(item.MessageID)
+		if id == "" || item.ThreadID == "" {
+			continue
+		}
+		key := item.ThreadID + "\x00" + id
+		if _, seen := states[key]; seen {
+			continue
+		}
+		if task, ok := s.manager.agent.lookupTask(id, account, item.ThreadID); ok {
+			states[key] = logTaskState{State: task.State, Updated: task.Updated}
+		}
+	}
+	return states
+}
 
 // Pages traverse immutable archive batches, never load all archived bodies into
 // memory. The UI follows continuation positions automatically for a chosen day.
@@ -57,5 +99,5 @@ func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
 		}
 		add(entries)
 	}
-	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
+	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
 }

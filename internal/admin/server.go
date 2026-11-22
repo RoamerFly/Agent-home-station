@@ -99,7 +99,8 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			s.logsByDate(w, r)
 			return
 		}
-		respond(w, 200, map[string]any{"items": s.manager.displayLogs(r.Context())})
+		items := s.manager.displayLogs(r.Context())
+		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items)})
 	}))
 	mux.HandleFunc("POST /api/logs/round/manual-complete", s.protected(s.manualRoundCompletion))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))

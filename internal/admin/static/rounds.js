@@ -10,7 +10,11 @@
     : item.category === 'sent' || /^(media_|delivery_|send_|manual_send|message_progress)/.test(item.event) ? 'delivery'
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
-  const messageKey = (item, id = identity(item)) => id && item.thread_id ? JSON.stringify([item.thread_id, id]) : '';
+  const taskTraceID = id => /^task-(.+)-\d{8}T\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
+  const musicResultID = id => /^music-result-([0-9a-f]{64})-\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
+  const roundIdentity = id => taskTraceID(id) ? 'task:' + taskTraceID(id)
+    : musicResultID(id) ? 'music-result:' + musicResultID(id) : id;
+  const messageKey = (item, id = identity(item)) => id && item.thread_id ? JSON.stringify([item.thread_id, roundIdentity(id)]) : '';
   const partialCancellation = item => item.status === 'stopped'
     && ['media_cancel_requested_by_user', 'media_superseded_by_new_request'].includes(item.reason)
     && /已接受\s+[1-9]\d*\s*\/\s*\d+\s*段/.test(item.content || '');
@@ -26,7 +30,7 @@
     done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
-  const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};
+  const groupLabels = {pending:'待处理',active:'进行中',done:'已结束'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -68,7 +72,7 @@
       return { kind: 'page', label: url.hostname + ' · ' + url.pathname, href: url.href };
     } catch { return null; }
   }
-  function project(items) {
+  function project(items, taskStates = {}) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     const latestEntryTime = entries.reduce((latest, item) => Math.max(latest, Date.parse(item.time) || 0), 0);
     const parents = new Map(), sends = new Map(), groups = new Map();
@@ -106,7 +110,9 @@
       }
       let round = groups.get(key);
       if (!round) {
-        round = { id: key, triggerMessageID: key.startsWith('system:') ? '' : JSON.parse(key)[1], system: key.startsWith('system:'), time: item.time, updated: item.time, source: '', source_kind: '', thread_id: item.thread_id || '', sender: '', entries: [], received: [], sent: [], tools: 0, errors: 0, status: 'received' };
+        const canonical = key.startsWith('system:') ? '' : JSON.parse(key)[1];
+        const taskID = canonical.startsWith('task:') ? taskTraceID(identity(item)) : '';
+        round = { id: key, triggerMessageID: taskID ? identity(item) : canonical, taskID, system: key.startsWith('system:'), time: item.time, updated: item.time, source: '', source_kind: '', thread_id: item.thread_id || '', sender: '', entries: [], received: [], sent: [], tools: 0, errors: 0, status: 'received' };
         groups.set(key, round);
       }
       round.entries.push(item); round.updated = item.time;
@@ -190,6 +196,19 @@
     }
     return [...groups.values()].map(round => {
       present(round);
+      const canonical = round.system ? '' : JSON.parse(round.id)[1];
+      round.attempts = new Set(round.entries.map(e => e.message_id).filter(id => id && roundIdentity(id) === canonical)).size;
+      round.continuation = !!round.taskID || canonical.startsWith('music-result:');
+      if (round.taskID) {
+        const task = taskStates[round.thread_id + '\0' + round.taskID];
+        const states = {completed:'completed', cancelled:'stopped', stopped:'stopped', needs_review:'needs_review', failed:'failed', waiting:'waiting', pending:'queued', running:'running', waiting_delivery:'waiting_receipt'};
+        if (task && states[task.state]) {
+          round.status = states[task.state];
+          round.taskState = task.state;
+          round.taskUpdated = task.updated;
+          if (Date.parse(task.updated) > Date.parse(round.updated)) round.updated = task.updated;
+        }
+      }
       // A bare receive/processing entry can survive a worker crash without a
       // durable continuation or a terminal event. Once a later activity entry
       // is present, settle such an old projection for review instead of
@@ -224,6 +243,14 @@
           round.status = 'needs_review';
           round.orphanReceipt = true;
         }
+      }
+      if (round.status === 'running' && ageFromLatest >= 10 * 60 * 1000 && round.entries.length > 0 && round.entries.every(e => e.tool && ['tool_started', 'tool_completed', 'tool_failed', 'tool_blocked', 'tool_cancelled'].includes(e.event) && e.call_id)) {
+        const open = new Set();
+        for (const e of round.entries) {
+          if (e.event === 'tool_started') open.add(e.call_id);
+          else open.delete(e.call_id);
+        }
+        if (!open.size) { round.status = 'needs_review'; round.orphanTools = true; }
       }
       round.group = groupByStatus[round.status] || 'pending';
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';

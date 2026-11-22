@@ -177,6 +177,36 @@ test('latest task execution evidence moves one round to waiting and later work r
   assert.equal(rows.find(x => x.triggerMessageID === 'task').status, 'running');
   assert.equal(rows.find(x => x.triggerMessageID === 'task').group, 'active');
 });
+test('timestamped attempts of one durable task form one card with its persisted final state', () => {
+ const id='a'.repeat(64), first=`task-${id}-20261122T010000.000000001`, second=`task-${id}-20261122T020000.000000002`;
+ const items=[
+  entry(1,{message_id:first,event:'generation_started',status:'running'}),
+  entry(2,{message_id:first,event:'task_execution_waiting',status:'waiting'}),
+  entry(3,{message_id:second,event:'generation_started',status:'running'}),
+  entry(4,{message_id:second,event:'task_execution_waiting',status:'waiting'}),
+ ];
+ const [round]=project(items,{['fixture@chatroom\0'+id]:{state:'completed',updated:at(5)}});
+ assert.equal(round.entries.length,4);assert.equal(round.attempts,2);
+ assert.equal(round.taskID,id);assert.equal(round.status,'completed');assert.equal(round.group,'done');
+ assert.equal(project(items,{['fixture@chatroom\0'+id]:{state:'needs_review',updated:at(5)}})[0].status,'needs_review');
+});
+test('two callbacks for the same music result form one completed card', () => {
+ const id='b'.repeat(64);
+ const rounds=project([
+  entry(1,{message_id:`music-result-${id}-010000.000000001`,event:'task_execution_waiting',status:'waiting'}),
+  entry(2,{message_id:`music-result-${id}-010100.000000002`,event:'message_sent',category:'sent',status:'accepted'}),
+ ]);
+ assert.equal(rounds.length,1);assert.equal(rounds[0].attempts,2);assert.equal(rounds[0].group,'done');
+});
+test('old tool-only round with every call settled is no longer shown as running', () => {
+ const old=entry(1,{message_id:'old-tool',event:'tool_started',category:'tool',tool:'read',call_id:'call-1',status:'running'});
+ const end=entry(2,{message_id:'old-tool',event:'tool_completed',category:'tool',tool:'read',call_id:'call-1',status:'succeeded'});
+ const later={...entry(3,{message_id:'later',event:'message_received',category:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const settled=project([old,end,later]).find(x=>x.triggerMessageID==='old-tool');
+ assert.equal(settled.status,'needs_review');assert.equal(settled.orphanTools,true);
+ const unfinished=project([old,later]).find(x=>x.triggerMessageID==='old-tool');
+ assert.equal(unfinished.group,'active');
+});
 test('no time-based merging; orphan system events form separate system periods', () => {
   const rows = project([
     entry(1, { message_id: '', thread_id: '', event: 'bot_starting', category: 'system' }),
