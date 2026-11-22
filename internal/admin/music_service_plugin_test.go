@@ -216,9 +216,10 @@ func TestMusicServiceAuthenticatedRoutesUseInstalledCapability(t *testing.T) {
 		if code, body, _ := f.request("POST", "/api/speech/music-service/stop", nil, true, true); code != 200 || calls != 2 || !strings.Contains(string(body), `"state":"stopped"`) {
 			t.Fatal(code, string(body), calls)
 		}
-		// The profile is deliberately absent: routing to the real host adapter
-		// must fail without creating a real music supervisor.
-		if code, _, _ := f.request("POST", "/api/speech/music-service/start", nil, true, true); code != 409 || calls != 3 {
+		// The profile is deliberately absent: the bound Windows host start
+		// must fail without creating a real music supervisor or invoking the
+		// plugin's lossy service-control callback.
+		if code, _, _ := f.request("POST", "/api/speech/music-service/start", nil, true, true); code != 409 || calls != 2 {
 			t.Fatal("missing service profile admitted", code, calls)
 		}
 	}

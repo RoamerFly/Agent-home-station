@@ -144,6 +144,37 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 	if err != nil {
 		return "", err
 	}
+	if action == "start" && runtime.GOOS == "windows" {
+		// The Windows supervisor is already bound to the installed music package
+		// by startWindowsMusic. Starting it through the plugin callback can lose
+		// the host result and strand an otherwise valid local launch.
+		if _, err := p.startMusicServiceHost(ctx); err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		base := policy.base
+		ready := func(probeCtx context.Context) (yueHealth, int, error) {
+			body, _, status, err := localMusicHTTP(probeCtx, "GET", base.endpoint+"/health", nil, "", base.token, accountDirectory(p.manager.native.Account()))
+			var health yueHealth
+			if err == nil && status == 200 && json.Unmarshal(body, &health) != nil {
+				err = yueError("yue_response_limit")
+			}
+			return health, status, err
+		}
+		if err := waitWindowsMusicReady(ctx, func(checkCtx context.Context) error {
+			if base.admin != nil {
+				return base.admin.valid(checkCtx, p.manager)
+			}
+			if !p.privileged() && !p.workspaceExecutionAllowed() {
+				return toolInputError("music_service_start_requires_owner")
+			}
+			return checkCtx.Err()
+		}, func() bool { return p.manager.windowsMusicStatus().Running }, ready, time.Second); err != nil {
+			return "", err
+		}
+		return `{"state":"ready","backend":"windows-native","ready":true}`, nil
+	}
 	c, ready, err := p.manager.installedPluginRuntime()
 	if err != nil || !ready {
 		return "", errors.New("music_service_plugin_runtime_unavailable")
@@ -164,29 +195,6 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 	}
 	if err = policy.Check(ctx, call.Job, pluginhost.Capability{}); err != nil {
 		return "", err
-	}
-	if action == "start" && runtime.GOOS == "windows" {
-		// Launch is asynchronous. Check the authenticated account endpoint outside
-		// the plugin call so its stdio session is available for other operations.
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		base := policy.base
-		ready := func(probeCtx context.Context) (yueHealth, int, error) {
-			body, _, status, err := localMusicHTTP(probeCtx, "GET", base.endpoint+"/health", nil, "", base.token, accountDirectory(p.manager.native.Account()))
-			var health yueHealth
-			if err == nil && status == 200 && json.Unmarshal(body, &health) != nil {
-				err = yueError("yue_response_limit")
-			}
-			return health, status, err
-		}
-		if err := waitWindowsMusicReady(ctx, func(checkCtx context.Context) error {
-			return policy.Check(checkCtx, call.Job, pluginhost.Capability{})
-		}, func() bool {
-			return p.manager.windowsMusicStatus().Running
-		}, ready, time.Second); err != nil {
-			return "", err
-		}
-		return `{"state":"ready","backend":"windows-native","ready":true}`, nil
 	}
 	return string(call.Job.Result), nil
 }
