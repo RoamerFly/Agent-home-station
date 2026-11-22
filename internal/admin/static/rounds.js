@@ -185,6 +185,7 @@
       else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
       else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
       else if (item.event === 'round_manually_completed' && item.status === 'completed') round.status = 'completed';
+      else if (['agent_operation','music_generation_finished'].includes(item.event) && item.status === 'completed' && ['received','queued','running'].includes(round.status)) round.status = 'completed';
       else if (item.event === 'round_manually_closed' && item.status === 'stopped') round.status = 'stopped';
       else if (item.event === 'task_execution_waiting' && item.status === 'waiting') round.status = 'waiting';
       else if (partialCancellation(item)) round.status = 'partially_cancelled';
