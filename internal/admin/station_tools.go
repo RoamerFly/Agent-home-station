@@ -75,18 +75,12 @@ func (p *permittedTools) stationToolLogin(ctx context.Context) (stationToolSessi
 	if base == "" {
 		return stationToolSession{}, errors.New("station_tool_endpoint_invalid")
 	}
-	password, err := os.ReadFile(p.stationToolPasswordPath())
-	if err != nil || strings.TrimSpace(string(password)) == "" {
-		return stationToolSession{}, errors.New("station_tool_authority_unavailable")
-	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	body, _ := json.Marshal(map[string]string{"password": strings.TrimSpace(string(password))})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/login", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/session", nil)
 	if err != nil {
 		return stationToolSession{}, err
 	}
 	req.Header.Set("Origin", base)
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		return stationToolSession{}, errors.New("station_tool_login_unavailable")
