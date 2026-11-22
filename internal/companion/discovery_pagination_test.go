@@ -81,6 +81,37 @@ func TestAudioRequestCanSearchAndDownloadAfterEmptyCacheWithoutUserURL(t *testin
 		t.Fatal("last page misreported as cache miss")
 	}
 }
+
+type savedPageModel struct{ step int }
+
+func (*savedPageModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("expected native tools")
+}
+func (m *savedPageModel) ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error) {
+	m.step++
+	if m.step == 1 {
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"web_media_download"}}`, nil
+	}
+	if m.step == 2 {
+		return `{"action":"tool","tool":"web_media_download","arguments":{"kind":"file","url":"https://www.bilibili.com/video/BV1xx411c7mD/","audio_only":true}}`, nil
+	}
+	return `{"action":"reply","messages":["已检查保存的公开页面。"]}`, nil
+}
+
+func TestSavedPublicPageCanBeRetriedWithoutNewSearch(t *testing.T) {
+	tools := &cacheMissMusicTools{}
+	engine, err := NewPreview(enabledConfig(), &savedPageModel{}, "base persona")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Tools, engine.MaxToolCalls = tools, 4
+	if _, err = engine.Respond(t.Context(), Input{Mode: "direct", Preview: true, Text: "继续上次保存的音频任务"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tools.calls, []string{"web_media_download"}) {
+		t.Fatalf("saved page was blocked or needlessly searched: %v", tools.calls)
+	}
+}
 func (p *pagedCatalog) Call(context.Context, string, json.RawMessage) (string, error) {
 	p.calls++
 	return "real fixture execution", nil
