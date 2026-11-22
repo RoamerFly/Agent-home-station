@@ -1,7 +1,10 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -10,6 +13,15 @@ import (
 // task ID is the part before the timestamp, and its persisted state is the
 // authority for the execution-round card after the last log entry.
 func continuationTaskID(trace string) string {
+	if strings.HasPrefix(trace, "admin-owner-request-") && len(trace) == len("admin-owner-request-")+64 {
+		return strings.TrimPrefix(trace, "admin-owner-request-")
+	}
+	if strings.HasPrefix(trace, "music-result-") {
+		cut := strings.LastIndexByte(trace, '-')
+		if cut > len("music-result-") && len(trace[len("music-result-"):cut]) == 64 {
+			return trace[len("music-result-"):cut]
+		}
+	}
 	if !strings.HasPrefix(trace, "task-") || len(trace) > 512 {
 		return ""
 	}
@@ -42,6 +54,28 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 		}
 		if task, ok := s.manager.agent.lookupTask(id, account, item.ThreadID); ok {
 			states[key] = logTaskState{State: task.State, Updated: task.Updated}
+		}
+	}
+	// Console cross-media sends have durable receipts but no Agent task. Join
+	// their stable request identity so a completed batch leaves the pending tab.
+	files, err := os.ReadDir(filepath.Join(s.manager.dir, "cross-media"))
+	if err == nil {
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(s.manager.dir, "cross-media", file.Name()))
+			var batch crossMediaBatch
+			if err != nil || json.Unmarshal(b, &batch) != nil || batch.Account != account || batch.RequestIdentity == "" || batch.Target == "" || validateCrossBatch(batch, account) != nil {
+				continue
+			}
+			state := "waiting"
+			if crossBatchAccepted(batch) {
+				state = "completed"
+			} else if !batch.CancelledAt.IsZero() || batch.SupersededBy != "" {
+				state = "cancelled"
+			}
+			states[batch.Target+"\x00"+batch.RequestIdentity] = logTaskState{State: state, Updated: batch.Created}
 		}
 	}
 	return states

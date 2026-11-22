@@ -10,7 +10,9 @@
     : item.category === 'sent' || /^(media_|delivery_|send_|manual_send|message_progress)/.test(item.event) ? 'delivery'
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
-  const taskTraceID = id => /^task-(.+)-\d{8}T\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
+  const taskTraceID = id => /^task-(.+)-\d{8}T\d{6}\.\d{9}$/.exec(id || '')?.[1]
+    || /^admin-owner-request-([0-9a-f]{64})$/.exec(id || '')?.[1]
+    || /^music-result-([0-9a-f]{64})-\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
   const musicResultID = id => /^music-result-([0-9a-f]{64})-\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
   const roundIdentity = id => taskTraceID(id) ? 'task:' + taskTraceID(id)
     : musicResultID(id) ? 'music-result:' + musicResultID(id) : id;
@@ -200,8 +202,8 @@
       const canonical = round.system ? '' : JSON.parse(round.id)[1];
       round.attempts = new Set(round.entries.map(e => e.message_id).filter(id => id && roundIdentity(id) === canonical)).size;
       round.continuation = !!round.taskID || canonical.startsWith('music-result:');
-      if (round.taskID) {
-        const task = taskStates[round.thread_id + '\0' + round.taskID];
+      {
+        const task = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
         const states = {completed:'completed', cancelled:'stopped', stopped:'stopped', needs_review:'needs_review', failed:'failed', waiting:'waiting', pending:'queued', running:'running', waiting_delivery:'waiting_receipt'};
         if (task && states[task.state]) {
           round.status = states[task.state];
@@ -227,7 +229,7 @@
       const hasOnlyReceiveProcessing = round.entries.every(e =>
         e.event === 'message_received' || e.event === 'message_processing' || e.category === 'received');
       if (ageFromLatest >= 10 * 60 * 1000 && !hasDurableContinuation && !hasTerminalEvidence && hasOnlyReceiveProcessing && ['received', 'running'].includes(round.status)) {
-        round.status = 'needs_review';
+        round.status = 'stopped';
         round.staleUnfinished = true;
       }
       // A receipt-wait record without an inbound turn, a submitted send, or

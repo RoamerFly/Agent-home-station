@@ -58,13 +58,22 @@ test('thread identity wins over a stale source kind label',()=>{
  const [round]=project([entry(1,{source_kind:'private',thread_id:'fixture@chatroom',event:'message_received',category:'received',status:'received'})]);
  assert.equal(round.source_kind,'group');
 });
-test('an old receive-only round is settled for review when later activity exists',()=>{
+test('an old receive-only round is shown as stopped when later activity exists',()=>{
  const old=entry(1,{message_id:'old-message',event:'message_received',category:'received',status:'received'});
  const later={...entry(2,{message_id:'later-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
  const [round]=project([old,later]).filter(x=>x.triggerMessageID==='old-message');
- assert.equal(round.status,'needs_review');
+ assert.equal(round.status,'stopped');
  assert.equal(round.group,'done');
  assert.equal(round.staleUnfinished,true);
+});
+test('owner continuation and accepted cross-media batch leave pending',()=>{
+ const id='a'.repeat(64), thread='owner-chat', target='group@chatroom';
+ const owner=entry(1,{thread_id:thread,message_id:'admin-owner-request-'+id,event:'owner_request_queued',status:'pending'});
+ const media=entry(2,{thread_id:target,message_id:'console-media-'+id,event:'cross_media_queued',status:'queued'});
+ const states={[thread+'\0'+id]:{state:'cancelled',updated:owner.time},[target+'\0console-media-'+id]:{state:'completed',updated:media.time}};
+ const rounds=project([owner,media],states);
+ assert.equal(rounds.find(x=>x.thread_id===thread).status,'stopped');
+ assert.equal(rounds.find(x=>x.thread_id===target).status,'completed');
 });
 test('a durable continuation stays pending or active even when older than later activity',()=>{
  const old=entry(1,{message_id:'saved-task',event:'message_received',category:'received',status:'received'});
