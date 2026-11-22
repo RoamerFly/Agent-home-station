@@ -66,6 +66,10 @@ func TestVoiceAgentFindsReadsAndPreparesWithoutExposingControlDirectory(t *testi
 	if !strings.Contains(r, `"total":2`) || !strings.Contains(r, `"has_more":true`) {
 		t.Fatal(r)
 	}
+	r = call("voice_library_list", `{"engine":"gpt-sovits"}`)
+	if !strings.Contains(r, `"total":2`) {
+		t.Fatal("engine filter must accept ordinary lowercase input", r)
+	}
 	r = call("voice_library_read", `{"voice_id":"owner-voice"}`)
 	if !strings.Contains(r, `"project_id":"gpt-sovits"`) || !strings.Contains(r, "gpu=true") {
 		t.Fatal("missing registered GPT-SoVITS inference route", r)

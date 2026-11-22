@@ -145,7 +145,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 	if name == "voice_library_list" {
 		rows := []map[string]any{}
 		for _, v := range voices {
-			if (in.Engine == "" || in.Engine == v.Engine) && strings.Contains(strings.ToLower(v.Name+" "+v.Engine), strings.ToLower(in.Query)) {
+			if (in.Engine == "" || strings.EqualFold(in.Engine, v.Engine)) && strings.Contains(strings.ToLower(v.Name+" "+v.Engine), strings.ToLower(in.Query)) {
 				rows = append(rows, voiceSummary(v))
 			}
 		}
