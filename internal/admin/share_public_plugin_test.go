@@ -241,6 +241,25 @@ func TestExplicitPublicURLPolicyRejectsForgottenSource(t *testing.T) {
 	}
 }
 
+func TestExplicitPublicURLPolicyReadsUnobservedNativeMessage(t *testing.T) {
+	f, n, _, ctx := receivedPolicyFixtureFor(t, false, 4)
+	f.manager.config.Companion.Permissions.Remember = true
+	policy, err := f.manager.newExplicitPublicSharePolicy(ctx, n.msg, "https://public.example/video", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.nativeRecall == nil {
+		t.Fatal("unobserved message did not use native reread")
+	}
+	job := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_public", Context: policy.invocation()}
+	if err := policy.Check(ctx, job, pluginhost.Capability{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", "test", n.msg.ThreadID)}, policy.source.EventID); err == nil {
+		t.Fatal("reread created a fabricated memory event")
+	}
+}
+
 func TestExplicitPublicURLPolicyRechecksCurrentActor(t *testing.T) {
 	f, n, _, _ := receivedPolicyFixtureFor(t, false, 4)
 	tools := &permittedTools{manager: f.manager, trace: companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: "current-actor", TraceID: "explicit-url-turn", Mode: "direct"}}

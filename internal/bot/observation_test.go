@@ -80,9 +80,14 @@ func TestShareRuntimeFailureSchedulesDurableRetry(t *testing.T) {
 	}))
 	room := "retry-durable@chatroom"
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "share-durable", room, "incoming", "remote"), Phase: "processing", Updated: time.Now()}}
+	reports := 0
+	w.config.ObservationFailed = func(companion.Input, string) error { reports++; return nil }
 	w.stopUnreadableTurn(companion.Input{Thread: room, TraceID: "share-durable", IsGroup: true}, &groupObservationFailure{reason: "share_plugin_runtime_unavailable", messageID: "share-durable"})
 	item := w.runtime.Inbox[0]
 	if item.Phase != "waiting_tool_retry" || item.ToolRetryAttempts != 1 || !item.RetryAfter.After(time.Now()) {
 		t.Fatalf("runtime failure was not persisted for retry: %+v", item)
+	}
+	if reports != 0 {
+		t.Fatal("temporary read failure was reported as a final group failure")
 	}
 }

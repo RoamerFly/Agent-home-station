@@ -183,14 +183,14 @@ func (w *Worker) stopUnreadableTurn(in companion.Input, err error) {
 	if errors.As(err, &failed) {
 		source = failed.messageID
 	}
-	// Keep a durable retry checkpoint while reporting the failed group turn
-	// immediately.  Waiting for the first backoff window made an unreadable
-	// attachment look permanently stuck in the UI and also hid the failure
-	// from the owner.  The inbox item remains in waiting_tool_retry, so the
-	// retry loop can continue after the report is queued.
 	retryScheduled := w.scheduleToolRetry(in, source, reason)
+	if retryScheduled {
+		// The original turn is still resumable. Report a final failure only
+		// after its durable read attempts have actually ended.
+		return
+	}
 	if !retryScheduled && retryableObservationReason(reason) {
-		w.activity(Record{Event: "tool_retry_exhausted", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Tool: "share-reader", ToolStage: "observation", Status: "failed", Reason: reason, RetryAttempts: maxObservationRetries, Origin: "wechat"})
+		w.activity(Record{Event: "tool_retry_exhausted", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Tool: "share-reader", ToolStage: "observation", Status: "failed", Reason: reason, RetryAttempts: maxDurableToolRetries, Origin: "wechat"})
 	}
 	report := "本回合有消息未能读取，已停止群回复。读取错误：" + reason
 	event := Record{Event: "group_input_read_failed", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, RelatedMessageID: source, Status: "failed", Reason: reason, Content: report}

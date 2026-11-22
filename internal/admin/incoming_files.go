@@ -192,6 +192,23 @@ func (a mediaUnderstanding) rememberIncomingOriginal(ctx context.Context, msg li
 	if kind != "image" && kind != "voice" {
 		return zero, nil, errors.New("incoming_original_kind_invalid")
 	}
+	// An exact, previously saved incoming original survives a temporary native
+	// transfer outage. Verify both its source fingerprint and stored bytes.
+	if fingerprint := inboundFingerprint(msg); fingerprint != "" {
+		m.assetMu.Lock()
+		items, cacheErr := m.loadAssets()
+		m.assetMu.Unlock()
+		if cacheErr == nil {
+			for _, asset := range items {
+				if asset.Account != msg.AccountID || asset.Scope != companion.ScopeID("wechat", msg.AccountID, msg.ThreadID) || !asset.hasOriginal(fingerprint) || asset.Bytes > limit {
+					continue
+				}
+				if data, err := m.cachedAssetData(asset); err == nil {
+					return asset, data, nil
+				}
+			}
+		}
+	}
 	reader, ok := m.native.(incomingReader)
 	if !ok {
 		return zero, nil, errors.New("incoming_media_backend_unavailable")
@@ -205,6 +222,10 @@ func (a mediaUnderstanding) rememberIncomingOriginal(ctx context.Context, msg li
 		data, typ, err = reader.IncomingMedia(ctx, msg.ID, limit)
 	}
 	if err != nil {
+		var transfer *linuxnative.IncomingMediaTransferError
+		if errors.As(err, &transfer) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return zero, nil, err
+		}
 		return zero, nil, errors.New("incoming_media_download_failed")
 	}
 	if len(data) == 0 || int64(len(data)) > limit {

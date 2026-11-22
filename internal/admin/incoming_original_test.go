@@ -50,6 +50,10 @@ func TestIncomingOriginalRetainsSourceAndRequiresExplicitVoiceEnrollment(t *test
 	if got, err := f.manager.cachedAssetData(asset); err != nil || string(got) != string(data) {
 		t.Fatal("cached raw voice differs", err)
 	}
+	again, cached, err := (mediaUnderstanding{manager: f.manager}).rememberIncomingOriginal(t.Context(), native.message, "voice", 8<<20)
+	if err != nil || again.ID != asset.ID || string(cached) != string(data) || native.downloads != 1 {
+		t.Fatal("same incoming original was downloaded again", err, native.downloads)
+	}
 }
 
 func TestResolveInboundArtifactDoesNotGuessAnotherMembersAttachment(t *testing.T) {

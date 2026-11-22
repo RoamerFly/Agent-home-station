@@ -220,9 +220,6 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 				// Follow-up media may arrive while a model turn is in progress.
 				// Check the exact native message without writing provisional
 				// observations that would invalidate the in-flight turn.
-				if explicitPublicURL {
-					return nil, errors.New("share_persisted_source_unavailable")
-				}
 				p.nativeRecall = &in
 				if err := p.checkNativeRecall(ctx); err != nil {
 					return nil, err
