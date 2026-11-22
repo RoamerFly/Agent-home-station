@@ -20,8 +20,8 @@
   }
   const due = new Date(current.reminder?.due_at || current.next || t.reminder?.due_at || t.next);
   const overdue = Number.isFinite(due.getTime()) && due.getTime() <= Date.now();
-  const labels = {waiting:current.reminder_due?'待继续 · 未完成':overdue?'已逾期 · 未完成':'未到期',pending:overdue?'已逾期 · 待处理':'待处理',running:'执行中',needs_review:'等待主人决定',handed_off:'已进入执行回合 · 未完成',completed:'已完成',expired:'已过期',cancelled:'已取消',failed:'失败',stopped:'已停止'};
-  return {label:(labels[status] || status || '状态未知') + (t.reminder_due ? ' · 提醒类消息' : ''), completed:status === 'completed'};
+  const labels = {waiting:overdue?'已逾期 · 待完成':'待完成',pending:overdue?'已逾期 · 待完成':'待完成',running:'执行中',needs_review:'等待主人决定',handed_off:'已进入执行回合 · 待完成',completed:'已完成',expired:'已过期',cancelled:'已取消',failed:'失败',stopped:'已停止'};
+  return {label:labels[status] || status || '状态未知', completed:status === 'completed'};
  }
  function renderReminders() {
   const box = $('#reminder-list');
@@ -41,6 +41,7 @@
    node(head, 'strong', item.title || '提醒任务');
    const status = reminderStatus(item, tasks);
    node(head, 'small', status.label, status.completed ? 'reminder-completed' : '');
+   node(card, 'p', '类型：' + (item.reminder ? item.reminder.kind === 'execute' ? '执行提醒' : '消息提醒' : item.reminder_due ? '到期执行任务' : '定时持续任务'), 'hint');
    const due = item.reminder?.due_at || item.next;
    if (due) node(card, 'p', '到期：' + time(due));
    const followUp = item.reminder?.follow_up_task_id && tasks.get(item.reminder.follow_up_task_id);
@@ -52,25 +53,33 @@
    if (item.last_result) node(card, 'p', item.last_result, 'hint');
    if (followUp?.checkpoint) node(card, 'p', followUp.checkpoint, 'hint');
    const actions = node(card, 'div', undefined, 'inline-actions');
-   if (['waiting','pending','needs_review'].includes(item.state) && !item.reminder?.job_id && !item.reminder?.follow_up_task_id) {
-    const edit = node(actions, 'button', item.reminder ? '修改提醒' : '修改时间', 'secondary');
-    edit.type = 'button';
-    edit.addEventListener('click', () => editReminder(card, item, edit, due));
-   }
-   if (item.state === 'needs_review') {
+   const target = followUp || item;
+   const terminal = ['completed','cancelled','stopped'].includes(target.state);
+   const unsettled = !!(target.pending_operations?.length || target.delivery && target.delivery.state !== 'accepted');
+   const toolActive = !!(target.plugin_job || target.process_id || target.device_task);
+   const canEdit = ['waiting','pending','needs_review','expired'].includes(target.state) && !unsettled && !target.delivery && !target.plugin_job && !target.process_id && !target.reminder?.job_id && !target.reminder?.follow_up_task_id;
+   const edit = node(actions, 'button', '修改时间', 'secondary');
+   edit.type = 'button';edit.disabled = !canEdit;
+   if (canEdit) edit.addEventListener('click', () => editReminder(card, target, edit, target.reminder?.due_at || target.next));
+   else edit.title = terminal ? '已结束任务不能改期' : '当前执行或投递阶段不能改期';
+   const cancel = node(actions, 'button', '取消任务', 'secondary');
+   cancel.type = 'button';cancel.disabled = terminal || target.state === 'running' && !target.plugin_job;
+   if (!cancel.disabled) cancel.addEventListener('click', () => changeReminder(target.id, 'cancel', cancel));
+   else cancel.title = terminal ? '任务已经结束' : '执行中请等待本轮结束';
+   const complete = node(actions, 'button', '设为完成', 'secondary');
+   complete.type = 'button';complete.disabled = terminal || target.state === 'running' || toolActive || unsettled;
+   if (!complete.disabled) complete.addEventListener('click', () => changeReminder(target.id, 'complete', complete));
+   else complete.title = terminal ? '任务已经结束' : '仍有执行或发送结果需要核对';
+   if (target.state === 'needs_review' && !target.reminder_due) {
     const resume = node(actions, 'button', '处理提醒', 'primary');
     resume.type = 'button';
-    resume.addEventListener('click', () => changeReminder(item.id, 'resume', resume));
-    const cancel = node(actions, 'button', '忽略', 'secondary');
-    cancel.type = 'button';
-    cancel.addEventListener('click', () => changeReminder(item.id, 'cancel', cancel));
+    resume.addEventListener('click', () => changeReminder(target.id, 'resume', resume));
    }
    if (item.reminder_due || ['pending','running'].includes(item.state)) {
     const open = node(actions, 'button', '查看执行回合', 'secondary');
     open.type = 'button';
     open.addEventListener('click', () => window.WechatAdmin.nav('logs'));
    }
-   if (!actions.children.length) actions.remove();
   }
  }
  function editReminder(card, item, edit, due) {

@@ -46,7 +46,7 @@ func reminderTitle(value string) (string, error) {
 }
 
 func (m *Manager) editReminder(ctx context.Context, t agentTask, edit reminderEdit) (agentTask, error) {
-	if t.Reminder == nil || t.State != "waiting" && t.State != "pending" && t.State != "needs_review" ||
+	if t.Reminder == nil || t.State != "waiting" && t.State != "pending" && t.State != "needs_review" && t.State != "expired" ||
 		t.Reminder.Job != "" || t.Reminder.FollowUpTaskID != "" || t.Delivery != nil || t.MusicJob != "" || len(t.PendingOperations) > 0 {
 		return agentTask{}, toolInputError("只有尚未开始执行或投递的提醒可以修改")
 	}

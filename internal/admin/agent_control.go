@@ -976,7 +976,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		if !decode(w, r, &in) {
 			return
 		}
-		if in.Action != "resume" && in.Action != "cancel" && in.Action != "update" {
+		if in.Action != "resume" && in.Action != "cancel" && in.Action != "update" && in.Action != "complete" {
 			fail(w, 400, "操作无效")
 			return
 		}
@@ -996,8 +996,8 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if t.ID != r.PathValue("id") {
 				continue
 			}
-			if t.State == "expired" {
-				fail(w, 409, "这条提醒已过期；如需安排新的时间，请创建新提醒")
+			if t.State == "expired" && in.Action == "resume" {
+				fail(w, 409, "提醒已过期；可修改时间后重新安排")
 				return
 			}
 			if in.Action == "update" {
@@ -1020,6 +1020,34 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 					return
 				}
 				respond(w, 200, map[string]any{"id": t.ID, "due_at": due, "updated_existing": true})
+				return
+			}
+			if in.Action == "complete" {
+				if t.State == "running" || t.PluginJob != nil || t.ProcessID != "" || t.DeviceTask != "" {
+					fail(w, 409, "任务正在执行或有工具任务，暂不能手动设为完成")
+					return
+				}
+				if t.Reminder != nil && t.Reminder.FollowUpTaskID != "" {
+					fail(w, 409, "提醒已进入执行回合，请操作对应的执行任务")
+					return
+				}
+				if len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted" {
+					fail(w, 409, "任务仍有待核对的执行或发送结果，不能直接设为完成")
+					return
+				}
+				t.State = "completed"
+				t.WorkCompleted = true
+				t.LastResult = "主人手动设为完成；不代表工具已执行或消息已送达"
+				saved, err := s.manager.agent.transitionSnapshot(t, false)
+				if err != nil {
+					fail(w, 500, err.Error())
+					return
+				}
+				if !saved {
+					fail(w, 409, "任务状态已改变，请刷新")
+					return
+				}
+				respond(w, 200, t)
 				return
 			}
 			if t.Reminder != nil && in.Action == "resume" {

@@ -324,6 +324,40 @@ func TestReminderOverdueAtStartupExpiresWithoutRescheduling(t *testing.T) {
 	if code != 409 {
 		t.Fatalf("expired reminder could be resumed: HTTP %d", code)
 	}
+	newDue := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	code, _, _ = f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "update", "run_at": newDue.Format(time.RFC3339)}, true, true)
+	if code != 200 {
+		t.Fatalf("expired reminder could not be rescheduled: HTTP %d", code)
+	}
+	rescheduled, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || rescheduled.State != "waiting" || !rescheduled.Reminder.Due.Equal(newDue) || len(n.requests) != 0 {
+		t.Fatalf("expired reminder did not return to scheduled work: %#v", rescheduled)
+	}
+	code, _, _ = f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "complete"}, true, true)
+	completed, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if code != 200 || !ok || completed.State != "completed" || len(n.requests) != 0 {
+		t.Fatalf("manual completion sent or did not complete: HTTP %d, %#v", code, completed)
+	}
+}
+
+func TestScheduledOwnerTaskCanMoveNextCheckAndCompleteWithoutSending(t *testing.T) {
+	f, p, n := memberReminder(t)
+	task := agentTask{ID: agentID("scheduled-task-ui", p.trace.TraceID), Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, OwnerRequested: true, Title: "继续制作歌曲", State: "waiting", Next: time.Now().Add(time.Hour), MusicJob: "synthetic-existing-job"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	f.login()
+	due := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	code, _, _ := f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "update", "run_at": due.Format(time.RFC3339)}, true, true)
+	updated, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if code != 200 || !ok || updated.State != "waiting" || !updated.Next.Equal(due) {
+		t.Fatalf("scheduled music check did not move: HTTP %d, %#v", code, updated)
+	}
+	code, _, _ = f.request("POST", "/api/agent/tasks/"+task.ID, map[string]string{"action": "complete"}, true, true)
+	completed, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if code != 200 || !ok || completed.State != "completed" || len(n.requests) != 0 {
+		t.Fatalf("manual completion sent or did not complete: HTTP %d, %#v", code, completed)
+	}
 }
 
 func TestReminderStartupKeepsPendingReceiptAndRecoversFollowUp(t *testing.T) {

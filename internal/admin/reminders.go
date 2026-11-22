@@ -647,10 +647,10 @@ func (m *Manager) rescheduleTask(t agentTask, due time.Time) error {
 	if !due.After(time.Now()) {
 		return errors.New("请选择未来的时间")
 	}
-	if t.State != "waiting" && t.State != "pending" && t.State != "needs_review" {
+	if t.State != "waiting" && t.State != "pending" && t.State != "needs_review" && t.State != "expired" {
 		return errors.New("只有尚未执行的任务可以改期")
 	}
-	if t.Delivery != nil || t.PluginJob != nil || t.ProcessID != "" || t.MusicJob != "" || len(t.PendingOperations) > 0 {
+	if t.Delivery != nil || t.PluginJob != nil || t.ProcessID != "" || len(t.PendingOperations) > 0 {
 		return errors.New("任务已进入工具执行或发送阶段，不能改期")
 	}
 	t.Next = due
@@ -663,7 +663,11 @@ func (m *Manager) rescheduleTask(t agentTask, due time.Time) error {
 		t.Reminder = &spec
 		t.State = "waiting"
 	} else {
-		t.State = "pending"
+		if t.MusicJob != "" {
+			t.State = "waiting"
+		} else {
+			t.State = "pending"
+		}
 	}
 	t.LastResult = "已修改计划时间：" + due.Format(time.RFC3339)
 	saved, err := m.agent.transitionSnapshot(t, false)
