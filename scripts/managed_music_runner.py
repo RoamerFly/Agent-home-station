@@ -272,6 +272,19 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
             if not config_path.is_file():
                 raise ValueError("music_voice_config_missing")
             readonly.append(str(config_path))
+            # Installed voice weights live under release/data while executable
+            # code stays in the public package. Mount the fixed voice tree when
+            # this selected configuration actually points to it.
+            voice_root = public.parent.parent / "data" / "voices" / "rvc" / "private-voice-library"
+            if voice_root.is_dir():
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+                    model = canonical(config["rvc_model"])
+                    index_file = canonical(config["rvc_index"])
+                    if model.is_relative_to(voice_root) and index_file.is_relative_to(voice_root):
+                        readonly.append(str(canonical(voice_root)))
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
             break
     # Embedded Python runtimes may keep their large dependency wheels in a
     # separately registered public runtime directory (the pth file is part of
