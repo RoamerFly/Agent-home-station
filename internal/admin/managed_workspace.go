@@ -32,6 +32,9 @@ type ExecutionContext struct {
 }
 
 func (m *Manager) managedRoot() string {
+	if root := m.releaseWorkspaces(); root != "" {
+		return filepath.Join(root, "home")
+	}
 	if base := os.Getenv("WECHAT_WORKSPACE_ROOT"); base != "" && filepath.IsAbs(base) {
 		return filepath.Clean(base)
 	}
@@ -42,6 +45,17 @@ func (m *Manager) managedRoot() string {
 		return filepath.Join(filepath.Dir(filepath.Dir(m.dir)), "managed-workspaces")
 	}
 	return filepath.Join(m.dir, "managed-workspaces")
+}
+
+func (m *Manager) releaseWorkspaces() string {
+	if filepath.Base(m.dir) != "legacy-admin" || filepath.Base(filepath.Dir(m.dir)) != "wechat" || filepath.Base(filepath.Dir(filepath.Dir(m.dir))) != "applications" {
+		return ""
+	}
+	root := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(m.dir))), "workspaces")
+	if info, err := os.Lstat(root); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+		return root
+	}
+	return ""
 }
 func (p *permittedTools) executionContext() ExecutionContext {
 	root := p.manager.managedRoot()

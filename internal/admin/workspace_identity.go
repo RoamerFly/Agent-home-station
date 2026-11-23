@@ -78,6 +78,11 @@ func (m *Manager) configureWorkspaceDirectory() error {
 }
 
 func (m *Manager) privateWorkspaceFor(account string) string {
+	if account == m.native.Account() {
+		if root := m.releaseWorkspaces(); root != "" {
+			return filepath.Join(root, "wechat")
+		}
+	}
 	name := accountDirectory(account)
 	if account == m.native.Account() && m.workspaceDir != "" {
 		name = m.workspaceDir

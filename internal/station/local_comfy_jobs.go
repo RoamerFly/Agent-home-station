@@ -60,7 +60,7 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	}
 	if !job.CancelRequested {
 		e.deployment, err = e.tool.projectTools.comfy.Info(ctx, g.FishID)
-		if err != nil || e.checkWorkflow(args) != nil {
+		if err != nil || e.checkWorkflow(ctx, args) != nil {
 			view := comfyJobView(job)
 			view["state"], view["reason"] = "needs_review", "deployment_or_workflow_changed"
 			return localProcessJSON(view)
@@ -270,7 +270,7 @@ func (e localComfyInvocation) publishComfyImages(ctx context.Context, client loc
 	if err := e.checkSource(ctx, args); err != nil {
 		return nil, err
 	}
-	if err := e.checkWorkflow(args); err != nil {
+	if err := e.checkWorkflow(ctx, args); err != nil {
 		return nil, err
 	}
 	receipt, _ := json.Marshal(map[string]any{"workflow_id": args.Workflow, "images": evidence})
@@ -345,7 +345,7 @@ func (e localComfyInvocation) publishComfyVideo(ctx context.Context, client loca
 	if err := e.checkSource(ctx, args); err != nil {
 		return nil, err
 	}
-	if err := e.checkWorkflow(args); err != nil {
+	if err := e.checkWorkflow(ctx, args); err != nil {
 		return nil, err
 	}
 	input := localArtifactInput{Key: job.ID, Expected: video.SHA256, project: localComfyPackage}

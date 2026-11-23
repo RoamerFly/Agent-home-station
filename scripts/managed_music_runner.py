@@ -130,7 +130,7 @@ def command(public, private, cwd, argv, gpu=False, ipc=None):
     if sys.platform != "linux" or not shutil.which("bwrap"):
         raise RuntimeError("music_sandbox_unavailable")
     public, private, cwd = managed_public_root(public), canonical(private), canonical(cwd)
-    if private.parent.name != "pri_workspace":
+    if private.parent.name != "pri_workspace" and not (private.parent.name == "workspaces" and private.name == "wechat"):
         raise ValueError("music_managed_layout_required")
     if not (cwd.is_relative_to(public) or cwd.is_relative_to(private)):
         raise ValueError("music_working_directory_outside_workspace")
@@ -245,7 +245,7 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
     if sys.platform != "win32" or os.environ.get("WECHAT_WINDOWS_MUSIC_POLICY") != "registry-read-private-network-v1":
         raise RuntimeError("windows_music_policy_not_authorized")
     public, private, cwd = managed_public_root(public), canonical(private), canonical(cwd)
-    if private.parent.name != "pri_workspace":
+    if private.parent.name != "pri_workspace" and not (private.parent.name == "workspaces" and private.name == "wechat"):
         raise ValueError("music_managed_layout_required")
     from music_account_scope import account_scope
     account_scope(private)

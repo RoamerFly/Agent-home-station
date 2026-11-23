@@ -172,6 +172,9 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		Inputs     map[string]json.RawMessage `json:"inputs"`
 		JobID      string                     `json:"job_id"`
 		ArtifactID string                     `json:"artifact_id"`
+		Category   string                     `json:"category"`
+		Offset     int                        `json:"offset"`
+		Limit      int                        `json:"limit"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -182,6 +185,11 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 	switch in.Action {
 	case "workflows":
 		instruction = "只调用本机 project_comfy_workflows，逐项返回工作流编号、用途和参数，不发送到微信。"
+	case "models":
+		if in.Offset < 0 || in.Limit < 0 || len(in.Category) > 32 {
+			return "", toolInputError("station_comfy_arguments_invalid")
+		}
+		instruction = fmt.Sprintf("只调用本机 project_comfy_models，参数 category=%q, offset=%d, limit=%d。返回模型名称和下一页位置，不发送微信。", in.Category, in.Offset, in.Limit)
 	case "run":
 		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
 			return "", toolInputError("station_comfy_workflow_required")

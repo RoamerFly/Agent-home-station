@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ const (
 	localComfyPackage    = "comfyui"
 	localComfyCapability = "comfyui.run"
 	localComfyListTool   = "project_comfy_workflows"
+	localComfyModelsTool = "project_comfy_models"
 	localComfyStartTool  = "project_comfy_run"
 	localComfyJobTool    = "project_comfy_job"
 	localComfyImageLimit = 16
@@ -37,6 +40,31 @@ func (s *localProjectTools) comfySetup(ctx context.Context, fish string) (localC
 	workflows, err := loadLocalComfyWorkflows(deployment.WorkflowRoot)
 	if err != nil || len(workflows) == 0 {
 		return deployment, nil, errLocalComfyWorkflowSetup
+	}
+	record, err := s.home.identity.Read()
+	if err != nil || record.FishID != fish || record.LocalOwner == nil {
+		return deployment, nil, errors.New("ComfyUI 家目录身份不可用")
+	}
+	home, err := s.home.directory(record)
+	if err != nil {
+		return deployment, nil, err
+	}
+	custom := filepath.Join(home, "workflows", "comfyui")
+	if _, err := os.Stat(filepath.Join(custom, localComfyWorkflowRegistryFile)); err == nil {
+		personal, err := loadLocalComfyWorkflows(custom)
+		if err != nil {
+			return deployment, nil, err
+		}
+		ids := map[string]bool{}
+		for _, item := range workflows {
+			ids[item.ID] = true
+		}
+		for _, item := range personal {
+			if ids[item.ID] {
+				return deployment, nil, errors.New("ComfyUI 自建工作流编号与已登记工作流重复")
+			}
+			workflows = append(workflows, item)
+		}
 	}
 	return deployment, workflows, nil
 }
@@ -59,17 +87,22 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 	}
 	jobTool := localComfyJobToolSpec()
 	if _, _, err := s.comfySetup(ctx, grant.FishID); err != nil {
-		return []mcptools.Tool{jobTool}
+		return []mcptools.Tool{localComfyModelTool(), jobTool}
 	}
 	return []mcptools.Tool{
 		localComfyWorkflowTool(),
+		localComfyModelTool(),
 		localComfyStartToolSpec(),
 		jobTool,
 	}
 }
 
 func localComfyWorkflowTool() mcptools.Tool {
-	return mcptools.NewTool(localComfyListTool, "查看本机主人已批准的 ComfyUI 工作流及可调参数。先查列表，再选工作流编号。", `{"type":"object","additionalProperties":false}`)
+	return mcptools.NewTool(localComfyListTool, "查看已登记和家目录自建的 ComfyUI 工作流及可调参数。自建工作流放在家目录 workflows/comfyui，包含 registry.json 和图文件。", `{"type":"object","additionalProperties":false}`)
+}
+
+func localComfyModelTool() mcptools.Tool {
+	return mcptools.NewTool(localComfyModelsTool, "列出已配置 ComfyUI 模型库内的模型文件名。category 默认 checkpoints；用 offset/limit 翻页。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 func localComfyStartToolSpec() mcptools.Tool {
@@ -120,6 +153,9 @@ func (t *localToolSet) callLocalComfy(ctx context.Context, name string, raw json
 	if name == localComfyJobTool {
 		return e.jobAction(ctx, raw)
 	}
+	if name == localComfyModelsTool {
+		return s.comfyModels(ctx, grant.FishID, raw)
+	}
 	e.deployment, e.workflows, err = s.comfySetup(ctx, grant.FishID)
 	if err != nil {
 		return "", err
@@ -128,7 +164,17 @@ func (t *localToolSet) callLocalComfy(ctx context.Context, name string, raw json
 		if strictLocalMemoryDecode(raw, &struct{}{}) != nil {
 			return "", errors.New("工作流列表不需要参数")
 		}
-		return localProcessJSON(map[string]any{"workflows": localComfyWorkflowViews(e.workflows)})
+		record, err := s.home.identity.Read()
+		if err != nil {
+			return "", err
+		}
+		home, err := s.home.directory(record)
+		if err != nil {
+			return "", err
+		}
+		return localProcessJSON(map[string]any{"workflows": localComfyWorkflowViews(e.workflows),
+			"personal_workflow_directory": filepath.Join(home, "workflows", "comfyui"),
+			"personal_registry_format":    "registry.json: {schema_version:1,comfyui_version:<version>,workflows:[{id,label,graph:<filename.json>,sha256:<graph bytes SHA-256>,save_node:<node ID>,parameters:[{id,label,kind,node,input,minimum?,maximum?,max_length?,enum?}]}]}. Use server_write to create graph and registry in personal_workflow_directory, then call project_comfy_workflows again. Existing job outputs are unchanged."})
 	}
 	return e.start(ctx, raw)
 }
@@ -221,8 +267,8 @@ func (e localComfyInvocation) checkSource(ctx context.Context, args localComfyJo
 	return t.checkProjectRequestMemory(ctx, args.Trace, args.Origin)
 }
 
-func (e localComfyInvocation) checkWorkflow(args localComfyJobInput) error {
-	workflows, err := loadLocalComfyWorkflows(e.deployment.WorkflowRoot)
+func (e localComfyInvocation) checkWorkflow(ctx context.Context, args localComfyJobInput) error {
+	_, workflows, err := e.tool.projectTools.comfySetup(ctx, e.grant.FishID)
 	if err == nil && e.deployment.Binding == args.Binding {
 		for _, workflow := range workflows {
 			if workflow.ID == args.Workflow && workflow.Fingerprint == args.Approval && (workflow.OutputKind == "video") == args.VideoOutput {
@@ -250,7 +296,7 @@ func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, ar
 		if err := e.checkSource(ctx, args); err != nil {
 			return err
 		}
-		if err := e.checkWorkflow(args); err != nil {
+		if err := e.checkWorkflow(ctx, args); err != nil {
 			return err
 		}
 		claimed, err := e.host.store.ClaimJob(ctx, job.ID, job.Revision)

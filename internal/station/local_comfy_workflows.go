@@ -1,8 +1,7 @@
 package station
 
-// This file is deliberately a small, host-only approval boundary.  The Agent
-// gets a workflow ID plus scalar values; it never gets a Comfy graph, a model
-// name, a node ID, a file name, or a path to choose from.
+// Workflow graphs may be installed by the owner or authored in the fish home.
+// Each job still pins the exact graph and saves output into its own job scope.
 
 import (
 	"crypto/sha256"
@@ -382,8 +381,13 @@ func localComfySafeBuiltinInput(class any, input, kind string) bool {
 		return (input == "width" || input == "height" || input == "batch_size") && kind == "integer"
 	case "EmptyImage":
 		return (input == "width" || input == "height" || input == "batch_size" || input == "color") && kind == "integer"
+	case "SaveImage", "SaveVideo":
+		return false // The host assigns the output filename for each job.
 	}
-	return false
+	// Custom ComfyUI nodes expose their own scalar inputs. The owner may bind
+	// those inputs in a personal workflow instead of waiting for a Go release.
+	name, ok := class.(string)
+	return ok && name != "" && input != "filename_prefix" && input != "output_dir"
 }
 func localComfyOutputBounded(graph map[string]any) bool {
 	for _, item := range graph {

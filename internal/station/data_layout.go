@@ -56,6 +56,10 @@ func stationMemoryDir(dataDir string) string {
 
 func stationWorkspaceDir(dataDir string) string {
 	if structuredDataRoot(dataDir) {
+		modern := filepath.Join(dataDir, "workspaces")
+		if directoryExists(modern) {
+			return modern
+		}
 		return filepath.Join(dataDir, "workspace")
 	}
 	return filepath.Join(dataDir, "managed-workspaces")
