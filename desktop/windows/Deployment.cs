@@ -54,7 +54,7 @@ namespace WechatAgent.Desktop {
                 if (Text(data, "runtime_directory") != "") local.StationExe = Path.Combine(Path.GetFullPath(Path.Combine(workspace, Text(data, "runtime_directory"))), "agent-home-station-server.exe");
                 if (Text(data, "data_root") != "") {
                     local.Root = Path.GetFullPath(Path.Combine(workspace, Text(data, "data_root")));
-                    local.StationWorkspace = Path.Combine(local.Root, "workspace");
+                    local.StationWorkspace = Path.Combine(local.Root, "workspaces");
                 }
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "tool_packages_directory") != "") {
@@ -170,7 +170,7 @@ namespace WechatAgent.Desktop {
             var runtime = Path.Combine(data, "main_setting", "runtime");
             var station = new Deployment {
                 Workspace = workspace, Backend = "local-station", Root = data,
-                StationWorkspace = Path.Combine(data, "workspace"),
+                StationWorkspace = Path.Combine(data, "workspaces"),
                 StationExe = Path.Combine(runtime, "agent-home-station-server.exe"),
                 ToolPackagesDirectory = Directory.Exists(Path.Combine(workspace, "publictools")) ? Path.Combine(workspace, "publictools") : "",
                 ApplicationPackagesDirectory = Directory.Exists(Path.Combine(workspace, "connected-apps")) && !Directory.Exists(Path.Combine(workspace, "applications"))
