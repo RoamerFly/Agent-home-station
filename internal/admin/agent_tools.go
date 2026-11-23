@@ -42,6 +42,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
 		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable on demand an external Station package the owner has already installed and approved. Owner only. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("station_comfy", "Use the workstation's registered ComfyUI workflows from this existing WeChat conversation. Owner only. action=workflows lists all approved workflows; action=run starts workflow_id with inputs and returns the original job/artifact result; action=job queries the exact job_id. This does not send anything to WeChat. Input {action:workflows|run|job,workflow_id?,inputs?,job_id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","run","job"]},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand for an authorized conversation. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
@@ -103,7 +104,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "station_tool_") || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "station_tool_") || name == "station_comfy" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -150,6 +151,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	}
 	if strings.HasPrefix(name, "station_tool_") {
 		return p.callStationTool(ctx, strings.TrimPrefix(name, "station_tool_"), args)
+	}
+	if name == "station_comfy" {
+		return p.callStationComfy(ctx, args)
 	}
 	if name == "project_checkout_plugin" {
 		return p.checkoutPluginSource(ctx, args)

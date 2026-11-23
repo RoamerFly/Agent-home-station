@@ -135,6 +135,9 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 		timeout = 5 * time.Minute
 		limit = 45 << 20
 	}
+	if path == "/api/local/chat" && method == http.MethodPost {
+		timeout = 3 * time.Minute
+	}
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return nil, errors.New("station_tool_request_unavailable")
@@ -151,6 +154,61 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 		return nil, fmt.Errorf("station_tool_request_failed_%d", resp.StatusCode)
 	}
 	return data, nil
+}
+
+// The legacy WeChat worker remains the sole owner of its native session. This
+// compatibility call gives it the same registered workstation generator as
+// local chat without transferring group delivery or duplicating a worker.
+func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !p.privileged() || !p.workspaceExecutionAllowed() || p.trace.TraceID == "" {
+		return "", toolInputError("station_comfy_not_authorized")
+	}
+	var in struct {
+		Action     string                     `json:"action"`
+		WorkflowID string                     `json:"workflow_id"`
+		Inputs     map[string]json.RawMessage `json:"inputs"`
+		JobID      string                     `json:"job_id"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&in) != nil {
+		return "", toolInputError("station_comfy_arguments_invalid")
+	}
+	var instruction string
+	switch in.Action {
+	case "workflows":
+		instruction = "只调用本机 project_comfy_workflows，逐项返回工作流编号、用途和参数，不发送到微信。"
+	case "run":
+		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
+			return "", toolInputError("station_comfy_workflow_required")
+		}
+		parameters, _ := json.Marshal(in.Inputs)
+		instruction = "调用本机 project_comfy_run，workflow_id=" + in.WorkflowID + "，inputs=" + string(parameters) + "。返回实际 job_id 和状态；若已完成也返回 artifact_id。不发送到微信。"
+	case "job":
+		if in.JobID == "" || len(in.JobID) > 128 || !validID(in.JobID) {
+			return "", toolInputError("station_comfy_job_required")
+		}
+		instruction = "只调用本机 project_comfy_job 查询 job_id=" + in.JobID + " 的 status，返回实际状态和已登记的 artifact_id。不发送到微信。"
+	default:
+		return "", toolInputError("station_comfy_action_invalid")
+	}
+	session, err := p.stationToolLogin(ctx)
+	if err != nil {
+		return "", err
+	}
+	requestID := "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw))
+	data, err := p.stationToolRequest(ctx, session, http.MethodPost, "/api/local/chat", map[string]string{"request_id": requestID, "text": instruction})
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Messages []string `json:"messages"`
+		Status   string   `json:"status"`
+	}
+	if json.Unmarshal(data, &result) != nil || len(result.Messages) == 0 {
+		return "", errors.New("station_comfy_result_unavailable")
+	}
+	return strings.Join(result.Messages, "\n"), nil
 }
 
 func (p *permittedTools) callStationTool(ctx context.Context, action string, raw json.RawMessage) (string, error) {

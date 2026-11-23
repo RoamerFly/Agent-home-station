@@ -44,6 +44,17 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 	return f, p
 }
 
+func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
+	_, p := trustedAgent(t)
+	if !p.agentToolEnabled("station_comfy") {
+		t.Fatal("owner conversation cannot discover the workstation ComfyUI bridge")
+	}
+	p.trace.Sender = "another-user"
+	if p.agentToolEnabled("station_comfy") {
+		t.Fatal("non-owner inherited the workstation ComfyUI bridge")
+	}
+}
+
 func TestMusicContinuationWithoutInstalledPluginNeedsReview(t *testing.T) {
 	f, p := trustedAgent(t)
 	f.manager.mu.Lock()
