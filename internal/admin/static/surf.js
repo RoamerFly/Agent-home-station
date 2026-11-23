@@ -74,8 +74,8 @@
    if (ended(item) && ended(target)) {
     const remove = node(actions, 'button', '删除历史', 'secondary');
     remove.type = 'button';
-    remove.addEventListener('click', () => {
-     if (window.confirm('删除这条已结束的提醒任务及其已结束的续办记录？')) changeReminder(item.id, 'delete', remove);
+    remove.addEventListener('click', async () => {
+     if (await window.WechatDialogs.confirmAction({title:'删除历史提醒',message:'删除这条已结束的提醒任务及其已结束的续办记录？',confirmText:'删除历史',danger:true})) await changeReminder(item.id, 'delete', remove);
     });
    }
    if (target.state === 'needs_review' && !target.reminder_due) {
@@ -169,9 +169,10 @@
    }
   });
  }
- async function changeReminder(id,action,button){button.disabled=true;try{await api('/api/agent/tasks/'+encodeURIComponent(id),{method:'POST',json:{action}});await refreshReminders()}catch(e){$('#reminder-state').textContent='操作失败：'+e.message;button.disabled=false}}
- async function refreshReminders() {
-  if (state.reminderBusy || $('#reminder-list form') || !window.WechatAdmin?.isAuthenticated()) return;
+ async function changeReminder(id,action,button){button.disabled=true;$('#reminder-state').textContent='正在保存…';try{await api('/api/agent/tasks/'+encodeURIComponent(id),{method:'POST',json:{action}});await refreshReminders(true)}catch(e){$('#reminder-state').textContent='操作失败：'+e.message;button.disabled=false}}
+ async function refreshReminders(force=false) {
+  if (state.reminderBusy) {if(force)state.reminderRefreshPending=true;return}
+  if ($('#reminder-list form') || !window.WechatAdmin?.isAuthenticated()) return;
   state.reminderBusy = true;
   try {
    const data = await api('/api/agent');
@@ -182,6 +183,7 @@
    $('#reminder-state').textContent = '读取失败：' + err.message;
   } finally {
    state.reminderBusy = false;
+   if(state.reminderRefreshPending){state.reminderRefreshPending=false;void refreshReminders()}
   }
  }
  function selectSurfTab(name){const reminders=name==='reminders';$('#surf').classList.toggle('reminder-tab-active',reminders);$('#surf-pane').hidden=reminders;$('#reminder-pane').hidden=!reminders;for(const [id,selected] of [['surf-tab',!reminders],['reminder-tab',reminders]]){$('#'+id).classList.toggle('active',selected);$('#'+id).setAttribute('aria-selected',String(selected));$('#'+id).tabIndex=selected?0:-1}if(reminders)refreshReminders()} function dirty(){state.dirty=true;state.version++;$('#surf-save-state').textContent='有未保存的冲浪设置。'}

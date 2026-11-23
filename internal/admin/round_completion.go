@@ -37,7 +37,7 @@ func (s *Server) manualRoundClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.record(bot.Record{Event: "round_manually_closed", Category: "decision", ThreadID: in.ThreadID,
-		MessageID: in.MessageID, Status: "completed", Reason: "owner_closed_round", Origin: "admin"})
+		MessageID: in.MessageID, Status: "stopped", Reason: "owner_closed_round", Origin: "admin"})
 	respond(w, http.StatusOK, map[string]any{"closed": true})
 }
 
