@@ -93,15 +93,15 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 			return c, e
 		}
 	}
-	c.Roots = []string{x.Conversation}
+	c.Roots = []string{x.Conversation, publicProjects}
 	c.Isolation = &agenthost.Isolation{ReadOnly: []string{publicProjects, models, runtimes, filepath.Join(x.Public, "manifests")}}
 	// The desktop package owns lightweight command-line runtimes once. Mount
 	// only audited non-control children needed by generic workspace work; never
 	// expose the desktop executable, broker, device tools or the package root.
 	c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, stationruntime.PackagedCommandRuntimeRoots(c.Windows)...)
-	if x.Owner {
-		// Only the real owner can inspect directories explicitly registered by
-		// the administrator. File writes still use c.Roots, never ReadOnly.
+	if p.workspaceExecutionAllowed() {
+		// Administrator-registered project directories are readable by the fish
+		// in every authorized conversation. Writes remain in its workspace.
 		for _, path := range p.manager.agent.config().ExternalReadOnly {
 			if info, err := os.Lstat(path); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 				c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, path)
@@ -138,7 +138,7 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 		// package/runtime/model/manifests stay explicit read-only mounts.
 		// Account-wide private access remains an explicit global=true elevation;
 		// the normal owner mount retains only this conversation plus public code.
-		c.Roots = append([]string{x.Conversation, publicProjects}, comfyWritable...)
+		c.Roots = append(c.Roots, comfyWritable...)
 	}
 	// Windows uses its own mandatory LPAC backend; never the legacy user shell.
 	return c, nil
@@ -192,7 +192,7 @@ func (p *permittedTools) workspaceExecutionAllowed() bool {
 }
 func (p *permittedTools) projectTools() []mcptools.Tool {
 	return []mcptools.Tool{
-		agentTool("agent_global_search", "Trusted owner only: search THIS account's stored conversation summaries, messages and assets, newest original time first. Asset at refers to its first source request, not later cache/format updates; time_basis labels legacy fallback and summary times. Results retain source conversation, message IDs and sender names. since is inclusive, before exclusive; use RFC3339 with timezone. Does not switch identity or authorize other accounts. Optional archives=true includes retained indexed originals; coverage reports partial indexing. order=relevance uses lexical/metadata ranking. Pagination accepts cursor or offset; a source change invalidates its cursor. Input {query?,thread_id?,since?,before?,offset?,limit?,cursor?,archives?,order?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"cursor":{"type":"string"},"order":{"type":"string","enum":["time","relevance"]},"archives":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
+		agentTool("agent_global_search", "Search this account's stored conversations, tasks and assets when cross-conversation reading is enabled. Results retain the source conversation, message IDs and original times. since/before use RFC3339 with timezone; continue with cursor or offset. Input {query?,thread_id?,since?,before?,offset?,limit?,cursor?,archives?,order?}.", `{"type":"object","properties":{"query":{"type":"string"},"thread_id":{"type":"string"},"since":{"type":"string","description":"Inclusive original time, RFC3339 with timezone"},"before":{"type":"string","description":"Exclusive original time, RFC3339 with timezone"},"cursor":{"type":"string"},"order":{"type":"string","enum":["time","relevance"]},"archives":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
 	}
 }
 func (p *permittedTools) callProject(ctx context.Context, name string, raw json.RawMessage) (string, error) {

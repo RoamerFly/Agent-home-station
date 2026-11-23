@@ -116,12 +116,11 @@ func (p *permittedTools) dedicatedPluginToolNames(ctx context.Context, id string
 	return names
 }
 
-// Dynamic packages can receive account-private configuration and declared
-// permissions. Until a package declares a narrower, reviewable conversation
-// grant, only the configured owner may invoke it. The invocation is still
-// bound to the current account and conversation below.
+// Generic packages are limited to declared read/compute capabilities. They
+// run for the fish in any authorized conversation, with the current source
+// and package grant bound by the invocation policy below.
 func (p *permittedTools) dynamicPluginAllowed() bool {
-	return p.privateSurfOrigin == nil && !p.trace.Surf && p.privileged()
+	return p.privateSurfOrigin == nil && p.workspaceExecutionAllowed()
 }
 
 func (p *permittedTools) dynamicPluginCapabilities(ctx context.Context, id string) ([]pluginhost.Capability, error) {

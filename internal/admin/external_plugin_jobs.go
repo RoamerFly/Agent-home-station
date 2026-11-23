@@ -61,7 +61,7 @@ func (g *externalJobAuthority) authorization(ctx context.Context, p *externalHTT
 		return "", errors.New("external_job_original_proof_missing")
 	}
 	current, ok := p.p.manager.agent.lookupTask(g.task.ID, g.task.Account, g.task.Thread)
-	if !ok || current.PluginJob == nil || !current.Updated.Equal(g.task.Updated) || current.Account != p.p.trace.Account || current.Thread != p.p.trace.Thread || current.Sender != p.p.trace.Sender || current.State != g.task.State || current.PluginJob.Polls != g.task.PluginJob.Polls || current.PluginJob.CancelState != g.task.PluginJob.CancelState || current.PluginJob.LegacyConfigurationSHA256 != g.task.PluginJob.LegacyConfigurationSHA256 || !reflect.DeepEqual(current.PluginJob.Origin, g.task.PluginJob.Origin) || !reflect.DeepEqual(current.PluginJob.Ticket, g.task.PluginJob.Ticket) || !reflect.DeepEqual(current.Constraints, g.task.Constraints) || !reflect.DeepEqual(current.PluginJob.PollState, g.task.PluginJob.PollState) {
+	if !ok || current.PluginJob == nil || !current.Updated.Equal(g.task.Updated) || current.Account != p.p.trace.Account || current.Thread != p.p.trace.Thread || current.State != g.task.State || current.PluginJob.Polls != g.task.PluginJob.Polls || current.PluginJob.CancelState != g.task.PluginJob.CancelState || current.PluginJob.LegacyConfigurationSHA256 != g.task.PluginJob.LegacyConfigurationSHA256 || !reflect.DeepEqual(current.PluginJob.Origin, g.task.PluginJob.Origin) || !reflect.DeepEqual(current.PluginJob.Ticket, g.task.PluginJob.Ticket) || !reflect.DeepEqual(current.Constraints, g.task.Constraints) || !reflect.DeepEqual(current.PluginJob.PollState, g.task.PluginJob.PollState) {
 		return "", errors.New("external_job_task_changed")
 	}
 	if err := p.p.manager.validateTaskSource(current); err != nil {

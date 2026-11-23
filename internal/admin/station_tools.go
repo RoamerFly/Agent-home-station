@@ -306,7 +306,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 	if action != "status" && action != "enable" && action != "start" && action != "stop" && action != "restart" {
 		return "", toolInputError("station_tool_action_invalid")
 	}
-	if !p.privileged() && (action == "enable" || !p.workspaceExecutionAllowed()) {
+	if !p.workspaceExecutionAllowed() {
 		return "", toolInputError("station_tool_not_authorized")
 	}
 	var in struct {

@@ -30,7 +30,7 @@ type projectCheckoutPluginInput struct {
 // capability's *write* grant.  A trusted owner with a read-only Agent host
 // cannot turn a package inspection into a writable source tree.
 func (p *permittedTools) projectCheckoutPluginAllowed(ctx context.Context) bool {
-	if !p.privileged() || !p.workspaceExecutionAllowed() {
+	if !p.workspaceExecutionAllowed() {
 		return false
 	}
 	rows, _, installed, err := p.projectPluginCatalog(ctx)

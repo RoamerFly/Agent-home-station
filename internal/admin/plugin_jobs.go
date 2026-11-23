@@ -188,8 +188,8 @@ func (p *permittedTools) callPluginJob(ctx context.Context, name string, args js
 			task = &copy
 		}
 	}
-	if task == nil || task.Sender != p.trace.Sender && !p.privileged() {
-		return "", toolInputError("只能查询或取消本人在本会话发起的工具任务")
+	if task == nil || !p.workspaceExecutionAllowed() {
+		return "", toolInputError("当前会话没有这个工具任务")
 	}
 	if name == "plugin_job_cancel" {
 		out, err := p.manager.cancelPluginTask(ctx, *task)

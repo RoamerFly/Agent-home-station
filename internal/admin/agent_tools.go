@@ -40,8 +40,8 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.documentTools()...)
 	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
-	if p.privileged() {
-		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable on demand an external Station package the owner has already installed and approved. Owner only. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
+	if p.workspaceExecutionAllowed() {
+		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable an external Station package already installed and approved on this workstation. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
 	}
 	if p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("station_comfy", "Use the workstation ComfyUI from this WeChat conversation. action=workflows lists available workflows; models lists installed models; author creates a workflow in the fish's home; run starts one; job checks it; attach stages a completed artifact for this conversation. After attach, send with returned media[].id and confirm receipt. No action sends by itself. Input {action:workflows|models|author|run|job|attach,workflow_id?,inputs?,job_id?,artifact_id?,category?,offset?,limit?,goal?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","run","job","attach"]},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
@@ -61,8 +61,8 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	for _, tool := range projectTools {
 		projectWriteVisible = projectWriteVisible || tool.Name == "project_create"
 	}
-	if p.privileged() && p.workspaceExecutionAllowed() && (c.Host.Mode == "files" || c.Host.Mode == "full") && projectWriteVisible {
-		tools = append(tools, agentTool("project_checkout_plugin", "Create or reopen an editable, digest-pinned source working copy of an installed plugin in THIS conversation's private tool-sources directory. Trusted owner with project write permission only. Copies only verified declared package files and plugin.json; never copies configuration, secrets, package-store state or mutable installed files. Same digest reopens without overwriting edits; a new installed digest creates a separate versioned directory. Input {plugin_id:string}.", `{"type":"object","properties":{"plugin_id":{"type":"string"}},"required":["plugin_id"],"additionalProperties":false}`))
+	if p.workspaceExecutionAllowed() && (c.Host.Mode == "files" || c.Host.Mode == "full") && projectWriteVisible {
+		tools = append(tools, agentTool("project_checkout_plugin", "Create or reopen an editable source copy of an installed plugin in the fish's conversation workspace. Copies verified package files only and preserves existing edits. Input {plugin_id:string}.", `{"type":"object","properties":{"plugin_id":{"type":"string"}},"required":["plugin_id"],"additionalProperties":false}`))
 	}
 	for _, tool := range p.projectTools() {
 		if tool.Name == "project_create" && (!p.workspaceExecutionAllowed() || (c.Host.Mode != "files" && c.Host.Mode != "full")) {

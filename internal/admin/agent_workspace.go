@@ -34,7 +34,22 @@ func (m *Manager) initializeWorkspace() error {
 		"project-rvc.md":              "# 原曲RVC翻唱\n默认翻唱用music_rvc_start：从本会话或公共歌曲库的实际原曲asset_id分离人声、转换为已配置角色声线再混回原伴奏；不经过YuE，不需要重写歌词/ASR或重训模型。省略范围处理原录音完整长度，明确短片段时传reference_start_seconds/reference_seconds。job_id自动持久续交，完成后music_local_status读取附件；默认完整分段语音，换格式用media_reuse。音色仍需实际试听。实际入口先project_read(id=rvc)读取受管路径和解释器；Windows运行通过server_windows_process隐藏执行。源码仓库根目录不属于账号工作区，不是训练或换声的前提。高级调参先读validate_singing_config和项目文档，保留原件及配置hash，不盲目重跑已成功的转换。\n",
 		"project-yue.md":              "# YuE项目\n当前已经有music_reference_inspect、music_local_start、music_local_status工具，可按需发现其参数。原曲翻唱默认music_rvc_start直接RVC换声，保留原词、旋律、节奏与伴奏；原创/相似歌曲用YuE，默认native女声。当前策略见project-rvc.md和每轮提供的歌曲策略v3。原歌曲的文件、来源、生成配方在本会话素材及任务里，先media_recent、agent_tasks和music_reference_inspect读取，不要对已知配方强制重新ASR。参考生成会重新合成，不保证原伴奏或逐字演唱。长歌曲制作必须持久保存真实job_id，查询原任务，不能重复提交。实际入口先project_read(id=yue)读取受管路径、工作流和模型。修改/运行项目需要已配置的服务器权限；没有权限时使用现有专用工具并如实说明。\n",
 	}
+	guideUpdates := map[string]string{
+		"在当前会话写小程序或由真实主人修改公共项目":                                               "在大肥鱼的会话工作区或公共项目目录编写程序",
+		"主人可在public_workspace/projects存公共工具":                                  "可在public_workspace/projects存公共工具",
+		"大肥鱼在已授权会话可使用本账号登记的GPT-SoVITS、百炼和RVC声线。":                              "可信主人能发现本账号私有GPT-SoVITS/百炼/RVC归档，普通群友只见公共条目。",
+		"个人声线保留在已登记的声线库，按voice_library_prepare返回的路径读取；新建样本放在大肥鱼工作区。":          "个人声线在账号global下，server_*调用global=true，不向群工作区复制私人原件。",
+		"跨会话读取已启用时，大肥鱼可以检索本账号已保存的会话":                                          "当前账号真实主人且跨会话权限有效时，可以检索本账号全部已保存会话",
+		"跨会话任务先核对本账号真实来源和目标；不猜其他账号ID，不跨账号。":                                   "普通成员只能在自己的会话内操作；不猜其他账号ID，不跨账号。",
+		"大肥鱼可在已授权会话执行文件处理、编写程序和使用公共项目；跨会话读取须已启用，创作文件写入大肥鱼工作区。删除和账号管理仍需管理员身份。": "大肥鱼可在当前会话工作区或公共项目目录创作和编写程序；普通群成员仍只读取本群消息，管理员私有资料仍按原权限访问。删除和账号管理仍需管理员身份。",
+		"跨会话检索用于继续本账号的真实任务；回应时由大肥鱼判断当前会话需要哪些信息。":                              "跨会话检索是给主人完成明确任务的资料，不是群里的共同记忆；不向群里提私聊中的需求、选择、联系人或私人素材。",
+		"GPT-SoVITS已登记声线可在大肥鱼工作区准备，用匹配的引擎":                                    "GPT-SoVITS私有声线可给主人准备在global，用匹配的引擎",
+		"普通成员可在本会话执行文件处理或无害程序、使用只读公共项目；不能修改公共源码、读取其他会话。管理员可改公共项目，global=true仅临时授予本次调用当前微信账号私有全局工作区，不影响后续群友。": "大肥鱼可在当前会话工作区或公共项目目录创作和编写程序；普通群成员仍只读取本群消息，管理员私有资料仍按原权限访问。删除和账号管理仍需管理员身份。",
+	}
 	for name, content := range docs {
+		for old, replacement := range guideUpdates {
+			content = strings.ReplaceAll(content, old, replacement)
+		}
 		d, e := m.workspace.Read("shared", name)
 		if e != nil {
 			return e
@@ -91,6 +106,9 @@ func (m *Manager) initializeWorkspace() error {
 		}
 		if d.Revision != "" {
 			updated := d.Content
+			for old, replacement := range guideUpdates {
+				updated = strings.ReplaceAll(updated, old, replacement)
+			}
 			for old, replacement := range map[string]string{
 				"每次新的重试使用新的request_key，同一次请求复用稳定key。":                                                                        "wechat_send_media始终复用原稳定request_key；wechat_delivery_retry的key仅标识一次原job恢复调用，不创建新投递。",
 				"server_list、server_search、workspace_list/search通过next_offset继续":                                             "server_list、workspace_list/search通过next_offset继续；server_search使用next_cursor续查，空页且has_more时也要继续，分批参数可调，详见project-search.md",
