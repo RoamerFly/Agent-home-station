@@ -32,7 +32,7 @@
     done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
-  const groupLabels = {pending:'待处理',active:'进行中',done:'已结束'};
+  const groupLabels = {pending:'待完成',active:'进行中',done:'已完成'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -264,8 +264,11 @@
         }
         if (!open.size) { round.status = 'needs_review'; round.orphanTools = true; }
       }
-      if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'stopped';
+      if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';
+      // Execution rounds have exactly three public lifecycle states. The raw
+      // outcome remains available in the timeline for diagnosis.
+      round.lifecycle = {pending:'待完成',active:'进行中',done:'已完成'}[round.group];
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       // The native thread identity is authoritative for the chat type. A
       // stale or hand-written source_kind must never turn a @chatroom round
@@ -275,6 +278,12 @@
       round.categories = [...new Set(round.entries.map(x => x.category || 'system'))];
       round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.effect, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();
       return round;
+    }).filter(round => {
+      // Old pre-submit drafts with no live task or accepted send are not
+      // execution rounds anymore. Keep their raw journal for diagnostics.
+      if (round.system || round.status !== 'needs_review') return true;
+      if (round.sent.some(item => ['accepted', 'observed'].includes(item.status))) return true;
+      return latestEntryTime - Date.parse(round.updated) < 60 * 60 * 1000;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }
   return { project, stage, activityTarget, groupLabels };

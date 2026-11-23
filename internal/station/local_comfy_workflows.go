@@ -366,10 +366,14 @@ func localComfyOutputKind(graph map[string]any, id string) string {
 }
 func localComfySafeBuiltinInput(class any, input, kind string) bool {
 	switch class {
+	case "CheckpointLoaderSimple":
+		return input == "ckpt_name" && kind == "string"
 	case "CLIPTextEncode":
 		return input == "text" && kind == "string"
 	case "KSampler":
-		return (input == "seed" || input == "steps") && kind == "integer"
+		return (input == "seed" || input == "steps") && kind == "integer" ||
+			(input == "cfg" || input == "denoise") && kind == "number" ||
+			(input == "sampler_name" || input == "scheduler") && kind == "string"
 	case "EmptyHunyuanLatentVideo":
 		return (input == "width" || input == "height" || input == "length") && kind == "integer"
 	case "CreateVideo":

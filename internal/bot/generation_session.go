@@ -137,9 +137,9 @@ func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message
 	}
 }
 
-// settleGenerationFollowups runs on the actor. A consumed event completes with
-// its parent run; it never enters a second independent response. Failed runs
-// retain the existing uncertain-effect rule instead of blind effect replay.
+// A later message participates in the active turn when possible. If that turn
+// fails, process the message normally on its own turn instead of leaving an
+// indefinitely interrupted follow-up card.
 func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 	if j.session == nil {
 		return
@@ -153,9 +153,6 @@ func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 		if item.FollowupConsumed {
 			if success {
 				item.Phase = "completed"
-			} else if j.toolStarted {
-				item.Phase = "interrupted"
-				item.ToolStarted = true
 			}
 		}
 		item.Updated = time.Now().UTC()
@@ -178,21 +175,12 @@ func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 // recoverFollowups must run before normal restart recovery rewrites parent
 // phases. The inbox itself is the durable source; no raw media XML is stored.
 func (w *Worker) recoverFollowups() {
-	parents := map[string]inboxItem{}
-	for _, item := range w.runtime.Inbox {
-		parents[item.Event.Data.MessageID] = item
-	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.Phase != "following" {
 			continue
 		}
-		parent := parents[item.FollowupParent]
 		item.Phase = "received"
-		if item.FollowupConsumed && parent.ToolStarted {
-			item.Phase = "interrupted"
-			item.ToolStarted = true
-		}
 		if item.Phase == "received" {
 			item.FollowupParent = ""
 			item.FollowupConsumed = false
