@@ -85,6 +85,15 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	// only audited non-control children needed by generic workspace work; never
 	// expose the desktop executable, broker, device tools or the package root.
 	c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, stationruntime.PackagedCommandRuntimeRoots(c.Windows)...)
+	if x.Owner {
+		// Only the real owner can inspect directories explicitly registered by
+		// the administrator. File writes still use c.Roots, never ReadOnly.
+		for _, path := range p.manager.agent.config().ExternalReadOnly {
+			if info, err := os.Lstat(path); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, path)
+			}
+		}
+	}
 	if p.workspaceExecutionAllowed() {
 		if options, err := runtimeDeploymentOptions(); err == nil && options.DocumentRuntimeRoot != "" {
 			c.Isolation.ReadOnly = append(c.Isolation.ReadOnly, options.DocumentRuntimeRoot)
@@ -99,6 +108,14 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 	}
 
 	if x.Owner {
+		comfyData := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(p.manager.dir))), "resources", "comfyui")
+		comfyWritable := []string{}
+		for _, sub := range []string{"workflows", "custom_nodes"} {
+			path := filepath.Join(comfyData, sub)
+			if info, err := os.Lstat(path); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				comfyWritable = append(comfyWritable, path)
+			}
+		}
 		// An owner may maintain public projects and the current account's private
 		// workspace, but the public workspace root also holds runtime definitions,
 		// model registrations and manifests consumed by trusted host components.
@@ -107,7 +124,7 @@ func (p *permittedTools) hostConfig() (agenthost.Config, error) {
 		// package/runtime/model/manifests stay explicit read-only mounts.
 		// Account-wide private access remains an explicit global=true elevation;
 		// the normal owner mount retains only this conversation plus public code.
-		c.Roots = []string{x.Conversation, publicProjects}
+		c.Roots = append([]string{x.Conversation, publicProjects}, comfyWritable...)
 	}
 	// Windows uses its own mandatory LPAC backend; never the legacy user shell.
 	return c, nil
@@ -148,7 +165,11 @@ func (p *permittedTools) scopedHostConfig(raw json.RawMessage) (agenthost.Config
 		x := p.executionContext()
 		// Match the owner default above. global widens only this account's private
 		// data, not the public runtime/control parent or another account.
-		c.Roots = []string{x.Private, filepath.Join(x.Public, "projects")}
+		ownerExtras := []string{}
+		if len(c.Roots) > 2 {
+			ownerExtras = c.Roots[2:]
+		}
+		c.Roots = append([]string{x.Private, filepath.Join(x.Public, "projects")}, ownerExtras...)
 	}
 	return c, nil
 }

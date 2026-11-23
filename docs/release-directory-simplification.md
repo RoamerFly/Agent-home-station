@@ -28,3 +28,10 @@
 - 声线登记只指向 `data/voices` 中当前版本，真实语音合成与 RVC 换声各完成一次本地验证。
 - 工作站更新后仍能读取原登录、消息、任务和媒体，服务恢复在线。
 - 待删除清单注明原路径、目标路径、引用检查结果和迁移日期；不在本轮直接永久删除。
+
+## 2026-11-23 首轮执行记录
+
+- 发布根目录的 `station-acceptance.test.exe` 已确认不是正在运行的程序，且源码构建脚本不引用它；按原 SHA-256 `9eef9a7522e481fef70180fd0ef996dab901e5a7c78bfcd8898b57b6b828a275` 移至 `E:\待删除\agent-home-workstation-release-cleanup-20261123`，保留恢复能力。程序与数据没有重命名。
+- 已将 ComfyUI 原有四个工作流登记文件逐文件校验复制到 `data/resources/comfyui/workflows`，创建 `data/resources/comfyui/custom_nodes` 作为自建节点目录。旧文件暂留原位，直到新登记与实际服务读取成功。
+- 当前 `env/windows-python-cli` 和 `env/windows-agent-host` 被工作站 Agent 配置直接引用；`windows-agent-host` 还被运行中的公共工具桥接进程引用。`env/windows-station-speech`、`document-workshop`、`windows-media` 仍有站内或旧配置引用。首轮不移动这些运行环境，也不把目录名当成重复证据。
+- 后续逐项把真正的公共工具运行时引用改为各自 `publictools/<工具>/runtime`，核验后再移动无引用副本。`env` 中属于工作站自己的运行器需要先确定新归属并完成配置切换。当前清理仅完成根目录遗留程序与 ComfyUI 工作流数据迁移，尚未达到整目录完成标准。

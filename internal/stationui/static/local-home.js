@@ -6107,7 +6107,7 @@
   }
   function normalizeDeployment(value, id = "comfyui") {
     const spec = deploymentDescriptor(id), source = value && typeof value === "object" ? value : {};
-    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", ffmpeg: "" };
+    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", custom_nodes: "", ffmpeg: "" };
     const text = (key) => typeof source[key] === "string" ? source[key] : defaults[key];
     const number = (key, fallback) => Object.hasOwn(source, key) && source[key] !== undefined && source[key] !== null ? source[key] : fallback;
     const configuration = {
@@ -6121,6 +6121,7 @@
       if (source.workflow_pins && typeof source.workflow_pins === "object" && !Array.isArray(source.workflow_pins)) configuration.workflow_pins = { ...source.workflow_pins };
       if (typeof source.ffmpeg_sha256 === "string" && source.ffmpeg_sha256) configuration.ffmpeg_sha256 = source.ffmpeg_sha256;
     }
+    if (id === "comfyui" && text("custom_nodes")) configuration.custom_nodes = text("custom_nodes");
     return configuration;
   }
   function validateDeploymentDraft(draft, id) {
@@ -6400,6 +6401,7 @@
       [id === "yue" ? "审核清单（选填，留空由宿主生成）" : "审核清单", "manifest", { placeholder: id === "yue" ? "已有清单可填写；留空自动生成" : "相对安装目录或宿主私有绝对路径" }]
     ];
     if (id === "yue") fields.push(["FFmpeg 程序", "ffmpeg", { placeholder: "已审核的 ffmpeg.exe 绝对路径" }]);
+    if (id === "comfyui") fields.push(["自建节点目录", "custom_nodes", { placeholder: "留空禁用；启用时使用工作站 data/resources/comfyui/custom_nodes", pickDirectory: true, toolID: id }]);
     fields.forEach(([label, key, options]) => {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: fieldsDisabled });
       field.input.id = `${spec.prefix}-deployment-${key}`; field.label.htmlFor = field.input.id;

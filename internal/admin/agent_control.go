@@ -35,6 +35,7 @@ type agentSettings struct {
 	MaxSteps          int               `json:"max_steps"`
 	MaxTaskRuns       int               `json:"max_task_runs"`
 	Host              agenthost.Config  `json:"host"`
+	ExternalReadOnly  []string          `json:"external_read_only,omitempty"`
 	ServiceRetention  *serviceRetention `json:"service_retention,omitempty"`
 }
 
@@ -76,6 +77,18 @@ func (c agentSettings) validate() error {
 	}
 	if len(c.OwnerIDs) > 30 || len(c.PrivilegedThreads) > 100 || len(c.AccountActions) > 8 {
 		return errors.New("授权条目过多")
+	}
+	if len(c.ExternalReadOnly) > 8 {
+		return errors.New("外部只读目录最多登记 8 个")
+	}
+	for _, path := range c.ExternalReadOnly {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, 0) {
+			return errors.New("外部只读目录须为规范绝对路径")
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("外部只读目录不存在或不是普通目录")
+		}
 	}
 	for _, id := range c.OwnerIDs {
 		if !validID(id) {
