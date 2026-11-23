@@ -54,6 +54,13 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  assert.equal(round.group,'done');
  assert.equal(round.orphanReceipt,true);
 });
+test('old stopped review with an accepted segment leaves the execution list',()=>{
+ const accepted=entry(1,{message_id:'old-review',event:'message_sent',category:'sent',status:'accepted',send_id:'segment-1'});
+ const review=entry(2,{message_id:'old-review',event:'generation_paused',category:'decision',status:'needs_review'});
+ const later={...entry(3,{message_id:'new-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(review.time)+2*60*60*1000).toISOString()};
+ const rounds=project([accepted,review,later]);
+ assert.equal(rounds.some(x=>x.triggerMessageID==='old-review'),false);
+});
 test('thread identity wins over a stale source kind label',()=>{
  const [round]=project([entry(1,{source_kind:'private',thread_id:'fixture@chatroom',event:'message_received',category:'received',status:'received'})]);
  assert.equal(round.source_kind,'group');

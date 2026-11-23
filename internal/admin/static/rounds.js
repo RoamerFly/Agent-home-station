@@ -280,10 +280,9 @@
       return round;
     }).filter(round => {
       if (round.entries.some(item => item.event === 'round_manually_closed')) return false;
-      // Old pre-submit drafts with no live task or accepted send are not
-      // execution rounds anymore. Keep their raw journal for diagnostics.
+      // Old settled reviews are no longer execution rounds, including those
+      // that contain an earlier accepted segment. Keep the raw journal.
       if (round.system || round.status !== 'needs_review') return true;
-      if (round.sent.some(item => ['accepted', 'observed'].includes(item.status))) return true;
       return latestEntryTime - Date.parse(round.updated) < 60 * 60 * 1000;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }
