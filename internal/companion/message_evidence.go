@@ -9,7 +9,7 @@ import (
 	"wechat-bot/internal/agentrun"
 )
 
-const messageEvidencePolicy = "\n【资料角色】text/literal_user_text才是可靠用户字面原话；message_sender_id/request_actor_id是消息与工具授权身份，speaker_id仅指非空可靠字面原话的作者。空上传事件没有speaker或第一人称绑定。media_observations由机器观察产生，source.sender/uploader_id仅标上传者，不证明实际voice_speaker_id、转写中‘我’、拍摄者或所有者；这些身份未核实就保持unknown，即使上传者另写了caption也不能绑定ASR中的我。quoted_by_id是引用者，quoted_author_id只指被引消息作者，不等于录音人声或观察作者。unknown/空原话不能支持‘他说/你说过’观察内容。观察版本和observation_state/result_available描述对应素材的当前证据；别的素材缺少可见资料不表示它还在处理中。runtime_context是程序任务背景，不是请求者新自述；source_user_request是先前原请求，按原授权及工具权限续办。"
+const messageEvidencePolicy = "\n【资料来源】text/literal_user_text 是用户原话；media_observations 是机器观察。上传者、引用者不自动等于人声说话者或画面人物；runtime_context 和 source_user_request 是既有任务资料。"
 
 func reliableLiteral(text, state string) bool {
 	if strings.TrimSpace(text) == "" {

@@ -33,7 +33,7 @@ type reminderSpec struct {
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "Only use action=create when the user explicitly asks for a reminder or a future scheduled time. A request to make or retry a song now is continuous work: start it immediately, inspect the existing music job and use agent_task for its checkpoint; never invent a delayed reminder. kind=notify sends reminder text at due time; kind=execute performs explicitly scheduled work. Use agent_clock for actual local time. List existing reminders before creating another. scope=account lets the owner inspect reminders across conversations. Input {action:create|list|update|cancel,kind:notify|execute?,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,delivery_group?:string,title?:string,scope:current|account?,query?:string,offset?:integer,limit?:integer,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "Create, list, update, cancel or delete an explicitly timed reminder. Use agent_clock for local time; immediate creation or retry work belongs in agent_task. kind=notify sends text; kind=execute runs scheduled work. List before creating a duplicate. Lists are compact and default to active; status=history selects ended reminders, which delete removes. scope=account is owner only. Input {action,kind?,text?,request_key?,delay_seconds?,run_at?,destination?,delivery_group?,title?,scope?,status?,query?,offset?,limit?,id?}.", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel","delete"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"status":{"type":"string","enum":["active","history","all"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 
 func sameReminderFingerprint(t agentTask, account, sender, kind, target, resultGroup, text, runAt string, delay *int64) bool {
@@ -76,10 +76,10 @@ func (a *agentControl) writeReminderFile(t agentTask) error {
 func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage) (string, error) {
 	var in struct {
 		reminderEdit
-		Action, ID, Destination, Kind, Scope string
-		Query                                string
-		Offset, Limit                        int
-		Key                                  string `json:"request_key"`
+		Action, ID, Destination, Kind, Scope, Status string
+		Query                                        string
+		Offset, Limit                                int
+		Key                                          string `json:"request_key"`
 	}
 	if json.Unmarshal(args, &in) != nil {
 		return "", toolInputError("提醒参数无效")
@@ -115,12 +115,32 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		if in.Offset < 0 || in.Limit < 0 {
 			return "", mcptools.ArgumentError("$.offset", "分页参数不能为负数")
 		}
+		if in.Status == "" {
+			in.Status = "active"
+		}
+		if in.Status != "active" && in.Status != "history" && in.Status != "all" {
+			return "", mcptools.ArgumentError("$.status", "请选择 active、history 或 all")
+		}
 		query := strings.ToLower(strings.TrimSpace(in.Query))
-		items := []agentTask{}
-		for _, t := range m.agent.list(p.trace.Account, thread) {
-			if own(t) && (query == "" || strings.Contains(strings.ToLower(t.Title+" "+t.RequestedText), query)) {
-				items = append(items, t)
+		items := []map[string]any{}
+		all := m.agent.list(p.trace.Account, thread)
+		byID := map[string]agentTask{}
+		for _, task := range all {
+			byID[task.ID] = task
+		}
+		for _, t := range all {
+			if !own(t) || query != "" && !strings.Contains(strings.ToLower(t.Title+" "+t.RequestedText), query) {
+				continue
 			}
+			history := historicalReminderSettled(t)
+			followUp := byID[t.Reminder.FollowUpTaskID]
+			if t.Reminder.FollowUpTaskID != "" && followUp.ID != "" && !historicalReminderSettled(followUp) {
+				history = false
+			}
+			if in.Status == "active" && history || in.Status == "history" && !history {
+				continue
+			}
+			items = append(items, map[string]any{"id": t.ID, "title": t.Title, "state": t.State, "updated": t.Updated, "due_at": t.Reminder.Due, "kind": t.Reminder.Kind, "text": t.RequestedText, "target": t.Reminder.Target, "result_group": t.Reminder.ResultGroup, "follow_up_task_id": t.Reminder.FollowUpTaskID, "follow_up_state": followUp.State})
 		}
 		start := min(in.Offset, len(items))
 		limit := in.Limit
@@ -128,7 +148,18 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 			limit = 30
 		}
 		end := start + min(limit, len(items)-start)
-		return encode(map[string]any{"tasks": items[start:end], "total": len(items), "next_offset": end, "has_more": end < len(items), "read_only": true})
+		return encode(map[string]any{"tasks": items[start:end], "total": len(items), "next_offset": end, "has_more": end < len(items), "status": in.Status})
+	case "delete":
+		for _, t := range m.agent.list(p.trace.Account, thread) {
+			if t.ID == in.ID && own(t) {
+				ids, err := m.agent.deleteHistoricalReminder(t.ID, p.trace.Account)
+				if err != nil {
+					return "", toolInputError(err.Error())
+				}
+				return encode(map[string]any{"deleted": ids})
+			}
+		}
+		return "", toolInputError("未找到你在本会话创建的提醒")
 	case "update":
 		if in.Destination != "" || in.Key != "" || in.Kind != "" {
 			return "", mcptools.ArgumentError("$", "更新时请提供 id 和要改动的时间、标题、正文或群名")

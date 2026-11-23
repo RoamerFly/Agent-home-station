@@ -70,6 +70,14 @@
    complete.type = 'button';complete.disabled = terminal || target.state === 'running' || toolActive || unsettled;
    if (!complete.disabled) complete.addEventListener('click', () => changeReminder(target.id, 'complete', complete));
    else complete.title = terminal ? '任务已经结束' : '仍有执行或发送结果需要核对';
+   const ended = task => ['completed','cancelled','stopped','expired'].includes(task.state) && !task.pending_operations?.length && (!task.delivery || task.delivery.state === 'accepted');
+   if (ended(item) && ended(target)) {
+    const remove = node(actions, 'button', '删除历史', 'secondary');
+    remove.type = 'button';
+    remove.addEventListener('click', () => {
+     if (window.confirm('删除这条已结束的提醒任务及其已结束的续办记录？')) changeReminder(item.id, 'delete', remove);
+    });
+   }
    if (target.state === 'needs_review' && !target.reminder_due) {
     const resume = node(actions, 'button', '处理提醒', 'primary');
     resume.type = 'button';
