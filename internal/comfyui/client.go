@@ -327,7 +327,14 @@ func (c *Client) readJob(ctx context.Context, ref JobRef) (State, json.RawMessag
 		return "", nil, ErrProtocol
 	}
 	switch response.State {
-	case Pending, Running, Failed, Cancelled:
+	case Running:
+		// Some ComfyUI builds leave /api/jobs at in_progress after the
+		// prompt has finished. History is the backend's completed output.
+		if historyState, output, ok := c.completedHistory(ctx, ref); ok {
+			return historyState, output, nil
+		}
+		return Running, nil, nil
+	case Pending, Failed, Cancelled:
 		return response.State, nil, nil
 	case Completed:
 		if response.Execution.Completed && response.Execution.Status == "success" {
@@ -335,6 +342,34 @@ func (c *Client) readJob(ctx context.Context, ref JobRef) (State, json.RawMessag
 		}
 	}
 	return "", nil, ErrProtocol
+}
+
+func (c *Client) completedHistory(ctx context.Context, ref JobRef) (State, json.RawMessage, bool) {
+	status, body, err := c.request(ctx, http.MethodGet, "/history/"+ref.ID, nil, maxJSONBytes)
+	if err != nil || status != http.StatusOK {
+		return "", nil, false
+	}
+	var entries map[string]struct {
+		Status struct {
+			Status    string `json:"status_str"`
+			Completed bool   `json:"completed"`
+		} `json:"status"`
+		Outputs map[string]json.RawMessage `json:"outputs"`
+	}
+	if json.Unmarshal(body, &entries) != nil {
+		return "", nil, false
+	}
+	entry, ok := entries[ref.ID]
+	if !ok || !entry.Status.Completed {
+		return "", nil, false
+	}
+	if entry.Status.Status == "success" {
+		return Completed, entry.Outputs[ref.SaveNode], true
+	}
+	if entry.Status.Status == "error" {
+		return Failed, nil, true
+	}
+	return "", nil, false
 }
 
 // Cancel returns whether the backend dispatched a targeted cancellation. A

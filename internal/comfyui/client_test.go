@@ -109,6 +109,8 @@ func TestUnknownSubmissionLookupAndTargetedCancel(t *testing.T) {
 				return
 			}
 			fmt.Fprintf(w, `{"id":%q,"status":"in_progress"}`, ref.ID)
+		case "GET /history/" + ref.ID:
+			fmt.Fprint(w, `{}`)
 		case "POST /api/jobs/" + ref.ID + "/cancel":
 			cancels.Add(1)
 			fmt.Fprint(w, `{"cancelled":true}`)
@@ -144,6 +146,24 @@ func TestUnknownSubmissionLookupAndTargetedCancel(t *testing.T) {
 	}
 	if submits.Load() != 1 || cancels.Load() != 1 {
 		t.Fatalf("submit=%d cancel=%d", submits.Load(), cancels.Load())
+	}
+}
+
+func TestCompletedHistoryOverridesStaleRunningJob(t *testing.T) {
+	ref := prepareFixture(t).Ref()
+	client, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/jobs/" + ref.ID:
+			fmt.Fprintf(w, `{"id":%q,"status":"in_progress"}`, ref.ID)
+		case "GET /history/" + ref.ID:
+			fmt.Fprintf(w, `{%q:{"status":{"status_str":"success","completed":true},"outputs":{%q:{"images":[{"filename":"image_00001_.png","subfolder":%q,"type":"output"}]}}}}`, ref.ID, ref.SaveNode, ref.subfolder())
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+		}
+	})
+	status, err := client.Status(context.Background(), ref)
+	if err != nil || status.State != Completed || status.ImageCount != 1 {
+		t.Fatalf("stale job with completed history = %+v, %v", status, err)
 	}
 }
 
