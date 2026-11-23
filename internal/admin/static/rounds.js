@@ -279,6 +279,7 @@
       round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.effect, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();
       return round;
     }).filter(round => {
+      if (round.entries.some(item => item.event === 'round_manually_closed')) return false;
       // Old pre-submit drafts with no live task or accepted send are not
       // execution rounds anymore. Keep their raw journal for diagnostics.
       if (round.system || round.status !== 'needs_review') return true;

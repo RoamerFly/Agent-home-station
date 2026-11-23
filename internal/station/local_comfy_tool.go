@@ -21,6 +21,7 @@ const (
 	localComfyCapability = "comfyui.run"
 	localComfyListTool   = "project_comfy_workflows"
 	localComfyModelsTool = "project_comfy_models"
+	localComfyFilesTool  = "project_comfy_files"
 	localComfyStartTool  = "project_comfy_run"
 	localComfyJobTool    = "project_comfy_job"
 	localComfyImageLimit = 16
@@ -87,11 +88,12 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 	}
 	jobTool := localComfyJobToolSpec()
 	if _, _, err := s.comfySetup(ctx, grant.FishID); err != nil {
-		return []mcptools.Tool{localComfyModelTool(), jobTool}
+		return []mcptools.Tool{localComfyModelTool(), localComfyFilesToolSpec(), jobTool}
 	}
 	return []mcptools.Tool{
 		localComfyWorkflowTool(),
 		localComfyModelTool(),
+		localComfyFilesToolSpec(),
 		localComfyStartToolSpec(),
 		jobTool,
 	}
@@ -103,6 +105,10 @@ func localComfyWorkflowTool() mcptools.Tool {
 
 func localComfyModelTool() mcptools.Tool {
 	return mcptools.NewTool(localComfyModelsTool, "列出已配置 ComfyUI 模型库内的模型文件名。category 默认 checkpoints；用 offset/limit 翻页。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+}
+
+func localComfyFilesToolSpec() mcptools.Tool {
+	return mcptools.NewTool(localComfyFilesTool, "浏览、读取或编辑 ComfyUI 已登记项目、模型库、插件、工作流和大肥鱼家目录及其子目录。root 选 runtime/models/model_library/custom_nodes/workflows/home；先 list/read，再用 expected_sha256 更新已有文件。read 可用 offset/limit 分段。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
 }
 
 func localComfyStartToolSpec() mcptools.Tool {
@@ -155,6 +161,9 @@ func (t *localToolSet) callLocalComfy(ctx context.Context, name string, raw json
 	}
 	if name == localComfyModelsTool {
 		return s.comfyModels(ctx, grant.FishID, raw)
+	}
+	if name == localComfyFilesTool {
+		return s.comfyFiles(ctx, grant.FishID, raw)
 	}
 	e.deployment, e.workflows, err = s.comfySetup(ctx, grant.FishID)
 	if err != nil {

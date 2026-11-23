@@ -195,7 +195,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		if strings.TrimSpace(in.Goal) == "" || len(in.Goal) > 4000 {
 			return "", toolInputError("station_comfy_goal_required")
 		}
-		instruction = "同一个大肥鱼正在完善自己的 ComfyUI 工作流。先调用 project_comfy_workflows 取得 personal_workflow_directory 和登记格式，再用 project_comfy_models 查询实际模型；按以下需求用 server_write 在自己的家目录创建或修改图文件和 registry.json，计算图文件 SHA-256，最后重新调用 project_comfy_workflows 验证可发现。不要运行或发送成品，已存在的文件先读取再修改。需求：" + in.Goal
+		instruction = "同一个大肥鱼正在完善自己的 ComfyUI 工作流。先调用 project_comfy_workflows 取得 personal_workflow_directory 和登记格式，再用 project_comfy_models 查询实际模型；需要查看项目、模型库、插件或工作流文件时调用 project_comfy_files，必要时用它写入文本源码和配置。按以下需求在自己的家目录创建或修改图文件和 registry.json，计算图文件 SHA-256，最后重新调用 project_comfy_workflows 验证可发现。不要运行或发送成品，已存在的文件先读取再修改。需求：" + in.Goal
 	case "run":
 		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
 			return "", toolInputError("station_comfy_workflow_required")

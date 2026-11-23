@@ -299,7 +299,7 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	switch name {
 	case localRVCVoicesTool, localRVCStartTool, localRVCJobTool:
 		return t.callLocalRVC(ctx, name, raw)
-	case localComfyListTool, localComfyModelsTool, localComfyStartTool, localComfyJobTool:
+	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyStartTool, localComfyJobTool:
 		return t.callLocalComfy(ctx, name, raw)
 	case localYuEStartTool, localYuEJobTool:
 		return t.callLocalYuE(ctx, name, raw)
