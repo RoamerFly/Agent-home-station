@@ -32,7 +32,7 @@
     done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled','needs_review'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
-  const groupLabels = {pending:'待完成',active:'进行中',done:'已完成'};
+  const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -74,9 +74,10 @@
       return { kind: 'page', label: url.hostname + ' · ' + url.pathname, href: url.href };
     } catch { return null; }
   }
-  function project(items, taskStates = {}) {
+  function project(items, taskStates = {}, now = Date.now(), inbox = {loaded:false, states:{}}) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     const latestEntryTime = entries.reduce((latest, item) => Math.max(latest, Date.parse(item.time) || 0), 0);
+    const observedTime = Math.max(latestEntryTime, Number(now) || 0);
     const parents = new Map(), sends = new Map(), groups = new Map();
     const find = key => {
       const seen = new Set();
@@ -89,7 +90,7 @@
     // Without it every process-result checkpoint becomes a separate active
     // round even when it yielded back to the same original message.
     for (const item of entries) {
-      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped', 'background_turn_yielded'].includes(item.event) && item.related_message_id) {
+      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped', 'background_turn_yielded', 'message_aggregated'].includes(item.event) && item.related_message_id) {
         const child = messageKey(item), parent = messageKey(item, item.related_message_id);
         if (child && parent && find(parent) !== child) parents.set(child, parent);
       }
@@ -192,6 +193,8 @@
       else if (item.event === 'character_decision' && ['quiet_hours','no_reliable_context'].includes(item.reason)) round.status = 'skipped';
       else if (item.event === 'character_decision' && ['invalid_model_decision','invalid_tool_arguments','tool_unavailable_or_budget_exhausted','tool_budget_exhausted','unverified_model_response','media_unavailable_or_permission_denied'].includes(item.reason)) round.status = 'failed';
       else if (item.event === 'character_decision' && ['cross_conversation_private_route_unavailable','cross_conversation_media_requires_explicit_delivery','private_diagnostic_only'].includes(item.reason)) round.status = 'blocked';
+      else if (item.event === 'message_aggregated' && !item.related_message_id) round.status = 'completed';
+      else if (item.event === 'shared_video_observation_unavailable') round.status = 'failed';
       else if (item.event === 'character_decision' && item.reason === 'cross_conversation_result_private_delivery_handled') round.status = 'completed';
       else if (['silent', 'skipped', 'blocked', 'stopped', 'cancelled'].includes(item.status)) round.status = item.status === 'cancelled' ? 'stopped' : item.status;
       else if (item.event === 'character_decision' && /silence|silent/.test(item.reason || '')) round.status = 'silent';
@@ -226,12 +229,23 @@
       ].includes(e.event));
       const hasTerminalEvidence = round.entries.some(e =>
         e.event === 'message_processed' || ['completed', 'accepted', 'failed', 'expired', 'blocked', 'stopped', 'cancelled', 'needs_review'].includes(e.status));
-      const ageFromLatest = latestEntryTime - Date.parse(round.updated);
+      const ageFromLatest = observedTime - Date.parse(round.updated);
       const hasOnlyReceiveProcessing = round.entries.every(e =>
         e.event === 'message_received' || e.event === 'message_processing' || e.category === 'received');
       if (ageFromLatest >= 10 * 60 * 1000 && !hasDurableContinuation && !hasTerminalEvidence && hasOnlyReceiveProcessing && ['received', 'running'].includes(round.status)) {
         round.status = 'stopped';
         round.staleUnfinished = true;
+      }
+      // A queued event can outlive its durable inbox entry after the worker
+      // processed or pruned it. Only reconcile when the current inbox snapshot
+      // was read successfully; an unavailable state file proves nothing.
+      if (inbox.loaded && round.status === 'queued' && !round.taskID && round.entries.every(e => e.event === 'message_queued')) {
+        const phases = round.entries.map(e => inbox.states?.[e.message_id]?.phase).filter(Boolean);
+        if (phases.length && phases.every(phase => ['replied','completed','skipped','stopped','failed','blocked','needs_review'].includes(phase))
+            || !phases.length && ageFromLatest >= 10 * 60 * 1000) {
+          round.status = 'stopped';
+          round.staleUnfinished = true;
+        }
       }
       // A receipt-wait record without an inbound turn, a submitted send, or
       // any task continuation is an orphan from an interrupted pre-submit
@@ -264,11 +278,25 @@
         }
         if (!open.size) { round.status = 'needs_review'; round.orphanTools = true; }
       }
+      // A started operation is evidence of an attempt, not proof that a
+      // worker still owns it. A persisted task is authoritative while fresh;
+      // an untracked round is closed after an hour without any new record.
+      // This also covers interrupted share reads whose final failure was
+      // followed by another start and no matching completion.
+      const activeTask = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
+      const taskAge = observedTime - (Date.parse(activeTask?.updated) || Date.parse(round.updated));
+      const scheduledRetry = round.entries.some(e => Date.parse(e.retry_at) > observedTime);
+      if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !scheduledRetry
+          && (activeTask ? taskAge >= 24 * 60 * 60 * 1000 : ageFromLatest >= 60 * 60 * 1000)) {
+        const failed = round.entries.some(e => e.category === 'error' && e.status === 'failed');
+        round.status = failed ? 'failed' : 'stopped';
+        round.staleUnfinished = true;
+      }
       if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';
       // Execution rounds have exactly three public lifecycle states. The raw
       // outcome remains available in the timeline for diagnosis.
-      round.lifecycle = {pending:'待完成',active:'进行中',done:'已完成'}[round.group];
+      round.lifecycle = groupLabels[round.group];
       round.source ||= round.system ? '系统运行' : round.thread_id || '来源未知';
       // The native thread identity is authoritative for the chat type. A
       // stale or hand-written source_kind must never turn a @chatroom round
@@ -283,7 +311,7 @@
       // Old settled reviews are no longer execution rounds, including those
       // that contain an earlier accepted segment. Keep the raw journal.
       if (round.system || round.status !== 'needs_review') return true;
-      return latestEntryTime - Date.parse(round.updated) < 60 * 60 * 1000;
+      return observedTime - Date.parse(round.updated) < 60 * 60 * 1000;
     }).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   }
   return { project, stage, activityTarget, groupLabels };

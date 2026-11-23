@@ -25,7 +25,7 @@ type Record struct {
 	ModelJSONValid                                                                                                  bool
 	ModelRetryDelayMS                                                                                               int64
 	CallID                                                                                                          string
-	Tool, TargetURL, Query, Effect                                                                                  string
+	Tool, ToolArgs, TargetURL, Query, Effect                                                                        string
 	DurationMS, Bytes                                                                                               int64
 	MediaCount                                                                                                      int
 	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string

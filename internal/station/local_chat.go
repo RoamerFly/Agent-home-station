@@ -78,7 +78,9 @@ func newLocalChatService(home *localHomeService) *localChatService {
 		toolOptions.CatalogDirectory = filepath.Clean(home.toolPackages)
 	}
 	toolOptions.DocumentRuntimeRoot = portableDocumentRoot(home.toolPackages, home.root, toolOptions.DocumentRuntimeRoot)
-	h := &localChatService{home: home, models: newLocalModelStore(stationAuthorityDir(home.dataDir)), grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
+	models := newLocalModelStore(stationAuthorityDir(home.dataDir))
+	models.personaPath = filepath.Join(home.root, "home", "PERSONA.md")
+	h := &localChatService{home: home, models: models, grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
 		projectTools: &localProjectTools{

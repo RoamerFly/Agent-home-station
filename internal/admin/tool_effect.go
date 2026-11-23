@@ -2,9 +2,52 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
+
+// Keep only small, explicitly useful scalar parameters. Full arguments may
+// contain message text, commands or credentials and must stay out of logs.
+func toolArgsSummary(raw json.RawMessage) string {
+	var input map[string]any
+	if json.Unmarshal(raw, &input) != nil {
+		return ""
+	}
+	if nested, ok := input["arguments"].(map[string]any); ok {
+		for key, value := range nested {
+			if _, exists := input[key]; !exists {
+				input[key] = value
+			}
+		}
+	}
+	keys := []string{"plugin", "capability", "action", "path", "output_path", "model", "model_name", "width", "height", "steps", "seed", "format", "limit", "query"}
+	parts := make([]string, 0, 6)
+	for _, key := range keys {
+		value, ok := input[key]
+		if !ok {
+			continue
+		}
+		var text string
+		switch value.(type) {
+		case string, float64, bool:
+			text = fmt.Sprint(value)
+		default:
+			continue
+		}
+		text = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(text)
+		if runes := []rune(text); len(runes) > 100 {
+			text = string(runes[:100]) + "…"
+		}
+		if text != "" {
+			parts = append(parts, key+"="+text)
+		}
+		if len(parts) == 6 {
+			break
+		}
+	}
+	return strings.Join(parts, " · ")
+}
 
 // toolEffect records only a verified, scoped effect of a successful call.
 // Tool output and command text are never copied into the activity journal.

@@ -70,6 +70,7 @@ type LogEntry struct {
 	ReviewFailure          *companion.ReviewFailure `json:"review_failure,omitempty"`
 	CallID                 string                   `json:"call_id,omitempty"`
 	Tool                   string                   `json:"tool,omitempty"`
+	ToolArgs               string                   `json:"tool_args,omitempty"`
 	Effect                 string                   `json:"effect,omitempty"`
 	TargetURL              string                   `json:"target_url,omitempty"`
 	Query                  string                   `json:"query,omitempty"`
@@ -299,6 +300,13 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 			m.processes.Close()
 		}
 	}()
+	if err := m.ensurePersonaDocument(c.Companion); err != nil {
+		return nil, err
+	}
+	if c, err = m.withPersonaDocument(c); err != nil {
+		return nil, err
+	}
+	m.config = c
 	if err := m.loadCompressionJobs(); err != nil {
 		return nil, err
 	}
@@ -475,6 +483,11 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 		next.Companion = previous.Companion
 	}
 	next.Companion = companion.Normalize(next.Companion)
+	var personaErr error
+	next, personaErr = m.withPersonaDocument(next)
+	if personaErr != nil {
+		return ConfigView{}, personaErr
+	}
 	if !input.ClearKey && next.APIKey == "" && previous.APIKey != "" {
 		oldURL, oldErr := url.Parse(previous.BaseURL)
 		newURL, newErr := url.Parse(next.BaseURL)

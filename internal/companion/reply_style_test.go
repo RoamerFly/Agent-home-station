@@ -97,7 +97,7 @@ func TestCharacterSingingAndVideoSummaryGuidanceReachesModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"角色演唱与视频内容", "第一人称", "原唱资源不冒充", "主要事件或观点", "不要为了接梗", "判断留在action/reason", "决定安静就用silent"} {
+	for _, part := range []string{"角色演唱与视频内容", "第一人称", "主要事件或观点", "不要为了接梗", "判断留在action/reason", "决定安静就用silent"} {
 		if !strings.Contains(m.system, part) {
 			t.Fatalf("missing guidance %s", part)
 		}

@@ -23,3 +23,15 @@ func TestToolEffectUsesScopedRelativePathOnly(t *testing.T) {
 		t.Fatal("outside path disclosed:", got)
 	}
 }
+
+func TestToolArgsSummaryKeepsUsefulParametersWithoutPayload(t *testing.T) {
+	got := toolArgsSummary(json.RawMessage(`{"plugin":"comfyui","capability":"image.generate","arguments":{"model":"sample-model","width":1024,"seed":42,"prompt":"private prompt","api_key":"secret"}}`))
+	for _, expected := range []string{"plugin=comfyui", "capability=image.generate", "model=sample-model", "width=1024", "seed=42"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("missing %q in %q", expected, got)
+		}
+	}
+	if strings.Contains(got, "private prompt") || strings.Contains(got, "secret") {
+		t.Fatal("tool payload leaked into activity summary")
+	}
+}

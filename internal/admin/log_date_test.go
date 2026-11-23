@@ -3,8 +3,44 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestReminderRoundUsesFollowUpTaskOutcome(t *testing.T) {
+	f := setup(t)
+	updated := time.Now().UTC()
+	parent := agentTask{ID: "reminder", Account: "test", Thread: "group@chatroom", OriginTrace: "request-message", State: "completed", Updated: updated, Reminder: &reminderSpec{FollowUpTaskID: "follow-up"}}
+	child := agentTask{ID: "follow-up", Account: "test", Thread: parent.Thread, ParentID: parent.ID, State: "completed", Updated: updated}
+	f.manager.agent.mu.Lock()
+	f.manager.agent.data.Tasks[parent.ID] = parent
+	f.manager.agent.data.Tasks[child.ID] = child
+	f.manager.agent.mu.Unlock()
+	states := (&Server{manager: f.manager}).logTaskStates([]LogEntry{{Event: "reminder_due", ThreadID: parent.Thread, MessageID: parent.OriginTrace}})
+	if got := states[parent.Thread+"\x00"+parent.OriginTrace]; got.State != "completed" {
+		t.Fatalf("completed reminder follow-up still pending: %+v", got)
+	}
+}
+
+func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
+	f := setup(t)
+	f.manager.stateDir = t.TempDir()
+	server := &Server{manager: f.manager}
+	states, loaded := server.logInboxStates()
+	if loaded || states != nil {
+		t.Fatal("missing checkpoint must not be treated as an empty inbox")
+	}
+	data := []byte(`{"inbox":[{"phase":"received","event":{"data":{"messageId":"message-one","content":"private text"}}}]}`)
+	if err := os.WriteFile(filepath.Join(f.manager.stateDir, "messages-v2.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	states, loaded = server.logInboxStates()
+	if !loaded || states["message-one"].Phase != "received" || len(states) != 1 {
+		t.Fatal("inbox phase projection failed")
+	}
+}
 
 func TestLogDateIncludesArchiveAndShanghaiBoundaries(t *testing.T) {
 	f := setup(t)

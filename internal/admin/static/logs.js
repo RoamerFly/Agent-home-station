@@ -1,5 +1,5 @@
 (() => {
- 'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false,taskStates:{}};
+ 'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false,taskStates:{},inbox:{loaded:false,states:{}}};
  const categories={received:'接收消息',sent:'发送消息',decision:'处理决定',tool:'工具调用',error:'异常与失败',system:'系统运行'};
  const stickerEvents={sticker_observation_unavailable:'表情包已接收，画面暂不可读'};
  Object.assign(stickerEvents,{cross_media_recovery_blocked:'跨会话附件记录未通过校验，保留原记录待检查',cross_media_receipt_restored:'已按持久回执恢复附件投递状态'});
@@ -122,13 +122,21 @@
   node(li,'span',stageNames[li.dataset.stage],'round-stage');
   const content=node(li,'div',undefined,'round-step-content');
   const tool=!!item.tool;
-  node(content,'strong',tool?'调用工具 · '+toolPurpose(item.tool):label(item));
-  if(tool){node(content,'p',item.status==='failed'||item.category==='error'?'结果：失败':'结果：'+(item.status==='running'?'执行中':'成功'),'tool-result '+(item.status==='failed'||item.category==='error'?'form-error':'receipt-accepted'));if(item.status==='failed'||item.category==='error')node(content,'p','失败原因：'+(reasons[item.reason]||item.reason||'未记录具体原因'),'hint');if(item.effect)node(content,'p','产生影响：'+item.effect,'tool-effect')}
+  if(tool){
+   const head=node(content,'div',undefined,'round-tool-head');
+   node(head,'strong','调用工具');
+   const meta=node(head,'span',undefined,'round-tool-meta');
+   node(meta,'span',item.tool,'round-tool-chip round-tool-name');
+   const args=item.tool_args||item.query&&'query='+item.query;
+   if(args){const chip=node(meta,'span',args,'round-tool-chip round-tool-args');chip.title=args}
+   if(item.effect){const chip=node(meta,'span',item.effect,'round-tool-chip round-tool-file');chip.title=item.effect}
+  }else node(content,'strong',label(item));
+  if(tool){node(content,'p',item.status==='failed'||item.category==='error'?'结果：失败':'结果：'+(item.status==='running'?'执行中':'成功'),'tool-result '+(item.status==='failed'||item.category==='error'?'form-error':'receipt-accepted'));if(item.status==='failed'||item.category==='error')node(content,'p','失败原因：'+(reasons[item.reason]||item.reason||'未记录具体原因'),'hint')}
   else if(item.reason){const reason=reasons[item.reason];if(reason&&reason!==label(item))node(content,'p',reason,'hint')}
   for(const detail of reviewDetails(item))node(content,'p',detail,'hint review-detail');
   if(item.event==='plugin_output_ready'&&item.media_count)node(content,'p','已准备 '+item.media_count+' 个附件，尚未发送微信。','tool-effect');
   if(item.message_time)node(content,'small','原消息时间：'+time(item.message_time),'hint');if(item.content&&item.content!==item.tool)readable(content,item.content,'完整执行内容');
-  if(item.sender)node(content,'small',window.WechatNames.display(item.sender,item.sender_name||item.sender),'hint');if(item.query)node(content,'p',item.query,'hint');
+  if(item.sender)node(content,'small',window.WechatNames.display(item.sender,item.sender_name||item.sender),'hint');if(item.query&&!tool)node(content,'p',item.query,'hint');
   const target=window.WechatRounds.activityTarget(item);if(target){const a=node(content,target.kind==='service'?'span':'a',target.label,'round-url');if(target.href){a.href=target.href;a.target='_blank';a.rel='noreferrer noopener'}else a.title=target.detail}
 
   if(item.retry_at)node(content,'p',(item.event==='conversation_wake_scheduled'?'下次评估：':'下次核对：')+time(item.retry_at),'hint');
@@ -136,8 +144,8 @@
   const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
  }
 
- let projectionSource=null,projectionTasks=null,projected=[];
- function rounds(){if(projectionSource!==state.items||projectionTasks!==state.taskStates){projected=window.WechatRounds.project(state.items,state.taskStates);projectionSource=state.items;projectionTasks=state.taskStates}return projected}
+ let projectionSource=null,projectionTasks=null,projectionInbox=null,projectionMinute=-1,projected=[],lastRenderedMinute=-1;
+ function rounds(){const minute=Math.floor(Date.now()/60000);if(projectionSource!==state.items||projectionTasks!==state.taskStates||projectionInbox!==state.inbox||projectionMinute!==minute){projected=window.WechatRounds.project(state.items,state.taskStates,Date.now(),state.inbox);projectionSource=state.items;projectionTasks=state.taskStates;projectionInbox=state.inbox;projectionMinute=minute}return projected}
  async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=node(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await window.WechatAdmin.api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
     result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
  const missingSources = '这次互动没有可核对的来源记录。';
@@ -229,10 +237,6 @@
   }
   if(round.timeline.length===0)node(body,'p','正在准备处理。','hint');
   if(!round.system)appendReplyEvidence(body,round.thread_id,round.triggerMessageID);
-  if(round.hasDiagnostics){
-   const details=node(body,'details');node(details,'summary','原始运行记录（'+round.entries.length+'）');
-   details.addEventListener('toggle',()=>{if(!details.open||details.querySelector('ol'))return;const list=node(details,'ol',undefined,'round-timeline');for(const item of round.entries)step(list,item)});
-  }
  }
  function openRound(round){const popup=window.WechatDialogs.open({title:round.source+' · 执行过程',subtitle:time(round.time)+' · '+round.lifecycle});if(!round.system&&round.group!=='done'&&!round.taskID){const actions=node(popup.body,'div',undefined,'dialog-actions');const status=node(actions,'span','可关闭无效回合；原始记录保留，真实后台任务仍会继续更新。','hint');const close=button(actions,'关闭回合',async()=>{if(!window.confirm('确认关闭这张执行回合卡片？不会取消后台任务或发送微信消息。'))return;close.disabled=true;status.textContent='正在保存…';try{await window.WechatAdmin.api('/api/logs/round/close',{method:'POST',json:{message_id:round.triggerMessageID,thread_id:round.thread_id}});status.textContent='已关闭；原始处理记录保留。';await window.WechatActivity.refresh()}catch(e){status.textContent='关闭失败：'+e.message;close.disabled=false}});close.className='secondary';if(round.group==='active'){const complete=button(actions,'手动完成',async()=>{if(!window.confirm('确认将这条执行回合标记为已完成？不会发送或重发微信消息。'))return;complete.disabled=true;status.textContent='正在保存…';try{await window.WechatAdmin.api('/api/logs/round/manual-complete',{method:'POST',json:{message_id:round.triggerMessageID}});status.textContent='已手动完成；保留原始处理记录。';await window.WechatActivity.refresh()}catch(e){status.textContent='手动完成失败：'+e.message;complete.disabled=false}});complete.className='secondary'}}fillRound(popup.body,round);return popup}
  function roundRow(parent,round){
@@ -252,9 +256,10 @@
  function openSend(id,thread){const candidates=rounds().filter(x=>(!thread||x.thread_id===thread)&&x.entries.some(e=>e.send_id===id));if(candidates.length===1)return openRound(candidates[0]);const popup=window.WechatDialogs.open({title:'发送记录'});node(popup.body,'p','当前活跃日志没有唯一匹配的发送记录，可在历史日志归档中查看。','empty');return popup}
  function roundForMessage(thread,message){const ids=[message.message_id,message.media?.request_trace_id].filter(Boolean);if(message.role==='assistant'&&message.message_id?.startsWith('progress-'))ids.push(message.message_id.slice(9));return rounds().find(x=>x.thread_id===thread&&x.entries.some(e=>ids.includes(e.message_id)||message.media?.job_id&&e.send_id===message.media.job_id))}
  function render(){
+  lastRenderedMinute=Math.floor(Date.now()/60000);
   const pane=$('#log-list'),position=pane.scrollTop,pageY=window.scrollY;
   const anchor=[...pane.children].find(el=>el.getBoundingClientRect().bottom>pane.getBoundingClientRect().top),anchorID=anchor?.dataset.roundId,offset=anchor?anchor.offsetTop-pane.scrollTop:0;
-  pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items,state.taskStates).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
+  pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items,state.taskStates,Date.now(),state.inbox).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
   $('#log-count').textContent=filtered.length+' 个'+($('#log-view').value==='system'?'系统时段':'执行回合');
   const counts={pending:0,active:0,done:0};for(const round of all)if(!round.system)counts[round.group]++;
   for(const [group,count] of Object.entries(counts))$('#round-'+group).textContent=count;
@@ -271,8 +276,11 @@
    const taskStates={...state.taskStates,...(result.task_states||{})};
    const taskStatesChanged=JSON.stringify(taskStates)!==JSON.stringify(state.taskStates);
    if(taskStatesChanged)state.taskStates=taskStates;
+   const inbox={loaded:result.inbox_loaded===true,states:result.inbox_states||{}};
+   const inboxChanged=JSON.stringify(inbox)!==JSON.stringify(state.inbox);
+   if(inboxChanged)state.inbox=inbox;
    if(!state.ready){state.ready=true;consume(items);return}
-   if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index]))){if(taskStatesChanged){render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}))}return}
+   if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index]))){if(taskStatesChanged||inboxChanged||lastRenderedMinute!==Math.floor(Date.now()/60000)){render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}))}return}
    if(force===true||$('#log-follow-latest').checked){consume(items,force!==true);return}
    state.pending=items;const old=new Set(state.items.map(key)),changed=items.filter(item=>!old.has(key(item))),rounds=window.WechatRounds.project(changed);
    $('#log-new').textContent=rounds.length?'有 '+rounds.length+' 组进展，可从侧栏刷新':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
@@ -289,7 +297,7 @@
    const q=new URLSearchParams({date:day});if(after)q.set('after',after);
    const result=await window.WechatAdmin.api('/api/logs?'+q);
    if(request!==dateEpoch||stamp!==epoch)return;
-   items.push(...(result.items||[]));batches+=result.archive_batches||0;state.taskStates={...state.taskStates,...(result.task_states||{})};
+   items.push(...(result.items||[]));batches+=result.archive_batches||0;state.taskStates={...state.taskStates,...(result.task_states||{})};state.inbox={loaded:result.inbox_loaded===true,states:result.inbox_states||{}};
    const seen=new Set();dateItems=items.filter(x=>{const id=key(x);if(seen.has(id))return false;seen.add(id);return true});dateReady=true;render();
    after=result.next||'';progress.textContent=after?'正在补齐当天历史记录…':'';
   }while(after)}catch(error){if(request===dateEpoch&&stamp===epoch)progress.textContent='当天记录尚未读完，请点击刷新重试。'}
@@ -309,5 +317,5 @@
   return decision&&round.status==='silent'?'自主评估 · '+label(decision):'自主发言评估';
  }
  window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,activitySummary,status:round=>round.system?'运行记录':window.WechatRounds.groupLabels[round.group],refresh:()=>refresh(true),loadPending:()=>{if(state.pending)consume(state.pending)}};
- window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];$('#log-date').value=today();state.items=[];state.taskStates={};state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
+ window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];$('#log-date').value=today();state.items=[];state.taskStates={};state.inbox={loaded:false,states:{}};state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
 })();

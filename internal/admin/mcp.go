@@ -342,7 +342,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		origin = "surf"
 	}
 	if strings.HasPrefix(name, "web_") {
-		p.manager.record(bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: "running", Reason: "tool_started"})
+		p.manager.record(bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, ToolArgs: toolArgsSummary(args), TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: "running", Reason: "tool_started"})
 	}
 	defer func() {
 		if callErr == nil && p.trace.Surf && name == "web_search" {
@@ -411,7 +411,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					reason = mcptools.FailureDescription(callErr)
 				}
 			}
-			record := bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: category, ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: status, Reason: reason, DurationMS: time.Since(started).Milliseconds(), Bytes: downloadBytes, MediaCount: len(media.Media), ToolCacheHit: media.CatalogCacheHit, ToolRequests: requests, ToolRetries: retries, ToolHTTPStatus: lastStatus, ToolCode: lastCode, ToolStage: lastStage}
+			record := bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: category, ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, ToolArgs: toolArgsSummary(args), TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: status, Reason: reason, DurationMS: time.Since(started).Milliseconds(), Bytes: downloadBytes, MediaCount: len(media.Media), ToolCacheHit: media.CatalogCacheHit, ToolRequests: requests, ToolRetries: retries, ToolHTTPStatus: lastStatus, ToolCode: lastCode, ToolStage: lastStage}
 			diagnosticMu.Unlock()
 			p.manager.record(record)
 		}
@@ -420,14 +420,14 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			if reason == "" {
 				reason = mcptools.FailureDescription(callErr)
 			}
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Tool: name, ToolCode: code, Content: name, Reason: reason, Status: "failed", Origin: "tool"})
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Tool: name, ToolArgs: toolArgsSummary(args), ToolCode: code, Content: name, Reason: reason, Status: "failed", Origin: "tool"})
 		}
 		if callErr == nil && !strings.HasPrefix(name, "web_") {
 			origin := "tool"
 			if name == "media_recent" || name == "media_reuse" || name == "media_history" || name == "music_library_search" {
 				origin = "local_asset"
 			}
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, ToolArgs: toolArgsSummary(args), Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
 		}
 	}()
 	if p.privateSurfOrigin != nil {

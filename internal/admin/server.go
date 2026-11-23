@@ -93,6 +93,8 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 	}
 	mux.HandleFunc("GET /api/config", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.manager.Config()) }))
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
+	mux.HandleFunc("GET /api/persona-document", s.protected(s.getPersonaDocument))
+	mux.HandleFunc("POST /api/persona-document", s.protected(s.savePersonaDocument))
 	mux.HandleFunc("GET /api/status", s.protected(s.status))
 	mux.HandleFunc("GET /api/logs", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("date") {
@@ -100,7 +102,8 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		items := s.manager.displayLogs(r.Context())
-		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items)})
+		inbox, loaded := s.logInboxStates()
+		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items), "inbox_states": inbox, "inbox_loaded": loaded})
 	}))
 	mux.HandleFunc("POST /api/logs/round/manual-complete", s.protected(s.manualRoundCompletion))
 	mux.HandleFunc("POST /api/logs/round/close", s.protected(s.manualRoundClose))

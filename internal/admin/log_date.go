@@ -40,10 +40,61 @@ type logTaskState struct {
 	Updated time.Time `json:"updated"`
 }
 
+type logInboxState struct {
+	Phase string `json:"phase"`
+}
+
+// The inbox checkpoint is the source of truth for old queued cards. Return
+// only message IDs and phases; message bodies and native events stay private.
+func (s *Server) logInboxStates() (map[string]logInboxState, bool) {
+	data, err := os.ReadFile(filepath.Join(s.manager.stateDir, "messages-v2.json"))
+	if err != nil {
+		return nil, false
+	}
+	var snapshot struct {
+		Inbox []struct {
+			Phase string `json:"phase"`
+			Event struct {
+				Data struct {
+					MessageID string `json:"messageId"`
+				} `json:"data"`
+			} `json:"event"`
+		} `json:"inbox"`
+	}
+	if json.Unmarshal(data, &snapshot) != nil {
+		return nil, false
+	}
+	states := make(map[string]logInboxState, len(snapshot.Inbox))
+	for _, item := range snapshot.Inbox {
+		if item.Event.Data.MessageID != "" {
+			states[item.Event.Data.MessageID] = logInboxState{Phase: item.Phase}
+		}
+	}
+	return states, true
+}
+
 func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 	states := map[string]logTaskState{}
 	account := s.manager.native.Account()
+	reminders := map[string]agentTask{}
+	tasks := map[string]agentTask{}
+	for _, task := range s.manager.agent.list(account, "") {
+		tasks[task.ID] = task
+		if task.Reminder != nil && task.OriginTrace != "" {
+			reminders[task.Thread+"\x00"+task.OriginTrace] = task
+		}
+	}
 	for _, item := range items {
+		if item.Event == "reminder_due" && item.MessageID != "" {
+			if reminder, ok := reminders[item.ThreadID+"\x00"+item.MessageID]; ok {
+				state := reminder.State
+				updated := reminder.Updated
+				if follow, ok := tasks[reminder.Reminder.FollowUpTaskID]; ok {
+					state, updated = follow.State, follow.Updated
+				}
+				states[item.ThreadID+"\x00"+item.MessageID] = logTaskState{State: state, Updated: updated}
+			}
+		}
 		id := continuationTaskID(item.MessageID)
 		if id == "" || item.ThreadID == "" {
 			continue
@@ -133,5 +184,6 @@ func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
 		}
 		add(entries)
 	}
-	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
+	inbox, loaded := s.logInboxStates()
+	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "inbox_states": inbox, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
 }

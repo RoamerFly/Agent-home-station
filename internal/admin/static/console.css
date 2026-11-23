@@ -213,12 +213,21 @@ pre,.technical-json,.agent-task-row pre { white-space:pre-wrap; overflow-wrap:an
 .round-stage { color:var(--accent); font-size:12px; background:var(--soft); border:1px solid var(--line); border-radius:8px; padding:3px 7px; align-self:start; text-align:center; }
 .round-step time { color:var(--muted); font-size:12px; }
 .round-step-content strong { font-size:14px; }.round-step-content small { display:block; }
+.round-tool-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 12px; min-width:0; }
+.round-tool-head>strong { flex:none; }
+.round-tool-meta { display:flex; align-items:center; flex-wrap:wrap; gap:5px; min-width:0; }
+.round-tool-chip { display:inline-block; max-width:min(48vw,420px); padding:2px 7px; border-radius:7px; font-size:11px; line-height:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
+.round-tool-name { color:#1d4ed8; background:#e8f0ff; }
+.round-tool-args { color:#6d3ca5; background:#f2eafd; }
+.round-tool-file { color:#126b45; background:#e3f5eb; }
 .round-technical { margin-top:8px; font-size:12px; }
 .round-output { padding:14px; border-radius:12px; background:var(--soft); border:1px solid var(--line); margin-bottom:18px; }
 .receipt-accepted { color:var(--good); }.receipt-pending { color:var(--warn); }.round-output small { display:block; font-size:12px; margin-top:4px; }
 .round-url { display:block; margin:6px 0; }
 /* Shared settings and connection editors. */
 .field-grid,.rule-grid,.companion-grid,.plugin-workspace { display:grid; gap:12px; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
+#companion .companion-grid { grid-template-columns:minmax(0,3fr) minmax(260px,1fr); }
+#companion-persona-document { min-height:55vh; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; line-height:1.55; }
 .field-grid>*,.rule-grid>*,.plugin-workspace>* { min-width:0; margin-top:0; }
 .plugin-workspace { grid-template-columns:minmax(210px,.7fr) minmax(0,2fr); }
 .plugin-browser { padding:14px; background:var(--surface); }

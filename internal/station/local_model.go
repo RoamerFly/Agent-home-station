@@ -45,8 +45,9 @@ type localModelRecord struct {
 }
 
 type localModelStore struct {
-	path string
-	mu   sync.Mutex
+	path        string
+	personaPath string
+	mu          sync.Mutex
 }
 
 var errLocalModelRevision = errors.New("本机聊天模型设置已更新，请刷新后再保存")
@@ -144,6 +145,16 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 		return nil, LocalModelSettings{}, err
 	}
 	settings := localModelView(record)
+	if s.personaPath != "" {
+		content, readErr := os.ReadFile(s.personaPath)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) || readErr == nil && (len(content) == 0 || len(content) > 32000 || !utf8.Valid(content)) {
+			return nil, settings, errors.New("角色文档不可读")
+		}
+		if readErr == nil {
+			settings.Persona = string(content)
+			record.Persona = settings.Persona
+		}
+	}
 	if record.APIKey == "" {
 		return nil, settings, errors.New("本机聊天尚未配置模型密钥")
 	}

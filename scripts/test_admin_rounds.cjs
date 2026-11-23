@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { project, stage, activityTarget } = require('../internal/admin/static/rounds.js');
+const { project: projectRounds, stage, activityTarget } = require('../internal/admin/static/rounds.js');
+// Historical fixtures are evaluated at their last event unless a test supplies
+// wall time explicitly. The production projection always uses the real clock.
+const project = (items, states, now, inbox) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox);
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
@@ -136,6 +139,23 @@ test('startup unread from multiple people becomes one conversation round with or
  ]);
  assert.equal(rows.length,2);const batch=rows.find(x=>x.thread_id==='fixture@chatroom');assert.equal(batch.received.length,2);assert.equal(batch.received[0].message_time,'2026-10-26T22:00:00+08:00');
 });
+test('aggregated child messages join the parent instead of leaving pending cards',()=>{
+ const child=entry(1,{message_id:'child',event:'message_received',category:'received',status:'received'});
+ const aggregate=entry(2,{message_id:'child',related_message_id:'parent',event:'message_aggregated',status:'aggregated'});
+ const parent=entry(3,{message_id:'parent',event:'message_processed',status:'completed'});
+ const [round]=project([child,aggregate,parent]);
+ assert.equal(round.entries.length,3);assert.equal(round.group,'done');
+ const [legacy]=project([entry(1,{message_id:'older-child',event:'message_aggregated',status:'aggregated'})]);
+ assert.equal(legacy.group,'done');
+});
+test('old queued cards use a successful inbox snapshot before being settled',()=>{
+ const queued=entry(1,{message_id:'old-queue',event:'message_queued',status:'queued'});
+ const now=Date.parse(queued.time)+11*60*1000;
+ assert.equal(project([queued],{},now,{loaded:false,states:{}})[0].group,'pending');
+ assert.equal(project([queued],{},now,{loaded:true,states:{'old-queue':{phase:'received'}}})[0].group,'pending');
+ assert.equal(project([queued],{},now,{loaded:true,states:{}})[0].group,'done');
+ assert.equal(project([queued],{},Date.parse(queued.time),{loaded:true,states:{'old-queue':{phase:'skipped'}}})[0].group,'done');
+});
 
 test('one round keeps receive, decision, failed tool, recovered tool and delivery evidence', () => {
   const rows = project([
@@ -222,6 +242,31 @@ test('old tool-only round with every call settled is no longer shown as running'
  assert.equal(settled.status,'needs_review');assert.equal(settled.orphanTools,true);
  const unfinished=project([old,later]).find(x=>x.triggerMessageID==='old-tool');
  assert.equal(unfinished.group,'active');
+});
+test('interrupted share read and untracked tool calls cannot stay active forever', () => {
+ const received=entry(1,{message_id:'share',event:'message_received',category:'received',status:'received'});
+ const failed=entry(2,{message_id:'share',event:'group_input_read_failed',category:'error',status:'failed'});
+ const restarted=entry(3,{message_id:'share',event:'shared_video_read_started',category:'decision',status:'processing'});
+ const open=entry(4,{message_id:'share',event:'tool_started',category:'tool',tool:'share.resolve_public',call_id:'open-call',status:'running'});
+ assert.equal(project([received,failed,restarted,open])[0].group,'active');
+ const [stale]=project([received,failed,restarted,open],{},Date.parse(open.time)+61*60*1000);
+ assert.equal(stale.status,'failed');assert.equal(stale.group,'done');assert.equal(stale.staleUnfinished,true);
+});
+test('a final share observation failure ends the round immediately', () => {
+ const start=entry(1,{event:'shared_video_read_started',status:'processing'});
+ const unavailable=entry(2,{event:'shared_video_observation_unavailable',status:'unavailable',reason:'share_plugin_resolution_needs_review'});
+ const [round]=project([start,unavailable]);
+ assert.equal(round.status,'failed');assert.equal(round.group,'done');
+});
+test('a fresh persisted task or scheduled receipt lookup remains live', () => {
+ const id='c'.repeat(64), trace=`task-${id}-20261122T010000.000000001`;
+ const running=entry(1,{message_id:trace,event:'generation_started',status:'running'});
+ const updated=new Date(Date.parse(running.time)+65*60*1000).toISOString();
+ assert.equal(project([running],{['fixture@chatroom\0'+id]:{state:'running',updated}},Date.parse(updated)+1000)[0].group,'active');
+ assert.equal(project([running],{['fixture@chatroom\0'+id]:{state:'running',updated}},Date.parse(updated)+25*60*60*1000)[0].group,'done');
+ const wait=entry(2,{message_id:'receipt',event:'delivery_waiting',status:'checking_receipt',retry_at:new Date(Date.parse(running.time)+2*60*60*1000).toISOString()});
+ const inbound=entry(1,{message_id:'receipt',event:'message_received',category:'received',status:'received'});
+ assert.equal(project([inbound,wait],{},Date.parse(wait.time)+70*60*1000)[0].group,'active');
 });
 test('no time-based merging; orphan system events form separate system periods', () => {
   const rows = project([

@@ -62,6 +62,7 @@ func (m *Manager) record(r bot.Record) {
 	entry.DecisionNote = logText(r.DecisionNote, 512)
 	entry.CallID = logText(r.CallID, 128)
 	entry.Tool = logText(r.Tool, 160)
+	entry.ToolArgs = logText(r.ToolArgs, 512)
 	entry.Effect = logText(r.Effect, 512)
 	entry.ToolCacheHit = r.ToolCacheHit
 	entry.ToolRequests = r.ToolRequests
@@ -110,6 +111,7 @@ func (m *Manager) record(r bot.Record) {
 		entry.Content = strings.ReplaceAll(entry.Content, m.config.APIKey, "[已隐藏密钥]")
 		entry.Reason = strings.ReplaceAll(entry.Reason, m.config.APIKey, "[已隐藏密钥]")
 		entry.Query = strings.ReplaceAll(entry.Query, m.config.APIKey, "[已隐藏密钥]")
+		entry.ToolArgs = strings.ReplaceAll(entry.ToolArgs, m.config.APIKey, "[已隐藏密钥]")
 	}
 	// Keep full bodies outside the bounded activity index, including after archive rotation.
 	if err := m.storeLogContent(&entry); err != nil {

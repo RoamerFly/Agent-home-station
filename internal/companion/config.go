@@ -22,22 +22,23 @@ type Permissions struct {
 	Proactive        bool `json:"proactive"`
 }
 type Config struct {
-	TaskReasoning  string                `json:"task_reasoning,omitempty"`
-	Grounding      *GroundingSettings    `json:"grounding,omitempty"`
-	Memory         *MemorySettings       `json:"memory,omitempty"`
-	Context        *ContextSettings      `json:"context,omitempty"`
-	Conversation   *ConversationSettings `json:"conversation,omitempty"`
-	Enabled        bool                  `json:"enabled"`
-	Name           string                `json:"name"`
-	Persona        string                `json:"persona"`
-	Appearance     string                `json:"appearance"`
-	Style          string                `json:"style"`
-	Relationship   string                `json:"relationship"`
-	Permissions    Permissions           `json:"permissions"`
-	MemoryMessages int                   `json:"memory_messages"`
-	MemoryDays     int                   `json:"memory_days"`
-	ReplyMinMS     int                   `json:"reply_min_ms"`
-	ReplyMaxMS     int                   `json:"reply_max_ms"`
+	TaskReasoning   string                `json:"task_reasoning,omitempty"`
+	Grounding       *GroundingSettings    `json:"grounding,omitempty"`
+	Memory          *MemorySettings       `json:"memory,omitempty"`
+	Context         *ContextSettings      `json:"context,omitempty"`
+	Conversation    *ConversationSettings `json:"conversation,omitempty"`
+	Enabled         bool                  `json:"enabled"`
+	Name            string                `json:"name"`
+	Persona         string                `json:"persona"`
+	PersonaDocument bool                  `json:"-"`
+	Appearance      string                `json:"appearance"`
+	Style           string                `json:"style"`
+	Relationship    string                `json:"relationship"`
+	Permissions     Permissions           `json:"permissions"`
+	MemoryMessages  int                   `json:"memory_messages"`
+	MemoryDays      int                   `json:"memory_days"`
+	ReplyMinMS      int                   `json:"reply_min_ms"`
+	ReplyMaxMS      int                   `json:"reply_max_ms"`
 	// MaxBubbles is retained only to read and round-trip legacy configuration.
 	// Message boundaries are model-selected; this value is not a quota.
 	MaxBubbles int `json:"max_bubbles,omitempty"`
@@ -106,12 +107,23 @@ func Validate(c Config) error {
 	if err := validateConversation(c.Conversation); err != nil {
 		return err
 	}
+	personaMax := 8000
+	if c.PersonaDocument {
+		personaMax = 32000
+	}
 	for _, field := range []struct {
 		value string
 		max   int
-	}{{c.Name, 96}, {c.Persona, 8000}, {c.Appearance, 4000}, {c.Style, 4000}, {c.Relationship, 4000}} {
+	}{{c.Name, 96}, {c.Persona, personaMax}} {
 		if strings.TrimSpace(field.value) == "" || len(field.value) > field.max || !utf8.ValidString(field.value) || strings.ContainsRune(field.value, '\x00') {
 			return errors.New("请检查角色名字、人设、说话风格和相处方式")
+		}
+	}
+	if !c.PersonaDocument {
+		for _, field := range []string{c.Appearance, c.Style, c.Relationship} {
+			if strings.TrimSpace(field) == "" || len(field) > 4000 || !utf8.ValidString(field) || strings.ContainsRune(field, '\x00') {
+				return errors.New("请检查角色名字、人设、说话风格和相处方式")
+			}
 		}
 	}
 	if c.MemoryMessages < 2 || c.MemoryMessages > 2000 || c.MemoryDays < 1 || c.MemoryDays > 365 || c.ReplyMinMS < 0 || c.ReplyMaxMS < c.ReplyMinMS || c.ReplyMaxMS > 10000 || c.MaxRepliesPerHour < 1 || c.MaxRepliesPerHour > 120 || c.ProactiveIdleMinutes < 5 || c.ProactiveIdleMinutes > 1440 || c.ProactiveMaxPerDay < 0 {
