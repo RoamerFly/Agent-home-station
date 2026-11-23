@@ -129,7 +129,9 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 				continue
 			}
 			if !messageAffectsInput(r.Input, m) {
-				r.Input.QuoteSharedMessage = true
+				if r.Input.Source != nil {
+					r.Input.QuoteSharedMessage = true
+				}
 				continue
 			}
 			seen := false
@@ -156,9 +158,11 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 			continue
 		}
 		if !messageAffectsInput(p.Input, m) {
-			p.Input.QuoteSharedMessage = true
-			if p.Input.QuoteServerID != "" {
-				p.Quote = replyQuote(p.Input)
+			if p.Input.Source != nil {
+				p.Input.QuoteSharedMessage = true
+				if p.Input.QuoteServerID != "" {
+					p.Quote = replyQuote(p.Input)
+				}
 			}
 			continue
 		}

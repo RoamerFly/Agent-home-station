@@ -44,6 +44,7 @@ type surfState struct {
 	Day              string       `json:"day"`
 	Sessions         int          `json:"sessions"`
 	TopicIndex       int          `json:"topic_index"`
+	LastThread       string       `json:"last_thread,omitempty"`
 }
 
 func surfDefaults() surfState {
@@ -136,11 +137,10 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, err
 	}
 	thread := ""
-	if m.agent != nil && m.agent.config().Enabled && m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText && len(s.Settings.Threads) > 0 {
-		candidate := s.Settings.Threads[s.TopicIndex%len(s.Settings.Threads)]
-		if permittedRecipient(m.config, candidate) {
-			thread = candidate
-		}
+	if m.agent != nil && m.agent.config().Enabled && m.config.Companion.Permissions.Proactive && m.config.Companion.Permissions.ReplyText {
+		thread = nextSurfThread(s.Settings.Threads, s.LastThread, s.TopicIndex, func(candidate string) bool {
+			return permittedRecipient(m.config, candidate)
+		})
 	}
 	loc, e := time.LoadLocation(m.config.Companion.Timezone)
 	if e != nil {
@@ -160,6 +160,9 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	}
 	topic := s.Settings.Topics[topicChoice.Int64()]
 	s.TopicIndex++
+	if thread != "" {
+		s.LastThread = thread
+	}
 	s.Sessions++
 	delay, e := surfRandomDelay(s.Settings)
 	if e != nil {
@@ -196,6 +199,26 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	}
 	m.surf = s
 	return task, nil
+}
+
+func nextSurfThread(threads []string, last string, index int, eligible func(string) bool) string {
+	if len(threads) == 0 {
+		return ""
+	}
+	start := index % len(threads)
+	for i, candidate := range threads {
+		if candidate == last {
+			start = (i + 1) % len(threads)
+			break
+		}
+	}
+	for i := range threads {
+		candidate := threads[(start+i)%len(threads)]
+		if eligible(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func (m *Manager) surfAllowed(thread string) bool {

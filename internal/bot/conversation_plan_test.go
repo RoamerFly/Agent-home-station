@@ -71,6 +71,34 @@ func readyPlans(w *Worker) {
 		p.Next = time.Time{}
 	}
 }
+func TestSourceFreeSurfPlanDoesNotAcquireQuoteFromNewGroupMessage(t *testing.T) {
+	w, engine, _, in := planWorker(t, &planReviewModel{})
+	in.Thread = "room@chatroom"
+	in.TraceID = "surf-source-free"
+	in.Sender = ""
+	in.Source = nil
+	in.ReplyContext = nil
+	in.QuoteServerID = ""
+	in.Mode = "proactive"
+	in.Surf = true
+	proof, err := engine.BindReplyEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ReplyContext = &proof
+	w.queueUtterancePlan(engine, in, companion.Decision{Action: "reply", Messages: []string{"已核实的公开内容"}, ReplyContexts: []companion.ReplyContext{proof}})
+	m := fixtureMessage("new-member", in.Thread, "群里新增消息", "incoming")
+	m.SenderID = "member"
+	w.noticeConversationMessage(m, true)
+	p := w.runtime.Plans[0]
+	if p.Input.QuoteSharedMessage || p.Quote != nil {
+		t.Fatal("source-free surf plan acquired an unrelated quote")
+	}
+	p.Input.ReplyContext = &p.ReplyContexts[0]
+	if _, _, err := w.prepareGroundedText(context.Background(), p.Input, p.Messages[0]); err != nil {
+		t.Fatal("valid surf reply failed before sending:", err)
+	}
+}
 func TestSemanticPlanWaitsForFreshInboxThenCanReplaceOnlyUnsentTail(t *testing.T) {
 	model := &planReviewModel{answer: `{"action":"replace","messages":["改成简短的补充"]}`}
 	w, c, n, in := planWorker(t, model)

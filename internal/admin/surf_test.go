@@ -130,6 +130,22 @@ func TestSurfTargetSelectionRoundtripAndDailyDisplay(t *testing.T) {
 	}
 }
 
+func TestSurfTargetRotationSurvivesSettingsReorder(t *testing.T) {
+	all := func(string) bool { return true }
+	if got := nextSurfThread([]string{"亲子群", "103修仙群"}, "", 0, all); got != "亲子群" {
+		t.Fatal(got)
+	}
+	if got := nextSurfThread([]string{"103修仙群", "亲子群"}, "亲子群", 1, all); got != "103修仙群" {
+		t.Fatal("reordering repeated the previous group", got)
+	}
+	if got := nextSurfThread([]string{"亲子群", "103修仙群"}, "103修仙群", 2, all); got != "亲子群" {
+		t.Fatal(got)
+	}
+	if got := nextSurfThread([]string{"亲子群", "103修仙群"}, "亲子群", 1, func(id string) bool { return id == "亲子群" }); got != "亲子群" {
+		t.Fatal("revoked destination prevented a valid destination", got)
+	}
+}
+
 func TestSurfAccessBudgetAndExplicitTargets(t *testing.T) {
 	f := setup(t)
 	if code, _, _ := f.request("GET", "/api/surf", nil, false, false); code != 401 {
