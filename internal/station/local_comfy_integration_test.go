@@ -149,8 +149,23 @@ func setUpLocalComfyChat(t *testing.T, f *localHomeFixture, backend localComfyBa
 	}
 }
 
+func localComfyFixture(t *testing.T) *localHomeFixture {
+	t.Helper()
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	code, session := f.request("GET", "/api/session", nil, false)
+	if code != http.StatusOK {
+		t.Fatalf("local session: %d %#v", code, session)
+	}
+	f.csrf, _ = session["csrf"].(string)
+	if code, result := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); code != http.StatusOK {
+		t.Fatalf("initialize local home: %d %#v", code, result)
+	}
+	return f
+}
+
 func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testing.T) {
-	f := localChatFixture(t)
+	f := localComfyFixture(t)
 	record, err := f.handler.home.identity.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -167,11 +182,11 @@ func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testin
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner",
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "group-member",
 		TraceID: "synthetic-message", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
 	adapter := &stationAttachmentTools{native: native, grants: map[string]time.Time{in.Thread: now.Add(-time.Minute)},
 		blocked: func() bool { return false }, projects: f.handler.chat.projectTools,
-		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+		projectOwnerAllowed: func(companion.Input) bool { return false }}
 	adapter.SetTrace(in)
 	items, err := adapter.List(t.Context())
 	if err != nil || !slices.ContainsFunc(items, func(tool mcptools.Tool) bool { return tool.Name == localComfyListTool }) {
@@ -195,7 +210,7 @@ func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testin
 }
 
 func TestPublicComfyGenerationWithoutApplicationSource(t *testing.T) {
-	f := localChatFixture(t)
+	f := localComfyFixture(t)
 	record, err := f.handler.home.identity.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +241,7 @@ func TestPublicComfyGenerationWithoutApplicationSource(t *testing.T) {
 }
 
 func TestWechatComfyImageUsesWorkstationAndApplicationDelivery(t *testing.T) {
-	f := localChatFixture(t)
+	f := localComfyFixture(t)
 	record, err := f.handler.home.identity.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +293,7 @@ func TestWechatComfyImageUsesWorkstationAndApplicationDelivery(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Now().UTC()
-	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner", TraceID: "synthetic-message",
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "group-member", TraceID: "synthetic-message",
 		Text: "请生成图像", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
 	in.Source = &companion.SourceRef{InstanceID: store.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account,
 		Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime}
@@ -295,7 +310,7 @@ func TestWechatComfyImageUsesWorkstationAndApplicationDelivery(t *testing.T) {
 	adapter := &stationAttachmentTools{native: native, store: store, dir: t.TempDir(),
 		grants: map[string]time.Time{in.Thread: grant}, replies: map[string]time.Time{in.Thread: grant},
 		blocked: func() bool { return false }, projects: f.handler.chat.projectTools, comfyMu: new(sync.Mutex),
-		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+		projectOwnerAllowed: func(companion.Input) bool { return false }}
 	adapter.SetTrace(in)
 	listed, err := adapter.List(t.Context())
 	want := map[string]bool{localComfyListTool: false, localComfyStartTool: false, localComfyJobTool: false}

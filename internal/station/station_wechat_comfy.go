@@ -20,7 +20,7 @@ func (t *stationAttachmentTools) publicComfyWorkflowTool(ctx context.Context) (m
 }
 
 func (t *stationAttachmentTools) publicComfyInstalled(ctx context.Context) (string, bool) {
-	if t.projects == nil || t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(t.trace) || !t.allowed() {
+	if t.projects == nil || !t.allowed() {
 		return "", false
 	}
 	record, err := t.projects.home.identity.Read()
@@ -66,7 +66,7 @@ func (t *stationAttachmentTools) callPublicComfyWorkflows(ctx context.Context, r
 		return "", errors.New("工作站身份不可用")
 	}
 	workflows, err := t.projects.publicComfyWorkflows(ctx, record.FishID)
-	if err != nil || !t.projectOwnerAllowed(t.trace) || !t.allowed() {
+	if err != nil || !t.allowed() {
 		return "", errors.New("工作站 ComfyUI 工作流当前不可用")
 	}
 	return localProcessJSON(map[string]any{"workflows": workflows})
