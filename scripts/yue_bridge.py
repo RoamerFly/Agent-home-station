@@ -150,11 +150,20 @@ def _merge_profile_runtime_config(profile_path, base_path, destination):
     return temporary_path, temporary_path
 
 
-def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None,base_config_path=None):
+def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None,base_config_path=None,parameters=None):
     current=singing_profile(config_path,expected['config_sha256']) if cancelled is not None else singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
     effective_config,temporary_config = _merge_profile_runtime_config(config_path,base_config_path,destination)
+    parameter_config=None
     try:
+        if parameters:
+            effective_data=load_singing_config(effective_config)
+            effective_data.update(rvc_cover.parameters(parameters))
+            fd,name=tempfile.mkstemp(prefix='.rvc-parameters-',suffix='.json',dir=Path(destination).parent)
+            os.close(fd)
+            parameter_config=Path(name)
+            parameter_config.write_text(json.dumps(effective_data,ensure_ascii=False),encoding='utf-8')
+            effective_config=parameter_config
         if temporary_config is None:
             interpreter=current['python']
         else:
@@ -181,6 +190,8 @@ def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*
         else:subprocess.run(argv,check=True,timeout=3600,**no_console_options())
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
     finally:
+        if parameter_config is not None:
+            parameter_config.unlink(missing_ok=True)
         if temporary_config is not None:
             temporary_config.unlink(missing_ok=True)
     if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
@@ -552,9 +563,9 @@ def main():
             def convert_voice(config,expected,source,destination):
                 if station:
                     if cancelled():raise ValueError('station_rvc_interrupted')
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled,base_config_path=args.singing_voice_config)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled,base_config_path=args.singing_voice_config,parameters=body.get('rvc_parameters'))
                 else:
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,base_config_path=args.singing_voice_config)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,base_config_path=args.singing_voice_config,parameters=body.get('rvc_parameters'))
 
             output=rvc_cover.convert(body,state,jid,config,profile,convert_voice)
             if station:
@@ -820,7 +831,7 @@ def main():
                     return self.reply(400,{'error':'station_rvc_profile_pin_required'})
                 if not isinstance(details['reference_source_sha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',details['reference_source_sha256']):
                     return self.reply(400,{'error':'station_rvc_source_hash_required'})
-                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id','profile_config_sha256'}:
+                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id','profile_config_sha256','rvc_parameters'}:
                     return self.reply(400,{'error':'station_rvc_unknown_request_field'})
                 try:
                     with wave.open(io.BytesIO(base64.b64decode(body['reference_base64'],validate=True)),'rb') as wav:

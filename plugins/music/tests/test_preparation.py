@@ -41,6 +41,18 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rvc_profile_bridge_required"):
             preparation.prepare(self.rvc(health=legacy, voice_profile_id="registered-rvc"))
 
+    def test_rvc_parameters_preserve_agent_choice(self):
+        tuning = {"index_rate": .45, "protect": .25, "rms_mix_rate": .3,
+                  "filter_radius": 0, "vocal_input_gain_db": -6,
+                  "true_peak_db": -1}
+        out = preparation.prepare(self.rvc(rvc_parameters=tuning))
+        self.assertEqual(out["body"]["rvc_parameters"], tuning)
+        for bad in ({"index_rate": 1.2}, {"filter_radius": 2.5}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "rvc_parameters_invalid"):
+                preparation.prepare(self.rvc(rvc_parameters=bad))
+        with self.assertRaises(ValueError):
+            preparation.prepare(self.rvc(rvc_parameters={"true_peak_db": float("nan")}))
+
     def test_resume_plans_and_results_never_change_identity(self):
         base = {"action": "resume_plan", "id": "job-1", "status": {"id": "job-1", "engine": "yue", "state": "failed"}, "restart_missing": True, "restart_failed": True}
         self.assertEqual(preparation.prepare(base), {"engine": "yue", "state": "failed", "submit": True, "options": {"restart_missing": True, "restart_failed": True}})

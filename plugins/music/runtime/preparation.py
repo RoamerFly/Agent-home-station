@@ -91,7 +91,8 @@ def _style(arguments):
 
 
 def _rvc_request(arguments):
-    value = _mapping(arguments, ("action", "health", "title", "voice_profile_id", "reference_sha256", "reference_start_seconds", "reference_seconds", "audio_ref"))
+    optional = "rvc_parameters" in arguments if isinstance(arguments, dict) else False
+    value = _mapping(arguments, ("action", "health", "title", "voice_profile_id", "reference_sha256", "reference_start_seconds", "reference_seconds", "audio_ref") + (("rvc_parameters",) if optional else ()))
     if value["action"] != "rvc_request":
         _fail("music_preparation_invalid")
     health = value["health"]
@@ -119,7 +120,24 @@ def _rvc_request(arguments):
     body = {"title": title, "reference_base64": {"$music_ref": copy.deepcopy(audio)}, "reference_source_sha256": source, "reference_start_seconds": start, "reference_seconds": seconds, "reference_pretrimmed": True}
     if profile:
         body["voice_profile_id"] = profile
+    if optional:
+        body["rvc_parameters"] = _rvc_parameters(value["rvc_parameters"])
     return {"method": "POST", "path": "/rvc-jobs", "body": body}
+
+
+def _rvc_parameters(value):
+    ranges = {"index_rate": (0, 1), "protect": (0, .5), "rms_mix_rate": (0, 1),
+              "filter_radius": (0, 7), "vocal_input_gain_db": (-18, 0), "true_peak_db": (-6, 0),
+              "pitch_chunk_seconds": (0, 60), "pitch_overlap_seconds": (0, 10),
+              "conversion_chunk_seconds": (0, 120), "conversion_context_seconds": (0, 10),
+              "conversion_crossfade_seconds": (0, 2)}
+    if not isinstance(value, dict) or set(value) - set(ranges):
+        _fail("rvc_parameters_invalid")
+    for name, item in value.items():
+        low, high = ranges[name]
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or not low <= item <= high or name == "filter_radius" and type(item) is not int:
+            _fail("rvc_parameters_invalid")
+    return copy.deepcopy(value)
 
 
 def _resume_plan(arguments):

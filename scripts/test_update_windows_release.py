@@ -157,6 +157,25 @@ class UpdateTests(unittest.TestCase):
                 installed.relative_to(release) / "run.py",
             })
 
+    def test_payload_updates_standalone_rvc_control_without_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate, release = root / "candidate", root / "release"
+            package = candidate / "publictools" / "rvc-package"
+            package.mkdir(parents=True)
+            (package / "plugin.json").write_text(json.dumps({"id": "rvc", "files": {"run.py": "synthetic"}}), encoding="utf-8")
+            (package / "run.py").write_bytes(b"plugin")
+            control = package / "runtime" / "windows-station-rvc"
+            control.mkdir(parents=True)
+            (control / "singing_voice.py").write_bytes(b"new control")
+            (control / "runtime-manifest.json").write_bytes(b"manifest")
+            (package / "models").mkdir()
+            (package / "models" / "weight.pth").write_bytes(b"model")
+            files = payload(candidate, release)
+            self.assertIn(Path("publictools/rvc-package/runtime/windows-station-rvc/singing_voice.py"), files)
+            self.assertIn(Path("publictools/rvc-package/runtime/windows-station-rvc/runtime-manifest.json"), files)
+            self.assertNotIn(Path("publictools/rvc-package/models/weight.pth"), files)
+
     def test_replace_then_restore_preserves_data_and_removes_new_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

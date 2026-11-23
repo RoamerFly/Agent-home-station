@@ -99,6 +99,14 @@ def payload(candidate, release):
                 for source in (package / "runtime/windows-x64").glob("*"):
                     if source.is_file():
                         files[(target / source.relative_to(package)).relative_to(release)] = source
+            if identity == "rvc":
+                # The standalone RVC control scripts are assembled by the
+                # Windows builder after the source plugin catalog is staged.
+                # They are covered by their own runtime-manifest.json, so the
+                # plugin.json member list intentionally does not include them.
+                for source in (package / "runtime/windows-station-rvc").rglob("*"):
+                    if source.is_file():
+                        files[(target / source.relative_to(package)).relative_to(release)] = source
     return files
 
 

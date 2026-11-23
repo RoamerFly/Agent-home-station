@@ -46,6 +46,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["url"], "https://www.bilibili.com/video/BV0000000002/")
         self.assertEqual(len(calls), 2)
 
+    def test_audio_search_bounds_default_wait_and_keeps_partial_candidate(self):
+        calls = []
+        def get(url, maximum, timeout):
+            calls.append((url, timeout))
+            if "api.bilibili.com" in url:
+                return {"ok": False, "error": "network_timeout"}
+            if "bing.com" in url:
+                return response("<rss><channel><item><title>Butter-Fly 数码宝贝 完整版</title><link>https://www.bilibili.com/video/BV0000000002/</link></item></channel></rss>", url, "text/xml")
+            return {"ok": False, "error": "network_timeout"}
+        result = plugin.search({"source": "bilibili", "query": "和田光司 Butter-Fly 原唱"}, get)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["match_quality"], "partial_title_match")
+        self.assertTrue(result["requires_candidate_check"])
+        self.assertTrue(all(timeout == 6 for _, timeout in calls))
+        calls.clear()
+        plugin.search({"source": "bilibili", "query": "和田光司 Butter-Fly 原唱", "timeout_seconds": 31}, get)
+        self.assertTrue(all(timeout == 31 for _, timeout in calls))
+
     def test_bilibili_search_uses_third_public_index_after_two_transport_failures(self):
         calls = []
         def get(url, *_):

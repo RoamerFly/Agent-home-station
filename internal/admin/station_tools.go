@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/plugins"
 )
 
 // stationToolView is deliberately a projection of the Station public tool
@@ -168,6 +171,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		WorkflowID string                     `json:"workflow_id"`
 		Inputs     map[string]json.RawMessage `json:"inputs"`
 		JobID      string                     `json:"job_id"`
+		ArtifactID string                     `json:"artifact_id"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -189,6 +193,15 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 			return "", toolInputError("station_comfy_job_required")
 		}
 		instruction = "只调用本机 project_comfy_job 查询 job_id=" + in.JobID + " 的 status，返回实际状态和已登记的 artifact_id。不发送到微信。"
+	case "attach":
+		if !strings.HasPrefix(in.ArtifactID, "work-") || len(in.ArtifactID) != len("work-")+64 || !validID(in.ArtifactID) {
+			return "", toolInputError("station_comfy_artifact_required")
+		}
+		session, err := p.stationToolLogin(ctx)
+		if err != nil {
+			return "", err
+		}
+		return p.attachStationComfyArtifact(ctx, session, in.ArtifactID)
 	default:
 		return "", toolInputError("station_comfy_action_invalid")
 	}
@@ -209,6 +222,70 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		return "", errors.New("station_comfy_result_unavailable")
 	}
 	return strings.Join(result.Messages, "\n"), nil
+}
+
+// Station owns generated artifacts while the existing WeChat worker owns its
+// native upload and delivery ledger. Import the verified bytes through the
+// owner's artifact API, then use the normal WeChat staging path.
+func (p *permittedTools) attachStationComfyArtifact(ctx context.Context, session stationToolSession, id string) (string, error) {
+	data, err := p.stationToolRequest(ctx, session, http.MethodGet, "/api/local/artifacts/"+id, nil)
+	if err != nil {
+		return "", err
+	}
+	var artifact struct {
+		ID       string `json:"artifact_id"`
+		Filename string `json:"filename"`
+		SHA256   string `json:"sha256"`
+		Bytes    int64  `json:"bytes"`
+		Status   string `json:"status"`
+	}
+	if json.Unmarshal(data, &artifact) != nil || artifact.ID != id || artifact.Status != "registered" || !safeMediaFilename(artifact.Filename) {
+		return "", errors.New("station_comfy_artifact_invalid")
+	}
+	var kind, mimeType string
+	switch strings.ToLower(filepath.Ext(artifact.Filename)) {
+	case ".png":
+		kind, mimeType = "image", "image/png"
+	case ".jpg", ".jpeg":
+		kind, mimeType = "image", "image/jpeg"
+	case ".webp":
+		kind, mimeType = "image", "image/webp"
+	case ".mp4":
+		kind, mimeType = "video", "video/mp4"
+	default:
+		return "", toolInputError("station_comfy_artifact_media_unsupported")
+	}
+	limit := toolsLimit(kind)
+	if artifact.Bytes < 1 || artifact.Bytes > limit || len(artifact.SHA256) != 64 {
+		return "", errors.New("station_comfy_artifact_size_invalid")
+	}
+	want, err := hex.DecodeString(artifact.SHA256)
+	if err != nil || len(want) != sha256.Size {
+		return "", errors.New("station_comfy_artifact_digest_invalid")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, session.BaseURL+"/api/local/artifacts/"+id+"/download", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Origin", session.BaseURL)
+	req.Header.Set("Cookie", session.Cookie)
+	resp, err := (&http.Client{Timeout: 3 * time.Minute}).Do(req)
+	if err != nil {
+		return "", errors.New("station_comfy_artifact_download_unavailable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("station_comfy_artifact_download_failed_%d", resp.StatusCode)
+	}
+	content, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || int64(len(content)) != artifact.Bytes {
+		return "", errors.New("station_comfy_artifact_download_incomplete")
+	}
+	digest := sha256.Sum256(content)
+	if !bytes.Equal(digest[:], want) {
+		return "", errors.New("station_comfy_artifact_digest_mismatch")
+	}
+	return p.stageOutputWithAsset(ctx, plugins.Output{Text: "工作站成品已准备为微信附件，尚未发送。", Media: []plugins.MediaResult{{Kind: kind, Data: content, MIMEType: mimeType, Filename: artifact.Filename}}}, &assetOriginal{Data: content, MIME: mimeType, Filename: artifact.Filename})
 }
 
 func (p *permittedTools) callStationTool(ctx context.Context, action string, raw json.RawMessage) (string, error) {

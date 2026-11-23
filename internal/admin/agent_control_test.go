@@ -2,7 +2,11 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +56,35 @@ func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
 	p.trace.Sender = "another-user"
 	if p.agentToolEnabled("station_comfy") {
 		t.Fatal("non-owner inherited the workstation ComfyUI bridge")
+	}
+}
+
+func TestStationComfyArtifactStagesWechatImageWithoutSending(t *testing.T) {
+	f, p := trustedAgent(t)
+	native := &fakeTools{fakeNative: f.native}
+	f.manager.native = native
+	f.manager.config.Companion.Permissions.SendImage = true
+	f.manager.config.Companion.Permissions.Remember = true
+	content := []byte("synthetic PNG bytes")
+	hash := sha256.Sum256(content)
+	id := "work-" + strings.Repeat("a", 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/local/artifacts/" + id:
+			_ = json.NewEncoder(w).Encode(map[string]any{"artifact_id": id, "filename": "finished.png", "sha256": hex.EncodeToString(hash[:]), "bytes": len(content), "status": "registered"})
+		case "/api/local/artifacts/" + id + "/download":
+			_, _ = w.Write(content)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	result, err := p.attachStationComfyArtifact(t.Context(), stationToolSession{BaseURL: server.URL}, id)
+	if err != nil || !strings.Contains(result, `"kind":"image"`) || !strings.Contains(result, `"required_media_ids"`) {
+		t.Fatalf("artifact was not staged for WeChat: %v %s", err, result)
+	}
+	if native.submits.Load() != 0 {
+		t.Fatal("staging unexpectedly submitted a WeChat message")
 	}
 }
 

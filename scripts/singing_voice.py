@@ -14,6 +14,7 @@ import argparse
 import gc
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -35,6 +36,11 @@ def validate_singing_config(config):
         if isinstance(backing,bool) or not isinstance(backing,int) or not -12<=backing<=12 or (shift-backing)%12 or isinstance(protect,bool) or not isinstance(protect,(int,float)) or not 0<=protect<=.5:raise ValueError('incompatible_singing_key')
         if config.get('precision','auto') not in ('auto','float32'):raise ValueError('invalid_rvc_precision')
         if config.get('rvc_device','auto') not in ('auto','cpu','cuda:0'):raise ValueError('invalid_rvc_device')
+        for key, default, low, high in (('rms_mix_rate',.5,0,1),('vocal_input_gain_db',0,-18,0),('true_peak_db',-1,-6,0),('pitch_chunk_seconds',10,0,60),('pitch_overlap_seconds',1,0,10),('conversion_chunk_seconds',8,0,120),('conversion_context_seconds',1,0,10),('conversion_crossfade_seconds',.08,0,2)):
+            value=config.get(key,default)
+            if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or not low<=value<=high:raise ValueError('invalid_rvc_parameter_'+key)
+        radius=config.get('filter_radius',0)
+        if isinstance(radius,bool) or not isinstance(radius,int) or not 0<=radius<=7:raise ValueError('invalid_rvc_parameter_filter_radius')
     elif engine=='seed-vc':
         steps,cfg=config.get('diffusion_steps',30),config.get('inference_cfg_rate',.7)
         if isinstance(steps,bool) or not isinstance(steps,int) or not 10<=steps<=100 or isinstance(cfg,bool) or not isinstance(cfg,(int,float)) or not 0<=cfg<=1:raise ValueError('invalid_seed_parameters')
@@ -46,7 +52,7 @@ def validate_singing_config(config):
     return engine
 
 
-def mix_converted(original, vocals, converted, accompaniment=None):
+def mix_converted(original, vocals, converted, accompaniment=None, true_peak_db=None, metrics=None):
     import numpy as np
     if len(converted) < len(original) - 4410 or len(converted) > len(original) + 4410:
         raise ValueError('converted_duration_mismatch')
@@ -57,8 +63,24 @@ def mix_converted(original, vocals, converted, accompaniment=None):
     peak = float(np.abs(mixed).max())
     if not np.isfinite(mixed).all() or peak < 1e-6:
         raise ValueError('invalid_converted_audio')
-    if peak > .98:
-        mixed *= .98/peak
+    if true_peak_db is None:
+        if peak > .98:
+            mixed *= .98/peak
+    else:
+        from scipy.signal import resample_poly
+        # Fourfold oversampling estimates intersample peaks without allocating
+        # an entire four-minute, fourfold stereo buffer at once.
+        true_peak=0.0
+        block=44100*5
+        for start in range(0,len(mixed),block):
+            left=max(0,start-64);right=min(len(mixed),start+block+64)
+            up=resample_poly(mixed[left:right],4,1,axis=0)
+            begin=(start-left)*4;end=begin+min(block,len(mixed)-start)*4
+            true_peak=max(true_peak,float(np.max(np.abs(up[begin:end]))))
+        ceiling=10**(true_peak_db/20)
+        gain=min(1.0,ceiling/max(true_peak,1e-9))
+        mixed*=gain
+        if metrics is not None:metrics.update(sample_peak_before=peak,true_peak_estimate_before=true_peak,true_peak_target_db=true_peak_db,mix_gain=gain)
     return mixed
 
 
@@ -141,25 +163,27 @@ def main():
             stems[:, :, start:end] += separated*fade
             weights[start:end] += fade
     vocals = (stems[model.sources.index('vocals')]/weights.clamp_min(1e-6)).T.numpy()
-    sf.write(work/'vocals.wav', vocals.mean(1), rate, subtype='PCM_16')
+    vocal_gain=float(config.get('vocal_input_gain_db',0)) if engine=='rvc' else 0
+    sf.write(work/'vocals.wav', vocals.mean(1)*10**(vocal_gain/20), rate, subtype='FLOAT' if vocal_gain else 'PCM_16')
     del model, waveform, stems, weights, separated
     gc.collect()
     if device == 'cuda': torch.cuda.empty_cache()
     timings['separate_vocals']=time.monotonic()-separation_started
     if engine=='rvc':
         conversion_started=time.monotonic();converted_path=work/'rvc-vocals.wav'
-        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--precision',config.get('precision','auto'),'--device',config.get('rvc_device','auto')],check=True,timeout=1800,**no_console_options())
+        subprocess.run([config['rvc_python'],str(Path(__file__).with_name('rvc_voice.py').resolve()),'--project',config['rvc_project'],'--model',config['rvc_model'],'--index',config['rvc_index'],'--source',str(work/'vocals.wav'),'--output',str(converted_path),'--index-rate',str(config.get('index_rate',.35)),'--semitones',str(config.get('semitones',0)),'--protect',str(config.get('protect',.33)),'--rms-mix-rate',str(config.get('rms_mix_rate',.5)),'--filter-radius',str(config.get('filter_radius',0)),'--pitch-chunk-seconds',str(config.get('pitch_chunk_seconds',10)),'--pitch-overlap-seconds',str(config.get('pitch_overlap_seconds',1)),'--conversion-chunk-seconds',str(config.get('conversion_chunk_seconds',8)),'--conversion-context-seconds',str(config.get('conversion_context_seconds',1)),'--conversion-crossfade-seconds',str(config.get('conversion_crossfade_seconds',.08)),'--precision',config.get('precision','auto'),'--device',config.get('rvc_device','auto')],check=True,timeout=1800,**no_console_options())
         timings['rvc_load_and_convert']=time.monotonic()-conversion_started
         resampled=work/'rvc-vocals-44k.wav'
         subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-i',str(converted_path),'-ac','1','-ar',str(rate),str(resampled)],check=True,timeout=90,**no_console_options())
         converted,converted_rate=sf.read(resampled,dtype='float32')
         if converted_rate!=rate or converted.ndim!=1:raise ValueError('converted_format_mismatch')
         backing=transpose_accompaniment(original-vocals,rate,config.get('accompaniment_semitones',0),work)
-        mixed=mix_converted(original,vocals,converted,backing)
+        mix_metrics={}
+        mixed=mix_converted(original,vocals,converted,backing,config.get('true_peak_db') if 'true_peak_db' in config else None,mix_metrics)
         sf.write(output,mixed,rate,subtype='PCM_16')
         timings['total']=time.monotonic()-started
         conversion_metadata=json.loads(converted_path.with_suffix('.rvc.json').read_text(encoding='utf-8'))
-        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_sha256':config['rvc_index_sha256'],'requested_device':config.get('rvc_device','auto'),'rvc_device':conversion_metadata['device'],'separation_device':device,'index_rate':config.get('index_rate',.35),'semitones':config.get('semitones',0),'accompaniment_semitones':config.get('accompaniment_semitones',0),'protect':config.get('protect',.33),'precision':conversion_metadata['precision'],'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
+        output.with_suffix('.voice.json').write_text(json.dumps({'profile':config['profile'],'engine':'RVC','model_sha256':config['rvc_model_sha256'],'index_sha256':config['rvc_index_sha256'],'requested_device':config.get('rvc_device','auto'),'rvc_device':conversion_metadata['device'],'separation_device':device,'index_rate':config.get('index_rate',.35),'semitones':config.get('semitones',0),'accompaniment_semitones':config.get('accompaniment_semitones',0),'protect':config.get('protect',.33),'rms_mix_rate':config.get('rms_mix_rate',.5),'filter_radius':config.get('filter_radius',0),'vocal_input_gain_db':vocal_gain,'mix':mix_metrics,'precision':conversion_metadata['precision'],'duration_seconds':len(mixed)/rate,'timings_seconds':timings,'bailian_calls':0},indent=2),encoding='utf-8')
         print('RVC singing conversion complete; seconds',round(timings['total'],2),'; no messages sent.',flush=True)
         return
     # Import after configuring all caches. Upstream's helper uses a relative

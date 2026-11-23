@@ -26,7 +26,22 @@ def recipe(body):
             'singing_voice':'character','lyrics_source':'original_audio','melody_source':'original_audio','accompaniment_source':'original_audio'}
     if body.get('voice_profile_id'):
         details['voice_profile_id']=body['voice_profile_id']
+    if 'rvc_parameters' in body:
+        details['rvc_parameters']=parameters(body['rvc_parameters'])
     return details
+
+
+def parameters(value):
+    limits={'index_rate':(0,1),'protect':(0,.5),'rms_mix_rate':(0,1),'filter_radius':(0,7),
+            'vocal_input_gain_db':(-18,0),'true_peak_db':(-6,0),'pitch_chunk_seconds':(0,60),
+            'pitch_overlap_seconds':(0,10),'conversion_chunk_seconds':(0,120),
+            'conversion_context_seconds':(0,10),'conversion_crossfade_seconds':(0,2)}
+    if not isinstance(value,dict) or set(value)-set(limits):raise ValueError('rvc_parameters_invalid')
+    for key,item in value.items():
+        low,high=limits[key]
+        if isinstance(item,bool) or not isinstance(item,(int,float)) or not math.isfinite(item) or not low<=item<=high or key=='filter_radius' and type(item) is not int:
+            raise ValueError('rvc_parameters_invalid')
+    return dict(value)
 
 
 def convert(body,state,jid,config,profile,convert_voice):

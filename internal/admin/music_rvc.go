@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -17,13 +18,14 @@ import (
 )
 
 type rvcRequest struct {
-	Title        string   `json:"title"`
-	Reference    string   `json:"reference_asset_id"`
-	Start        *float64 `json:"reference_start_seconds"`
-	Seconds      *float64 `json:"reference_seconds"`
-	Kind         string   `json:"kind"`
-	VoiceProfile string   `json:"voice_profile_id"`
-	VoiceID      string   `json:"voice_id"`
+	Title        string          `json:"title"`
+	Reference    string          `json:"reference_asset_id"`
+	Start        *float64        `json:"reference_start_seconds"`
+	Seconds      *float64        `json:"reference_seconds"`
+	Kind         string          `json:"kind"`
+	VoiceProfile string          `json:"voice_profile_id"`
+	VoiceID      string          `json:"voice_id"`
+	Parameters   json.RawMessage `json:"rvc_parameters"`
 }
 
 // A cached recording and a private speech reference share the same conversion
@@ -140,13 +142,16 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 	if err != nil {
 		return "", err
 	}
-	body, err := p.prepareRVCRequest(ctx, health, in.Title, in.VoiceProfile, asset.Hash, start, seconds, clip)
+	body, err := p.prepareRVCRequest(ctx, health, in.Title, in.VoiceProfile, asset.Hash, start, seconds, clip, in.Parameters)
 	if err != nil {
 		return "", err
 	}
 	operationData := map[string]any{"title": in.Title, "reference_asset_id": in.Reference, "reference_sha256": asset.Hash, "reference_start_seconds": start, "reference_seconds": seconds, "kind": in.Kind, "engine": "rvc"}
 	if in.VoiceProfile != "" {
 		operationData["voice_profile_id"] = in.VoiceProfile
+	}
+	if len(in.Parameters) > 0 {
+		operationData["rvc_parameters"] = in.Parameters
 	}
 	operation, _ := json.Marshal(operationData)
 	result, err := p.privilegedCall(ctx, "music_rvc_start", operation, func() (any, error) {
@@ -197,7 +202,11 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 // The package owns bridge negotiation and request construction. Only the host
 // can materialize this exact audio reference, and it rejects any change to the
 // authorized title, selected voice, source hash or requested recording range.
-func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, title, profile, sourceHash string, start, seconds float64, clip []byte) (any, error) {
+func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, title, profile, sourceHash string, start, seconds float64, clip []byte, tuning ...json.RawMessage) (any, error) {
+	var parameters json.RawMessage
+	if len(tuning) > 0 {
+		parameters = tuning[0]
+	}
 	var observed map[string]json.RawMessage
 	if json.Unmarshal(health, &observed) != nil {
 		return nil, toolInputError("rvc_health_invalid")
@@ -213,16 +222,20 @@ func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, t
 		Method string `json:"method"`
 		Path   string `json:"path"`
 		Body   struct {
-			Title     string          `json:"title"`
-			Reference json.RawMessage `json:"reference_base64"`
-			Hash      string          `json:"reference_source_sha256"`
-			Start     float64         `json:"reference_start_seconds"`
-			Seconds   float64         `json:"reference_seconds"`
-			Precut    bool            `json:"reference_pretrimmed"`
-			Profile   string          `json:"voice_profile_id,omitempty"`
+			Title      string          `json:"title"`
+			Reference  json.RawMessage `json:"reference_base64"`
+			Hash       string          `json:"reference_source_sha256"`
+			Start      float64         `json:"reference_start_seconds"`
+			Seconds    float64         `json:"reference_seconds"`
+			Precut     bool            `json:"reference_pretrimmed"`
+			Profile    string          `json:"voice_profile_id,omitempty"`
+			Parameters json.RawMessage `json:"rvc_parameters,omitempty"`
 		} `json:"body"`
 	}
 	input := map[string]any{"action": "rvc_request", "health": safeHealth, "title": title, "voice_profile_id": profile, "reference_sha256": sourceHash, "reference_start_seconds": start, "reference_seconds": seconds, "audio_ref": ref}
+	if len(parameters) > 0 {
+		input["rvc_parameters"] = parameters
+	}
 	err := p.prepareMusic(ctx, "/rvc-health", input, &prepared, func() error {
 		var reference struct {
 			Ref localMusicBodyRef `json:"$music_ref"`
@@ -233,6 +246,10 @@ func (p *permittedTools) prepareRVCRequest(ctx context.Context, health []byte, t
 		}
 		if b.Title != title || b.Profile != profile {
 			return errors.New("music_preparation_voice_or_title_changed")
+		}
+		var requested, prepared any
+		if len(parameters) > 0 && json.Unmarshal(parameters, &requested) != nil || len(b.Parameters) > 0 && json.Unmarshal(b.Parameters, &prepared) != nil || !reflect.DeepEqual(requested, prepared) {
+			return errors.New("music_preparation_rvc_parameters_changed")
 		}
 		if b.Hash != sourceHash {
 			return errors.New("music_preparation_source_changed")
