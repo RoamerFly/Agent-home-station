@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"wechat-bot/internal/bot"
+	"wechat-bot/internal/companion"
 )
 
 type surfSettings struct {
@@ -126,6 +127,9 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.surf
+	if m.surfManualThread != "" {
+		return m.claimManualSurfLocked(now, s)
+	}
 	if !s.Settings.Enabled || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
 		return nil, nil
 	}
@@ -169,6 +173,7 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 		return nil, e
 	}
 	s.Next = now.Add(delay)
+	s.Next = surfEffectiveNext(now, s, m.config.Companion)
 	formats := []string{"text"}
 	p := m.config.Companion.Permissions
 	if p.SendVideo {
@@ -199,6 +204,60 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	}
 	m.surf = s
 	return task, nil
+}
+
+func (m *Manager) claimManualSurfLocked(now time.Time, s surfState) (*bot.SurfTask, error) {
+	thread := m.surfManualThread
+	m.surfManualThread = ""
+	if !s.Settings.Enabled || !m.config.Companion.Enabled || m.agent == nil || !m.agent.config().Enabled || !m.config.Companion.Permissions.Proactive || !m.config.Companion.Permissions.ReplyText || m.config.Companion.Quiet(now) || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || !permittedRecipient(m.config, thread) {
+		return nil, errors.New("手动冲浪的会话或工具当前不可用")
+	}
+	selected := false
+	for _, id := range s.Settings.Threads {
+		selected = selected || id == thread
+	}
+	if !selected || len(s.Settings.Topics) == 0 {
+		return nil, errors.New("手动冲浪目标未在当前设置中选中")
+	}
+	if err := (&permittedTools{manager: m}).installedWebCapability(context.Background(), "web.discover"); err != nil {
+		return nil, err
+	}
+	choice, err := rand.Int(rand.Reader, big.NewInt(int64(len(s.Settings.Topics))))
+	if err != nil {
+		return nil, err
+	}
+	s.LastThread = thread
+	b, _ := json.Marshal(s)
+	if err := writePrivate(filepath.Join(m.dir, "surf.json"), b); err != nil {
+		return nil, err
+	}
+	m.surf = s
+	return &bot.SurfTask{Topic: s.Settings.Topics[choice.Int64()], Thread: thread, PreferredKind: "text", ForceShare: s.Settings.ForceShare, Manual: true, QuietDeadline: m.config.Companion.QuietDeadline(now)}, nil
+}
+
+func surfEffectiveNext(now time.Time, state surfState, config companion.Config) time.Time {
+	next := state.Next
+	loc, err := time.LoadLocation(config.Timezone)
+	if err != nil || state.Day != now.In(loc).Format("2006-01-02") || state.Sessions < state.Settings.MaxSessionsPerDay {
+		return next
+	}
+	local := now.In(loc)
+	tomorrow := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, loc)
+	if next.Before(tomorrow) {
+		next = tomorrow
+	}
+	if config.Quiet(next) {
+		end, err := time.Parse("15:04", config.QuietEnd)
+		if err == nil {
+			at := next.In(loc)
+			wake := time.Date(at.Year(), at.Month(), at.Day(), end.Hour(), end.Minute(), 0, 0, loc)
+			if !wake.After(next) {
+				wake = wake.AddDate(0, 0, 1)
+			}
+			next = wake
+		}
+	}
+	return next
 }
 
 func nextSurfThread(threads []string, last string, index int, eligible func(string) bool) string {
@@ -238,6 +297,35 @@ func (m *Manager) surfAllowedAt(thread string, now time.Time) bool {
 	return false
 }
 func (s *Server) surfRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/surf/run", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Thread string `json:"thread"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		m := s.manager
+		if m.currentWorker() == nil {
+			fail(w, http.StatusServiceUnavailable, "微信工作回合当前未运行")
+			return
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		allowed := false
+		for _, id := range m.surf.Settings.Threads {
+			allowed = allowed || id == input.Thread
+		}
+		if !allowed || !permittedRecipient(m.config, input.Thread) || !m.surf.Settings.Enabled || !m.config.Companion.Enabled || m.config.Companion.Quiet(time.Now()) || !m.config.Companion.Permissions.Proactive || !m.config.Companion.Permissions.ReplyText {
+			fail(w, http.StatusConflict, "目标会话或当前冲浪权限不可用")
+			return
+		}
+		if m.surfManualThread != "" {
+			fail(w, http.StatusConflict, "已有一次手动冲浪等待执行")
+			return
+		}
+		m.surfManualThread = input.Thread
+		respond(w, http.StatusAccepted, map[string]any{"queued": true, "thread": input.Thread})
+	}))
 	mux.HandleFunc("GET /api/surf/history", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.manager.surfHistory.snapshot()) }))
 	mux.HandleFunc("GET /api/surf", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		m := s.manager
@@ -261,7 +349,7 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 		if readyErr != nil {
 			reason = readyErr.Error()
 		}
-		respond(w, 200, map[string]any{"settings": state.Settings, "next": state.Next, "sessions": sessions, "day": state.Day, "items": items, "execution_ready": reason == "", "execution_reason": reason, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
+		respond(w, 200, map[string]any{"settings": state.Settings, "next": surfEffectiveNext(now, state, config.Companion), "sessions": sessions, "day": state.Day, "items": items, "execution_ready": reason == "", "execution_reason": reason, "share_permission": config.Companion.Permissions.Proactive && config.Companion.Permissions.ReplyText, "allowed_threads": config.allowed(), "quiet_now": config.Companion.Quiet(now), "quiet_start": config.Companion.QuietStart, "quiet_end": config.Companion.QuietEnd, "timezone": config.Companion.Timezone})
 	}))
 	mux.HandleFunc("POST /api/surf", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input surfSettings
@@ -305,6 +393,7 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 			return
 		}
 		state.Next = time.Now().Add(delay)
+		state.Next = surfEffectiveNext(time.Now(), state, m.config.Companion)
 		b, _ := json.Marshal(state)
 		if e := writePrivate(filepath.Join(m.dir, "surf.json"), b); e != nil {
 			fail(w, 500, e.Error())

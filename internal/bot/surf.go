@@ -14,6 +14,7 @@ type SurfTask struct {
 	Topic, Thread      string
 	PreferredKind      string
 	ForceShare         bool
+	Manual             bool
 	QuietDeadline      time.Time
 	// The private observer can use its host scheduler's own time zone and
 	// quiet hours instead of inheriting the conversation policy.
@@ -67,7 +68,11 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 	input.SurfTopic = task.Topic
 	input.SurfPreferredKind = task.PreferredKind
 	input.SurfForceShare = task.ForceShare
-	w.activity(Record{Event: "surf_started", Category: "tool", ThreadID: task.Thread, MessageID: trace, Content: task.Topic, Origin: "surf", Status: "running", Reason: "autonomous_surf"})
+	reason := "autonomous_surf"
+	if task.Manual {
+		reason = "owner_requested_surf"
+	}
+	w.activity(Record{Event: "surf_started", Category: "tool", ThreadID: task.Thread, MessageID: trace, Content: task.Topic, Origin: "surf", Status: "running", Reason: reason})
 	if task.Thread != "" && w.allowed[task.Thread] {
 		if w.generation != nil {
 			w.startGeneration(ctx, c, input, nil, task.QuietDeadline)

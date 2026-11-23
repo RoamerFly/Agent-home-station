@@ -122,6 +122,7 @@ type Manager struct {
 	memoryServiceMu     sync.Mutex
 	workerMu            sync.RWMutex
 	worker              *bot.Worker
+	surfManualThread    string
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry

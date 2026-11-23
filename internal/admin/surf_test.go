@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -143,6 +144,46 @@ func TestSurfTargetRotationSurvivesSettingsReorder(t *testing.T) {
 	}
 	if got := nextSurfThread([]string{"亲子群", "103修仙群"}, "亲子群", 1, func(id string) bool { return id == "亲子群" }); got != "亲子群" {
 		t.Fatal("revoked destination prevented a valid destination", got)
+	}
+}
+
+func TestSurfDailyLimitMovesNextTimePastQuietHours(t *testing.T) {
+	config := companion.Defaults()
+	now, _ := time.Parse(time.RFC3339, "2026-11-23T20:30:00+08:00")
+	state := surfDefaults()
+	state.Day = "2026-11-23"
+	state.Sessions = 3
+	state.Settings.MaxSessionsPerDay = 2
+	state.Next = now.Add(time.Hour)
+	if got := surfEffectiveNext(now, state, config).In(time.FixedZone("China", 8*3600)).Format(time.RFC3339); got != "2026-11-24T08:00:00+08:00" {
+		t.Fatal(got)
+	}
+	state.Settings.MaxSessionsPerDay = 4
+	if got := surfEffectiveNext(now, state, config); !got.Equal(state.Next) {
+		t.Fatal("available daily budget delayed the schedule", got)
+	}
+}
+
+func TestOwnerRequestedSurfUsesSelectedGroupWithoutChangingDailyBudget(t *testing.T) {
+	f := setup(t)
+	installPublicWebFixture(t, f)
+	now, _ := time.Parse(time.RFC3339, "2026-11-23T20:30:00+08:00")
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.Proactive = true
+	f.manager.config.Companion.Permissions.ReplyText = true
+	f.manager.config.Companion.QuietStart, f.manager.config.Companion.QuietEnd = "00:00", "00:00"
+	f.manager.config.GroupRules = []GroupRule{{ID: "103@chatroom", Mode: "social"}}
+	f.manager.surf = surfDefaults()
+	f.manager.surf.Settings.Enabled = true
+	f.manager.surf.Settings.Threads = []string{"parent@chatroom", "103@chatroom"}
+	f.manager.surf.Settings.MaxSessionsPerDay = 2
+	f.manager.surf.Day = "2026-11-23"
+	f.manager.surf.Sessions = 3
+	f.manager.surf.Next = now.Add(time.Hour)
+	f.manager.surfManualThread = "103@chatroom"
+	task, err := f.manager.claimSurf(now)
+	if err != nil || task == nil || !task.Manual || task.Thread != "103@chatroom" || f.manager.surf.Sessions != 3 || f.manager.surf.LastThread != "103@chatroom" {
+		t.Fatal("requested group was not claimed separately from automatic budget", task, err)
 	}
 }
 
