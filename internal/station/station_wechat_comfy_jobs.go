@@ -42,7 +42,7 @@ func (j stationWechatComfyJob) expectedID() string {
 }
 
 func (t *stationAttachmentTools) comfyJobAllowed(in companion.Input, j stationWechatComfyJob) bool {
-	if t.projectOwnerAllowed == nil || !t.projectOwnerAllowed(in) || !t.replyAllowed(in) || t.store == nil ||
+	if !t.replyAllowed(in) || t.store == nil ||
 		j.ID != j.expectedID() || j.Account != in.Account || j.Thread != in.Thread || j.Sender != in.Sender ||
 		!j.MediaGrant.Equal(t.replies[in.Thread]) {
 		return false
