@@ -42,7 +42,9 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.voiceTools()...)
 	if p.privileged() {
 		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable on demand an external Station package the owner has already installed and approved. Owner only. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
-		tools = append(tools, agentTool("station_comfy", "Use the workstation ComfyUI from this WeChat conversation. action=workflows lists host and self-authored workflows; models lists available installed models; author asks the same fish to create a workflow in its home; run starts one; job checks it; attach takes a completed artifact_id returned by job and stages its image or video for WeChat. After attach, send using returned media[].id, never artifact_publish, a local path, or artifact_id. No action sends by itself. Owner only. Input {action:workflows|models|author|run|job|attach,workflow_id?,inputs?,job_id?,artifact_id?,category?,offset?,limit?,goal?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","run","job","attach"]},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
+	}
+	if p.workspaceExecutionAllowed() {
+		tools = append(tools, agentTool("station_comfy", "Use the workstation ComfyUI from this WeChat conversation. action=workflows lists available workflows; models lists installed models; author creates a workflow in the fish's home; run starts one; job checks it; attach stages a completed artifact for this conversation. After attach, send with returned media[].id and confirm receipt. No action sends by itself. Input {action:workflows|models|author|run|job|attach,workflow_id?,inputs?,job_id?,artifact_id?,category?,offset?,limit?,goal?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","run","job","attach"]},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand for an authorized conversation. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
@@ -366,8 +368,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			found := false
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
-					if old.Sender != p.trace.Sender {
-						return "", toolInputError("只能调整本人发起的任务")
+					if old.Sender != p.trace.Sender && !strings.HasSuffix(p.trace.Thread, "@chatroom") {
+						return "", toolInputError("任务会话与当前发言者不一致")
 					}
 					t = old
 					found = true
@@ -434,6 +436,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			return "", err
 		}
 		m.record(bot.Record{Event: "agent_task_saved", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: t.Title, Status: t.State, Reason: "persistent_checkpoint_saved", Origin: "agent"})
+		if t.OriginTrace != "" && t.OriginTrace != p.trace.TraceID && t.Thread == p.trace.Thread {
+			m.record(bot.Record{Event: "task_followup_attached", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, RelatedMessageID: t.OriginTrace, Status: t.State, Origin: "agent"})
+		}
 		requirements := "proactive permission, selected target, quiet hours and daily budget; pending is not delivery"
 		if t.OwnerRequested {
 			requirements = "continuation of an authenticated owner request; current owner and conversation authorization rechecked; pending is not delivery"

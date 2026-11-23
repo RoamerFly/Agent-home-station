@@ -65,6 +65,24 @@ func TestTaskWaitsForFullDeliveryAndRetainsUnknownOutcome(t *testing.T) {
 	}
 }
 
+func TestProgressTextReceiptDoesNotCompleteUnfinishedGroupTask(t *testing.T) {
+	f := setup(t)
+	task := agentTask{ID: "image-task", Account: "test", Thread: "room@chatroom", Sender: "member", OriginTrace: "image-request", State: "running"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	in := companion.Input{Account: "test", Thread: task.Thread, TaskID: task.ID, TraceID: "progress-text"}
+	f.manager.finishAgentTask(in, "reply")
+	delivery := bot.TaskDelivery{Trace: in.TraceID, State: "accepted", TextExpected: 1, TextAccepted: 1}
+	if err := f.manager.updateAgentDelivery(in, delivery); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || got.State != "waiting" || got.WorkCompleted || got.Next.Before(time.Now()) {
+		t.Fatal("progress text prematurely completed the image request", got)
+	}
+}
+
 func TestSilentDocumentRetryWithNoDeliveryCanResume(t *testing.T) {
 	f := setup(t)
 	task := agentTask{ID: "document-read", Account: "test", Thread: "filehelper", Sender: "owner", State: "waiting", Delivery: &bot.TaskDelivery{Trace: "empty", State: "waiting_delivery"}}

@@ -7,7 +7,10 @@ import (
 	"sync"
 )
 
-type Scope struct{ Account, Thread, Sender, RunID string }
+type Scope struct {
+	Account, Thread, Sender, RunID string
+	AllowThreadPeers               bool
+}
 
 type Event struct {
 	ID     string `json:"message_id"`
@@ -38,12 +41,12 @@ func New(scope Scope, prepare Prepare, commit Commit) *Session {
 	return &Session{scope: scope, seen: map[string]bool{}, consumed: map[string]bool{}, prepare: prepare, commit: commit}
 }
 
-// Offer never changes the run's verified principal. Other speakers receive
-// independent turns even when they post to the same group.
+// Offer keeps the run's verified principal while allowing later group messages
+// to inform a live turn. Each event retains its original sender in evidence.
 func (s *Session) Offer(account string, e Event) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || e.ID == "" || e.ID == s.scope.RunID || s.scope.Sender == "" || account != s.scope.Account || e.Thread != s.scope.Thread || e.Sender != s.scope.Sender {
+	if s.closed || e.ID == "" || e.ID == s.scope.RunID || s.scope.Sender == "" || account != s.scope.Account || e.Thread != s.scope.Thread || e.Sender == "" || e.Sender != s.scope.Sender && !s.scope.AllowThreadPeers {
 		return false
 	}
 	if !s.seen[e.ID] {

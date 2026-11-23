@@ -301,6 +301,21 @@ test('an accepted acknowledgement is not completion of a long-running task', () 
   ]);
   assert.equal(rows[0].status, 'running'); assert.equal(rows[0].sent[0].status, 'accepted');
 });
+
+test('an unfinished group task keeps its round active and includes later messages', () => {
+  const items = [
+    entry(1, { message_id:'image-request', event:'message_received', category:'received', content:'画一张居家照', status:'received' }),
+    entry(2, { message_id:'image-request', event:'agent_task_saved', category:'decision', status:'pending' }),
+    entry(3, { message_id:'image-request', event:'message_sent', category:'sent', content:'我画好了发你', status:'accepted' }),
+    entry(4, { message_id:'followup', event:'message_received', category:'received', content:'这个画完没', status:'received' }),
+    entry(5, { message_id:'followup', event:'message_processing', category:'decision', status:'processing' }),
+  ];
+  const states = { 'fixture@chatroom\0image-request': {state:'pending',active:true,updated:at(5)} };
+  const rows = project(items, states);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].group, 'active');
+  assert.equal(rows[0].received.length, 2);
+});
 test('a later partial delivery timeout remains visible after an earlier accepted segment', () => {
   const rows = project([
     entry(1, { event: 'message_sent', category: 'sent', content: '第一段', send_id: 'one', status: 'accepted' }),

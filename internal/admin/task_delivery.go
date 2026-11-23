@@ -56,10 +56,11 @@ func settleFromDelivery(t *agentTask, roundReplied bool) bool {
 			return true
 		case "accepted":
 			if len(t.PendingOperations) == 0 {
-				if t.WorkCompleted || roundReplied {
+				if t.WorkCompleted {
 					t.State, t.WorkCompleted, t.LastResult = "completed", true, "原投递已由微信接受"
 				} else {
-					t.State, t.LastResult = "needs_review", "原投递已由微信接受；没有其余工作完成的记录，已停止续办"
+					t.State, t.LastResult = "waiting", "文字已发送，原任务仍待完成"
+					t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				}
 				return true
 			}
@@ -90,7 +91,6 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		}
 		task.Delivery = &delivery
 		wasRunning := task.State == "running"
-		previousState := task.State
 		if !wasRunning {
 			task.State = "waiting_delivery"
 		}
@@ -108,11 +108,12 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		switch delivery.State {
 		case "accepted":
 			if !wasRunning {
-				if task.WorkCompleted || previousState == "waiting_delivery" || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly {
+				if task.WorkCompleted || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly {
 					task.State = "completed"
 					task.WorkCompleted = true
 				} else {
-					task.State = previousState
+					task.State = "waiting"
+					task.Next = time.Now().Add(bot.DeliveryRetryBackoff(task.Runs))
 				}
 			}
 			if delivery.CaptionOmitted {

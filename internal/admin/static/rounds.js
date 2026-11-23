@@ -90,10 +90,28 @@
     // Without it every process-result checkpoint becomes a separate active
     // round even when it yielded back to the same original message.
     for (const item of entries) {
-      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped', 'background_turn_yielded', 'message_aggregated'].includes(item.event) && item.related_message_id) {
+      if (['generation_followup_consumed', 'generation_followup_settled', 'backlog_message_grouped', 'background_turn_yielded', 'message_aggregated', 'task_followup_attached'].includes(item.event) && item.related_message_id) {
         const child = messageKey(item), parent = messageKey(item, item.related_message_id);
         if (child && parent && find(parent) !== child) parents.set(child, parent);
       }
+    }
+    const activeOrigins = new Map();
+    for (const item of entries) {
+      const id = identity(item), task = taskStates[item.thread_id + '\0' + id];
+      if (!id || !task?.active) continue;
+      const known = activeOrigins.get(item.thread_id) || new Map();
+      const stamp = Date.parse(item.time) || 0;
+      known.set(id, Math.min(known.get(id) ?? stamp, stamp));
+      activeOrigins.set(item.thread_id, known);
+    }
+    for (const item of entries) {
+      if (item.event !== 'message_received' || !item.message_id || taskStates[item.thread_id + '\0' + item.message_id]?.active) continue;
+      const key = messageKey(item);
+      if (!key || parents.has(key)) continue;
+      const stamp = Date.parse(item.time) || 0;
+      const candidates = [...(activeOrigins.get(item.thread_id) || [])].filter(([id, started]) => id !== item.message_id && started <= stamp);
+      candidates.sort((a, b) => b[1] - a[1]);
+      if (candidates.length) parents.set(key, messageKey(item, candidates[0][0]));
     }
     for (const item of entries) {
       const key = messageKey(item);
@@ -210,7 +228,7 @@
         const task = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
         const states = {completed:'completed', cancelled:'stopped', stopped:'stopped', needs_review:'needs_review', failed:'failed', waiting:'waiting', pending:'queued', running:'running', waiting_delivery:'waiting_receipt'};
         if (task && states[task.state]) {
-          round.status = states[task.state];
+          round.status = task.active ? 'running' : states[task.state];
           round.taskState = task.state;
           round.taskUpdated = task.updated;
           if (Date.parse(task.updated) > Date.parse(round.updated)) round.updated = task.updated;
@@ -286,7 +304,7 @@
       const activeTask = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
       const taskAge = observedTime - (Date.parse(activeTask?.updated) || Date.parse(round.updated));
       const scheduledRetry = round.entries.some(e => Date.parse(e.retry_at) > observedTime);
-      if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !scheduledRetry
+      if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !activeTask?.active && !scheduledRetry
           && (activeTask ? taskAge >= 24 * 60 * 60 * 1000 : ageFromLatest >= 60 * 60 * 1000)) {
         const failed = round.entries.some(e => e.category === 'error' && e.status === 'failed');
         round.status = failed ? 'failed' : 'stopped';

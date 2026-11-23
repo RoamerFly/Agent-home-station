@@ -670,6 +670,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			}
 			ownerContinuation = true
 		}
+		if t.OriginTrace != "" && strings.HasSuffix(t.Thread, "@chatroom") {
+			ownerContinuation = true
+		}
 		if !ownerContinuation && cfg.Companion.Quiet(now) {
 			continue
 		}
@@ -687,6 +690,10 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			if err := m.memory.ClaimConversationWake(in, withTaskWake(cfg.Companion), now); err != nil {
 				continue
 			}
+		}
+		if t.Delivery != nil && t.Delivery.State == "accepted" && !t.WorkCompleted {
+			t.LastResult = "此前文字已获微信回执，原任务仍需继续"
+			t.Delivery = nil
 		}
 		t.State = "running"
 		t.Runs++
@@ -844,7 +851,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				return
 			}
 			t.State = "needs_review"
-			t.LastResult = "本轮结束：" + state + "；未生成可安全续办的检查点，已停止"
+			t.LastResult = "本轮结束：" + state + "；尚无后续检查点"
 			if t.ReportSourceThread != "" && t.OwnerRequested {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
@@ -854,6 +861,11 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "模型本轮未完整结束，已保存真实行动证据；稍后读取项目和程序状态继续，避免重复已成功操作"
+			}
+			if t.OriginTrace != "" && strings.HasSuffix(t.Thread, "@chatroom") && t.State == "needs_review" {
+				t.State = "waiting"
+				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+				t.LastResult = "原任务尚未完成；结合最新会话和已保存的工具结果继续"
 			}
 			settleFromDelivery(&t, state == "reply")
 			if _, err := m.agent.updateSnapshot(t); err != nil {

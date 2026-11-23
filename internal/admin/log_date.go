@@ -38,6 +38,11 @@ func continuationTaskID(trace string) string {
 type logTaskState struct {
 	State   string    `json:"state"`
 	Updated time.Time `json:"updated"`
+	Active  bool      `json:"active,omitempty"`
+}
+
+func unfinishedExecutionTask(state string) bool {
+	return state == "pending" || state == "waiting" || state == "running" || state == "waiting_delivery"
 }
 
 type logInboxState struct {
@@ -77,14 +82,30 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 	states := map[string]logTaskState{}
 	account := s.manager.native.Account()
 	reminders := map[string]agentTask{}
+	origins := map[string]agentTask{}
 	tasks := map[string]agentTask{}
 	for _, task := range s.manager.agent.list(account, "") {
 		tasks[task.ID] = task
 		if task.Reminder != nil && task.OriginTrace != "" {
 			reminders[task.Thread+"\x00"+task.OriginTrace] = task
+		} else if task.OriginTrace != "" {
+			thread := task.RequestThread
+			if thread == "" {
+				thread = task.Thread
+			}
+			key := thread + "\x00" + task.OriginTrace
+			if old, exists := origins[key]; !exists || unfinishedExecutionTask(task.State) && !unfinishedExecutionTask(old.State) || unfinishedExecutionTask(task.State) == unfinishedExecutionTask(old.State) && task.Updated.After(old.Updated) {
+				origins[key] = task
+			}
 		}
 	}
 	for _, item := range items {
+		if item.ThreadID != "" && item.MessageID != "" {
+			key := item.ThreadID + "\x00" + item.MessageID
+			if task, ok := origins[key]; ok {
+				states[key] = logTaskState{State: task.State, Updated: task.Updated, Active: unfinishedExecutionTask(task.State)}
+			}
+		}
 		if item.Event == "reminder_due" && item.MessageID != "" {
 			if reminder, ok := reminders[item.ThreadID+"\x00"+item.MessageID]; ok {
 				state := reminder.State
@@ -92,7 +113,7 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 				if follow, ok := tasks[reminder.Reminder.FollowUpTaskID]; ok {
 					state, updated = follow.State, follow.Updated
 				}
-				states[item.ThreadID+"\x00"+item.MessageID] = logTaskState{State: state, Updated: updated}
+				states[item.ThreadID+"\x00"+item.MessageID] = logTaskState{State: state, Updated: updated, Active: unfinishedExecutionTask(state)}
 			}
 		}
 		id := continuationTaskID(item.MessageID)

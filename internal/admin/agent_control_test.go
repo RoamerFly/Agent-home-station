@@ -59,6 +59,39 @@ func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
 	}
 }
 
+func TestGroupMemberCanContinueExistingImageTask(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "room@chatroom", Mode: "mention"})
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.ProactiveThreads = nil
+	f.manager.mu.Unlock()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "member", TraceID: "image-request", IsGroup: true, Mode: "direct"})
+	if !p.agentToolEnabled("station_comfy") {
+		t.Fatal("group image request cannot discover ComfyUI")
+	}
+	if _, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"image","title":"居家照","checkpoint":"继续检查作品","state":"waiting","delay_seconds":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	tasks := f.manager.agent.active("test", "room@chatroom")
+	if len(tasks) != 1 {
+		t.Fatal("image task not persisted", tasks)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "owner", TraceID: "follow-up", IsGroup: true, Mode: "direct"})
+	update := `{"id":"` + tasks[0].ID + `","checkpoint":"继续核对成品","state":"waiting","delay_seconds":0}`
+	if _, err := p.Call(context.Background(), "agent_task", json.RawMessage(update)); err != nil {
+		t.Fatal("later group message could not continue task", err)
+	}
+	stored, ok := f.manager.agent.lookupTask(tasks[0].ID, "test", "room@chatroom")
+	if !ok || stored.Sender != "member" || stored.State != "waiting" {
+		t.Fatal("task origin was replaced or lost", stored)
+	}
+	claimed, err := f.manager.claimAgentTask(time.Now().Add(time.Second), func(string) bool { return false })
+	if err != nil || claimed == nil || claimed.TaskID != stored.ID || !claimed.Directed {
+		t.Fatal("requested group task did not resume directly", claimed, err)
+	}
+}
+
 func TestStationComfyArtifactStagesWechatImageWithoutSending(t *testing.T) {
 	f, p := trustedAgent(t)
 	native := &fakeTools{fakeNative: f.native}

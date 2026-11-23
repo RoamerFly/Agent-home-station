@@ -24,6 +24,20 @@ func TestReminderRoundUsesFollowUpTaskOutcome(t *testing.T) {
 	}
 }
 
+func TestUnfinishedGroupTaskKeepsOriginalRoundActive(t *testing.T) {
+	f := setup(t)
+	updated := time.Now().UTC()
+	task := agentTask{ID: "image-task", Account: "test", Thread: "group@chatroom", RequestThread: "group@chatroom", OriginTrace: "image-request", State: "pending", Updated: updated}
+	f.manager.agent.mu.Lock()
+	f.manager.agent.data.Tasks[task.ID] = task
+	f.manager.agent.mu.Unlock()
+	states := (&Server{manager: f.manager}).logTaskStates([]LogEntry{{Event: "message_sent", ThreadID: task.Thread, MessageID: task.OriginTrace}})
+	got := states[task.Thread+"\x00"+task.OriginTrace]
+	if got.State != "pending" || !got.Active {
+		t.Fatalf("unfinished image task lost after a text reply: %+v", got)
+	}
+}
+
 func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
 	f := setup(t)
 	f.manager.stateDir = t.TempDir()

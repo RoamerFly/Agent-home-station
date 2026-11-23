@@ -106,7 +106,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			return w.persistErr
 		})
 	}
-	return agentrun.New(agentrun.Scope{Account: in.Account, Thread: in.Thread, Sender: in.Sender, RunID: in.TraceID}, prepare, commit)
+	return agentrun.New(agentrun.Scope{Account: in.Account, Thread: in.Thread, Sender: in.Sender, RunID: in.TraceID, AllowThreadPeers: in.IsGroup}, prepare, commit)
 }
 
 func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message, eligible bool) {
@@ -175,12 +175,21 @@ func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 // recoverFollowups must run before normal restart recovery rewrites parent
 // phases. The inbox itself is the durable source; no raw media XML is stored.
 func (w *Worker) recoverFollowups() {
+	parents := map[string]bool{}
+	for _, item := range w.runtime.Inbox {
+		if item.ToolStarted {
+			parents[item.Event.Data.MessageID] = true
+		}
+	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.Phase != "following" {
 			continue
 		}
 		item.Phase = "received"
+		if item.FollowupConsumed && parents[item.FollowupParent] {
+			item.Phase = "interrupted"
+		}
 		if item.Phase == "received" {
 			item.FollowupParent = ""
 			item.FollowupConsumed = false

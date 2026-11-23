@@ -163,7 +163,7 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 // compatibility call gives it the same registered workstation generator as
 // local chat without transferring group delivery or duplicating a worker.
 func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !p.privileged() || !p.workspaceExecutionAllowed() || p.trace.TraceID == "" {
+	if !p.workspaceExecutionAllowed() || p.trace.TraceID == "" {
 		return "", toolInputError("station_comfy_not_authorized")
 	}
 	var in struct {
