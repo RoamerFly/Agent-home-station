@@ -28,7 +28,11 @@ func (s *localProjectTools) comfyFiles(ctx context.Context, fish string, raw jso
 		Content  string `json:"content"`
 		Expected string `json:"expected_sha256"`
 	}
-	if strictLocalMemoryDecode(raw, &in) != nil || in.Offset < 0 || in.Limit < 0 || in.Path == ".." || filepath.IsAbs(in.Path) || strings.HasPrefix(in.Path, ".."+string(os.PathSeparator)) || strings.ContainsRune(in.Path, 0) || (in.Path != "" && filepath.Clean(in.Path) != in.Path) {
+	if strictLocalMemoryDecode(raw, &in) != nil {
+		return "", errors.New("ComfyUI 文件参数无效")
+	}
+	rel := filepath.FromSlash(in.Path)
+	if in.Offset < 0 || in.Limit < 0 || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || strings.ContainsRune(rel, 0) || (rel != "" && filepath.Clean(rel) != rel) {
 		return "", errors.New("ComfyUI 文件参数无效")
 	}
 	view, err := s.readComfyDeployment()
@@ -54,7 +58,6 @@ func (s *localProjectTools) comfyFiles(ctx context.Context, fish string, raw jso
 		return "", err
 	}
 	defer root.Close()
-	rel := in.Path
 	if rel == "" {
 		rel = "."
 	}
