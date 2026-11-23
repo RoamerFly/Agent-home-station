@@ -6107,7 +6107,7 @@
   }
   function normalizeDeployment(value, id = "comfyui") {
     const spec = deploymentDescriptor(id), source = value && typeof value === "object" ? value : {};
-    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", custom_nodes: "", ffmpeg: "" };
+    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", custom_nodes: "", model_library: "", ffmpeg: "" };
     const text = (key) => typeof source[key] === "string" ? source[key] : defaults[key];
     const number = (key, fallback) => Object.hasOwn(source, key) && source[key] !== undefined && source[key] !== null ? source[key] : fallback;
     const configuration = {
@@ -6122,6 +6122,7 @@
       if (typeof source.ffmpeg_sha256 === "string" && source.ffmpeg_sha256) configuration.ffmpeg_sha256 = source.ffmpeg_sha256;
     }
     if (id === "comfyui" && text("custom_nodes")) configuration.custom_nodes = text("custom_nodes");
+    if (id === "comfyui" && text("model_library")) configuration.model_library = text("model_library");
     return configuration;
   }
   function validateDeploymentDraft(draft, id) {
@@ -6402,6 +6403,7 @@
     ];
     if (id === "yue") fields.push(["FFmpeg 程序", "ffmpeg", { placeholder: "已审核的 ffmpeg.exe 绝对路径" }]);
     if (id === "comfyui") fields.push(["自建节点目录", "custom_nodes", { placeholder: "留空禁用；启用时使用工作站 data/resources/comfyui/custom_nodes", pickDirectory: true, toolID: id }]);
+    if (id === "comfyui") fields.push(["有权限的外部模型库", "model_library", { placeholder: "例如 F:\\AI_Comfyui模型库；读取 image/video 下的模型", pickDirectory: true, toolID: id }]);
     fields.forEach(([label, key, options]) => {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: fieldsDisabled });
       field.input.id = `${spec.prefix}-deployment-${key}`; field.label.htmlFor = field.input.id;
