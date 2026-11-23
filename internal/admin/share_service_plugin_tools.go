@@ -277,6 +277,13 @@ func resolvePublicShareFacade(ctx context.Context, policy *publicSharePolicy, in
 	}
 	args, _ := json.Marshal(map[string]any{"url": policy.message.Link.URL, "video_required": *policy.message.AppMessageType == 4, "offset": in.Offset, "limit": in.Limit, "candidate_offset": in.CandidateOffset, "candidate_limit": in.CandidateLimit, "timeout_seconds": in.timeoutFor("share.resolve_public")})
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: args}, policy)
+	if err == nil && out.Reused && out.Job.State == "needs_review" {
+		// The explicit share tool is read-only as well: a restart must not turn
+		// an interrupted parse into a permanent request for manual review.
+		policy.requestSuffix += "-retry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		job.Context = policy.invocation()
+		out, err = h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: args}, policy)
+	}
 	if err != nil {
 		return result, out.Job, errors.New("share_plugin_resolution_incomplete")
 	}

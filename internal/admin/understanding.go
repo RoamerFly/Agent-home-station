@@ -105,7 +105,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 				return "", ctx.Err()
 			}
 			a.manager.record(bot.Record{Event: "shared_video_observation_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: sharedVideoReadReason(err), Origin: "media"})
-			text = shareMessageDescription(m) + "\n[分享实际内容未取得；可能需要浏览器、登录或App读取，不要根据标题评论或追问视频讲了什么。原因：" + sharedVideoReadReason(err) + "]"
+			text = shareMessageDescription(m) + "\n[分享正文尚未读到。可使用当前消息ID和分享链接自动换方法读取；不要根据卡片标题推断正文。]"
 			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
 		}
 		return shareMessageDescription(m), nil

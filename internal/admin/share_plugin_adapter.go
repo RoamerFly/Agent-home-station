@@ -544,6 +544,13 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		return source, err
 	}
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
+	if err == nil && out.Reused && out.Job.State == "needs_review" && out.Job.Diagnostic == nil {
+		// Channel resolution only reads the bound source. An interrupted read
+		// can be retried without reusing its ambiguous execution record.
+		p.resolutionSnapshotSuffix += "-retry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		job.Context = p.invocation()
+		out, err = h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
+	}
 	if err != nil {
 		return source, p.recordResolutionFailure(out.Job, safeShareResolutionFailure("plugin_invoke", err))
 	}

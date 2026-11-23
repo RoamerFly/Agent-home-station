@@ -353,14 +353,14 @@ func (p *publicSharePolicy) resolve(ctx context.Context) (publicShareObservation
 	p.setReadOnlyResolutionSnapshot(args, i, configuration)
 	j.Context = p.invocation()
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
-	// A failed read is not a completed checkpoint. On a subsequent authorized
-	// read, retry transient transport failures with a new immutable job while
-	// retaining the original failure. Successful parses still deduplicate.
-	if err == nil && out.Reused && out.Job.State == "failed" {
+	// A read-only parse interrupted by a workstation restart is safe to resume
+	// under a new immutable job. Keep the old record for diagnosis; completed
+	// parses still deduplicate and media delivery is never replayed here.
+	if err == nil && out.Reused && (out.Job.State == "failed" || out.Job.State == "needs_review") {
 		var failure struct {
 			Error string `json:"error"`
 		}
-		if json.Unmarshal(out.Job.Result, &failure) == nil && failure.Error == "public_read_failed" {
+		if out.Job.State == "needs_review" || out.Job.State == "failed" && json.Unmarshal(out.Job.Result, &failure) == nil && failure.Error == "public_read_failed" {
 			p.resolutionSnapshotSuffix += "-retry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 			j.Context = p.invocation()
 			out, err = h.Invoke(ctx, pluginruntime.CallRequest{Plugin: j.Plugin, Capability: j.Tool, Context: j.Context, Arguments: args}, p)
