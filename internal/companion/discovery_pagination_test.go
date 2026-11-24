@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"wechat-bot/internal/mcptools"
 )
@@ -125,7 +126,7 @@ type catalogModel struct {
 func (*catalogModel) Chat(context.Context, string, []map[string]string) (string, error) {
 	panic("native functions required")
 }
-func (m *catalogModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+func (m *catalogModel) ChatFunctions(_ context.Context, _ string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
 	m.step++
 	has := func(name string) bool {
 		for _, t := range tools {
@@ -141,6 +142,10 @@ func (m *catalogModel) ChatFunctions(_ context.Context, _ string, _ []map[string
 	case 2:
 		if !has("catalog_06") || has("catalog_11") {
 			m.t.Fatal("first discovery page leaked other schemas")
+		}
+		last := turns[len(turns)-1]["content"]
+		if !strings.Contains(last, "next_native_function_catalog") || strings.Contains(last, "input_schema") {
+			m.t.Fatal("discovery duplicated native schemas in its result", last)
 		}
 		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":7,"limit":7}}`, nil
 	case 3:

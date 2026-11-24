@@ -23,9 +23,9 @@ type surfReviewer interface {
 }
 
 // This deliberately stays short because it is present in every native
-// function-calling turn. Provider-specific procedures are supplied only by
-// the schema returned from discover_tools.
-const nativeToolDiscoveryPolicy = "先从本轮已列出的schema选择工具。需要的能力未列出时，用discover_tools按动作、资源或目标关键词发现，再严格按返回schema调用。工具失败先依据实际错误修正参数、续读位置或来源，不能重复同一调用碰运气；已取得的素材、任务和回执先查询或复用，不重新提交。"
+// function-calling turn. Discovery names the matches; their exact schemas are
+// supplied by the native function catalogue on the next model request.
+const nativeToolDiscoveryPolicy = "先从本轮已列出的schema选择工具。需要的能力未列出时，用discover_tools按动作、资源或目标关键词发现，再严格按下一轮原生工具schema调用。工具失败先依据实际错误修正参数、续读位置或来源，不能重复同一调用碰运气；已取得的素材、任务和回执先查询或复用，不重新提交。"
 
 func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string]string) (decision Decision, runErr error) {
 	ctx, automaticReasoning, reasoningErr := e.taskReasoningContext(ctx)
@@ -166,7 +166,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 只有 accepted 才能说已送达。指定声线保留完整来源，不要改用未指定的声音。长音频每条不超过60秒，原文件完整保留；未完成不把计划写成已完成。
 `
 		}
-		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find additional tools by capability name or keywords. Returns paginated exact schemas, total, next_offset and has_more; offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
+		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
 		system += "\n默认值不是上限；按需用分页/续读参数。批量调用顺序执行，后项不能猜前项结果；按实际反馈修正参数或换方法。"
 	}
 	allowed := map[string]bool{}
@@ -805,7 +805,14 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 						end := q.Offset + min(limit, len(matches)-q.Offset)
 						page := matches[q.Offset:end]
 						discovered := page
-						resultPage := map[string]any{"matches": page, "total": len(matches), "next_offset": end, "has_more": end < len(matches)}
+						names := make([]string, 0, len(page))
+						for _, match := range page {
+							names = append(names, match.Name)
+						}
+						// The same full schemas are exposed through native functions on
+						// the next request. Repeating them in this tool result doubled
+						// their token cost throughout a long action transcript.
+						resultPage := map[string]any{"matches": names, "total": len(matches), "next_offset": end, "has_more": end < len(matches), "schema_delivery": "next_native_function_catalog"}
 						if len(matches) == 0 {
 							resultPage["hint"] = "未匹配当前关键词。可用更短的动作或资源名称，或用空关键词分页查看本轮工具目录。"
 							for _, tool := range tools {
