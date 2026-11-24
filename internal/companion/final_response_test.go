@@ -15,6 +15,37 @@ func (failedFinalModel) Chat(context.Context, string, []map[string]string) (stri
 	return "", errors.New("synthetic model unavailable")
 }
 
+type extraContextModel struct{ *capturePolicyModel }
+
+func (*extraContextModel) AdditionalContextTokens(context.Context, []map[string]string) int {
+	return 10000
+}
+
+func TestFinalResponseIgnoresNativeOnlyProviderContext(t *testing.T) {
+	model := &extraContextModel{capturePolicyModel: &capturePolicyModel{}}
+	e, err := NewPreview(enabledConfig(), model, "role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.MemoryOptions = func() MemorySettings {
+		settings := MemoryDefaults()
+		settings.ContextWindow, settings.OutputReserve = 5000, 100
+		return settings
+	}
+	r := &AgentRunner{Engine: e}
+	if _, err := r.finalResponse(t.Context(), "role", []map[string]string{{"role": "user", "content": `{"kind":"current_message","text":"继续处理"}`}}, "tool_no_progress", "same page"); err != nil || model.turns == nil {
+		t.Fatal("text-only final response was blocked by native-only media/reasoning estimate", err)
+	}
+}
+
+func TestNativeContextCountsProviderAddedContent(t *testing.T) {
+	model := &extraContextModel{capturePolicyModel: &capturePolicyModel{}}
+	turns := []map[string]string{{"role": "user", "content": `{"kind":"current_message","text":"继续处理"}`}}
+	if _, err := compactModelContext(t.Context(), model, "role", turns, nil, 5000, 100); err == nil || !strings.Contains(err.Error(), "model_context_window_exceeded") {
+		t.Fatal("native request omitted provider-added context from its budget", err)
+	}
+}
+
 func TestFailureTextIsModelAuthoredAndModelOutageProducesNoChat(t *testing.T) {
 	m := &capturePolicyModel{}
 	e, _ := NewPreview(enabledConfig(), m, "role")

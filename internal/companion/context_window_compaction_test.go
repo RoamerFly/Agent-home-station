@@ -52,6 +52,25 @@ func TestWindowCompactionDoesNotShortenCurrentRequest(t *testing.T) {
 	}
 }
 
+func TestWindowCompactionShortHistoryTriesSmallerTail(t *testing.T) {
+	current := map[string]string{"role": "user", "content": `{"kind":"current_message","text":"继续整理报告"}`}
+	followup := map[string]string{"role": "user", "content": `{"kind":"current_followup","text":"保留最后的结果编号"}`}
+	recentCall := map[string]string{"role": "assistant", "content": `{"action":"tool","tool":"probe","arguments":{}}`}
+	recentResult := map[string]string{"role": "user", "content": `{"source":"untrusted_tool_result","tool":"probe","result":"最新结果","execution":{"result_id":"recent"}}`}
+	oldCall := map[string]string{"role": "assistant", "content": `{"action":"tool","tool":"probe","arguments":{"text":"` + strings.Repeat("旧参数", 1200) + `"}}`}
+	oldResult := map[string]string{"role": "user", "content": `{"source":"untrusted_tool_result","tool":"probe","result":"已完成"}`}
+	turns := []map[string]string{current, oldCall, oldResult, followup, recentCall, recentResult}
+	kept := compactActionTurnsForWindow("system", turns, nil, 700, 80)
+	if err := ValidateContextWindow("system", kept, nil, 700, 80); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 5 || kept[0]["content"] != current["content"] ||
+		kept[2]["content"] != followup["content"] ||
+		kept[3]["content"] != recentCall["content"] || kept[4]["content"] != recentResult["content"] {
+		t.Fatal("lost the current request, latest follow-up or most recent function/result pair")
+	}
+}
+
 type repeatedDiscoveryModel struct{ nativeCalls, finalCalls int }
 
 func (m *repeatedDiscoveryModel) Chat(context.Context, string, []map[string]string) (string, error) {

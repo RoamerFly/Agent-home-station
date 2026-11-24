@@ -18,6 +18,18 @@ func TestWorkspaceSearchExcerptIncludesLateMatch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSearchExcerptLocatesUnicodeCaseMatch(t *testing.T) {
+	for _, prefixRune := range []string{"K", "Ⱥ"} {
+		t.Run(prefixRune, func(t *testing.T) {
+			content := strings.Repeat(prefixRune, 600) + "MiXeD" + strings.Repeat("后", 600)
+			want := strings.Repeat(prefixRune, 120) + "MiXeD" + strings.Repeat("后", 375)
+			if excerpt := workspaceExcerpt(content, "mixed"); excerpt != want {
+				t.Fatalf("excerpt match position = %d bytes, want %d", strings.Index(excerpt, "MiXeD"), strings.Index(want, "MiXeD"))
+			}
+		})
+	}
+}
+
 func TestDeliveryWorkingRuleMergesAndSurvivesRestart(t *testing.T) {
 	f := setup(t)
 	d, e := f.manager.workspace.Read("shared", "AGENTS.md")

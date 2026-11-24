@@ -252,6 +252,26 @@ func estimatedContextTokens(system string, turns []map[string]string, toolJSON [
 	return total
 }
 
+// Providers may add transient reasoning or media blocks after the text view is
+// prepared. Include their estimated cost when selecting the model-only view;
+// the durable transcript remains unchanged. Actual provider usage is recorded
+// separately and remains authoritative.
+func compactModelContext(ctx context.Context, model LanguageModel, system string, turns []map[string]string, toolJSON []byte, window, reserve int) ([]map[string]string, error) {
+	additional := func(view []map[string]string) int {
+		if estimator, ok := model.(interface {
+			AdditionalContextTokens(context.Context, []map[string]string) int
+		}); ok {
+			return max(0, estimator.AdditionalContextTokens(ctx, view))
+		}
+		return 0
+	}
+	view := compactActionTurnsForWindow(system, turns, toolJSON, window, reserve+additional(turns))
+	if err := ValidateContextWindow(system, view, toolJSON, window, reserve+additional(view)); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
 // Build a model-only view of older actions against the configured window. The
 // durable transcript stays complete; the current request, latest follow-up and
 // newest tool result remain intact. Older operation receipts are represented in
@@ -276,8 +296,11 @@ func compactActionTurnsForWindow(system string, turns []map[string]string, toolJ
 		current--
 	}
 	for _, tail := range []int{12, 4, 2} {
-		if estimatedContextTokens(system, turns, toolJSON, reserve) <= window || len(turns)-current <= tail+2 {
+		if estimatedContextTokens(system, turns, toolJSON, reserve) <= window {
 			break
+		}
+		if len(turns)-current <= tail+2 {
+			continue
 		}
 		end := len(turns) - tail
 		if toolFeedbackTurn(turns[end]) {

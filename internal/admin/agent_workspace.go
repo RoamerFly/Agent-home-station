@@ -238,8 +238,9 @@ func workspaceExcerpt(content, query string) string {
 		return content
 	}
 	start := 0
-	if match := strings.Index(strings.ToLower(content), strings.ToLower(query)); match >= 0 {
-		center := utf8.RuneCountInString(content[:min(match, len(content))])
+	lowerContent := strings.ToLower(content)
+	if match := strings.Index(lowerContent, strings.ToLower(query)); match >= 0 {
+		center := utf8.RuneCountInString(lowerContent[:match])
 		start = max(0, center-120)
 		if start+500 > len(runes) {
 			start = len(runes) - 500

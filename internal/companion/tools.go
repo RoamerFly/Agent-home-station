@@ -251,6 +251,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 	}
 	previousCalls := map[string]string{}
+	discoveredPages := map[string][]string{}
 	blockedWithoutProgress := 0
 	// Failed reads are keyed by the complete normalized call. A failure for one
 	// message or page must never poison another message/page of the same tool.
@@ -362,8 +363,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		modelTurns := historyNeed.contextForModel(turns)
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
-		modelTurns = compactActionTurnsForWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
-		if err := ValidateContextWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+		modelTurns, err = compactModelContext(ctx, e.model, system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
+		if err != nil {
 			return Decision{}, err
 		}
 		var answer string
@@ -381,8 +382,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if autonomous {
 				budget = "\n自主行动没有工具次数配额。每次依据真实反馈决定下一步，失败先查原因并修复再验证；长时间等待请保存任务检查点，避免忙轮询。发送未知时读取目标会话真实记录再恢复原任务。"
 			}
-			modelTurns = compactActionTurnsForWindow(system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
-			if err := ValidateContextWindow(system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
+			modelTurns, err = compactModelContext(ctx, e.model, system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
+			if err != nil {
 				return Decision{}, err
 			}
 			if err := e.Store.recordContextMetrics(ctx, system+budget, modelTurns, catalogBytes); err != nil && e.ToolLog != nil {
@@ -712,13 +713,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		if old, ok := previousCalls[callKey]; ok && strings.HasPrefix(response.Tool, "web_") && !autonomous && !(response.Tool == "web_media_download" && strings.HasPrefix(old, "工具调用失败：")) {
 			blockedResult = "程序没有重复执行相同请求；上一次结果：" + old + "。请换有效来源/参数，或如实给出最终回复。"
 		}
-		if old, ok := previousCalls[callKey]; ok && response.Tool == "discover_tools" {
-			var prior struct {
-				Matches []string `json:"matches"`
-			}
-			if json.Unmarshal([]byte(old), &prior) == nil && discoveredPageActive(activeTools, prior.Matches) {
-				blockedResult = "这一工具目录页已提供；请使用刚列出的工具、改查其他页，或根据现有结果回复。"
-			}
+		if names, ok := discoveredPages[callKey]; ok && discoveredPageActive(activeTools, names) {
+			blockedResult = "这一工具目录页已提供；请使用刚列出的工具、改查其他页，或根据现有结果回复。"
 		}
 		if blockedResult != "" {
 			blockedWithoutProgress++
@@ -842,11 +838,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 						// the next request. Repeating them in this tool result doubled
 						// their token cost throughout a long action transcript.
 						resultPage := map[string]any{"matches": names, "total": len(matches), "next_offset": end, "has_more": end < len(matches), "schema_delivery": "next_native_function_catalog"}
+						exposedNames := names
 						if len(matches) == 0 {
 							resultPage["hint"] = "未匹配当前关键词。可用更短的动作或资源名称，或用空关键词分页查看本轮工具目录。"
 							for _, tool := range tools {
 								if tool.Name == "service_plugins" {
 									discovered = []mcptools.Tool{tool}
+									exposedNames = []string{tool.Name}
 									resultPage["plugin_catalog_tool"] = tool.Name
 									break
 								}
@@ -857,6 +855,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 							activeTools = exposeTool(activeTools, t)
 							allowed[t.Name] = true
 						}
+						discoveredPages[callKey] = exposedNames
 						b, _ := json.Marshal(resultPage)
 						result = string(b)
 					}
@@ -925,7 +924,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 		if blockedResult == "" {
 			blockedWithoutProgress = 0
-			previousCalls[callKey] = boundedText(result, 1500)
+			if strings.HasPrefix(response.Tool, "web_") {
+				previousCalls[callKey] = boundedText(result, 1500)
+			}
 			if callErr == nil {
 				delete(failedReadOnlyCalls, callKey)
 				delete(readParameterRepairs, operationKey)

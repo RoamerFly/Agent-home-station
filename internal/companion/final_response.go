@@ -30,6 +30,8 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 			return Decision{}, err
 		}
 		settings := r.memorySettings()
+		// Chat sends only role/content turns. Native function calls may attach
+		// reasoning and media, but this final text request does not.
 		modelTurns := compactActionTurnsForWindow(system, turns, nil, settings.ContextWindow, settings.OutputReserve)
 		if err := ValidateContextWindow(system, modelTurns, nil, settings.ContextWindow, settings.OutputReserve); err != nil {
 			return Decision{}, err

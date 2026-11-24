@@ -168,6 +168,63 @@ func TestNativeToolDiscoveryContinuesBeyondFirstEightMatches(t *testing.T) {
 	}
 }
 
+type largePageReplayModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*largePageReplayModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("native functions required")
+}
+
+func (m *largePageReplayModel) ChatFunctions(_ context.Context, _ string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
+	const firstPage = `{"action":"tool","tool":"discover_tools","arguments":{"query":"tool_","limit":140}}`
+	m.step++
+	switch m.step {
+	case 1:
+		return firstPage, nil
+	case 2:
+		var feedback struct{ Result string }
+		if err := json.Unmarshal([]byte(turns[len(turns)-1]["content"]), &feedback); err != nil || len(feedback.Result) <= 1500 {
+			m.t.Fatalf("discovery fixture must exceed the web result cache limit: size=%d err=%v", len(feedback.Result), err)
+		}
+		return firstPage, nil
+	case 3:
+		if !strings.Contains(turns[len(turns)-1]["content"], `"status":"blocked"`) {
+			m.t.Fatal("same large page was executed again while its tools were active")
+		}
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"tool_","offset":140,"limit":140}}`, nil
+	case 4:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "tool_149" }) {
+			m.t.Fatal("second discovery page did not expose its tools")
+		}
+		return firstPage, nil
+	case 5:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "tool_139" }) {
+			m.t.Fatal("returning to the first discovery page did not re-expose its tools")
+		}
+		return `{"action":"tool","tool":"tool_139","arguments":{}}`, nil
+	default:
+		if !strings.Contains(turns[len(turns)-1]["content"], `"status":"succeeded"`) {
+			m.t.Fatal("execution did not resume after discovery of the earlier page")
+		}
+		return `{"action":"reply","messages":["已核对"]}`, nil
+	}
+}
+
+func TestNativeToolDiscoveryBlocksRepeatedLargePageAndContinues(t *testing.T) {
+	model := &largePageReplayModel{t: t}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools, e.MaxToolCalls = largeDiscoveryTools{}, 6
+	decision, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "核对工具目录", Preview: true})
+	if err != nil || decision.Action != "reply" || model.step != 6 {
+		t.Fatalf("decision=%+v err=%v steps=%d", decision, err, model.step)
+	}
+}
+
 func TestDiscoveryRanksExactNamesAndChineseActions(t *testing.T) {
 	catalog := []mcptools.Tool{
 		{Name: "aaa_help", Description: "If needed, use web_media_download"},
