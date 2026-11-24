@@ -51,11 +51,12 @@ type logInboxState struct {
 }
 
 type logPlanState struct {
-	State      string `json:"state"`
-	StopReason string `json:"stop_reason,omitempty"`
-	Index      int    `json:"index"`
-	Total      int    `json:"total"`
-	Created    string `json:"created,omitempty"`
+	State          string `json:"state"`
+	StopReason     string `json:"stop_reason,omitempty"`
+	Index          int    `json:"index"`
+	Total          int    `json:"total"`
+	Created        string `json:"created,omitempty"`
+	ReceiptDormant bool   `json:"receipt_dormant,omitempty"`
 }
 
 // The inbox checkpoint is the source of truth for old queued cards. Return
@@ -79,12 +80,20 @@ func (s *Server) logRuntimeStates() (map[string]logInboxState, map[string]logPla
 			State      string            `json:"state"`
 			StopReason string            `json:"stop_reason"`
 			Index      int               `json:"index"`
+			Slot       int               `json:"slot"`
 			Created    string            `json:"created"`
 			Messages   []json.RawMessage `json:"messages"`
 			Input      struct {
 				Thread string `json:"thread"`
 			} `json:"input"`
 		} `json:"utterance_plans"`
+		Deliveries []struct {
+			Trace           string `json:"trace"`
+			Thread          string `json:"thread"`
+			State           string `json:"state"`
+			Bubble          int    `json:"bubble"`
+			UncertainRounds int    `json:"uncertain_rounds"`
+		} `json:"deliveries"`
 	}
 	if json.Unmarshal(data, &snapshot) != nil {
 		return nil, nil, false
@@ -95,12 +104,22 @@ func (s *Server) logRuntimeStates() (map[string]logInboxState, map[string]logPla
 			states[item.Event.Data.MessageID] = logInboxState{Phase: item.Phase}
 		}
 	}
+	type receiptKey struct {
+		thread, trace string
+		bubble        int
+	}
+	dormant := make(map[receiptKey]bool)
+	for _, d := range snapshot.Deliveries {
+		if d.State == "awaiting_evidence" || d.State == "waiting" && d.UncertainRounds >= 6 {
+			dormant[receiptKey{d.Thread, d.Trace, d.Bubble}] = true
+		}
+	}
 	plans := make(map[string]logPlanState, len(snapshot.Plans))
 	for _, plan := range snapshot.Plans {
 		if plan.Input.Thread == "" || plan.Trace == "" || plan.Index < 0 || plan.Index > len(plan.Messages) {
 			continue
 		}
-		plans[plan.Input.Thread+"\x00"+plan.Trace] = logPlanState{State: plan.State, StopReason: plan.StopReason, Index: plan.Index, Total: len(plan.Messages), Created: plan.Created}
+		plans[plan.Input.Thread+"\x00"+plan.Trace] = logPlanState{State: plan.State, StopReason: plan.StopReason, Index: plan.Index, Total: len(plan.Messages), Created: plan.Created, ReceiptDormant: dormant[receiptKey{plan.Input.Thread, plan.Trace, plan.Slot}] && plan.Index < len(plan.Messages)}
 	}
 	return states, plans, true
 }

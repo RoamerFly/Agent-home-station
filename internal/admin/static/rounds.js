@@ -330,9 +330,15 @@
         round.status = round.entries.some(e => e.category === 'error' || e.status === 'failed') ? 'failed' : 'completed';
         round.auxiliaryRead = true;
       }
+      let plan;
+      for (const item of round.entries) {
+        const candidate = planStates[item.thread_id + '\0' + item.message_id];
+        if (candidate && (!plan || Date.parse(candidate.created) >= Date.parse(plan.created))) plan = candidate;
+      }
+      round.receiptDormant = plan?.receipt_dormant === true;
       const taskAge = observedTime - (Date.parse(activeTask?.updated) || Date.parse(round.updated));
       const unresolvedReceipts = unresolvedTextReceipt(round.entries);
-      const receiptRetryScheduled = unresolvedReceipts.some(e => e.event === 'delivery_waiting' && Date.parse(e.retry_at) > observedTime);
+      const receiptRetryScheduled = !round.receiptDormant && unresolvedReceipts.some(e => e.event === 'delivery_waiting' && Date.parse(e.retry_at) > observedTime);
       const scheduledRetry = receiptRetryScheduled || round.entries.some(e => e.event !== 'delivery_waiting' && Date.parse(e.retry_at) > observedTime);
       if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !activeTask?.active && !scheduledRetry
           && (activeTask ? taskAge >= 24 * 60 * 60 * 1000 : ageFromLatest >= 60 * 60 * 1000)) {
@@ -349,16 +355,12 @@
       }
       // Sending is part of the round. A model decision or an earlier accepted
       // progress message cannot complete a plan with unsent bubbles.
-      let plan;
-      for (const item of round.entries) {
-        const candidate = planStates[item.thread_id + '\0' + item.message_id];
-        if (candidate && (!plan || Date.parse(candidate.created) >= Date.parse(plan.created))) plan = candidate;
-      }
       const manualCompletion = round.entries.some(e => e.event === 'round_manually_completed');
       if (!manualCompletion && plan) {
         if (plan.state === 'accepted' && plan.index >= plan.total) round.status = 'accepted';
         else if (plan.total > plan.index) {
-          if (plan.state === 'waiting_receipt' || plan.stop_reason === 'receipt_only_reconciliation' && (activeTask?.active || scheduledRetry)) round.status = 'checking_receipt';
+          if (round.receiptDormant) round.status = 'waiting';
+          else if (plan.state === 'waiting_receipt' || plan.stop_reason === 'receipt_only_reconciliation' && (activeTask?.active || scheduledRetry)) round.status = 'checking_receipt';
           else if (['submitting', 'sending'].includes(plan.state) || activeTask?.active) round.status = 'running';
           else if (['model_cancel', 'manual_completion', 'media_queue_cancelled', 'media_cancel_requested_by_user', 'media_superseded_by_new_request'].includes(plan.stop_reason)) round.status = 'stopped';
           else round.status = 'waiting';

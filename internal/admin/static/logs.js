@@ -144,7 +144,7 @@
   const target=window.WechatRounds.activityTarget(item);if(target){const a=node(content,target.kind==='service'?'span':'a',target.label,'round-url');if(target.href){a.href=target.href;a.target='_blank';a.rel='noreferrer noopener'}else a.title=target.detail}
 
   const receiptPausedLater = item.event === 'delivery_waiting' && round?.entries.some(e => e.event === 'delivery_receipt_paused' && Date.parse(e.time) >= Date.parse(item.time) && (item.send_id && e.send_id ? e.send_id === item.send_id : e.content === item.content));
-  if(item.retry_at && !receiptPausedLater)node(content,'p',(item.event==='conversation_wake_scheduled'?'下次评估：':'下次核对：')+time(item.retry_at),'hint');
+  if(item.retry_at && !receiptPausedLater && !(round?.receiptDormant && item.event === 'delivery_waiting'))node(content,'p',(item.event==='conversation_wake_scheduled'?'下次评估：':'下次核对：')+time(item.retry_at),'hint');
   if(item.decision_note)node(content,'p',item.decision_note,'hint');
   const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
  }

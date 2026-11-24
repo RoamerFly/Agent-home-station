@@ -100,6 +100,15 @@ test('paused text receipt stays pending even after a task ends and an old retry 
  const planStates={'fixture@chatroom\0message-1':{state:'accepted',index:1,total:1,created:at(1)}};
  assert.equal(project([inbound,wait,detached,paused,accepted],taskStates,Date.parse(at(6)),undefined,undefined,planStates)[0].group,'done');
 });
+test('legacy exhausted receipt is pending without a synthetic pause event',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'旧发送',retry_at:at(30)});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const key='fixture@chatroom\0message-1';
+ const planStates={[key]:{state:'stopped',stop_reason:'receipt_only_reconciliation',index:0,total:1,created:at(1),receipt_dormant:true}};
+ const [round]=project([inbound,wait,detached],{},Date.parse(at(4)),undefined,undefined,planStates);
+ assert.equal(round.group,'pending');assert.equal(round.status,'waiting');assert.equal(round.receiptDormant,true);
+});
 test('receipt for another text segment does not finish an unresolved segment',()=>{
  const received=entry(1,{event:'message_received',category:'received',status:'received'});
  const pending=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'第一段',retry_at:at(20)});

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -160,6 +161,29 @@ func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
 	projected, _ := json.Marshal(plans)
 	if strings.Contains(string(projected), "private reply") || strings.Contains(string(projected), "private text") {
 		t.Fatal("private message content leaked into plan status")
+	}
+}
+
+func TestLegacyDormantReceiptIsProjectedWithoutChangingQueue(t *testing.T) {
+	f := setup(t)
+	f.manager.stateDir = t.TempDir()
+	path := filepath.Join(f.manager.stateDir, "messages-v2.json")
+	data := []byte(`{"utterance_plans":[{"trace":"old-trace","state":"stopped","stop_reason":"receipt_only_reconciliation","index":0,"slot":0,"messages":["private reply"],"input":{"thread":"room@chatroom"}}],"deliveries":[{"trace":"old-trace","thread":"room@chatroom","bubble":0,"state":"waiting","uncertain_rounds":26,"key":"original-key","text":"private reply"}]}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, plans, loaded := (&Server{manager: f.manager}).logRuntimeStates()
+	plan := plans["room@chatroom\x00old-trace"]
+	if !loaded || !plan.ReceiptDormant || plan.State != "stopped" || plan.StopReason != "receipt_only_reconciliation" {
+		t.Fatal("legacy unresolved receipt was not projected as dormant", plan)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("read-only status projection changed the private queue", err)
 	}
 }
 
