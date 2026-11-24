@@ -17,14 +17,15 @@ import (
 )
 
 const (
-	localComfyPackage    = "comfyui"
-	localComfyCapability = "comfyui.run"
-	localComfyListTool   = "project_comfy_workflows"
-	localComfyModelsTool = "project_comfy_models"
-	localComfyFilesTool  = "project_comfy_files"
-	localComfyStartTool  = "project_comfy_run"
-	localComfyJobTool    = "project_comfy_job"
-	localComfyImageLimit = 16
+	localComfyPackage      = "comfyui"
+	localComfyCapability   = "comfyui.run"
+	localComfyListTool     = "project_comfy_workflows"
+	localComfyModelsTool   = "project_comfy_models"
+	localComfyFilesTool    = "project_comfy_files"
+	localComfyRegisterTool = "project_comfy_register"
+	localComfyStartTool    = "project_comfy_run"
+	localComfyJobTool      = "project_comfy_job"
+	localComfyImageLimit   = 16
 )
 
 var localComfyGrants = []string{"artifact.write", "gpu"}
@@ -88,19 +89,20 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 	}
 	jobTool := localComfyJobToolSpec()
 	if _, _, err := s.comfySetup(ctx, grant.FishID); err != nil {
-		return []mcptools.Tool{localComfyModelTool(), localComfyFilesToolSpec(), jobTool}
+		return []mcptools.Tool{localComfyModelTool(), localComfyFilesToolSpec(), localComfyRegisterToolSpec(), jobTool}
 	}
 	return []mcptools.Tool{
 		localComfyWorkflowTool(),
 		localComfyModelTool(),
 		localComfyFilesToolSpec(),
+		localComfyRegisterToolSpec(),
 		localComfyStartToolSpec(),
 		jobTool,
 	}
 }
 
 func localComfyWorkflowTool() mcptools.Tool {
-	return mcptools.NewTool(localComfyListTool, "查看已登记和家目录自建的 ComfyUI 工作流及可调参数。自建工作流放在家目录 workflows/comfyui，包含 registry.json 和图文件。", `{"type":"object","additionalProperties":false}`)
+	return mcptools.NewTool(localComfyListTool, "查看公共工具及大肥鱼家目录中的 ComfyUI 工作流和可调参数。新工作流图写入 home/workflows/comfyui 后用 project_comfy_register 登记；无需手工维护 registry.json。", `{"type":"object","additionalProperties":false}`)
 }
 
 func localComfyModelTool() mcptools.Tool {
@@ -108,7 +110,11 @@ func localComfyModelTool() mcptools.Tool {
 }
 
 func localComfyFilesToolSpec() mcptools.Tool {
-	return mcptools.NewTool(localComfyFilesTool, "浏览、读取或编辑 ComfyUI 已登记项目、模型库、插件、工作流和大肥鱼家目录及其子目录。root 选 runtime/models/model_library/custom_nodes/workflows/home；先 list/read，再用 expected_sha256 更新已有文件。read 可用 offset/limit 分段。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyFilesTool, "浏览和编辑工作站 publictools 中已登记的 ComfyUI 间接工具及其子目录，不必访问外部 ComfyUI 安装目录。root=runtime 是公共工具运行时，workflows 是已登记图，home 是大肥鱼工作区；也可访问 models/model_library/custom_nodes。先 list/read，更新已有文件传 expected_sha256；read 支持 offset/limit。写新图后用 project_comfy_register 登记。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
+}
+
+func localComfyRegisterToolSpec() mcptools.Tool {
+	return mcptools.NewTool(localComfyRegisterTool, "登记或更新大肥鱼家目录中的 ComfyUI 工作流。先用 project_comfy_files 写 graph JSON，再传 id、label、graph 文件名、save_node 和 parameters；工具计算 SHA-256、校验节点与参数并原子更新 registry.json，返回工作流视图。", `{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"graph":{"type":"string"},"save_node":{"type":"string"},"parameters":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"kind":{"type":"string","enum":["image","string","number","integer","boolean"]},"required":{"type":"boolean"},"minimum":{"type":"number"},"maximum":{"type":"number"},"max_length":{"type":"integer"},"enum":{"type":"array","items":{"type":"string"}},"node":{"type":"string"},"input":{"type":"string"}},"required":["id","label","kind","node","input"],"additionalProperties":false}}},"required":["id","label","graph","save_node","parameters"],"additionalProperties":false}`)
 }
 
 func localComfyStartToolSpec() mcptools.Tool {
@@ -164,6 +170,9 @@ func (t *localToolSet) callLocalComfy(ctx context.Context, name string, raw json
 	}
 	if name == localComfyFilesTool {
 		return s.comfyFiles(ctx, grant.FishID, raw)
+	}
+	if name == localComfyRegisterTool {
+		return s.comfyRegister(ctx, grant.FishID, raw)
 	}
 	e.deployment, e.workflows, err = s.comfySetup(ctx, grant.FishID)
 	if err != nil {
