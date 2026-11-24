@@ -652,6 +652,11 @@ func (w *Worker) acceptReconciled(d *delivery) {
 	if c, ok := w.model.(*companion.Engine); ok {
 		for _, p := range w.runtime.Plans {
 			if d.Bubble >= 0 && p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace {
+				if p.StopReason == "receipt_only_reconciliation" {
+					if err := w.acceptTextMemoryAt(c, d.Input, d.Bubble, d.Text, deliveryAcceptedTime(d, time.Now())); err != nil {
+						w.config.Log("memory_save_failed_after_accepted_reply")
+					}
+				}
 				return
 			}
 		}

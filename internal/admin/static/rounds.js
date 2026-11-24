@@ -310,6 +310,14 @@
         round.status = failed ? 'failed' : 'stopped';
         round.staleUnfinished = true;
       }
+      // A long-running receipt lookup is accounting for one old send, not an
+      // active conversation. Keep the uncertain receipt in the timeline while
+      // removing the completed text turn from the ongoing-round list.
+      if (round.status === 'checking_receipt' && !activeTask?.active &&
+          round.entries.some(e => e.event === 'utterance_plan_stopped' && e.reason === 'receipt_only_reconciliation')) {
+        round.status = 'completed';
+        round.receiptOnly = true;
+      }
       if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';
       // Execution rounds have exactly three public lifecycle states. The raw

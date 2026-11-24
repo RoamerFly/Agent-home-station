@@ -57,6 +57,14 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  assert.equal(round.group,'done');
  assert.equal(round.orphanReceipt,true);
 });
+test('receipt-only continuation closes the old round while retaining uncertain receipt evidence',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'合成旧回复'});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const [round]=project([inbound,wait,detached]);
+ assert.equal(round.group,'done');assert.equal(round.status,'completed');assert.equal(round.receiptOnly,true);
+ assert.equal(round.timeline.some(e=>e.event==='delivery_waiting'),true);
+});
 test('old stopped review with an accepted segment leaves the execution list',()=>{
  const accepted=entry(1,{message_id:'old-review',event:'message_sent',category:'sent',status:'accepted',send_id:'segment-1'});
  const review=entry(2,{message_id:'old-review',event:'generation_paused',category:'decision',status:'needs_review'});

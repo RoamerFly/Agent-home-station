@@ -290,6 +290,16 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 				p.State = "stopped"
 				w.persistErr = w.saveRuntime()
 				w.refreshMediaParent(p.Input.TraceID)
+			} else if d.State == "waiting" && d.UncertainRounds > 0 && time.Since(p.Created) > 30*time.Minute {
+				// The submitted text is now receipt-only work. Retire the old
+				// conversation plan without changing the original send intent;
+				// a late receipt is still reconciled by its original key.
+				p.State, p.StopReason = "stopped", "receipt_only_reconciliation"
+				w.persistErr = w.saveRuntime()
+				if w.persistErr != nil {
+					return
+				}
+				w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "completed", Reason: p.StopReason})
 			} else {
 				delete(visited, p.Input.Thread)
 			}

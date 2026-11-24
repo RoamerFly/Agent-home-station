@@ -317,6 +317,27 @@ func TestPendingPlanSharesPersistedReceiptBackoff(t *testing.T) {
 		t.Fatal("late receipt missed or duplicated", saved.State, w.runtime.Plans[0].State)
 	}
 }
+func TestOldReceiptOnlyPlanEndsWithoutResending(t *testing.T) {
+	w, c, _, in := planWorker(t, &planReviewModel{})
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w.sender = n
+	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"合成旧回复"}})
+	p := w.runtime.Plans[0]
+	p.InboxChecked = true
+	p.Created = time.Now().Add(-time.Hour)
+	d := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "合成旧回复", State: "waiting", ID: "old-job", Key: "old-key", Created: p.Created, Next: time.Now().Add(time.Hour), UncertainRounds: 2}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
+	w.reconcileUtterancePlans(t.Context())
+	if p.State != "stopped" || p.StopReason != "receipt_only_reconciliation" || d.State != "waiting" || len(n.submissions) != 0 {
+		t.Fatal("old plan did not detach from receipt-only lookup")
+	}
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: d.ID, ThreadID: in.Thread, State: "accepted", ServerID: "late-receipt"}
+	d.Next = time.Time{}
+	w.reconcileDeliveries(t.Context())
+	if d.State != "accepted" || len(n.submissions) != 0 {
+		t.Fatal("late original receipt was not reconciled safely")
+	}
+}
 func TestNewContextPreventsSubmissionOfPreparedOldText(t *testing.T) {
 	w, c, n, in := planWorker(t, &planReviewModel{answer: `{"action":"cancel"}`})
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"不该继续的旧内容"}})
