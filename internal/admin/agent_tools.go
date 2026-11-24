@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -463,23 +464,20 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			if in.Key == "" || len(in.Key) > 128 || in.Title == "" {
 				return "", toolInputError("新任务请同时传key和title；续办现有任务请传agent_tasks返回的id")
 			}
-			if in.OriginMessageID != "" {
-				for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
-					if old.OriginTrace == origin && old.Title == in.Title && old.State == "completed" {
-						return encode(map[string]any{"task": map[string]any{"id": old.ID, "title": old.Title, "state": old.State, "origin_message_id": old.OriginTrace, "updated": old.Updated, "result": logText(old.LastResult, 240)}, "reused_existing": true, "instruction": "该原请求同名任务已完成；先核对现有成品和发送记录。新的明确要求可使用当前新消息作为任务来源。"}, nil)
-					}
-				}
+			// The key is the model's stable task handle. The title and source
+			// messages identify its input, so two requests that happen to reuse
+			// the same key cannot silently inherit one another's music job.
+			t.ID = agentID(p.trace.Account, sourceThread, deliveryThread, origin, in.Key, in.Title, strings.Join(in.SourceMessageIDs, "\x00"))
+			legacyID := agentID(p.trace.Account, deliveryThread, origin, in.Key)
+			if old, ok := m.agent.lookupTask(legacyID, p.trace.Account, deliveryThread); ok &&
+				old.OriginTrace == origin && old.Sender == p.trace.Sender && old.Title == in.Title && taskSourceThread(old) == sourceThread &&
+				(old.RequestThread == "" || old.RequestThread == p.trace.Thread) &&
+				(slices.Equal(old.SourceMessageIDs, in.SourceMessageIDs) || len(old.SourceMessageIDs) == 0 && len(in.SourceMessageIDs) <= 1) &&
+				(old.RequestedText == "" || t.RequestedText == "" || old.RequestedText == t.RequestedText) {
+				// Preserve existing task IDs across the ID schema upgrade, but only
+				// when the persisted source and input still match.
+				t.ID = legacyID
 			}
-			if p.privileged() && strings.Contains(in.Title, "歌") {
-				for _, old := range m.agent.active(p.trace.Account, deliveryThread) {
-					sameRequest := old.OriginTrace != "" && (old.OriginTrace == origin || old.OriginTrace == p.trace.TraceID)
-					if sameRequest && sourceThread == p.trace.Thread && deliveryThread == p.trace.Thread && old.Sender == p.trace.Sender && old.MusicJob != "" && old.Title == in.Title &&
-						(old.State == "pending" || old.State == "waiting" || old.State == "running") {
-						return encode(map[string]any{"task": old, "reused_existing": true, "instruction": "继续查询此任务的原 music_job，不重复提交或创建提醒"}, nil)
-					}
-				}
-			}
-			t.ID = agentID(p.trace.Account, deliveryThread, origin, in.Key)
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
 				return encode(old, nil)
 			}

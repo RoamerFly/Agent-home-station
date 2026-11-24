@@ -54,20 +54,27 @@ func (s *localProjectTools) fileRoots() []toolFileRoot {
 	return roots
 }
 
+// The file catalog shows retained source assets and completed outputs. These
+// directories contain working copies or generated intermediates, so skip them
+// during traversal as well as when classifying an individual path.
+func hiddenToolFileDirectory(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasSuffix(name, "-voice-work") || strings.HasPrefix(name, "validation-") ||
+		strings.Contains(name, "managed-test") || name == "scratch" || name == "comfy-input" ||
+		name == "input" || name == "base" || name == "models" || name == "voice-library" ||
+		name == "private-voice-library" || name == "catalog" || name == "registrations" ||
+		name == "secrets" || name == "site-packages" || name == "node_modules" || name == ".git"
+}
+
 func toolFileKind(path string) string {
 	p := strings.ToLower(filepath.ToSlash(path))
 	for _, part := range strings.Split(p, "/") {
-		if strings.HasSuffix(part, "-voice-work") || strings.HasPrefix(part, "validation-") || strings.Contains(part, "managed-test") || part == "scratch" || part == "comfy-input" || part == "input" || part == "base" {
+		if hiddenToolFileDirectory(part) {
 			return ""
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(filepath.Base(path)), "manual-") {
 		return ""
-	}
-	for _, part := range []string{"/models/", "/voice-library/", "/private-voice-library/", "/catalog/", "/registrations/", "/secrets/", "/node_modules/", "/site-packages/", "/.git/"} {
-		if strings.Contains(p, part) {
-			return ""
-		}
 	}
 	if strings.Contains(p, "/assets/objects/") {
 		return "素材"
@@ -114,8 +121,7 @@ func (s *localProjectTools) toolFiles(ctx context.Context) ([]toolFile, []string
 				return nil
 			}
 			if d.IsDir() {
-				switch strings.ToLower(d.Name()) {
-				case "models", "voice-library", "private-voice-library", "catalog", "registrations", "secrets", "site-packages", "node_modules", ".git":
+				if hiddenToolFileDirectory(d.Name()) {
 					return filepath.SkipDir
 				}
 				return nil

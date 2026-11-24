@@ -2,9 +2,20 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"time"
 	"wechat-bot/internal/companion"
 )
+
+func (w *Worker) finishAgentTask(in companion.Input, outcome string) {
+	if w.config.AgentTaskDone == nil {
+		return
+	}
+	if err := w.config.AgentTaskDone(in, outcome); err != nil {
+		w.persistErr = errors.Join(w.persistErr, err)
+		w.config.Log("agent_task_completion_save_failed")
+	}
+}
 
 func (w *Worker) taskActive(in companion.Input) bool {
 	if w.config.DeliveryCancelled != nil {
@@ -48,11 +59,11 @@ func (w *Worker) tickAgentTask(ctx context.Context) bool {
 	in.PersonaOverride = w.config.GroupRules[in.Thread].Persona
 	w.activity(Record{Event: "agent_task_started", Category: "decision", ThreadID: in.Thread, MessageID: in.TraceID, Status: "running", Reason: "persistent_task_continuation", Origin: "agent"})
 	outcome := w.respondCharacter(ctx, c, *in)
-	if w.generation == nil && outcome != "retrying_model" && w.config.AgentTaskDone != nil {
+	if w.generation == nil && outcome != "retrying_model" {
 		if outcome == "" {
 			outcome = "synchronous_round_finished"
 		}
-		w.config.AgentTaskDone(*in, outcome)
+		w.finishAgentTask(*in, outcome)
 	}
 	return true
 }

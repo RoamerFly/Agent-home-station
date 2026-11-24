@@ -989,15 +989,14 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 			return station.claimAgentTask(now, native.Account(), busy)
 		},
 		AgentTaskActive: station.agentTaskActive,
-		AgentTaskDone: func(in companion.Input, state string) {
-			station.updateAgentTask(in, state, nil, 0, "")
+		AgentTaskDone: func(in companion.Input, state string) error {
+			return station.updateAgentTask(in, state, nil, 0, "")
 		},
 		AgentTaskRetry: func(in companion.Input, delay time.Duration, reason string) {
-			station.updateAgentTask(in, "retrying_model", nil, delay, reason)
+			_ = station.updateAgentTask(in, "retrying_model", nil, delay, reason)
 		},
 		AgentTaskDelivery: func(in companion.Input, delivery bot.TaskDelivery) error {
-			station.updateAgentTask(in, "", &delivery, 0, "")
-			return nil
+			return station.updateAgentTask(in, "", &delivery, 0, "")
 		},
 		MediaSeeds:       station.mediaSeeds,
 		MediaSeedKnown:   station.mediaSeedKnown,

@@ -3,6 +3,7 @@ package companion
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,6 +248,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	previousCalls := map[string]string{}
 	discoveredPages := map[string][]string{}
 	blockedWithoutProgress := 0
+	// An autonomous run has no call quota. Repeating an identical read with
+	// identical arguments and output does not advance the task, even when the
+	// backend returns success (for example, a job status stuck at "running").
+	// First visits to a page, changed arguments/results and follow-ups reset
+	// this; cycling through already seen unchanged pages accumulates stalls.
+	readResults := map[string][32]byte{}
+	unchangedReads := 0
 	// Failed reads are keyed by the complete normalized call. A failure for one
 	// message or page must never poison another message/page of the same tool.
 	// The actual transient retry budget is enforced inside the single call.
@@ -345,6 +353,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			// do not force reads for a superseded original range.
 			historyNeed = nil
 			blockedWithoutProgress = 0
+			readResults = map[string][32]byte{}
+			unchangedReads = 0
 			followupRounds++
 			pendingCalls = nil // Re-plan siblings proposed before the new request.
 			need = resourceNeed(turns)
@@ -469,6 +479,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		if response.Action == "tool" && !allowed[response.Tool] {
 			if repairFormat("decision_tool_unknown", answer) {
 				continue
+			}
+			if listPartial {
+				return finalize("tool_catalog_unavailable")
 			}
 			return finalize("tool_not_in_authorized_catalog")
 		}
@@ -667,11 +680,11 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		unmetered := autonomous || deliveryFeedbackTool(response.Tool)
 		if calls >= max && !unmetered {
 			if need.Required && need.Kind != "surf" {
-				return finalize("resource_not_obtained")
+				return finalize("tool_budget_exhausted")
 			}
 			return reviewSurf(silent("tool_budget_exhausted"))
 		}
-		if e.Tools == nil || !allowed[response.Tool] {
+		if e.Tools == nil {
 			if need.Required && need.Kind != "surf" {
 				return finalize("tool_backend_unavailable")
 			}
@@ -920,6 +933,17 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 		if blockedResult == "" {
 			blockedWithoutProgress = 0
+			if callErr == nil && isReadOnlyRecoveryTool(response.Tool) {
+				digest := sha256.Sum256([]byte(result))
+				if previous, seen := readResults[callKey]; seen && previous == digest {
+					unchangedReads++
+				} else {
+					unchangedReads = 0
+				}
+				readResults[callKey] = digest
+			} else {
+				unchangedReads = 0
+			}
 			if strings.HasPrefix(response.Tool, "web_") {
 				previousCalls[callKey] = boundedText(result, 1500)
 			}
@@ -1018,6 +1042,14 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			payload = historyNeed.tagReadPacket(response.Tool, args, result, payload)
 		}
 		turns = append(turns, deepseek.AssistantTurn(ctx, answer), map[string]string{"role": "user", "content": payload})
+		if blockedResult != "" {
+			unchangedReads = 0
+		}
+		if unchangedReads >= 2 {
+			lastFailure = "unchanged_read_result:" + response.Tool
+			observeDecision(ctx, "tool_no_progress", unchangedReads)
+			return finalize("tool_no_progress")
+		}
 	}
 	return reviewSurf(silent("tool_budget_exhausted"))
 }

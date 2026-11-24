@@ -205,7 +205,7 @@ type WorkerQueue struct {
 	MediaRepairRequired func(companion.Input, string, string) error
 	BacklogSettled      func(string, string, []string, string)
 	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone       func(companion.Input, string)
+	AgentTaskDone       func(companion.Input, string) error
 	AgentTaskRetry      func(companion.Input, time.Duration, string)
 	AgentTaskDelivery   func(companion.Input, bot.TaskDelivery) error
 	AgentTaskActive     func(companion.Input) bool

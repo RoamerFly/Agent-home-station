@@ -275,12 +275,12 @@ func (w *stationWechatWorker) claimAgentTask(now time.Time, account string, busy
 	return nil, nil
 }
 
-func (w *stationWechatWorker) updateAgentTask(in companion.Input, state string, delivery *bot.TaskDelivery, retry time.Duration, reason string) {
+func (w *stationWechatWorker) updateAgentTask(in companion.Input, state string, delivery *bot.TaskDelivery, retry time.Duration, reason string) error {
 	w.ownerMu.Lock()
 	defer w.ownerMu.Unlock()
 	tasks, err := w.readAgentTasks()
 	if err != nil {
-		return
+		return err
 	}
 	for i := range tasks {
 		if tasks[i].ID != in.TaskID || tasks[i].Account != in.Account || tasks[i].Thread != in.Thread {
@@ -308,9 +308,9 @@ func (w *stationWechatWorker) updateAgentTask(in companion.Input, state string, 
 			task.Checkpoint = strings.TrimSpace(task.Checkpoint + "；" + reason)
 		}
 		task.Updated = time.Now().UTC()
-		_ = w.writeAgentTasks(tasks)
-		return
+		return w.writeAgentTasks(tasks)
 	}
+	return nil
 }
 
 func (w *stationWechatWorker) agentTaskActive(in companion.Input) bool {

@@ -13,7 +13,14 @@ func TestToolFileCatalogPreservesMediaAndProvenance(t *testing.T) {
 	data := t.TempDir()
 	s := &localProjectTools{home: &localHomeService{dataDir: data}}
 	base := filepath.Join(data, "applications", "wechat", "legacy-admin")
-	paths := []string{"managed-workspaces/account/assets/objects/abc", "managed-workspaces/account/music/jobs/song.wav", "managed-workspaces/account/voice-library/model.wav", "managed-workspaces/account/secrets/auth.json"}
+	paths := []string{
+		"managed-workspaces/account/assets/objects/abc",
+		"managed-workspaces/account/music/jobs/song.wav",
+		"managed-workspaces/account/music/input/source.wav",
+		"managed-workspaces/account/music/base/accompaniment.wav",
+		"managed-workspaces/account/voice-library/model.wav",
+		"managed-workspaces/account/secrets/auth.json",
+	}
 	for _, p := range paths {
 		full := filepath.Join(base, p)
 		os.MkdirAll(filepath.Dir(full), 0700)

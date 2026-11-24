@@ -107,10 +107,10 @@ func (m *Manager) claimTaskResult(task agentTask, now time.Time, facts any, next
 		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。" + task.deliveryInstruction()}), nil
 }
 
-func (m *Manager) finishTaskResult(t agentTask, state string) bool {
+func (m *Manager) finishTaskResult(t agentTask, state string) (bool, error) {
 	kind := t.resultKind()
 	if kind == "" {
-		return false
+		return false, nil
 	}
 	prepared, failed := false, false
 	switch kind {
@@ -150,8 +150,6 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 	if t.State == "completed" || t.State == "waiting_delivery" {
 		t.WorkCompleted = true
 	}
-	if _, err := m.agent.updateSnapshot(t); err != nil {
-		m.log("task_checkpoint_save_failed")
-	}
-	return true
+	_, err := m.agent.updateSnapshot(t)
+	return true, err
 }

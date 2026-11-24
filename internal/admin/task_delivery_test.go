@@ -263,17 +263,28 @@ func TestFinishAgentTaskReportsCheckpointWriteFailure(t *testing.T) {
 	for _, state := range []string{"yielded_to_message", "silent"} {
 		t.Run(state, func(t *testing.T) {
 			f := setup(t)
-			task := agentTask{ID: "write-failure", ProcessID: "running-process", Account: "test", Thread: "filehelper", Sender: "owner", State: "running"}
+			task := agentTask{ID: "write-failure", ProcessID: "running-process", Account: "test", Thread: "filehelper", Sender: "owner", State: "running", Actions: []taskAction{{Tool: "server_windows_process", Result: "process started", State: "completed"}}, Delivery: &bot.TaskDelivery{Trace: "original-send", State: "partial", Expected: 2, Accepted: 1}}
 			if err := f.manager.agent.task(task); err != nil {
 				t.Fatal(err)
 			}
 			original := f.manager.agent.dir
 			f.manager.agent.dir = filepath.Join(original, "agent-state.json")
-			defer func() { f.manager.agent.dir = original }()
-			f.manager.finishAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, TaskID: task.ID}, state)
+			err := f.manager.finishAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, TaskID: task.ID}, state)
+			f.manager.agent.dir = original
+			if err == nil {
+				t.Fatal("scheduler did not receive checkpoint write failure")
+			}
 			saved, _ := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
 			if saved.State != "running" {
 				t.Fatal(saved.State)
+			}
+			reloaded, err := newAgentControl(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered, ok := reloaded.lookupTask(task.ID, task.Account, task.Thread)
+			if !ok || recovered.State == "completed" || recovered.State == "stopped" || recovered.ProcessID != task.ProcessID || len(recovered.Actions) != 1 || recovered.Actions[0].Result != "process started" || recovered.Delivery == nil || recovered.Delivery.Trace != "original-send" || recovered.Delivery.Accepted != 1 {
+				t.Fatalf("original action or delivery receipt was lost during restart: %+v", recovered)
 			}
 			for _, entry := range f.manager.logs {
 				if entry.Event == "task_checkpoint_save_failed" {
@@ -284,14 +295,13 @@ func TestFinishAgentTaskReportsCheckpointWriteFailure(t *testing.T) {
 		})
 	}
 }
-func TestMusicTaskReuseRequiresSameConversationAndRequest(t *testing.T) {
+func TestMusicTaskRequiresExplicitIDForDifferentTaskKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name, thread, origin string
-		reuse                bool
 	}{
-		{"same request", "wxid_owner", "turn-1", true},
-		{"different conversation", "room@chatroom", "turn-1", false},
-		{"different request", "wxid_owner", "earlier", false},
+		{"same request", "wxid_owner", "turn-1"},
+		{"different conversation", "room@chatroom", "turn-1"},
+		{"different request", "wxid_owner", "earlier"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, p := trustedAgent(t)
@@ -310,10 +320,58 @@ func TestMusicTaskReuseRequiresSameConversationAndRequest(t *testing.T) {
 			if err := json.Unmarshal([]byte(result), &response); err != nil {
 				t.Fatal(err)
 			}
-			if response.Reused != tc.reuse || (response.Task.ID == old.ID) != tc.reuse {
+			if response.Reused || response.Task.ID == old.ID || response.Task.Thread != p.trace.Thread {
 				t.Fatal(result)
 			}
+			expectedCount := 1
+			if tc.thread == p.trace.Thread {
+				expectedCount++
+			}
+			repeated, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"song","title":"测试歌曲","state":"waiting","checkpoint":"wait for job"}`))
+			if err != nil || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != expectedCount {
+				t.Fatal(repeated, err)
+			}
+			var same struct{ Task agentTask }
+			if json.Unmarshal([]byte(repeated), &same) != nil || same.Task.ID != response.Task.ID {
+				t.Fatal("same original request and key were not idempotent", repeated)
+			}
+			changed, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"song","title":"另一首歌曲","state":"waiting","checkpoint":"different song input"}`))
+			var different struct{ Task agentTask }
+			if err != nil || json.Unmarshal([]byte(changed), &different) != nil || different.Task.ID == response.Task.ID || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != expectedCount+1 {
+				t.Fatal("same key merged a different song input", changed, err)
+			}
+			otherKey, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"different-arrangement","title":"测试歌曲","state":"waiting","checkpoint":"separate arrangement"}`))
+			var separate struct{ Task agentTask }
+			if err != nil || json.Unmarshal([]byte(otherKey), &separate) != nil || separate.Task.ID == response.Task.ID || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != expectedCount+2 {
+				t.Fatal("same title merged a different task key", otherKey, err)
+			}
+			if tc.thread == p.trace.Thread {
+				resumed, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"id":"old-song-task","state":"waiting","checkpoint":"continue original job"}`))
+				var existing struct{ Task agentTask }
+				if err != nil || json.Unmarshal([]byte(resumed), &existing) != nil || existing.Task.ID != old.ID || existing.Task.MusicJob != old.MusicJob {
+					t.Fatal("explicit ID failed to continue the original job", resumed, err)
+				}
+			}
 		})
+	}
+}
+
+func TestMusicTaskKeepsMatchingLegacyIDOnRetry(t *testing.T) {
+	f, p := trustedAgent(t)
+	legacyID := agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, "song")
+	old := agentTask{ID: legacyID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, SourceThread: p.trace.Thread, DeliveryThread: p.trace.Thread, OriginTrace: p.trace.TraceID, Title: "测试歌曲", MusicJob: "original-job", State: "waiting"}
+	if err := f.manager.agent.task(old); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"song","title":"测试歌曲","state":"waiting","checkpoint":"continue original job"}`))
+	var same struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(retried), &same) != nil || same.Task.ID != legacyID || same.Task.MusicJob != old.MusicJob || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != 1 {
+		t.Fatalf("matching old task was duplicated: %s %v", retried, err)
+	}
+	changed, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"song","title":"不同歌曲","state":"waiting","checkpoint":"different song"}`))
+	var distinct struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(changed), &distinct) != nil || distinct.Task.ID == legacyID || len(f.manager.agent.list(p.trace.Account, p.trace.Thread)) != 2 {
+		t.Fatalf("different input inherited old music job: %s %v", changed, err)
 	}
 }
 

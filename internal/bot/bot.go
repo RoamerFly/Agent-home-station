@@ -69,7 +69,7 @@ type Config struct {
 	AuthorizeMediaSubmit    func(context.Context, companion.Input, string, string) bool
 	PrepareMediaSource      func(context.Context, companion.Input, string, string) (string, error)
 	AgentTask               func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone           func(companion.Input, string)
+	AgentTaskDone           func(companion.Input, string) error
 	AgentTaskRetry          func(companion.Input, time.Duration, string)
 	AgentTaskDelivery       func(companion.Input, TaskDelivery) error
 	AgentTaskActive         func(companion.Input) bool

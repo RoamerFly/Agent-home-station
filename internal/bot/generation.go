@@ -534,9 +534,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 			stop()
 			delete(s.reviews, "generation-"+r.input.TraceID)
 		}
-		if w.config.AgentTaskDone != nil {
-			w.config.AgentTaskDone(r.input, "yielded_to_message")
-		}
+		w.finishAgentTask(r.input, "yielded_to_message")
 		w.activity(Record{Event: "background_turn_yielded", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, RelatedMessageID: r.job.yieldMessageID, Reason: "saved_task_retained_for_continuation", Status: "waiting"})
 		return
 	}
@@ -571,7 +569,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		if errors.As(r.err, &changed) {
 			state = "generation_paused"
 		}
-		defer w.config.AgentTaskDone(r.input, state)
+		defer w.finishAgentTask(r.input, state)
 	}
 	delete(s.jobs, r.input.Thread)
 	w.settleGenerationFollowups(r.job, r.err == nil && !r.job.cancelled && w.taskActive(r.input))

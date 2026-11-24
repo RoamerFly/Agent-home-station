@@ -24,11 +24,12 @@ func TestBackgroundReasoningYieldsToNewPrivateQuestionWithoutLosingInbox(t *test
 	w.enableGenerations()
 	defer w.closeGenerations()
 	done := ""
-	w.config.AgentTaskDone = func(in companion.Input, state string) {
+	w.config.AgentTaskDone = func(in companion.Input, state string) error {
 		if in.TaskID != "saved-process" {
 			t.Error(in)
 		}
 		done = state
+		return nil
 	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "process-result", TaskID: "saved-process", Mode: "direct", Text: "Inspect original process output"}
 	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
@@ -93,7 +94,7 @@ func TestBackgroundYieldWaitsForActualToolBoundaryWithoutReplay(t *testing.T) {
 	w.enableGenerations()
 	defer w.closeGenerations()
 	done := ""
-	w.config.AgentTaskDone = func(_ companion.Input, state string) { done = state }
+	w.config.AgentTaskDone = func(_ companion.Input, state string) error { done = state; return nil }
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "old-task", TaskID: "saved-task", Mode: "direct", Text: "saved repair"}
 	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	pumpGeneration(t, w, func() bool {

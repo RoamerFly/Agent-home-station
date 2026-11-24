@@ -147,36 +147,38 @@ type pluginJobState struct {
 	CancelState               string             `json:"cancel_state,omitempty"`
 }
 type agentTask struct {
-	Constraints        *TaskConstraints  `json:"constraints,omitempty"`
-	PendingOperations  []string          `json:"pending_operations,omitempty"`
-	WorkCompleted      bool              `json:"work_completed,omitempty"`
-	Reminder           *reminderSpec     `json:"reminder,omitempty"`
-	NotificationText   string            `json:"notification_text,omitempty"`
-	ReminderDue        bool              `json:"reminder_due,omitempty"`
-	OwnerRequest       bool              `json:"owner_request,omitempty"`
-	ParentID           string            `json:"parent_task_id,omitempty"`
-	Goal               string            `json:"goal,omitempty"`
-	Actions            []taskAction      `json:"recent_actions,omitempty"`
-	DeliveryJob        string            `json:"delivery_job,omitempty"`
-	ReportOnly         bool              `json:"report_only,omitempty"`
-	ReportSourceThread string            `json:"report_source_thread,omitempty"`
-	OwnerRequested     bool              `json:"owner_requested,omitempty"`
-	ProcessID          string            `json:"process_id,omitempty"`
-	FishHomeID         string            `json:"fish_home_id,omitempty"`
-	DeviceTask         string            `json:"device_task,omitempty"`
-	MusicSpec          *songSpec         `json:"music_spec,omitempty"`
-	PluginJob          *pluginJobState   `json:"plugin_job,omitempty"`
-	RequestedText      string            `json:"requested_text,omitempty"`
-	MusicFailure       bool              `json:"music_failure,omitempty"`
-	Delivery           *bot.TaskDelivery `json:"delivery,omitempty"`
-	RecoveryMessageID  string            `json:"recovery_message_id,omitempty"`
-	MusicTitle         string            `json:"music_title,omitempty"`
-	MusicJob           string            `json:"music_job,omitempty"`
-	MusicKind          string            `json:"music_kind,omitempty"`
-	MusicPrepared      bool              `json:"music_prepared,omitempty"`
-	MusicDeadline      time.Time         `json:"music_deadline,omitempty"`
-	OriginTrace        string            `json:"origin_trace,omitempty"`
-	QuoteServerID      string            `json:"quote_server_id,omitempty"`
+	Constraints          *TaskConstraints  `json:"constraints,omitempty"`
+	PendingOperations    []string          `json:"pending_operations,omitempty"`
+	WorkCompleted        bool              `json:"work_completed,omitempty"`
+	Reminder             *reminderSpec     `json:"reminder,omitempty"`
+	NotificationText     string            `json:"notification_text,omitempty"`
+	ReminderDue          bool              `json:"reminder_due,omitempty"`
+	OwnerRequest         bool              `json:"owner_request,omitempty"`
+	ParentID             string            `json:"parent_task_id,omitempty"`
+	Goal                 string            `json:"goal,omitempty"`
+	Actions              []taskAction      `json:"recent_actions,omitempty"`
+	DeliveryJob          string            `json:"delivery_job,omitempty"`
+	ReportOnly           bool              `json:"report_only,omitempty"`
+	ReportSourceThread   string            `json:"report_source_thread,omitempty"`
+	OwnerRequested       bool              `json:"owner_requested,omitempty"`
+	ProcessID            string            `json:"process_id,omitempty"`
+	FishHomeID           string            `json:"fish_home_id,omitempty"`
+	DeviceTask           string            `json:"device_task,omitempty"`
+	MusicSpec            *songSpec         `json:"music_spec,omitempty"`
+	PluginJob            *pluginJobState   `json:"plugin_job,omitempty"`
+	RequestedText        string            `json:"requested_text,omitempty"`
+	MusicFailure         bool              `json:"music_failure,omitempty"`
+	Delivery             *bot.TaskDelivery `json:"delivery,omitempty"`
+	RecoveryMessageID    string            `json:"recovery_message_id,omitempty"`
+	MusicTitle           string            `json:"music_title,omitempty"`
+	MusicJob             string            `json:"music_job,omitempty"`
+	MusicKind            string            `json:"music_kind,omitempty"`
+	MusicPrepared        bool              `json:"music_prepared,omitempty"`
+	MusicDeliveryBlocked bool              `json:"music_delivery_blocked,omitempty"`
+	MusicStatusTerminal  bool              `json:"music_status_terminal,omitempty"`
+	MusicDeadline        time.Time         `json:"music_deadline,omitempty"`
+	OriginTrace          string            `json:"origin_trace,omitempty"`
+	QuoteServerID        string            `json:"quote_server_id,omitempty"`
 	// RequestThread is where an owner asked for the work, SourceThread is the
 	// conversation whose material was actually read, and DeliveryThread is the
 	// conversation where the result belongs. Thread remains the legacy
@@ -603,7 +605,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				busyThread = delivery
 			}
 		}
-		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(busyThread) || !permittedRecipient(cfg.Config, t.Thread) {
+		musicPermissionRestored := t.MusicJob != "" && t.MusicDeliveryBlocked && (cfg.Companion.Permissions.SendVoice || cfg.Companion.Permissions.SendFile)
+		musicTerminalBlocked := t.MusicDeliveryBlocked && t.MusicStatusTerminal && !musicPermissionRestored
+		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || musicTerminalBlocked || now.Before(t.Next) && !musicPermissionRestored || busy(busyThread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
 		// Recheck identity and owner authority before dispatching any specialized
@@ -631,17 +635,18 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 			return m.claimDeviceTask(t, now)
 		}
 		if t.MusicJob != "" {
-			if !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
-				const reason = "等待恢复语音或文件发送权限，保留原音乐任务及投递进度"
-				if t.LastResult != reason {
-					t.LastResult = reason
-					if _, err := m.agent.updateSnapshot(t); err != nil {
-						return nil, err
-					}
-				}
-				continue
-			}
+			deliveryAllowed := cfg.Companion.Permissions.SendVoice || cfg.Companion.Permissions.SendFile
 			if !m.localMusicPluginConfigured(context.Background()) {
+				if !deliveryAllowed {
+					const reason = "音乐工具连接尚未恢复；等待恢复语音或文件发送权限后交付原任务，保留原 job_id"
+					if t.LastResult != reason || !t.MusicDeliveryBlocked {
+						t.LastResult, t.MusicDeliveryBlocked = reason, true
+						if _, err := m.agent.updateSnapshot(t); err != nil {
+							return nil, err
+						}
+					}
+					continue
+				}
 				t.State = "needs_review"
 				t.LastResult = "music_local_plugin_configuration_required"
 				if store, err := m.packageStore(); err != nil {
@@ -654,7 +659,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				}
 				continue
 			}
-			return m.claimMusicTask(t, now)
+			return m.claimMusicTask(t, now, deliveryAllowed)
 		}
 		if t.RecoveryMessageID != "" {
 			t.State = "running"
@@ -735,10 +740,14 @@ func withTaskWake(c companion.Config) companion.Config {
 	c.Conversation = &x
 	return c
 }
-func (m *Manager) finishAgentTask(in companion.Input, state string) {
+func (m *Manager) finishAgentTask(in companion.Input, state string) (finishErr error) {
+	saveFailure := func(event string, err error) {
+		m.log(event)
+		finishErr = errors.Join(finishErr, err)
+	}
 	defer func() {
 		if err := m.agent.retireSettled(); err != nil {
-			m.log("task_archive_save_failed")
+			saveFailure("task_archive_save_failed", err)
 		}
 	}()
 	if in.TaskID == "" {
@@ -766,7 +775,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 			task.State = "needs_review"
 			task.LastResult = "生成期间依据或授权已改变，本轮尚未发送部分已停止；原程序、工具产物和已核验回执保留，重新核验后再继续"
 			if _, err := m.agent.updateSnapshot(task); err != nil {
-				m.log("generation_pause_checkpoint_failed")
+				saveFailure("generation_pause_checkpoint_failed", err)
 			}
 			return
 		}
@@ -781,7 +790,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 			if task.ID == in.TaskID && task.State == "running" && task.Delivery == nil && !task.WorkCompleted {
 				task.Delivery = &bot.TaskDelivery{Trace: in.TraceID, State: "waiting_delivery"}
 				if err := m.agent.task(task); err != nil {
-					m.log("task_delivery_binding_failed")
+					saveFailure("task_delivery_binding_failed", err)
 					return
 				}
 			}
@@ -793,7 +802,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.State = "completed"
 				t.LastResult = "提醒正文已交给发送链，实际发送状态以回执为准"
 				if err := m.agent.task(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
@@ -803,7 +812,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "后台思考已让位于新消息；原程序、工具结果和行动证据保留。稍后读取真实状态继续，不重新启动已执行操作"
 				if _, err := m.agent.updateSnapshot(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
@@ -823,7 +832,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 							t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
 						}
 						if err := m.agent.task(t); err != nil {
-							m.log("task_checkpoint_save_failed")
+							saveFailure("task_checkpoint_save_failed", err)
 						}
 						return
 					}
@@ -834,7 +843,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.WorkCompleted = true
 				t.LastResult = "已提交原定群聊的成品，等待原发送回执"
 				if _, err := m.agent.updateSnapshot(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
@@ -849,7 +858,7 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 					t.LastResult = "Agent 决定不发送本次技术私报"
 				}
 				if _, err := m.agent.updateSnapshot(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
@@ -861,18 +870,21 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 					t.LastResult = "私聊报告本轮未完成：" + state
 				}
 				if err := m.agent.task(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
-			if m.finishTaskResult(t, state) {
+			if handled, err := m.finishTaskResult(t, state); handled {
+				if err != nil {
+					saveFailure("task_checkpoint_save_failed", err)
+				}
 				return
 			}
 			if t.RecoveryMessageID != "" && (state == "reply" || state == "silent" || state == "synchronous_round_finished") {
 				t.State = "completed"
 				t.LastResult = "原消息已交由模型处理；回复已交给发送链路或模型选择安静，实际送达以发送记录为准"
 				if err := m.agent.task(t); err != nil {
-					m.log("task_checkpoint_save_failed")
+					saveFailure("task_checkpoint_save_failed", err)
 				}
 				return
 			}
@@ -895,10 +907,11 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 			}
 			settleFromDelivery(&t, state == "reply")
 			if _, err := m.agent.updateSnapshot(t); err != nil {
-				m.log("task_checkpoint_save_failed")
+				saveFailure("task_checkpoint_save_failed", err)
 			}
 		}
 	}
+	return
 }
 
 // retryAgentTask receives only an already-classified, retryable provider

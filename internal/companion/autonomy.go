@@ -18,7 +18,7 @@ func (d Decision) RecordStatus() string {
 		return "failed"
 	}
 	switch d.Reason {
-	case "tool_task_deadline_exceeded", "tool_budget_exhausted", "tool_unavailable_or_budget_exhausted", "tool_backend_unavailable", "tool_not_in_authorized_catalog", "unverified_model_response", "media_unavailable_or_permission_denied":
+	case "tool_task_deadline_exceeded", "tool_budget_exhausted", "tool_unavailable_or_budget_exhausted", "tool_backend_unavailable", "tool_catalog_unavailable", "tool_not_in_authorized_catalog", "tool_no_progress", "unverified_model_response", "media_unavailable_or_permission_denied":
 		return "failed"
 	case "quiet_hours", "no_reliable_context":
 		return "skipped"

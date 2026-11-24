@@ -95,10 +95,8 @@ func TestTaskCanBindVerifiedEarlierRequestAndReuseCompletedWork(t *testing.T) {
 	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "even-later-message", OriginalText: &late, Mode: "direct"})
 	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"song-request"}]}`)
 	raw, err = p.Call(t.Context(), "agent_task", args)
-	var reused struct {
-		Reused bool `json:"reused_existing"`
-	}
-	if err != nil || json.Unmarshal([]byte(raw), &reused) != nil || !reused.Reused || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
+	var existing agentTask
+	if err != nil || json.Unmarshal([]byte(raw), &existing) != nil || existing.ID != first.Task.ID || existing.State != "completed" || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
 		t.Fatalf("completed original was scheduled again: %s %v", raw, err)
 	}
 	raw, err = p.Call(t.Context(), "agent_tasks", json.RawMessage(`{"status":"history","query":"卜卦","limit":120}`))
