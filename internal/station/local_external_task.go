@@ -32,7 +32,7 @@ func (t *localToolSet) localExternalTaskTools(ctx context.Context) []mcptools.To
 	}
 	return []mcptools.Tool{
 		mcptools.NewTool(localExternalTaskList, "分页查看已登记的异步 Job 和 Poll 工具及输入参数。", `{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
-		mcptools.NewTool(localExternalTaskCall, "start 使用目录中的工具名和参数提交一次。status 使用 task_id 按服务声明的间隔核对结果，可用 next_text_offset 续读。需要完成后自动续办时，用 local_task_followup 关联原任务，result_tool 为 station_external_task。cancel 使用 task_id。具备远程取消端点时才发远程取消，其他情况下停止本机轮询。结果未知时请先核对原任务。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","status","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"task_id":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`),
+		mcptools.NewTool(localExternalTaskCall, "调用异步工具：start 提交目录中的工具和参数；status 按 task_id 查结果并用 next_text_offset 续读；cancel 停止原任务。自动续办用 local_task_followup 关联 task_id，result_tool=station_external_task。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","status","cancel"]},"tool":{"type":"string"},"arguments":{"type":"object"},"task_id":{"type":"string"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`),
 	}
 }
 

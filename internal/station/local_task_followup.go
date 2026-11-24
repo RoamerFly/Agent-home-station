@@ -47,7 +47,7 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 }
 
 func localFollowupTool() mcptools.Tool {
-	return mcptools.NewTool(localFollowupToolName, "为本轮已提交的长任务安排结果续办。schedule 使用 process_id，或同时提供原 job_id 和对应查询工具 result_tool（RVC、ComfyUI、YuE、异步外部工具）。外部任务的 task_id 填入 job_id。宿主核对原任务和成品后续写本机聊天。status/cancel 使用续办 id，list 按游标查看。cancel 只停止续办，停止原任务使用对应工具。需要自动回看时请实际登记。",
+	return mcptools.NewTool(localFollowupToolName, "为已提交的长任务安排自动续办。schedule 填 process_id，或原 job_id 与 result_tool；外部任务的 task_id 作为 job_id。status/cancel 使用续办 id，list 分页查看。停止原任务请用对应工具。",
 		`{"type":"object","properties":{"action":{"type":"string","enum":["schedule","status","cancel","list"]},"process_id":{"type":"string"},"job_id":{"type":"string"},"result_tool":{"type":"string","enum":["project_rvc_job","project_comfy_job","project_yue_job","station_external_task"]},"id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 

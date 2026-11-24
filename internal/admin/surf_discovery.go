@@ -619,7 +619,7 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	if mode == "search" {
 		mode = "search_verification"
 	}
-	out := map[string]any{"session_id": session.ID, "entry_mode": mode, "depth": depth, "max_depth": settings.MaxDepth, "candidates": selected, "filtered_duplicates": filtered, "source_failures": session.Failures, "instruction": "这是实际读取公开列表/订阅/目录得到的候选，不代表看过视频或听过音频。选值得继续的具体内容，用web_fetch读正文；视频/音乐/图片可用media_url（若有）或BV页执行web_media_download。不要把标题摘要当完整文章；发现适合当前群的新内容就是分享理由，无需等待群友提问；优先读取感兴趣的具体候选或准备媒体。确实没有兴趣或不适合可silent并用reason=surf_not_interested或surf_not_suitable；喜欢但只想收藏可在silent对象加surf_action=bookmark和surf_item_id。分享时给reply加surf_item_id，比较近期主题，不能用同主题换网址凑新鲜。可用web_discover(related_url=候选BV页)继续关联探索，搜索仅用于核实具体疑问；不要退回搜索宽泛兴趣句子或首页。失败源已记录，其他源候选仍可用。"}
+	out := map[string]any{"session_id": session.ID, "entry_mode": mode, "depth": depth, "max_depth": settings.MaxDepth, "candidates": selected, "filtered_duplicates": filtered, "source_failures": session.Failures, "instruction": "这些是公开内容候选。网页用 web_fetch 读正文，媒体可用 media_url 或 BV 页通过 web_media_download 准备；也可用 web_discover(related_url) 继续探索。根据内容和近期主题决定分享，reply 附 surf_item_id；无合适内容用 silent 及 reason，收藏用 surf_action=bookmark 和 surf_item_id。"}
 	if excerpts := p.recentReadingExcerpts(ctx, session); len(excerpts) > 0 {
 		out["current_session_reading_excerpts"] = excerpts
 	}
@@ -627,7 +627,7 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	if p.privateSurfOrigin == nil {
 		if previous := p.priorReadingExcerpts(ctx, session); len(previous) > 0 {
 			out["prior_authorized_reading_excerpts"] = previous
-			out["instruction"] = out["instruction"].(string) + " 既往摘录只记录此前在同一兴趣下实际读到的部分，当前候选的阅读进度单独核对。"
+			out["instruction"] = out["instruction"].(string) + " 既往摘录可作背景；当前内容按本轮读取结果判断。"
 		}
 		if comments := p.priorConfirmedInteractions(ctx, session); len(comments) > 0 {
 			out["prior_confirmed_interactions"] = comments
@@ -641,7 +641,7 @@ func (p *permittedTools) discover(ctx context.Context, args json.RawMessage) (st
 	}
 
 	if p.privateSurfOrigin != nil {
-		out["instruction"] = "这是实际读取公开列表/订阅/目录得到的候选元数据，不代表观看或播放。当前仅供私人浏览，没有发送目标或发送权限。可用web_fetch分页读取候选正文、web_search核实具体疑问，或web_discover继续发现；不得下载、准备或发送素材，也不能读取会话记忆。最终silent；喜欢的候选可用surf_action=bookmark与surf_item_id收藏，其他候选可略过。"
+		out["instruction"] = "私人浏览：用 web_fetch 读候选正文、web_search 核实或 web_discover 继续探索。可用 surf_action=bookmark 和 surf_item_id 收藏；本轮以 silent 结束。"
 	}
 	b, _ := json.Marshal(out)
 	return string(b), nil

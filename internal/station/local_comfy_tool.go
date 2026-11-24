@@ -105,19 +105,19 @@ func (t *localToolSet) localComfyTools(ctx context.Context) []mcptools.Tool {
 }
 
 func localComfyWorkflowTool() mcptools.Tool {
-	return mcptools.NewTool(localComfyListTool, "查看公共工具及大肥鱼家目录中的 ComfyUI 工作流和可调参数。新工作流图写入 home/workflows/comfyui 后用 project_comfy_register 登记；无需手工维护 registry.json。", `{"type":"object","additionalProperties":false}`)
+	return mcptools.NewTool(localComfyListTool, "列出可用 ComfyUI 工作流及参数。新图写入 home/workflows/comfyui，再用 project_comfy_register 登记。", `{"type":"object","additionalProperties":false}`)
 }
 
 func localComfyModelTool() mcptools.Tool {
-	return mcptools.NewTool(localComfyModelsTool, "列出已配置 ComfyUI 模型库内的模型文件名，供内部选择和调用。只有当前账号管理员要求时才把完整模型列表、文件名、目录或库存明细写进对外回复；普通成员的请求只回答可提供的创作能力，不披露明细。category 默认 checkpoints；用 offset/limit 翻页。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyModelsTool, "按 category、offset、limit 浏览模型供创作选用。具体模型清单和路径仅向管理员回复；其他成员询问时介绍可提供的创作能力。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 func localComfyFilesToolSpec() mcptools.Tool {
-	return mcptools.NewTool(localComfyFilesTool, "浏览和编辑工作站 publictools 中已登记的 ComfyUI 间接工具及其子目录，不必访问外部 ComfyUI 安装目录。root=runtime 是公共工具运行时，workflows 是已登记图，home 是大肥鱼工作区；也可访问 models/model_library/custom_nodes。先 list/read，更新已有文件传 expected_sha256；read 支持 offset/limit。写新图后用 project_comfy_register 登记。模型目录和文件名只用于内部调用；仅在当前账号管理员要求时向其披露模型清单、路径等敏感库存信息，普通成员不披露。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyFilesTool, "浏览或编辑 ComfyUI 工具、工作流、模型与工作区目录。root 选 runtime/models/model_library/custom_nodes/workflows/home；read 可分页，修改已有文件传 expected_sha256。新图用 project_comfy_register 登记。模型路径仅向管理员披露。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
 }
 
 func localComfyRegisterToolSpec() mcptools.Tool {
-	return mcptools.NewTool(localComfyRegisterTool, "登记或更新大肥鱼家目录中的 ComfyUI 工作流。先用 project_comfy_files 写 graph JSON，再传 id、label、graph 文件名、save_node 和 parameters；工具计算 SHA-256、校验节点与参数并原子更新 registry.json，返回工作流视图。", `{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"graph":{"type":"string"},"save_node":{"type":"string"},"parameters":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"kind":{"type":"string","enum":["image","string","number","integer","boolean"]},"required":{"type":"boolean"},"minimum":{"type":"number"},"maximum":{"type":"number"},"max_length":{"type":"integer"},"enum":{"type":"array","items":{"type":"string"}},"node":{"type":"string"},"input":{"type":"string"}},"required":["id","label","kind","node","input"],"additionalProperties":false}}},"required":["id","label","graph","save_node","parameters"],"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyRegisterTool, "登记或更新工作流：先写 graph JSON，再传 id、label、graph、save_node、parameters；返回已校验的工作流视图。", `{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"graph":{"type":"string"},"save_node":{"type":"string"},"parameters":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"label":{"type":"string"},"kind":{"type":"string","enum":["image","string","number","integer","boolean"]},"required":{"type":"boolean"},"minimum":{"type":"number"},"maximum":{"type":"number"},"max_length":{"type":"integer"},"enum":{"type":"array","items":{"type":"string"}},"node":{"type":"string"},"input":{"type":"string"}},"required":["id","label","kind","node","input"],"additionalProperties":false}}},"required":["id","label","graph","save_node","parameters"],"additionalProperties":false}`)
 }
 
 func localComfyStartToolSpec() mcptools.Tool {

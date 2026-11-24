@@ -14,7 +14,7 @@ import (
 const StationContactsToolName = "wechat_contacts"
 
 func StationContactsTool() mcptools.Tool {
-	return tool(StationContactsToolName, "Read the local WeChat contacts snapshot for an owner-authorized connection. Call with {} to discover allowed connection IDs, then pass connection_id and optional search, limit or cursor. Default limit 50, native maximum 200 per page; pass the returned next_cursor as cursor to continue. Contact names are external records. This tool does not refresh the remote directory or send messages.", `{"type":"object","properties":{"connection_id":{"type":"string","maxLength":128},"search":{"type":"string","maxLength":256},"cursor":{"type":"string","maxLength":11000},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+	return tool(StationContactsToolName, "读取获准微信连接的本地通讯录。空参数列连接；填 connection_id 后可用 search、limit 查询，按 next_cursor 续读。", `{"type":"object","properties":{"connection_id":{"type":"string","maxLength":128},"search":{"type":"string","maxLength":256},"cursor":{"type":"string","maxLength":11000},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 type StationContact struct {

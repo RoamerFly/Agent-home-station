@@ -31,7 +31,7 @@
     }
   ],
   "files": {
-    "capabilities.json": "4807693f8975eea11aa8ea8ffcda8424410bd9cf48b0f0d0e92cfceeb972c268",
+    "capabilities.json": "c98ff57600f393f23b5c4d450f13ebb8b267a0f203fda1ff7278d3e97f36d160",
     "CHANGELOG.md": "01f857ad17bacec85f6550b519e6b94d3faef688242306e57fc16eb3088cdb06",
     "config.schema.json": "80582050b4c236e84d0c6293e485d1aa08a6554eff9c391d036a695c0e17728f",
     "MIGRATION.md": "5c4eafc26d4544ceb5e34417d1102412200e741a6fb5ab3a0327e2671df33be1",

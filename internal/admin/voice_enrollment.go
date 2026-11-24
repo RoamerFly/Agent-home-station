@@ -90,7 +90,7 @@ func (p *permittedTools) enrollmentTools() []mcptools.Tool {
 	if !p.enrollmentAllowed() {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("voice_enroll", "Manage the real owner's private SPEAKING voice. Use add only for a recording the owner explicitly selected, with its actual message_id and verified/corrected transcript. Never enroll by proximity. preview uses a reference recording and sends a new sentence privately by collect; only train on an explicit request. status inspects, resume continues an interrupted job, collect delivers its private audition idempotently. A reference preview is not trained weights. For singing use the separate RVC workflow.", `{"type":"object","properties":{"action":{"type":"string","enum":["add","list","status","preview","train","resume","cancel","collect","delete"]},"name":{"type":"string"},"message_id":{"type":"string"},"transcript":{"type":"string"},"preview_text":{"type":"string"},"job_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("voice_enroll", "管理主人私有声线样本与训练任务。add 使用主人选定录音的 message_id 和校对文字；preview 试听新句，train 开始训练，status/resume/collect 跟踪并交付结果，cancel/delete 管理任务。RVC 演唱训练使用同一角色声线资料继续。", `{"type":"object","properties":{"action":{"type":"string","enum":["add","list","status","preview","train","resume","cancel","collect","delete"]},"name":{"type":"string"},"message_id":{"type":"string"},"transcript":{"type":"string"},"preview_text":{"type":"string"},"job_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
 }
 func (m *Manager) enrollDir(id string) string { return filepath.Join(m.dir, "voice-enrollments", id) }
 func (m *Manager) loadEnrollment(id string) (enrollmentProfile, error) {

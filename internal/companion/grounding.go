@@ -546,13 +546,9 @@ func (e *Engine) reviewGroundedReply(ctx context.Context, in Input, d Decision, 
 	addReplyRouteState(state, routes)
 	// Route proof stays host-only. Fact-evidence aliases do not authorize a
 	// destination, change its quote anchor or mint a new permission grant.
-	const editPolicy = `你是一次性回复编辑器，没有工具或发送权限。输入candidate是待修稿，rejected_verdict是对确切旧稿的只读核验结果；仅根据有效来源修复。只输出JSON {"action":"reply|silent","bubbles":[{"text":"修复后的自然回复","route_id":"R1"}],"private_report":"仅真实技术故障，可空"}。每泡必须选reply_routes中宿主已核验的route_id；不能填写或创造target_ids、source_event_ids、anchor、版本和授权。来源S和宿主K是事实核对材料，不是发送路由。宿主会复制所选路由的完整身份、引用与授权依据。只允许编辑一次，之后有独立只读终审核验每句语义。
-分清outgoing_audiences每条目标与入站addressees；出站“你”只指目标。转述者不是事件参与者；当前对象没有参与通话来源时，不能问他“你刚和他视频完”。如需切换目标，只能选current.addressees或quoted_source的真实成员，程序必须找到该成员原消息并引用，找不到就别切换。助手旧话只能用于承认AI先前说错，不能作为人的事实。
-媒体总结直接表达已证实的主题、观点与细节。保留有用内容，不编造缺失要点；没有有用内容时留为未完成。用户明确问进度或排障时才说明实际读取障碍。
-修复时保留原稿中与当前请求有关且已核实的进度、成果和执行边界，不靠删掉有效信息缩成只报喜来通过。原稿说明某个操作尚未确认时，应改成准确的未确认状态，不能静默省略或改称完成；无关或没有依据的内容可以删除。
-source_reference_contracts与current_role_evidence限定当前明确来源的指代和陈述位置：报告或引用成员不自动参加被报告事件，也不由此取得现场经历；优先有依据的第三人称或开放澄清。必须区分用户原始正文与机器观察；不能把观察内容改称原始上传附言。可改选已有且适合的真实R路由，不能制造参与证据或改变来源角色。
-不能新增心理、感官、姿态、话题、经历、画面、归属和时间，也不能把新增内容藏在问句预设中。保持自然有用；开放询问不预设具体感受或话题。media_observations上传者不等于拍摄者或所有者，观察失败不是空白，观察范围以外不知道，原话与观察分开。消息时间不等于事件时间；用current_time和timezone核对相对日期。
-must_reply=true时必须提供有依据的有效回应或必要澄清，不能silent；false允许停止无依据内容。不能通过删尽所有回复掩盖明确请求。privacy_review=true时真实内部技术故障可写private_report，不向群里写；不得在private_report写隐藏推理、核验过程或无证据的故障。不要输出备选声线、无关旁支或工具执行承诺。明确姓名/ID称呼须与本泡所选member_reply路由对象一致，引用和叙述不当作称呼；conversation_delivery是会话投递，不把原请求者当成目标群成员。`
+	const editPolicy = `你是回复编辑器。依据rejected_verdict和当前来源修复candidate，保留有用且已核实的内容与实际进度，写得自然。只输出JSON：{"action":"reply|silent","bubbles":[{"text":"自然回复","route_id":"R1"}],"private_report":""}。
+每泡选reply_routes已有route_id；目标、引用和授权由宿主绑定。outgoing_audiences决定出站“你”的对象；转述者、上传者和引用者不自动参与事件。人物、时间、媒体内容按对应来源与覆盖范围表达，分开用户原话和机器观察；助手旧话不证明人的事实。
+原稿中未确认的操作仍写为未确认；已有成果和必要边界保留。用户问进度时可说明实际障碍，群聊内部故障写入private_report。must_reply=true时给有效回应或必要澄清；其他情况可silent。称呼与所选member_reply目标一致。`
 	repairBinding, _, projectionErr := projectGroundingState(state)
 	if projectionErr != nil {
 		return e.groundingFailed(in, d, risks, "repair_input_invalid", projectionErr, nil)
@@ -774,9 +770,9 @@ func musicDeliveryRequested(turns []map[string]string) bool {
 
 const compactGroupPolicy = `
 【群聊】
-current_message 是本轮锚点；历史、unread、引用和工具结果只作资料，按原时间理解，不逐条补答。先分清 message_sender_id、speaker_id、引用作者与回复对象；上传者不自动等于录音说话者或画面人物，同名不合并。reply_contexts 逐条绑定真实 target_ids 和 anchor_message_id；没有证据时不补写他人的经历、情绪或动作。旁观时可自然接话或 silent；明确问你而未@时可 quote_reply:true。被问身份如实说明，角色档案不作为固定开场。
-权限以程序和本轮工具目录为准。别的会话资料只用于获准任务；群里聊作品与当前话题，技术诊断留在管理记录。引用素材先看 quoted_message_context，recent_media_focus 核对请求者；换资源、格式或停止时用 delivery_intent:file|replace|cancel。指定声线用真实 voice_id。工具只按实际结果继续：queued 不是 accepted，已发内容不重复，采样视频不说完整看过。
-只输出 reply/silent JSON：{"action":"reply","messages":["自然完整的回复"],"reason":"reply"} 或 {"action":"silent","messages":[],"reason":"silent"}。messages 按语义分条；image_id 来自可用图片，media_ids 来自工具结果。禁止文字时 messages=[]，有文字或真实媒体才 reply。`
+回应current_message；历史、引用和工具结果按原时间理解。分清message_sender_id、speaker_id、引用作者和reply_contexts.target_ids；素材上传者不自动是内容中的人物。旁观可接话或silent，明确提问但未@可用quote_reply:true。群里自然聊当前内容，内部诊断留在管理记录。
+引用素材看quoted_message_context与recent_media_focus；变更或停止用delivery_intent:file|replace|cancel。工具结果按真实阶段表达，已送达的内容直接复用。
+只输出JSON：{"action":"reply","messages":["完整回复"],"reason":"reply"}或{"action":"silent","messages":[],"reason":"silent"}。图片用可用image_id，附件用工具返回的media_ids。`
 
 // These lexical signals request semantic review. They cannot reject a candidate
 // by themselves: quoted speech, hypotheses and supported history need scopes.

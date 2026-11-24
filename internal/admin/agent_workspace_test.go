@@ -48,8 +48,8 @@ func TestDeliveryWorkingRuleMergesAndSurvivesRestart(t *testing.T) {
 	if e != nil || !strings.Contains(d.Content, "保留主人设定") || strings.Count(d.Content, "## 投递先核查，续办原批次") != 1 {
 		t.Fatal(d, e)
 	}
-	if strings.Count(d.Content, "## 自然表达，直接回应") != 1 {
-		t.Fatal("natural style note missing or duplicated", d)
+	if strings.Count(d.Content, "## 角色演唱与视频内容") != 1 || !strings.Contains(d.Content, "角色歌曲用第一人称自然表达") {
+		t.Fatal("character expression guide missing or duplicated", d)
 	}
 }
 
@@ -121,7 +121,7 @@ func TestSearchGuideMigratesLegacyPaginationWithoutReplacingPersonalNotes(t *tes
 		t.Fatal(d, e)
 	}
 	guide, e := f.manager.workspace.Read("shared", "project-search.md")
-	if e != nil || !strings.Contains(guide.Content, "不是整个任务的上限") {
+	if e != nil || !strings.Contains(guide.Content, "next_cursor") || !strings.Contains(guide.Content, "skipped_files") {
 		t.Fatal(guide, e)
 	}
 }

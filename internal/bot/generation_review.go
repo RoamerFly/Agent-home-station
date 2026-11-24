@@ -32,7 +32,7 @@ func (w *Worker) reviewActiveGenerations(ctx context.Context) {
 		s.reviews[id] = cancel
 		in := j.input
 		updates := append([]companion.ConversationEvent(nil), j.updates...)
-		pending := []string{"当前原始请求或工具任务尚在执行，尚未提交最终结果；资源类型：" + j.resourceKind + "。后续事件用于判断原请求是否已被明确撤销或替代；同一条媒体的短说明属于补充，无关聊天不取消。cancel表示停止本任务后续工作，不能撤回已经发生的外部操作。若cancel，必须返回evidence_message_id为new_events中实际使原任务失效的消息编号，并给reason说明；不能仅因机器人没开机、催促、表情或新话题取消。"}
+		pending := []string{"原任务仍在执行，资源类型：" + j.resourceKind + "。根据new_events判断原请求是否被同一请求者撤销或替代；补充说明和无关聊天继续保留。若选cancel，填写导致变更的evidence_message_id和reason；已发生的外部操作仍保留。"}
 		modelCtx := w.generationContext(jobCtx, in)
 		s.wg.Add(1)
 		go func(j *generationJob, id, fingerprint string) {

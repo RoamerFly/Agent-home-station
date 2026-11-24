@@ -82,7 +82,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	if err != nil {
 		return "", err
 	}
-	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "这是同一会话完整性已校验的缓存，标题不代表已确认歌手、版本或人声。generation如存在是当时提交的配方。先识别并选定与歌词匹配的演唱片段，留意长前奏、主持口播和纯伴奏。music_local_start的reference_start_seconds/reference_seconds指定原录音中的范围，本机会先截取再上传；省略起点时默认采用提交歌词依据的最早位置，显式0仍保留开头。不要把演唱段歌词配到纯前奏。重发原版用media_reuse；生成会重新合成，结果仍需核实。"}
+	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "已读取本会话缓存。先核对歌手、版本和演唱片段；generation 是原提交配方。music_local_start 用 reference_start_seconds/reference_seconds 选原录音区间；省略起点沿用歌词依据最早位置，显式 0 保留开头。重发原版用 media_reuse。"}
 	out["available_lyrics"] = p.availableLyricEvidence(a)
 	if a.Music != nil {
 		out["lyrics_evidence_ids"] = a.Music.LyricEvidence

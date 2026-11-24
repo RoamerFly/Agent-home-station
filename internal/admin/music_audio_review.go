@@ -39,12 +39,12 @@ func (p *permittedTools) reviewSongAudio(ctx context.Context, audio []byte, expe
 	if err = policy.checkCompleted(ctx); err != nil {
 		return map[string]any{"state": "failed", "reason": err.Error(), "windows": windows}, policy.checkCompleted
 	}
-	review := map[string]any{"state": result.Status, "model": result.Model, "windows": windows, "observation": result.Text, "expected_vocal_gender": expected, "voice_identity_evidence": result.VoiceEvidence, "instruction": "这是实际音频抽样的模型意见，不是全曲人工验收或声线认证。根据观察与用户需求判断能否交付；不要用请求参数代替实际观察。"}
+	review := map[string]any{"state": result.Status, "model": result.Model, "windows": windows, "observation": result.Text, "expected_vocal_gender": expected, "voice_identity_evidence": result.VoiceEvidence, "instruction": "音频抽样观察已返回；结合用户需求判断是否需要继续试听或调整。"}
 	if result.ProviderModel != "" {
 		review["provider_model"] = result.ProviderModel
 	}
 	if result.Status == "partial" {
-		review["instruction"] = "本次音频观察因输出额度而截断，仅有部分模型意见；不是完整听感结论、全曲人工验收或声线认证，不得把partial标作observed。"
+		review["instruction"] = "音频观察输出截断；继续读取未覆盖片段。"
 	}
 	return review, policy.checkCompleted
 }

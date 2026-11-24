@@ -117,7 +117,7 @@ func (c *Client) ChatGroundingValidated(ctx context.Context, system string, mess
 		policy := system
 		if attempt == 2 {
 			attemptCtx = WithPurpose(attemptCtx, purpose+"_format_repair")
-			policy += "\n【JSON格式修复】上次最终输出未通过JSON语法或宿主协议校验。输入候选和证据完全相同；重新核对原协议要求的units、全部句段编号、状态与来源编号，只输出符合原协议的一个合法JSON对象，不输出Markdown围栏或JSON外文字。不得改写候选、执行工具、把无证据内容改标为已支持或降低原核验标准。"
+			policy += "\n【JSON格式修复】按原协议核对 units、句段编号、状态和来源编号，只返回合法 JSON。保持候选与证据不变。"
 			if protocolCode != "" {
 				policy += "\n宿主校验项：" + protocolCode
 			}

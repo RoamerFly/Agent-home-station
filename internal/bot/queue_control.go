@@ -284,7 +284,7 @@ func (w *Worker) controlQueue(ctx context.Context, in companion.Input, owner boo
 			return "", w.persistErr
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"action": args.Action, "thread_id": in.Thread, "items": rows, "instruction": "已发内容保留真实回执。暂停保留原队列；已取消的分段语音只有在明确 resume 且每段状态已核实后，才会新建仅含未发段的任务，绝不重放已接受段。"})
+	b, _ := json.Marshal(map[string]any{"action": args.Action, "thread_id": in.Thread, "items": rows, "instruction": "暂停保留队列；resume 按回执续发未送达的分段。"})
 	return string(b), nil
 }
 

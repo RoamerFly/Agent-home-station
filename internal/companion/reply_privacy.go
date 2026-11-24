@@ -108,7 +108,7 @@ func ReviewGroupMessages(ctx context.Context, model LanguageModel, access GroupR
 
 func reviewGroupMessages(ctx context.Context, model LanguageModel, access GroupReplyPrivacy, in Input, messages []string, correction bool) ([]string, error) {
 	payload, _ := json.Marshal(map[string]any{"request_for_context_only": in.Text, "draft_messages": messages, "group": in.Thread, "previous_edit_still_exposed_internal_details": correction})
-	answer, err := model.Chat(ctx, "只编辑群聊草稿，输出JSON {\"messages\":[],\"private_report\":\"\"}。messages保留自然回应；模型、权重、参数、工具、路径、故障、修复进度及其他私聊内容移入private_report。保留原事实、时态和附件，不把计划改成完成；无新结果时messages=[]。若previous_edit_still_exposed_internal_details=true，继续删去残留技术说明。", []map[string]string{{"role": "user", "content": string(payload)}})
+	answer, err := model.Chat(ctx, "编辑群聊草稿，只输出JSON {\"messages\":[],\"private_report\":\"\"}。messages保留自然回应和准确进度；模型、工具、路径及内部故障写入private_report。previous_edit_still_exposed_internal_details=true时继续精简技术说明。", []map[string]string{{"role": "user", "content": string(payload)}})
 	if err != nil {
 		return nil, err
 	}

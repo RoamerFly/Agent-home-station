@@ -16,7 +16,7 @@ import (
 const localLiveToolName = "app_live"
 
 func localLiveTool() mcptools.Tool {
-	return mcptools.NewTool(localLiveToolName, "管理已授权应用的限时直播会话。先用targets核对available、获准目标和active原会话；响应中断或重启后从active恢复原id。start提供app_id、connection_id和duration_seconds；播放已登记MP4时同时提供program_artifact_id和program_sha256，program_loop控制循环，省略素材沿用测试色板。宿主绑定本轮来源、素材版本并持久去重。status只读原会话；reconcile核对原平台状态，stop停止原会话与本机输出，均只提供原id。unknown需核对原id，不可重复开始。平台与本机输出分别返回。",
+	return mcptools.NewTool(localLiveToolName, "管理已授权应用的限时直播。targets 返回可用目标和 active 会话；start 填应用、连接和时长，可用 program_artifact_id、program_sha256 指定 MP4，program_loop 控制循环；省略素材则播放测试色板。status/reconcile/stop 使用原会话 id；中断后从 active 续办。",
 		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","start","status","reconcile","stop"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"duration_seconds":{"type":"integer","minimum":1},"program_artifact_id":{"type":"string"},"program_sha256":{"type":"string","minLength":64,"maxLength":64},"program_loop":{"type":"boolean"},"id":{"type":"string","format":"uuid"}},"required":["action"],"additionalProperties":false}`)
 }
 

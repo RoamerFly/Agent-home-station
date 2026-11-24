@@ -110,17 +110,17 @@ func (p *permittedTools) compareMusicLyrics(ctx context.Context, raw json.RawMes
 	if threshold < 1 {
 		threshold = 1
 	}
-	out := map[string]any{"asr_lyrics": base.Text, "candidate_url": in.URL, "matched_lyrics": corrected, "similarity": score, "edit_count": distance, "accepted": false, "instruction": "逐个比较不同版本，不要把整首候选塞入转写片段。词相似不能证明原唱或编曲版本一致，仍需核对歌名、歌手及实际参考录音。"}
+	out := map[string]any{"asr_lyrics": base.Text, "candidate_url": in.URL, "matched_lyrics": corrected, "similarity": score, "edit_count": distance, "accepted": false, "instruction": "逐段比较歌词候选，并核对歌名、歌手与参考录音版本。"}
 	if corrected != "" && score >= .88 && distance <= threshold {
 		proof, err := p.saveLyricEvidenceDetails(a, corrected, "web_aligned_asr", base.Offset, base.Seconds, in.URL, base.ID)
 		if err != nil {
 			return "", err
 		}
 		out["accepted"], out["lyrics_evidence_id"], out["lyrics"] = true, proof.ID, proof.Text
-		out["instruction"] = "候选网页与本段ASR大部分一致，已按小差异生成修正依据；这不是人工校对证明。使用此lyrics_evidence_id及返回lyrics，继续核对其他片段和版本；不能加入未匹配的整首歌词。"
+		out["instruction"] = "本段歌词已匹配；使用 lyrics_evidence_id 和返回的 lyrics，继续核对其他片段。"
 	} else {
 		out["reason"] = "version_mismatch_or_uncertain_transcript"
-		out["instruction"] = "差异过大、片段过短或无法对齐，未采纳此版本。继续找另一版本，或重转写更清楚的片段；不能强套候选。"
+		out["instruction"] = "本段未匹配；改查其他版本或重转写片段。"
 	}
 	return stringMustJSON(out), nil
 }

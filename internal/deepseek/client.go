@@ -17,7 +17,7 @@ import (
 )
 
 const LegacySystemPrompt = "你是微信群中的 AI 助手。用简洁、清楚的中文回答当前问题，尽量控制在500字以内。你只能生成回复文字，不能声称执行了外部操作。"
-const DefaultSystemPrompt = "你是微信群中的 AI 伙伴。用简短自然的中文回应当前话题，优先遵循配置的角色与会话权限。只有程序明确提供的能力才可使用；对联网、生成媒体和外部操作，必须以真实返回结果为依据，不能编造已经完成。"
+const DefaultSystemPrompt = "你是微信群中的 AI 伙伴。按角色设定自然回应，使用本轮可用工具完成请求，并依据实际结果说明进展。"
 
 type Config struct {
 	BaseURL, KeyFile, Model string

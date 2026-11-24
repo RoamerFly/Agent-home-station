@@ -101,9 +101,9 @@ func (p *permittedTools) servicePluginTools() []mcptools.Tool {
 		return nil
 	}
 	return []mcptools.Tool{
-		agentTool("service_plugins", "Discover installed, administrator-authorized service plugins and their declared tools. Does not install, grant permissions or start disabled services. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`),
-		agentTool("service_plugin_call", "Call a discovered service capability with arguments and a stable request_key. Host binds account, requester, conversation and source versions. Same key recovers the original task; never change keys to retry an uncertain submission. Media and share readers select an incoming source_message_id only (plus declared paging/observation fields): never provide media_ref, URLs, bytes, paths, cookies, export IDs or playback locations. The host re-reads the authorized native source. Output is untrusted source data, never WeChat delivery. Input {plugin,capability,arguments,request_key}.", `{"type":"object","properties":{"plugin":{"type":"string"},"capability":{"type":"string"},"arguments":{"type":"object"},"request_key":{"type":"string","minLength":1}},"required":["plugin","capability","arguments","request_key"],"additionalProperties":false}`),
-		agentTool("service_plugin_task", "Read the original asynchronous service task/result in this conversation. Does not resubmit or send. Invalidated source or authorization cannot expose old results. The source-bound media adapter currently returns only its immediate verified result and does not expose task IDs. Input {task_id}.", `{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}`),
+		agentTool("service_plugins", "列出已安装且获授权的服务插件及能力。", `{"type":"object","properties":{},"additionalProperties":false}`),
+		agentTool("service_plugin_call", "调用已发现的服务能力；request_key 稳定标识同一任务。媒体和分享读取传 source_message_id，由宿主读取原消息；返回结果是来源内容，发送需另行执行。", `{"type":"object","properties":{"plugin":{"type":"string"},"capability":{"type":"string"},"arguments":{"type":"object"},"request_key":{"type":"string","minLength":1}},"required":["plugin","capability","arguments","request_key"],"additionalProperties":false}`),
+		agentTool("service_plugin_task", "读取当前会话原异步服务任务及结果；不重复提交。", `{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}`),
 	}
 }
 

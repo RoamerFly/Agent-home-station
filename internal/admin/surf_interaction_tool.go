@@ -212,7 +212,7 @@ func (p *permittedTools) surfInteractionTools() []mcptools.Tool {
 	}) {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("surf_interaction", "Comment on a public item only through the explicitly host-authorized external platform account bound to a verified current public reading. Only publish public-safe text. Keep private conversations and credentials out of the comment. action=comment creates at most one durable request; status checks an existing request_key, or lists recent unresolved keys when omitted. Input {action:comment|status,candidate_id?:string,text?:string,request_key?:string}.", `{"type":"object","properties":{"action":{"type":"string","enum":["comment","status"]},"candidate_id":{"type":"string","maxLength":512},"text":{"type":"string","minLength":1,"maxLength":4000},"request_key":{"type":"string","maxLength":256}},"required":["action"],"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("surf_interaction", "用已授权平台账号对本轮读到的公开内容发表评论。action=comment 提交一次请求，status 按 request_key 查结果或列最近未完成请求；评论内容不包含私聊资料或凭据。", `{"type":"object","properties":{"action":{"type":"string","enum":["comment","status"]},"candidate_id":{"type":"string","maxLength":512},"text":{"type":"string","minLength":1,"maxLength":4000},"request_key":{"type":"string","maxLength":256}},"required":["action"],"additionalProperties":false}`)}
 }
 
 type surfInteractionToolInput struct {

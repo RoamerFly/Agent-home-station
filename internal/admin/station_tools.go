@@ -200,7 +200,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		if strings.TrimSpace(in.Goal) == "" || len(in.Goal) > 4000 {
 			return "", toolInputError("station_comfy_goal_required")
 		}
-		instruction = "同一个大肥鱼正在完善自己的 ComfyUI 工具。先调用 project_comfy_workflows 和 project_comfy_models；用 project_comfy_files 查看已登记工具、模型和工作流。按需求在自己的家目录创建或修改 graph JSON，再调用 project_comfy_register 自动校验并登记，不手算哈希或手改 registry.json；最后重新调用 project_comfy_workflows 验证可发现。不要运行或发送成品。需求：" + in.Goal
+		instruction = "先用 project_comfy_workflows、project_comfy_models 和 project_comfy_files 查看现有能力；在工作目录编写 graph JSON，用 project_comfy_register 登记，再查询 workflows 确认。需求：" + in.Goal
 	case "run":
 		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
 			return "", toolInputError("station_comfy_workflow_required")
