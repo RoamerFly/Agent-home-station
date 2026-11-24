@@ -127,7 +127,25 @@ func parseCompressionSummary(raw string) (contextSummary, error) {
 }
 
 func budgetSummary(raw string, budget int) string {
+	if raw == "" || raw == "null" {
+		return "null"
+	}
 	s, err := parseContextSummary(raw, false)
+	if err != nil {
+		// Host-bound provenance can make a valid compressed summary exceed
+		// the model response limit. It is stored for verification, not sent
+		// to the conversation model. Decode the same strict schema and trim
+		// it below instead of dropping the entire compressed history.
+		if len(raw) <= 256<<10 && utf8.ValidString(raw) {
+			var host contextSummary
+			d := json.NewDecoder(bytes.NewBufferString(raw))
+			d.DisallowUnknownFields()
+			if d.Decode(&host) == nil && d.Decode(new(any)) == io.EOF && host.Version == 1 && len(host.Sources) > 0 && host.People != nil && host.Topics != nil && host.Media != nil && host.PendingTasks != nil && host.Preferences != nil && host.Corrections != nil && len(host.People) <= 20 && len(host.Topics) <= 20 && len(host.Media) <= 20 && len(host.PendingTasks) <= 20 && len(host.Preferences) <= 20 && len(host.Corrections) <= 20 {
+				s = host
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		// Prior versions allowed different structures inside these same fields.
 		// Keep that bounded legacy data until the next successful compression;
@@ -158,10 +176,26 @@ func budgetSummary(raw string, budget int) string {
 		b, _ := json.Marshal(limited)
 		return string(b)
 	}
+	s.Sources = nil
+	for i := range s.People {
+		s.People[i].SourceEventIDs = nil
+	}
+	for i := range s.Topics {
+		s.Topics[i].SourceEventIDs = nil
+	}
+	for i := range s.Media {
+		s.Media[i].SourceEventIDs = nil
+	}
+	for i := range s.PendingTasks {
+		s.PendingTasks[i].SourceEventIDs = nil
+	}
+	if budget > 14000 {
+		budget = 14000
+	}
 	// Drop the oldest lower-priority entries before recent media and pending work.
 	for {
 		b, _ := json.Marshal(s)
-		if len(b) <= budget {
+		if len(b) <= budget && utf8.RuneCount(b) <= 3500 {
 			return string(b)
 		}
 		switch {

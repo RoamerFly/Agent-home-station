@@ -23,7 +23,7 @@ func (c MemorySettings) AuditConfig() ReplyAuditSettings {
 }
 
 func MemoryDefaults() MemorySettings {
-	return MemorySettings{Enabled: true, BatchMessages: 12, IdleSeconds: 300, DailyTokens: 100000, RecentTokens: 16384, RecallTokens: 16384, ContinuityTokens: 4096, OutputReserve: 32768}
+	return MemorySettings{Enabled: true, BatchMessages: 12, IdleSeconds: 300, DailyTokens: 100000, RecentTokens: 8192, RecallTokens: 8192, ContinuityTokens: 2048, OutputReserve: 32768}
 }
 func (c Config) MemoryConfig() MemorySettings {
 	if c.Memory == nil {

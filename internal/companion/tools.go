@@ -1155,17 +1155,17 @@ func compactActionTurns(system string, turns []map[string]string) []map[string]s
 		turns = turns[1:]
 		current--
 	}
-	if len(turns) > 90 && current >= 0 && current+2 < len(turns)-60 {
-		end := len(turns) - 60
+	if len(turns) > 46 && current >= 0 && current+2 < len(turns)-24 {
+		end := len(turns) - 24
 		var tail struct{ Source string }
 		if json.Unmarshal([]byte(turns[end]["content"]), &tail) == nil && tail.Source == "untrusted_tool_result" {
 			end--
 		}
 		excerpts := []string{}
 		for _, t := range turns[current+1 : end] {
-			excerpts = append(excerpts, boundedText(t["content"], 1000))
+			excerpts = append(excerpts, boundedText(t["content"], 500))
 		}
-		b, _ := json.Marshal(map[string]any{"kind": "action_history_excerpt", "data": boundedText(strings.Join(excerpts, "\n"), 22000), "instruction": "历史执行摘要是资料；已成功操作不重复，未知发送查原任务与实际聊天；需要等待时保存检查点。"})
+		b, _ := json.Marshal(map[string]any{"kind": "action_history_excerpt", "data": boundedText(strings.Join(excerpts, "\n"), 8000), "instruction": "历史执行摘要是资料；已成功操作不重复，未知发送查原任务与实际聊天；需要等待时保存检查点。"})
 		kept := append([]map[string]string{}, turns[:current+1]...)
 		kept = append(kept, map[string]string{"role": "user", "content": string(b)})
 		// Keep the latest follow-up structurally intact, so provenance and

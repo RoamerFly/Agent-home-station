@@ -22,7 +22,7 @@ type ContextSettings struct {
 	MaxInputChars  int  `json:"max_input_chars"`
 }
 
-func ContextDefaults() *ContextSettings { return &ContextSettings{true, 120, 80, 96000} }
+func ContextDefaults() *ContextSettings { return &ContextSettings{true, 64, 24, 32000} }
 func (c Config) ContextConfig() ContextSettings {
 	if c.Context == nil {
 		return *ContextDefaults()
@@ -513,11 +513,16 @@ func (e *Engine) contextTurns(scope Scope, input Input) []map[string]string {
 	sort.SliceStable(history, func(i, j int) bool { return history[i].Time.Before(history[j].Time) })
 	totalHistory := len(history)
 	history = prioritizeContextHistory(history, input, c.RecentMessages)
-	summary := budgetSummary(scope.Summary, c.MaxInputChars/3)
+	summary := scope.Summary
 	if input.SourceOnlyContext {
 		summary = "null"
-	} else if input.IsGroup {
-		summary = e.groundedSummary(input, summary)
+	} else {
+		// Group provenance is checked against the host snapshot before it is
+		// removed from the compact model-facing summary.
+		if input.IsGroup {
+			summary = e.groundedSummary(input, summary)
+		}
+		summary = budgetSummary(summary, c.MaxInputChars/3)
 	}
 	if _, native := e.model.(interface {
 		ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error)
