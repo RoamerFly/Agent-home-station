@@ -213,10 +213,10 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 	if j.input.Source != nil && j.input.Source.MessageID == m.ID {
 		return
 	}
-	// A saved worker result is background work, not the live user's turn.
-	// Yield at a tool boundary instead of keeping a new question queued for
-	// the entire repair/tool loop. The actual external process is untouched.
-	if j.input.TaskID != "" && eligible {
+	// Give a new request the same thread at the next tool boundary. This is
+	// scheduling only: it does not review or alter an old text plan, and a tool
+	// already in flight is left to finish before the saved task yields.
+	if j.input.TaskID != "" && eligible && !explicitCorrectionToPriorInput(j.input, m) {
 		if w.generation.yieldedMessages == nil {
 			w.generation.yieldedMessages = map[string]struct{}{}
 		}
@@ -234,7 +234,12 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		}
 		return
 	}
-	if !messageAffectsInput(j.input, m) {
+	// Ordinary new messages stay independent; only the original requester's
+	// explicit correction may affect this running job.
+	if !explicitCorrectionToPriorInput(j.input, m) {
+		if messageAffectsInput(j.input, m) {
+			w.offerGenerationFollowup(j, m, eligible)
+		}
 		return
 	}
 	w.offerGenerationFollowup(j, m, eligible)
@@ -251,12 +256,6 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 func (w *Worker) deferBusyGeneration(ctx context.Context, m linuxnative.Message) bool {
 	s := w.generation
 	if j := s.jobs[m.ThreadID]; j != nil {
-		// Explicit, verified stop/format changes may interrupt an in-flight voice
-		// download as well as already queued notes. Unrelated chat does not kill it.
-		if m.PrivateQuote == "" && (j.input.Sender == "" || j.input.Sender == m.SenderID) && j.resourceKind == "voice" && rejectVoice(m.Body) && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
-			j.cancelled = true
-			j.cancel()
-		}
 		for _, item := range w.runtime.Inbox {
 			if item.Event.Data.MessageID == m.ID && item.Phase == "following" && !j.cancelled {
 				return true
@@ -631,7 +630,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		defer w.config.BacklogSettled(r.input.Account, r.input.Thread, ids, r.decision.Action)
 	}
 	w.finishCharacter(ctx, r.engine, r.input, r.decision, r.err, r.processingErr, r.job.toolStarted, r.progressDelivered)
-	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 {
+	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 && r.job.reviewed != generationFingerprint(r.job) {
 		for _, caption := range w.runtime.MediaReplies {
 			if caption.Trace == r.input.TraceID && !caption.terminal() {
 				caption.Updates = append([]companion.ConversationEvent(nil), r.job.updates...)
@@ -639,8 +638,15 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		}
 		for _, p := range w.runtime.Plans {
 			if p.Trace == r.input.TraceID && !p.terminal() {
-				p.Updates = append([]companion.ConversationEvent(nil), r.job.updates...)
-				p.State = "review_pending"
+				for _, update := range r.job.updates {
+					if !p.hasUpdate(update.MessageID) {
+						p.Updates = append(p.Updates, update)
+					}
+				}
+				p.retainExplicitCorrections()
+				if len(p.Updates) > 0 && p.State == "queued" {
+					p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "queued"
+				}
 			}
 		}
 	}

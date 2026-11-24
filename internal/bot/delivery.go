@@ -40,8 +40,10 @@ type delivery struct {
 	Reason          string                 `json:"reason"`
 	PreviousKeys    []string               `json:"previous_keys,omitempty"`
 	UncertainRounds int                    `json:"uncertain_rounds,omitempty"`
-	PreviousTexts   []string               `json:"previous_texts,omitempty"`
-	SubmittedText   string                 `json:"submitted_text,omitempty"`
+	// Once receipt checks make no progress, retain the original send intent
+	// without scheduling another timer or creating a replacement submission.
+	PreviousTexts []string `json:"previous_texts,omitempty"`
+	SubmittedText string   `json:"submitted_text,omitempty"`
 	// Cancelled means the originating task was withdrawn after this delivery
 	// might already have reached WeChat.  It deliberately keeps the record in
 	// reconciliation mode: we may read the old idempotency key, but must never
@@ -292,12 +294,34 @@ func (w *Worker) waitDelivery(d *delivery, reason string) (sending.Receipt, erro
 // Record the sampled deadline once per inconclusive observation. Restarts and
 // plan pacing ticks must not sample again before this deadline expires.
 func (w *Worker) deferReceiptLookup(d *delivery, reason string) {
+	previousReason := d.Reason
 	d.Reason = reason
 	d.UncertainRounds++
+	if d.Bubble >= 0 && d.UncertainRounds >= 6 {
+		w.pauseReceiptLookup(d)
+		return
+	}
 	d.Next = time.Now().Add(deliveryBackoff(w.config.Options.RetryDelaySeconds, d.UncertainRounds))
 	w.persistErr = w.saveRuntime()
-	if w.persistErr == nil {
+	if w.persistErr == nil && (d.UncertainRounds == 1 || previousReason != reason) {
 		w.recordDeliveryWait(d, reason)
+	}
+}
+
+// An inconclusive lookup is not a failed send and cannot authorize a resend.
+// Keep its key, text and native evidence durable, while ending timer-driven
+// checks and repeated activity rows. Ordinary incoming messages do not reopen
+// the old turn or request another lookup.
+func (w *Worker) pauseReceiptLookup(d *delivery) {
+	if d.State == "awaiting_evidence" {
+		return
+	}
+	d.State = "awaiting_evidence"
+	d.Reason = "delivery_receipt_awaiting_evidence"
+	d.Next = time.Time{}
+	w.persistErr = w.saveRuntime()
+	if w.persistErr == nil {
+		w.activity(Record{Event: "delivery_receipt_paused", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, SendID: d.ID, Reason: d.Reason, Status: "waiting"})
 	}
 }
 
@@ -336,9 +360,9 @@ func replyQuote(in companion.Input) *linuxnative.ToolQuote {
 	return &linuxnative.ToolQuote{MessageID: id, ServerID: in.QuoteServerID}
 }
 
-// Each uncertain submission doubles its wait, with jitter. At the ceiling the
-// interval remains random (one to two hours); the durable job has no retry count
-// or age expiry. Read failures never authorize a new send.
+// Each inconclusive receipt observation doubles its wait, with jitter. After
+// six observations it pauses pending an explicit check or native receipt.
+// Read failures never authorize a new send.
 func deliveryBackoff(baseSeconds, round int) time.Duration {
 	if baseSeconds < 30 {
 		baseSeconds = 30
@@ -386,6 +410,51 @@ func lookupTextReceipt(ctx context.Context, n reliableNative, d *delivery) (linu
 	return checked(n.LookupSend(ctx, d.Key))
 }
 
+func (w *Worker) hasPausedDelivery(thread string) bool {
+	if w.runtime == nil {
+		return false
+	}
+	for _, d := range w.runtime.Deliveries {
+		if d.State == "awaiting_evidence" && d.Thread == thread {
+			return true
+		}
+	}
+	return false
+}
+
+// A native outgoing message is independent receipt evidence. Resolve a parked
+// intent only when its original native key reports the same server message ID;
+// equal text or a later incoming chat message alone cannot prove delivery.
+func (w *Worker) reconcilePausedOutgoing(ctx context.Context, m linuxnative.Message) {
+	if w.runtime == nil || m.Direction != "outgoing" || m.ServerID == "" {
+		return
+	}
+	n, ok := w.sender.(reliableNative)
+	if !ok {
+		return
+	}
+	for _, d := range w.runtime.Deliveries {
+		if d.State != "awaiting_evidence" || d.Thread != m.ThreadID || d.Key == "" || d.Text != m.Body && d.SubmittedText != m.Body {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339, m.CreatedAt); err == nil && at.Before(d.Created.Add(-5*time.Second)) {
+			continue
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		status, err := n.LookupSend(readCtx, d.Key)
+		cancel()
+		if err != nil || status.State != "accepted" || status.ServerID != m.ServerID || !textReceiptMatches(status, d.Thread, d.ID) {
+			continue
+		}
+		if status.ID != "" {
+			d.ID = status.ID
+		}
+		d.ServerID = status.ServerID
+		d.AcceptedAt = m.CreatedAt
+		w.acceptReconciled(d)
+	}
+}
+
 func (w *Worker) reconcileDeliveries(ctx context.Context) {
 	n, ok := w.sender.(reliableNative)
 	if !ok {
@@ -395,7 +464,16 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if d.State == "accepted" || d.State == "stopped" || time.Now().Before(d.Next) {
+		if d.State == "accepted" || d.State == "stopped" || d.State == "awaiting_evidence" {
+			continue
+		}
+		// Older runtimes may already have dozens of sampled deadlines. Park
+		// them immediately on upgrade, even when the old deadline is future.
+		if d.Bubble >= 0 && d.UncertainRounds >= 6 {
+			w.pauseReceiptLookup(d)
+			continue
+		}
+		if time.Now().Before(d.Next) {
 			continue
 		}
 		if d.Bubble < 0 {
@@ -432,19 +510,23 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			continue
 		}
 		if d.State == "prepared" && !d.Cancelled {
-			superseded := false
+			deferred := false
 			for _, p := range w.runtime.Plans {
-				if p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace && p.Slot == d.Bubble && len(p.Updates) > 0 {
-					d.State = "stopped"
-					d.Reason = "unsubmitted_text_needs_replan"
-					p.Slot++
-					p.State = "review_pending"
-					superseded = true
-					break
+				if p.Input.Thread != d.Thread || p.Input.TraceID != d.Trace || p.Slot != d.Bubble {
+					continue
 				}
+				if p.State == "review_pending" {
+					// Only an explicit persisted plan review pauses this
+					// unsubmitted draft; ordinary new messages do not.
+					deferred = true
+				} else if p.State == "stopped" {
+					d.State, d.Reason = "stopped", "plan_stopped_before_submission"
+					w.persistErr = w.saveRuntime()
+					deferred = true
+				}
+				break
 			}
-			if superseded {
-				w.persistErr = w.saveRuntime()
+			if deferred {
 				continue
 			}
 		}
@@ -533,6 +615,8 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		status, err := lookupTextReceipt(readCtx, n, d)
 		cancel()
 		if err == nil && (status.State == "queued" || status.State == "sending" || status.State == "submitting" || status.State == "running") {
+			// A native job is now observable; resume short status checks.
+			d.UncertainRounds = 0
 			d.Next = time.Now().Add(15 * time.Second)
 			w.persistErr = w.saveRuntime()
 			continue
@@ -609,6 +693,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		// remain lookup-only and never invoke another model review.
 		d.Attempts++
 		d.Checks = 0
+		d.UncertainRounds = 0
 		{
 			base := d.Key
 			if len(d.PreviousKeys) > 0 {
@@ -649,12 +734,32 @@ func (w *Worker) acceptReconciled(d *delivery) {
 		event = "message_progress"
 	}
 	w.activity(Record{Event: event, Category: "sent", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: "delivery_confirmed_by_receipt_or_sync", Status: "accepted", SendID: d.ID, Origin: "bot"})
+	for _, p := range w.runtime.Plans {
+		if d.Bubble >= 0 && p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace && p.StopReason == "correction_receipt_awaiting_evidence" {
+			w.resumeCorrectionAfterReceipt(p, d)
+			return
+		}
+	}
 	if c, ok := w.model.(*companion.Engine); ok {
 		for _, p := range w.runtime.Plans {
 			if d.Bubble >= 0 && p.Input.Thread == d.Thread && p.Input.TraceID == d.Trace {
 				if p.StopReason == "receipt_only_reconciliation" {
 					if err := w.acceptTextMemoryAt(c, d.Input, d.Bubble, d.Text, deliveryAcceptedTime(d, time.Now())); err != nil {
 						w.config.Log("memory_save_failed_after_accepted_reply")
+					}
+					// The detached plan no longer runs, but its delivered bubble
+					// must count toward completion in the console. Never resume
+					// remaining old text merely because this receipt arrived.
+					if p.Slot == d.Bubble && p.Index < len(p.Messages) {
+						p.Sent = append(p.Sent, d.Text)
+						p.Index++
+						p.Slot++
+						if p.Index >= len(p.Messages) {
+							p.State, p.StopReason = "accepted", ""
+						} else {
+							p.StopReason = "receipt_confirmed_remaining_unsent"
+						}
+						w.persistErr = w.saveRuntime()
 					}
 				}
 				return
@@ -665,6 +770,35 @@ func (w *Worker) acceptReconciled(d *delivery) {
 			w.config.Log("memory_save_failed_after_accepted_reply")
 		}
 	}
+}
+
+// A correction paused after submission cannot call its draft "unsent". Once
+// the original native intent is accepted, count that bubble exactly once and
+// resume the saved read-only correction decision. The plan then decides which
+// accepted indices need recall; delivery never posts a replacement text.
+func (w *Worker) resumeCorrectionAfterReceipt(p *utterancePlan, d *delivery) {
+	if p == nil || d == nil || p.State != "stopped" || p.StopReason != "correction_receipt_awaiting_evidence" ||
+		d.State != "accepted" || p.Input.Thread != d.Thread || p.Input.TraceID != d.Trace ||
+		p.Slot != d.Bubble || p.Index >= len(p.Messages) {
+		return
+	}
+	if c, ok := w.model.(*companion.Engine); ok {
+		if err := w.acceptTextMemoryAt(c, d.Input, d.Bubble, d.Text, deliveryAcceptedTime(d, time.Now())); err != nil {
+			w.config.Log("memory_save_failed_after_accepted_reply")
+		}
+	}
+	p.Sent = append(p.Sent, d.Text)
+	p.Index++
+	p.Slot++
+	p.State, p.StopReason, p.ReviewReason = "review_pending", "", "new_message"
+	p.ReviewReturnState = "queued"
+	if p.Index >= len(p.Messages) {
+		p.ReviewReturnState = "accepted"
+		p.WakePending = true
+	}
+	p.Next = time.Now()
+	p.InboxChecked = true
+	w.persistErr = w.saveRuntime()
 }
 func (w *Worker) observedDelivery(ctx context.Context, n reliableNative, d *delivery) (bool, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)

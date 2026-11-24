@@ -47,6 +47,7 @@ func (w *Worker) ownerModelReview(id string) bool {
 
 type runtimeState struct {
 	SendGates    map[string]time.Time `json:"send_gates,omitempty"`
+	Recalls      []*recallIntent      `json:"recalls,omitempty"`
 	Wakes        []*conversationWake  `json:"conversation_wakes,omitempty"`
 	Plans        []*utterancePlan     `json:"utterance_plans,omitempty"`
 	Version      int                  `json:"version"`
@@ -212,7 +213,7 @@ func (w *Worker) loadRuntime(server string) error {
 				p.Input.QuoteServerID = p.Quote.ServerID
 			}
 		}
-		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() || p.Input.Thread == "" || p.Slot < 0 {
+		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() && !(p.State == "review_pending" && p.ReviewReason == "new_message" && p.ReviewReturnState == "accepted") || p.Input.Thread == "" || p.Slot < 0 {
 			return errors.New("persistent utterance plan invalid; retained")
 		}
 	}
@@ -452,6 +453,17 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 				if item.Event.Data.MessageID == event.Data.MessageID {
 					duplicate = true
 					break
+				}
+			}
+			if event.Kind == "message.committed" && event.Data.Origin == "local_send" && event.Data.MessageID != "" && !duplicate && w.hasPausedDelivery(event.Data.ThreadID) {
+				readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				message, readErr := w.source.Message(readCtx, event.Data.MessageID)
+				cancel()
+				if readErr == nil && message.ThreadID == event.Data.ThreadID && message.Direction == "outgoing" {
+					w.reconcilePausedOutgoing(ctx, message)
+					if w.persistErr != nil {
+						return w.persistErr
+					}
 				}
 			}
 			if event.Kind == "message.committed" && event.Data.MessageID != "" && !duplicate && event.Data.Origin != "local_send" {

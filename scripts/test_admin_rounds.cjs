@@ -85,8 +85,27 @@ test('receipt-only continuation remains unfinished until a verified receipt',()=
  assert.equal(round.timeline.some(e=>e.event==='delivery_waiting'),true);
  const scheduled=entry(2,{...wait,retry_at:at(12)});
  assert.equal(project([inbound,scheduled,detached])[0].group,'active');
- const confirmed=entry(4,{event:'task_delivery_updated',category:'decision',status:'completed'});
+	const confirmed=entry(4,{event:'message_sent',category:'sent',status:'accepted',content:'合成旧回复'});
  assert.equal(project([inbound,wait,detached,confirmed])[0].group,'done');
+});
+test('paused text receipt stays pending even after a task ends and an old retry was scheduled',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'未确认文字',retry_at:at(20)});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const paused=entry(4,{event:'delivery_receipt_paused',category:'decision',status:'waiting',content:'未确认文字'});
+ const taskStates={'fixture@chatroom\0message-1':{state:'completed',updated:at(3),active:false}};
+ const [pending]=project([inbound,wait,detached,paused],taskStates,Date.parse(at(5)));
+ assert.equal(pending.group,'pending');assert.equal(pending.status,'waiting');
+ const accepted=entry(6,{event:'message_sent',category:'sent',status:'accepted',content:'未确认文字'});
+ const planStates={'fixture@chatroom\0message-1':{state:'accepted',index:1,total:1,created:at(1)}};
+ assert.equal(project([inbound,wait,detached,paused,accepted],taskStates,Date.parse(at(6)),undefined,undefined,planStates)[0].group,'done');
+});
+test('receipt for another text segment does not finish an unresolved segment',()=>{
+ const received=entry(1,{event:'message_received',category:'received',status:'received'});
+ const pending=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'第一段',retry_at:at(20)});
+ const sent=entry(3,{event:'message_sent',category:'sent',status:'accepted',content:'第二段'});
+ const [round]=project([received,pending,sent]);
+ assert.equal(round.group,'active');assert.equal(round.status,'checking_receipt');
 });
 test('old stopped review with an accepted segment leaves the execution list',()=>{
  const accepted=entry(1,{message_id:'old-review',event:'message_sent',category:'sent',status:'accepted',send_id:'segment-1'});

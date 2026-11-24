@@ -18,9 +18,10 @@ type planReviewResult struct {
 func reviewFingerprint(p *utterancePlan) string {
 	b, _ := json.Marshal(struct {
 		Index, Slot    int
+		ReviewReason   string
 		Messages, Sent []string
 		Updates        []companion.ConversationEvent
-	}{p.Index, p.Slot, p.Messages, p.Sent, p.Updates})
+	}{p.Index, p.Slot, p.ReviewReason, p.Messages, p.Sent, p.Updates})
 	return messageHash(string(b))
 }
 func (w *Worker) startPlanReview(ctx context.Context, c *companion.Engine, p *utterancePlan) {
@@ -41,13 +42,16 @@ func (w *Worker) startPlanReview(ctx context.Context, c *companion.Engine, p *ut
 	updates := append([]companion.ConversationEvent(nil), p.Updates...)
 	media := w.captionAttachments(p)
 	isCaption := p.MediaCaption
+	reviewReason := p.ReviewReason
 	modelCtx := w.generationContext(jobCtx, in)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		var d companion.PendingReview
 		var err error
-		if isCaption {
+		if reviewReason == "new_message" {
+			d, err = c.ReviewInterruption(modelCtx, in, sent, pending, updates, media)
+		} else if isCaption {
 			d, err = c.ReviewMediaCaption(modelCtx, in, sent, pending, updates, media)
 		} else {
 			d, err = c.ReviewPending(modelCtx, in, sent, pending, updates)
@@ -85,7 +89,7 @@ func (w *Worker) finishPlanReview(r planReviewResult) {
 	}
 }
 func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, err error) {
-	if err == nil && d.Action != "cancel" {
+	if err == nil && d.Action != "cancel" && p.ReviewReason != "new_message" {
 		if evidence, ok := d.GenerationEvidence(); ok {
 			c, available := w.model.(*companion.Engine)
 			if !available {
@@ -117,6 +121,53 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 			d.Action, d.Reason = "continue", "other_member_cannot_cancel_task"
 		}
 	}
+	if p.ReviewReason == "new_message" {
+		p.finishUpdateCheck()
+		returnState := p.ReviewReturnState
+		if returnState == "" {
+			returnState = "queued"
+		}
+		p.ReviewReason, p.ReviewReturnState = "", ""
+		p.ReviewFailures = 0
+		if err != nil {
+			// A failed one-time judgment does not hold the old reply in a loop.
+			// Submission still validates its original delivery evidence.
+			p.State = returnState
+			if returnState == "accepted" && p.WakePending {
+				if c, ok := w.model.(*companion.Engine); ok {
+					w.scheduleConversationWake(c, p.Input, p.WakeAfterSeconds, p.WaitForReply, p.WakeReason)
+				}
+				p.WakePending = false
+			}
+			w.persistErr = w.saveRuntime()
+			w.activity(Record{Event: "utterance_interruption_check_failed", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: p.State, Reason: "original_plan_continues"})
+			return
+		}
+		if d.Action == "cancel" && (p.Index < len(p.Messages) || len(d.RecallSentIndices) > 0) {
+			p.State, p.StopReason = "stopped", "explicit_correction_cancelled"
+			p.WakePending = false
+			seen := map[int]bool{}
+			for _, index := range d.RecallSentIndices {
+				if index >= 0 && index < p.Index && !seen[index] {
+					p.PendingRecall = append(p.PendingRecall, index)
+					seen[index] = true
+				}
+			}
+			p.RecallNext = time.Now()
+		} else {
+			p.State = returnState
+			if returnState == "accepted" && p.WakePending {
+				if c, ok := w.model.(*companion.Engine); ok {
+					w.scheduleConversationWake(c, p.Input, p.WakeAfterSeconds, p.WaitForReply, p.WakeReason)
+				}
+				p.WakePending = false
+			}
+		}
+		w.persistErr = w.saveRuntime()
+		w.activity(Record{Event: "utterance_interruption_checked", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: p.State, Reason: "correction_" + d.Action, Content: d.Reason})
+		w.refreshMediaParent(p.Input.TraceID)
+		return
+	}
 	if err != nil {
 		p.ReviewFailures++
 		p.Next = time.Now().Add(5 * time.Second)
@@ -130,7 +181,7 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 	}
 	p.ReviewFailures = 0
 	p.EpochReplan = false
-	p.Updates = nil
+	p.finishUpdateCheck()
 	switch d.Action {
 	case "cancel":
 		p.State = "stopped"
@@ -172,6 +223,9 @@ func (w *Worker) reviewPlan(ctx context.Context, c *companion.Engine, p *utteran
 		return companion.PendingReview{}, err
 	}
 	in.TraceID = p.Trace
+	if p.ReviewReason == "new_message" {
+		return c.ReviewInterruption(ctx, in, p.Sent, p.Messages[p.Index:], p.Updates, w.captionAttachments(p))
+	}
 	if p.MediaCaption {
 		return c.ReviewMediaCaption(ctx, in, p.Sent, p.Messages[p.Index:], p.Updates, w.captionAttachments(p))
 	}
@@ -185,6 +239,11 @@ func (w *Worker) planReviewEvidence(ctx context.Context, c *companion.Engine, p 
 		r := p.ReplyContexts[p.Index]
 		in.ReplyContext = &r
 	}
+	if p.ReviewReason == "new_message" {
+		// Judge the correction from the current authorized source. The proof
+		// for the old text belongs to the later submission, not this read.
+		in.ReplyContext = nil
+	}
 	reader, err := w.deliveryEvidenceReader(in)
 	if err != nil {
 		return ctx, in, err
@@ -192,13 +251,13 @@ func (w *Worker) planReviewEvidence(ctx context.Context, c *companion.Engine, p 
 	if scoped, ok := reader.model.(*companion.Engine); ok {
 		c = scoped
 	}
-	if p.ReviewEvidence != nil {
+	if p.ReviewEvidence != nil && p.ReviewReason != "new_message" {
 		if err := c.ValidateGenerationEvidence(ctx, *p.ReviewEvidence); err != nil {
 			return ctx, in, err
 		}
 		ctx = companion.WithStoredGenerationEvidence(ctx, *p.ReviewEvidence)
 	}
-	if !in.IsGroup && (in.ReplyContext == nil || reader.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil && !p.EpochReplan {
+	if !in.IsGroup && (in.ReplyContext == nil || reader.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil && !p.EpochReplan && p.ReviewReason != "new_message" {
 		return ctx, in, errors.New("private_reply_requires_replan")
 	}
 	return ctx, in, nil

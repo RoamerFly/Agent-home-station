@@ -32,7 +32,7 @@ func (w *Worker) reviewActiveGenerations(ctx context.Context) {
 		s.reviews[id] = cancel
 		in := j.input
 		updates := append([]companion.ConversationEvent(nil), j.updates...)
-		pending := []string{"原任务仍在执行，资源类型：" + j.resourceKind + "。根据new_events判断原请求是否被同一请求者撤销或替代；补充说明和无关聊天继续保留。若选cancel，填写导致变更的evidence_message_id和reason；已发生的外部操作仍保留。"}
+		pending := []string{"原任务仍在执行；资源类型：" + j.resourceKind + "。只判断原请求者的明确纠错是否要求停止旧任务。"}
 		modelCtx := w.generationContext(jobCtx, in)
 		s.wg.Add(1)
 		go func(j *generationJob, id, fingerprint string) {
@@ -52,22 +52,13 @@ func (w *Worker) finishGenerationReview(r planReviewResult) {
 		return
 	}
 	if r.err != nil {
-		j.reviewFailures++
-		if j.reviewFailures >= 2 {
-			j.cancelled = true
-			j.cancelReason = "generation_review_unavailable"
-			j.cancel()
-		}
-		j.nextReview = time.Now().Add(5 * time.Second)
+		j.reviewed = r.fingerprint
+		w.activity(Record{Event: "generation_review_retained", Category: "decision", ThreadID: j.input.Thread, MessageID: j.input.TraceID, Status: "processing", Reason: "correction_check_unavailable"})
 		return
 	}
 	j.reviewFailures = 0
 	if r.decision.Action == "delay" {
-		delay := r.decision.DelaySeconds
-		if delay < 1 {
-			delay = 5
-		}
-		j.nextReview = time.Now().Add(time.Duration(delay) * time.Second)
+		j.reviewed = r.fingerprint
 		return
 	}
 	j.reviewed = r.fingerprint

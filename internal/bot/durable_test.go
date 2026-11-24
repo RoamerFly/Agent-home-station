@@ -111,10 +111,6 @@ func TestUnknownDeliveryOnlyReconcilesSameKeyAcrossRestart(t *testing.T) {
 	if len(n.submissions) != 1 || d.State == "stopped" || d.Attempts != 0 {
 		t.Fatal("unknown receipt was stopped or resent")
 	}
-	d.Next = time.Time{}
-	w.runtime.SendGates = nil
-	w2.runtime.SendGates = nil
-	w2.reconcileDeliveries(context.Background())
 	if len(n.submissions) != 1 || d.Attempts != 0 || len(d.PreviousKeys) != 0 || d.UncertainRounds < 1 {
 		t.Fatal("unknown receipt was not retained as a lookup-only delivery", d)
 	}
@@ -273,27 +269,86 @@ func TestUncertainBackoffIsRandomAndGrowsUntilCeiling(t *testing.T) {
 		t.Fatal("backoff was fixed")
 	}
 }
-func TestUncertainDeliveryDoesNotExpireAt24HoursAndHonorsDisable(t *testing.T) {
+func TestUncertainDeliveryPausesAfterFiniteChecksWithoutResending(t *testing.T) {
 	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
 	w := durableWorker(t, n)
-	_, _ = w.sendText(context.Background(), companion.Input{Thread: "filehelper", TraceID: "older"}, 0, "持续补发")
+	_, _ = w.sendText(context.Background(), companion.Input{Thread: "filehelper", TraceID: "older"}, 0, "待核对文字")
 	d := w.runtime.Deliveries[0]
+	key := d.Key
 	d.Created = time.Now().Add(-48 * time.Hour)
 	w.config.Options.RetryUncertain = false
-	d.Next = time.Time{}
-	w.runtime.SendGates = nil
-	w.reconcileDeliveries(context.Background())
-	if d.State == "stopped" || len(n.submissions) != 1 {
-		t.Fatal("disabled should pause, not discard or send")
-	}
-	w.config.Options.RetryUncertain = true
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 8 && d.State != "awaiting_evidence"; i++ {
 		d.Next = time.Time{}
 		w.runtime.SendGates = nil
 		w.reconcileDeliveries(context.Background())
 	}
-	if len(n.submissions) != 1 || d.Attempts != 0 || d.State == "stopped" {
-		t.Fatal("old unknown was resent or expired", d)
+	if len(n.submissions) != 1 || d.Attempts != 0 || d.Key != key || !d.Next.IsZero() || d.UncertainRounds != 6 {
+		t.Fatal("unknown receipt lost its original intent or kept a retry timer", d)
+	}
+}
+
+func TestLegacyUncertainDeliveryParksOnUpgradeWithoutNewMessageWake(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w := durableWorker(t, n)
+	in := companion.Input{Thread: "room@chatroom", TraceID: "original", Mode: "direct"}
+	d := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "原发送内容", Key: "original-key", State: "waiting", Created: time.Now().Add(-time.Hour), Next: time.Now().Add(time.Hour), UncertainRounds: 26}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
+	if err := w.saveRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	var records []Record
+	w.config.Record = func(r Record) { records = append(records, r) }
+	w.reconcileDeliveries(t.Context())
+	w.reconcileDeliveries(t.Context())
+	if d.State != "awaiting_evidence" || !d.Next.IsZero() || d.Key != "original-key" || len(records) != 1 || records[0].Event != "delivery_receipt_paused" || len(n.submissions) != 0 {
+		t.Fatal("legacy receipt loop did not park once without resending", d, records)
+	}
+	w.recordIncoming(linuxnative.Message{ID: "new-message", ThreadID: in.Thread, CreatedAt: time.Now().Format(time.RFC3339)})
+	w.reconcileDeliveries(t.Context())
+	if d.State != "awaiting_evidence" || !d.Next.IsZero() || len(n.submissions) != 0 || len(records) != 2 {
+		t.Fatal("ordinary message restarted an old receipt loop", d, records)
+	}
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: "original-job", ThreadID: in.Thread, State: "accepted", ServerID: "late-receipt"}
+	w.reconcileDeliveries(t.Context())
+	if d.State != "awaiting_evidence" || d.Key != "original-key" || len(n.submissions) != 0 {
+		t.Fatal("parked intent was altered without explicit reconciliation", d)
+	}
+	outgoing := linuxnative.Message{Direction: "outgoing", ThreadID: in.Thread, Body: d.Text, ServerID: "another-message", CreatedAt: time.Now().Format(time.RFC3339)}
+	w.reconcilePausedOutgoing(t.Context(), outgoing)
+	if d.State != "awaiting_evidence" {
+		t.Fatal("equal text without the original receipt was accepted", d)
+	}
+	outgoing.ServerID = "late-receipt"
+	d.ServerID = "late-receipt"
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: "original-job", ThreadID: in.Thread, State: "needs_review", ServerID: "late-receipt"}
+	w.reconcilePausedOutgoing(t.Context(), outgoing)
+	if d.State != "awaiting_evidence" {
+		t.Fatal("matching server ID bypassed the original key status", d)
+	}
+	n.intents[d.Key] = linuxnative.ToolStatus{ID: "original-job", ThreadID: in.Thread, State: "accepted", ServerID: "late-receipt"}
+	w.reconcilePausedOutgoing(t.Context(), outgoing)
+	if d.State != "accepted" || d.ID != "original-job" || d.ServerID != "late-receipt" || len(n.submissions) != 0 {
+		t.Fatal("matching native receipt did not settle parked intent", d)
+	}
+}
+
+func TestLateAcceptedReceiptResumesExplicitCorrectionOnce(t *testing.T) {
+	w, c, _, in := planWorker(t, &planReviewModel{})
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w.sender = n
+	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"原回复"}})
+	p := w.runtime.Plans[0]
+	p.State, p.StopReason, p.ReviewReason = "stopped", "correction_receipt_awaiting_evidence", "new_message"
+	p.InboxChecked = true
+	d := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: p.Slot, Text: "原回复", SubmittedText: "原回复", Key: "original-key", ID: "original-job", ServerID: "server-1", State: "awaiting_evidence", Created: time.Now()}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
+	w.acceptReconciled(d)
+	if d.State != "accepted" || p.State != "review_pending" || p.StopReason != "" || p.ReviewReason != "new_message" || p.ReviewReturnState != "accepted" || p.Index != 1 || p.Slot != 1 || len(p.Sent) != 1 || p.Sent[0] != "原回复" || !p.WakePending || len(n.submissions) != 0 {
+		t.Fatal("late accepted text did not reopen exactly one correction decision", d.State, p)
+	}
+	w.resumeCorrectionAfterReceipt(p, d)
+	if p.Index != 1 || len(p.Sent) != 1 || len(n.submissions) != 0 {
+		t.Fatal("late receipt resumed correction twice or resent text", p)
 	}
 }
 

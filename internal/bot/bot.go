@@ -297,6 +297,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
 		return
 	}
+	if message.Direction == "outgoing" {
+		w.reconcilePausedOutgoing(ctx, message)
+	}
 	if message.IsPassiveNotice() {
 		// A notice has no participant request to answer, but it is still an
 		// incoming message that the application must account for. Keep its
@@ -316,6 +319,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	// must not interrupt a previous review before it has had a model decision
 	// and completed its already queued delivery.
 	if w.ownerModelReview(message.ID) && w.pendingConversationThread(message.ThreadID) {
+		if message.PrivateQuote == "" && w.hasExplicitCorrectionTarget(message) {
+			// Register a self-correction before an older queued send advances.
+			// This message remains in the inbox for its own normal turn.
+			w.noticeConversationMessage(message, true)
+		}
 		w.queuePhase(message.ID, "received")
 		return
 	}

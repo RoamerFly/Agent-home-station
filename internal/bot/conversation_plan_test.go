@@ -99,8 +99,8 @@ func TestSourceFreeSurfPlanDoesNotAcquireQuoteFromNewGroupMessage(t *testing.T) 
 		t.Fatal("valid surf reply failed before sending:", err)
 	}
 }
-func TestSemanticPlanWaitsForFreshInboxThenCanReplaceOnlyUnsentTail(t *testing.T) {
-	model := &planReviewModel{answer: `{"action":"replace","messages":["改成简短的补充"]}`}
+func TestSemanticPlanWaitsForFreshInboxThenCanCancelOnlyUnsentTail(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"cancel","evidence_message_id":"new","reason":"原请求者撤销尾部"}`}
 	w, c, n, in := planWorker(t, model)
 	w.queueUtterancePlan(c, in, companion.Decision{Action: "reply", Messages: []string{"这是第一条完整意思", "旧的第二条", "旧的第三条"}})
 	w.reconcileUtterancePlans(context.Background())
@@ -112,7 +112,7 @@ func TestSemanticPlanWaitsForFreshInboxThenCanReplaceOnlyUnsentTail(t *testing.T
 	if len(n.submissions) != 1 {
 		t.Fatal(n.submissions)
 	}
-	m := fixtureMessage("new", "filehelper", "不用说这么多，简单点", "incoming")
+	m := fixtureMessage("new", "filehelper", "刚才那条我说错了，别继续发", "incoming")
 	m.SenderID = "one"
 	w.noticeConversationMessage(m, true)
 	if w.runtime.Plans[0].State != "review_pending" {
@@ -125,7 +125,7 @@ func TestSemanticPlanWaitsForFreshInboxThenCanReplaceOnlyUnsentTail(t *testing.T
 	}
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
-	if len(n.submissions) != 2 || !strings.Contains(n.submissions[1].Text, "简短的补充") || w.runtime.Plans[0].State != "accepted" {
+	if len(n.submissions) != 1 || w.runtime.Plans[0].State != "stopped" {
 		t.Fatal("stale tail still sent", n.submissions)
 	}
 }
@@ -180,7 +180,7 @@ func TestSleepingPlanDoesNotBlockAnotherConversationAndCancelDoesNotCancelMedia(
 		t.Fatal("sleep blocked another thread", n.submissions)
 	}
 	w.runtime.Media = []*mediaDelivery{{Kind: "file", State: "running", Input: in, Trace: in.TraceID}}
-	stop := fixtureMessage("stop", "filehelper", "先别说了", "incoming")
+	stop := fixtureMessage("stop", "filehelper", "刚才那条先别继续说了", "incoming")
 	stop.SenderID = in.Sender
 	w.noticeConversationMessage(stop, true)
 	readyPlans(w)
@@ -334,8 +334,8 @@ func TestOldReceiptOnlyPlanEndsWithoutResending(t *testing.T) {
 	n.intents[d.Key] = linuxnative.ToolStatus{ID: d.ID, ThreadID: in.Thread, State: "accepted", ServerID: "late-receipt"}
 	d.Next = time.Time{}
 	w.reconcileDeliveries(t.Context())
-	if d.State != "accepted" || len(n.submissions) != 0 {
-		t.Fatal("late original receipt was not reconciled safely")
+	if d.State != "accepted" || p.State != "accepted" || p.Index != 1 || len(n.submissions) != 0 {
+		t.Fatal("late original receipt did not complete the detached plan safely")
 	}
 }
 func TestNewContextPreventsSubmissionOfPreparedOldText(t *testing.T) {
@@ -343,12 +343,13 @@ func TestNewContextPreventsSubmissionOfPreparedOldText(t *testing.T) {
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"不该继续的旧内容"}})
 	readyPlans(w)
 	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "不该继续的旧内容", State: "prepared", Key: "never-submitted", Created: time.Now()})
-	update := fixtureMessage("new-context", "filehelper", "不用说了", "incoming")
+	update := fixtureMessage("new-context", "filehelper", "刚才那条我说错了，别发", "incoming")
 	update.SenderID = in.Sender
 	w.noticeConversationMessage(update, true)
 	w.reconcileDeliveries(context.Background())
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
+	w.reconcileDeliveries(context.Background())
 	if len(n.submissions) != 0 || w.runtime.Plans[0].State != "stopped" || w.runtime.Deliveries[0].State != "stopped" {
 		t.Fatal("unsubmitted stale text escaped review")
 	}

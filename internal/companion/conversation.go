@@ -65,6 +65,7 @@ func validateConversation(c *ConversationSettings) error {
 type PendingReview struct {
 	generationEvidence *GenerationEvidence
 	EvidenceMessageID  string   `json:"evidence_message_id,omitempty"`
+	RecallSentIndices  []int    `json:"recall_sent_indices,omitempty"`
 	Reason             string   `json:"reason,omitempty"`
 	Action             string   `json:"action"`
 	Messages           []string `json:"messages,omitempty"`
@@ -108,6 +109,12 @@ func (e *Engine) ReviewPending(ctx context.Context, in Input, sent, pending []st
 	return e.reviewPending(ctx, in, sent, pending, updates, nil, false)
 }
 
+// ReviewInterruption reads an explicit correction without responding to it.
+// New messages remain normal independent conversation inputs.
+func (e *Engine) ReviewInterruption(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, media []DeliveredAttachment) (PendingReview, error) {
+	return e.reviewPendingWithMode(ctx, in, sent, pending, updates, nil, false, "interruption", media)
+}
+
 // Caption review includes verified attachment delivery, not just the original
 // search request. The model may still rewrite, delay or cancel the unsent text.
 type DeliveredAttachment struct {
@@ -137,6 +144,10 @@ func (e *Engine) ReviewDelivery(ctx context.Context, in Input, sent []string, te
 }
 
 func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, caption ...[]DeliveredAttachment) (PendingReview, error) {
+	return e.reviewPendingWithMode(ctx, in, sent, pending, updates, delivery, generation, "", caption...)
+}
+
+func (e *Engine) reviewPendingWithMode(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, mode string, caption ...[]DeliveredAttachment) (PendingReview, error) {
 	// Persisted plans can be reviewed by the base Engine while other requests
 	// are running. Trace-dependent authorization must belong to this plan, not
 	// whichever conversation last used a shared mutable adapter.
@@ -144,7 +155,7 @@ func (e *Engine) reviewPending(ctx context.Context, in Input, sent, pending []st
 	if err != nil {
 		return PendingReview{}, err
 	}
-	return scoped.reviewPendingScoped(ctx, in, sent, pending, updates, delivery, generation, caption...)
+	return scoped.reviewPendingScoped(ctx, in, sent, pending, updates, delivery, generation, mode, caption...)
 }
 
 // ForEvidenceInput checks the original stamp with the original actor's current
@@ -165,7 +176,7 @@ func (e *Engine) ForEvidenceInput(in Input) (*Engine, error) {
 	return fork, nil
 }
 
-func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, caption ...[]DeliveredAttachment) (PendingReview, error) {
+func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pending []string, updates []ConversationEvent, delivery *DeliveryReview, generation bool, mode string, caption ...[]DeliveredAttachment) (PendingReview, error) {
 	if in.ReplyContext != nil {
 		if err := e.ValidateReplyContext(ctx, in, *in.ReplyContext); err != nil {
 			return PendingReview{}, err
@@ -187,6 +198,9 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 		return PendingReview{}, err
 	}
 	data := map[string]any{"kind": "review_unsent_message_plan", "original_request": e.safeCurrentEvidence(in), "original_requester_id": in.Sender, "already_sent": sent, "pending_messages": pending, "new_events": e.pendingEventEvidence(ctx, in, updates), "current_time": time.Now().In(location(e.Config.Timezone)).Format(time.RFC3339)}
+	if mode == "interruption" {
+		data["kind"] = "explicit_self_correction_check"
+	}
 	if generation {
 		data["kind"] = "review_running_task"
 	}
@@ -198,24 +212,29 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 		data["kind"] = "review_delivered_media_caption"
 		data["delivered_attachments"] = caption[0]
 	}
-	scope := e.conversationScope(in, e.Config, time.Now())
-	data["relationship_notes"] = map[string]any{"evidence_kind": "legacy_unverified_notes", "items": scope.Notes}
-	data["recent_conversation"] = e.contextTurns(scope, in)
-	if scope.Preferences != "" {
-		data["conversation_preferences"] = scope.Preferences
+	if mode != "interruption" {
+		scope := e.conversationScope(in, e.Config, time.Now())
+		data["relationship_notes"] = map[string]any{"evidence_kind": "legacy_unverified_notes", "items": scope.Notes}
+		data["recent_conversation"] = e.contextTurns(scope, in)
+		if scope.Preferences != "" {
+			data["conversation_preferences"] = scope.Preferences
+		}
 	}
 	encoded, _ := json.Marshal(data)
 	system := e.policy(in) + "\n复核旧发言计划尚未发送的部分；新消息可补充、调整或取消它。只输出JSON {action:continue|cancel|replace|delay,messages:[完整短句],delay_seconds:整数}。只有原请求者明确叫停、改为相冲突要求或旧内容过时才cancel，并指出依据消息；媒体后的同人说明通常属于补充。无关聊天或催促不撤销原任务。已发送内容保持原样；不确定时continue。"
+	if mode == "interruption" {
+		system = e.policy(in) + "\n只读判断原请求者的纠错是否使旧回复确实错误、过时或被取消。仅处理原请求；新消息另行正常处理。只输出 JSON：{\"action\":\"continue|cancel\",\"evidence_message_id\":\"造成取消的新消息ID\",\"recall_sent_indices\":[已发送且确实错误的段落索引],\"reason\":\"简短依据\"}。原回复仍正确时 continue。需要停止未发部分或撤回错误已发段落时 cancel；已发段落正确则不要列入撤回。"
+	}
 	if delivery != nil {
 		system += "\n发送回执待核对：结合已接受回执和目标会话记录决定沿用、改写、取消或稍后复核。已接受的附件直接复用；replace只返回一条短消息，不确定时delay。"
 	}
-	if in.IsGroup {
+	if in.IsGroup && mode != "interruption" {
 		system += "\n群聊只发送自然的当前话题内容；纯内部诊断可取消该条配文，原任务仍继续。"
 	}
 	if generation {
 		system = e.policy(in) + "\n判断original_request是否被new_events中的原请求者明确叫停或替代。只输出JSON {action:continue|cancel|delay,evidence_message_id:字符串,reason:简短依据,delay_seconds:整数}。同人媒体图注、催促和其他人聊天通常不撤销；取消时给依据消息ID。无法确认时continue。"
 	}
-	if len(caption) > 0 {
+	if len(caption) > 0 && mode != "interruption" {
 		system += "\ndelivered_attachments已被微信接受，pending_messages是未发配文；附件已发不代表配文重复。按实际附件和新上下文自然介绍、改写或取消配文；取消给出reason。already_sent仅指已发文字。"
 	}
 	if err := e.ValidateGenerationEvidence(ctx, evidence); err != nil {
@@ -244,6 +263,30 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 	default:
 		return d, errors.New("invalid pending-plan action")
 	}
+	if mode == "interruption" {
+		if d.Action != "continue" && d.Action != "cancel" {
+			return d, errors.New("invalid interruption action")
+		}
+		if d.Action == "cancel" {
+			if d.EvidenceMessageID == "" && len(updates) == 1 {
+				d.EvidenceMessageID = updates[0].MessageID
+			}
+			found := false
+			for _, update := range updates {
+				found = found || update.MessageID == d.EvidenceMessageID
+			}
+			if !found {
+				return d, errors.New("interruption evidence not in new events")
+			}
+			for _, index := range d.RecallSentIndices {
+				if index < 0 || index >= len(sent) {
+					return d, errors.New("interruption recall index out of range")
+				}
+			}
+		} else if len(d.RecallSentIndices) > 0 {
+			return d, errors.New("interruption recall without cancellation")
+		}
+	}
 	for _, s := range d.Messages {
 		if strings.TrimSpace(s) == "" || len(s) > 1<<20 || !utf8.ValidString(s) {
 			return d, errors.New("invalid pending-plan message")
@@ -252,7 +295,7 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 	if d.DelaySeconds < 0 || d.DelaySeconds > 300 {
 		return d, errors.New("invalid pending-plan delay")
 	}
-	if in.IsGroup && !generation && d.Action != "cancel" {
+	if in.IsGroup && !generation && mode != "interruption" && d.Action != "cancel" {
 		candidate := pending
 		if d.Action == "replace" {
 			candidate = d.Messages

@@ -33,6 +33,19 @@
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
   const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};
+  function unresolvedTextReceipt(entries) {
+    const open = new Map();
+    for (const item of entries) {
+      const key = item.send_id ? 'id:' + item.send_id : 'text:' + (item.content || '');
+      if (['delivery_waiting', 'delivery_receipt_paused'].includes(item.event)) {
+        open.set(key, item);
+      } else if (item.event === 'message_sent' && item.status === 'accepted') {
+        if (open.has(key)) open.delete(key);
+        else if (item.content) open.delete('text:' + item.content);
+      }
+    }
+    return [...open.values()];
+  }
   // Derive the reader's timeline after grouping. Raw entries still drive
   // search, receipts and diagnostics, including records from older versions.
   function present(round) {
@@ -318,7 +331,9 @@
         round.auxiliaryRead = true;
       }
       const taskAge = observedTime - (Date.parse(activeTask?.updated) || Date.parse(round.updated));
-      const scheduledRetry = round.entries.some(e => Date.parse(e.retry_at) > observedTime);
+      const unresolvedReceipts = unresolvedTextReceipt(round.entries);
+      const receiptRetryScheduled = unresolvedReceipts.some(e => e.event === 'delivery_waiting' && Date.parse(e.retry_at) > observedTime);
+      const scheduledRetry = receiptRetryScheduled || round.entries.some(e => e.event !== 'delivery_waiting' && Date.parse(e.retry_at) > observedTime);
       if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !activeTask?.active && !scheduledRetry
           && (activeTask ? taskAge >= 24 * 60 * 60 * 1000 : ageFromLatest >= 60 * 60 * 1000)) {
         const failed = round.entries.some(e => e.category === 'error' && e.status === 'failed');
@@ -327,9 +342,9 @@
       }
       // A receipt-only continuation still has an unconfirmed send. Historical
       // logs may lack a persisted plan, so the stop event cannot complete it.
-      if (round.entries.some(e => e.event === 'utterance_plan_stopped' && e.reason === 'receipt_only_reconciliation') &&
+      if (unresolvedReceipts.length && round.entries.some(e => e.event === 'utterance_plan_stopped' && e.reason === 'receipt_only_reconciliation') &&
           !round.entries.some(e => e.event === 'task_delivery_updated' && e.status === 'completed')) {
-        round.status = activeTask?.active || scheduledRetry ? 'checking_receipt' : 'waiting';
+        round.status = receiptRetryScheduled ? 'checking_receipt' : 'waiting';
         round.receiptOnly = true;
       }
       // Sending is part of the round. A model decision or an earlier accepted
@@ -351,6 +366,12 @@
       } else if (!manualCompletion && !plan) {
         const lastFailure = round.entries.findLastIndex(e => e.event === 'send_failed');
         if (lastFailure >= 0 && !round.entries.slice(lastFailure + 1).some(e => e.event === 'message_sent' && e.status === 'accepted' || e.event === 'task_delivery_updated' && e.status === 'completed') && !['checking_receipt', 'waiting_receipt'].includes(round.status)) round.status = activeTask?.active ? 'running' : 'waiting';
+      }
+      // A task may already have reached a terminal state while its final
+      // text still lacks a WeChat receipt. The latest delivery evidence wins;
+      // a paused lookup is pending work, not a running timer or completion.
+      if (!manualCompletion && !round.orphanReceipt && unresolvedReceipts.length && !(plan?.state === 'accepted' && plan.index >= plan.total)) {
+        round.status = receiptRetryScheduled ? 'checking_receipt' : 'waiting';
       }
       if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';
