@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"wechat-bot/internal/companion"
@@ -112,8 +113,12 @@ func TestReceivedFilesPreserveOriginalTimesAndSeparateConversationProvenance(t *
 	other.ID, other.ThreadID, other.CreatedAt = "file-other-thread", "other@chatroom", "2026-10-28T02:00:00Z"
 	messages := []linuxnative.Message{first, later, other}
 	for _, msg := range messages {
-		if _, err := (mediaUnderstanding{manager: f.manager}).receiveFile(t.Context(), msg, "notes.txt"); err != nil {
+		result, err := (mediaUnderstanding{manager: f.manager}).receiveFile(t.Context(), msg, "notes.txt")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.Contains(result, "同哈希文件已缓存的读取内容") || !strings.Contains(result, "synthetic attachment bytes") {
+			t.Fatal("cached file content unavailable", result)
 		}
 	}
 	assets, err := f.manager.loadAssets()
@@ -157,6 +162,10 @@ func TestReceivedFilesPreserveOriginalTimesAndSeparateConversationProvenance(t *
 	}
 	if n.submits.Load() != 0 {
 		t.Fatal("receiving a file sent a message")
+	}
+	entries, err := os.ReadDir(filepath.Join(f.manager.messageMediaRoot(), "files"))
+	if err != nil || len(entries) != 1 {
+		t.Fatal("duplicate file original in message folder", len(entries), err)
 	}
 }
 

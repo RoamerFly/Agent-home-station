@@ -160,6 +160,17 @@ func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability st
 	if err != nil {
 		return "", err
 	}
+	inspectionHash, inspectionKey := "", ""
+	if capability == "document.inspect" && len(policy.materialized) == 1 {
+		item := policy.materialized[0]
+		if key, ok := messageInspectionKey(item.SHA256, item.MIME, item.Filename, installed.Digest, arguments); ok {
+			inspectionHash, inspectionKey = item.SHA256, key
+			if cached, found := p.manager.readMessageInspection(inspectionHash, inspectionKey); found {
+				b, _ := json.Marshal(map[string]any{"state": "completed", "reused": true, "cache_hit": true, "result": cached, "artifacts": []any{}})
+				return string(b), nil
+			}
+		}
+	}
 	// A document process is deliberately one task-scoped invocation rather than
 	// a resident account-wide session. Its only writable mount is this task's
 	// output directory; its only extra read-only mount is the same task's input
@@ -177,6 +188,9 @@ func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability st
 	out, err := runtime.Invoke(ctx, pluginruntime.CallRequest{Plugin: documentWorkshopPluginID, Capability: capability, Context: policy.invocation, Arguments: arguments}, policy)
 	if err != nil {
 		return "", err
+	}
+	if inspectionKey != "" && out.Job.State == "completed" {
+		_ = p.manager.saveMessageInspection(inspectionHash, inspectionKey, out.Job.Result)
 	}
 	b, err := json.Marshal(map[string]any{"task_id": out.Job.ID, "state": out.Job.State, "reused": out.Reused, "result": json.RawMessage(out.Job.Result), "artifacts": out.Job.Artifacts})
 	return string(b), err

@@ -32,11 +32,11 @@ func TestStickerAnalysisPreservesUnavailableMessageWithoutInventingContent(t *te
 	a := mediaUnderstanding{manager: f.manager}
 	m := linuxnative.Message{ID: "sticker", Type: 47, ThreadID: "filehelper"}
 	text, err := a.Analyze(context.Background(), m)
-	if err == nil || err.Error() != "media_plugin_migration_required" || text != "" || n.calls != 0 {
+	if err == nil || !strings.Contains(text, "本次画面读取失败") || n.calls != 1 {
 		t.Fatal(text, err)
 	}
 	f.manager.config.Behavior.ReadImages = false
-	if _, err = a.Analyze(context.Background(), m); err == nil || n.calls != 0 {
+	if _, err = a.Analyze(context.Background(), m); err == nil || n.calls != 1 {
 		t.Fatal("read permission bypassed")
 	}
 }
@@ -49,13 +49,37 @@ func TestStickerStaticImageUsesConfiguredVisionAndDistinctObservation(t *testing
 	n := &stickerNative{fakeNative: f.native, data: b.Bytes()}
 	f.manager.native = n
 	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(context.Background(), linuxnative.Message{ID: "sticker", Type: 47})
-	if err == nil || err.Error() != "media_plugin_migration_required" || text != "" || n.calls != 0 {
+	if err == nil || err.Error() != "media_plugin_migration_required" || !strings.Contains(text, "本次画面读取失败") || n.calls != 1 {
 		t.Fatal(text, err)
 	}
 }
-func TestAnimatedStickerSamplesBoundedBeginning(t *testing.T) {
+
+func TestStickerHashReusesObservedContentWithoutVisionCall(t *testing.T) {
+	f := setup(t)
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	n := &stickerNative{fakeNative: f.native, data: b.Bytes()}
+	f.manager.native = n
+	_, digest, err := f.manager.storeMessageMediaBytes("stickers", ".png", b.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.saveMessageObservation("stickers", digest, "单张画面", "一只挥手的小猫"); err != nil {
+		t.Fatal(err)
+	}
+	text, err := (mediaUnderstanding{manager: f.manager}).Analyze(context.Background(), linuxnative.Message{ID: "same-sticker-new-message", Type: 47})
+	if err != nil || !strings.Contains(text, "一只挥手的小猫") || n.calls != 1 {
+		t.Fatal(text, err, n.calls)
+	}
+}
+func TestAnimatedStickerSamplesAcrossCompleteCycle(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg unavailable")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe unavailable")
 	}
 	palette := color.Palette{color.Black, color.White}
 	a := &gif.GIF{LoopCount: 0}
@@ -74,10 +98,29 @@ func TestAnimatedStickerSamplesBoundedBeginning(t *testing.T) {
 		t.Fatal(err)
 	}
 	frames, scope, err := sampleSticker(context.Background(), t.TempDir(), b.Bytes())
-	if err != nil || len(frames) != 3 || !strings.Contains(scope, "未验证完整动画") {
+	if err != nil || len(frames) < 4 || !strings.Contains(scope, "完整动画约2.0秒") {
 		t.Fatal(len(frames), scope, err)
+	}
+	if bytes.Equal(frames[0].Data, frames[len(frames)-1].Data) {
+		t.Fatal("late animation state was not sampled")
 	}
 	if _, _, err = sampleSticker(context.Background(), t.TempDir(), []byte("not an image")); err == nil {
 		t.Fatal("invalid attachment accepted")
+	}
+}
+
+func TestAnimatedWebPChunkDetection(t *testing.T) {
+	animated := append([]byte("RIFF\x10\x00\x00\x00WEBPANIM"), 0, 0, 0, 0)
+	static := append([]byte("RIFF\x10\x00\x00\x00WEBPVP8 "), 0, 0, 0, 0)
+	if !animatedWebP(animated) || animatedWebP(static) {
+		t.Fatal("WebP animation chunk misclassified")
+	}
+}
+
+func TestAnimatedPNGChunkDetection(t *testing.T) {
+	animated := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00acTL"), 0, 0, 0, 0)
+	static := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x00IHDR"), 0, 0, 0, 0)
+	if !animatedPNG(animated) || animatedPNG(static) {
+		t.Fatal("PNG animation chunk misclassified")
 	}
 }
