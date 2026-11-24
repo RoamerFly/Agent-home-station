@@ -340,6 +340,9 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 	if !ok || w.runtime == nil {
 		return false
 	}
+	if w.inputRoundClosed(input) {
+		return true
+	}
 	if w.mediaTraceCancelled(input.TraceID) {
 		w.activity(Record{Event: "media_callback_ignored", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "media_trace_cancelled"})
 		return true
@@ -394,7 +397,7 @@ func (w *Worker) adoptMediaSeeds() {
 		return
 	}
 	for _, seed := range w.config.MediaSeeds() {
-		if w.mediaTraceCancelled(seed.Trace) {
+		if w.roundClosed(seed.Input.Thread, seed.Trace) || w.inputRoundClosed(seed.Input) || seed.OriginInput != nil && w.inputRoundClosed(*seed.OriginInput) || w.mediaTraceCancelled(seed.Trace) {
 			continue
 		}
 		if seed.Key != "" {
@@ -438,7 +441,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	}
 	defer func() {
 		for _, d := range w.runtime.Media {
-			if w.roundClosed(d.Input.Thread, d.Trace) {
+			if w.roundClosed(d.Input.Thread, d.Trace) || w.inputRoundClosed(d.Input) {
 				continue
 			}
 			w.refreshMediaParent(d.Trace)
@@ -456,7 +459,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
-		if w.roundClosed(d.Input.Thread, d.Trace) {
+		if w.roundClosed(d.Input.Thread, d.Trace) || w.inputRoundClosed(d.Input) {
 			continue
 		}
 		// The receipt journal may have committed just before a crash while this

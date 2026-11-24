@@ -74,8 +74,22 @@ func (w *Worker) roundClosed(thread, trace string) bool {
 	return w != nil && w.runtime != nil && w.runtime.ClosedRounds[roundKey(thread, trace)]
 }
 
+func inputOriginThread(in companion.Input) string {
+	if in.OriginThread != "" {
+		return in.OriginThread
+	}
+	if in.Source != nil && in.Source.MessageID == in.OriginTraceID && in.Source.Thread != "" {
+		return in.Source.Thread
+	}
+	return in.Thread
+}
+
+func inputBelongsToRound(in companion.Input, thread, trace string) bool {
+	return in.Thread == thread && in.TraceID == trace || in.OriginTraceID == trace && inputOriginThread(in) == thread
+}
+
 func (w *Worker) inputRoundClosed(in companion.Input) bool {
-	return w.roundClosed(in.Thread, in.TraceID) || in.OriginTraceID != "" && w.roundClosed(in.Thread, in.OriginTraceID)
+	return w.roundClosed(in.Thread, in.TraceID) || in.OriginTraceID != "" && w.roundClosed(inputOriginThread(in), in.OriginTraceID)
 }
 
 func (w *Worker) completeTrace(thread, trace string) error {
@@ -105,9 +119,23 @@ func (w *Worker) completeTrace(thread, trace string) error {
 		return w.persistErr
 	}
 	if w.generation != nil {
-		if job := w.generation.jobs[thread]; job != nil && (job.input.TraceID == trace || job.input.OriginTraceID == trace) {
-			job.cancel()
-			delete(w.generation.jobs, thread)
+		for _, p := range w.runtime.Plans {
+			if p != nil && inputBelongsToRound(p.Input, thread, trace) {
+				if cancel := w.generation.reviews[p.ID]; cancel != nil {
+					cancel()
+					delete(w.generation.reviews, p.ID)
+				}
+			}
+		}
+		for jobThread, job := range w.generation.jobs {
+			if job != nil && inputBelongsToRound(job.input, thread, trace) {
+				if key := "generation-" + job.input.TraceID; w.generation.reviews[key] != nil {
+					w.generation.reviews[key]()
+					delete(w.generation.reviews, key)
+				}
+				job.cancel()
+				delete(w.generation.jobs, jobThread)
+			}
 		}
 	}
 	for _, in := range tasks {
@@ -128,7 +156,7 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		}
 	}
 	for _, d := range w.runtime.Deliveries {
-		if d == nil || d.Trace != trace || d.Thread != thread {
+		if d == nil || !(d.Thread == thread && d.Trace == trace || inputBelongsToRound(d.Input, thread, trace)) {
 			continue
 		}
 		collectTask(d.Input)
@@ -138,7 +166,7 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		found = true
 	}
 	for _, p := range w.runtime.Plans {
-		if p == nil || p.Input.TraceID != trace || p.Input.Thread != thread {
+		if p == nil || !inputBelongsToRound(p.Input, thread, trace) {
 			continue
 		}
 		collectTask(p.Input)
@@ -149,7 +177,7 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		found = true
 	}
 	for _, d := range w.runtime.Media {
-		if d == nil || d.Trace != trace || d.Input.Thread != thread {
+		if d == nil || !inputBelongsToRound(d.Input, thread, trace) && !(d.Input.Thread == thread && d.Trace == trace) && (d.OriginInput == nil || !inputBelongsToRound(*d.OriginInput, thread, trace)) {
 			continue
 		}
 		collectTask(d.Input)
@@ -163,7 +191,7 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		found = true
 	}
 	for _, reply := range w.runtime.MediaReplies {
-		if reply == nil || reply.Trace != trace || reply.Input.Thread != thread {
+		if reply == nil || !inputBelongsToRound(reply.Input, thread, trace) && !(reply.Input.Thread == thread && reply.Trace == trace) {
 			continue
 		}
 		collectTask(reply.Input)
@@ -173,7 +201,7 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		found = true
 	}
 	for _, wake := range w.runtime.Wakes {
-		if wake == nil || wake.Input.Thread != thread || wake.Parent != trace && wake.Input.TraceID != trace {
+		if wake == nil || !inputBelongsToRound(wake.Input, thread, trace) && !(wake.Input.Thread == thread && wake.Parent == trace) {
 			continue
 		}
 		collectTask(wake.Input)
@@ -188,9 +216,11 @@ func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]compani
 		}
 	}
 	if w.generation != nil {
-		if job := w.generation.jobs[thread]; job != nil && (job.input.TraceID == trace || job.input.OriginTraceID == trace) {
-			collectTask(job.input)
-			found = true
+		for _, job := range w.generation.jobs {
+			if job != nil && inputBelongsToRound(job.input, thread, trace) {
+				collectTask(job.input)
+				found = true
+			}
 		}
 	}
 	return found, tasks

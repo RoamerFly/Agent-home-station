@@ -133,6 +133,12 @@ func (p *permittedTools) inheritTaskDelivery(t *agentTask) {
 	}
 }
 func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
+	if in.OriginTraceID != "" {
+		in.OriginThread = t.Thread
+		if t.ReportSourceThread != "" {
+			in.OriginThread = t.ReportSourceThread
+		}
+	}
 	in.NotificationText = t.NotificationText
 	in.SilentExecution = t.NotificationText == "" && !t.ReportOnly && !t.OwnerRequest && t.RecoveryMessageID == ""
 

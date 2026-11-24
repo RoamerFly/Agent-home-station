@@ -120,6 +120,9 @@ func (w *Worker) acceptTextMemoryAt(c *companion.Engine, input companion.Input, 
 }
 
 func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int, text string) (sending.Receipt, error) {
+	if w.inputRoundClosed(input) {
+		return sending.Receipt{}, errors.New("round_manually_closed")
+	}
 	if w.surfOrigin(input) && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
 		return sending.Receipt{}, errors.New("surf_share_permission_changed")
 	}
@@ -464,7 +467,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if w.roundClosed(d.Thread, d.Trace) {
+		if w.roundClosed(d.Thread, d.Trace) || w.inputRoundClosed(d.Input) {
 			continue
 		}
 		if d.State == "accepted" || d.State == "stopped" || d.State == "awaiting_evidence" {

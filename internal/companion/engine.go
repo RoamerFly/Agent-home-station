@@ -55,6 +55,7 @@ type Input struct {
 	HistoricalReview   bool                    `json:"historical_review,omitempty"`
 	RequestedText      string                  `json:"requested_text,omitempty"`
 	OriginTraceID      string                  `json:"origin_trace_id,omitempty"`
+	OriginThread       string                  `json:"origin_thread,omitempty"`
 	TaskID             string                  `json:"task_id,omitempty"`
 	QuoteSharedMessage bool                    `json:"quote_shared_message,omitempty"`
 	SenderName         string                  `json:"sender_name,omitempty"`

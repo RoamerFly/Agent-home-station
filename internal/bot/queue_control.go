@@ -64,6 +64,9 @@ func (w *Worker) resumedMediaExists(old *mediaDelivery) *mediaDelivery {
 }
 
 func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old *mediaDelivery) (*mediaDelivery, string) {
+	if old == nil || w.inputRoundClosed(in) || w.inputRoundClosed(old.Input) || w.roundClosed(old.Input.Thread, old.Trace) {
+		return nil, "round_manually_closed"
+	}
 	n, ok := w.sender.(resumeMissingMediaNative)
 	if !ok {
 		return nil, "native_resume_missing_not_supported"

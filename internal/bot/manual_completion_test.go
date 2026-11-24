@@ -36,12 +36,17 @@ func TestManualCompletionPersistsClosedRoundAndStopsOnlyMatchingThread(t *testin
 			{Event: fixtureEvent("2", "child", "filehelper", "incoming", "remote"), Phase: "backlog_grouped", BacklogParent: "trace-1"},
 			{Event: fixtureEvent("3", "trace-1", "room@chatroom", "incoming", "remote"), Phase: "received"},
 		},
-		Deliveries: []*delivery{{Trace: "trace-1", Thread: "filehelper", State: "waiting", Next: time.Now()}},
+		Deliveries: []*delivery{
+			{Trace: "trace-1", Thread: "filehelper", State: "waiting", Next: time.Now()},
+			{Trace: "continuation", Thread: "filehelper", Input: companion.Input{Thread: "filehelper", OriginTraceID: "trace-1"}, State: "waiting", Next: time.Now()},
+			{Trace: "owner-update", Thread: "owner", Input: companion.Input{Thread: "owner", OriginThread: "filehelper", OriginTraceID: "trace-1"}, State: "waiting", Next: time.Now()},
+			{Trace: "other-owner-update", Thread: "owner", Input: companion.Input{Thread: "owner", OriginThread: "room@chatroom", OriginTraceID: "trace-1"}, State: "waiting", Next: time.Now()},
+		},
 	}
 	if err := w.completeTrace("filehelper", "trace-1"); err != nil {
 		t.Fatal(err)
 	}
-	if !w.roundClosed("filehelper", "trace-1") || w.roundClosed("room@chatroom", "trace-1") || w.runtime.Inbox[0].Phase != "completed" || w.runtime.Inbox[1].Phase != "completed" || w.runtime.Inbox[2].Phase != "received" || w.runtime.Deliveries[0].State != "stopped" {
+	if !w.roundClosed("filehelper", "trace-1") || w.roundClosed("room@chatroom", "trace-1") || w.runtime.Inbox[0].Phase != "completed" || w.runtime.Inbox[1].Phase != "completed" || w.runtime.Inbox[2].Phase != "received" || w.runtime.Deliveries[0].State != "stopped" || w.runtime.Deliveries[1].State != "stopped" || w.runtime.Deliveries[2].State != "stopped" || w.runtime.Deliveries[3].State != "waiting" {
 		t.Fatal("close did not fence matching round only")
 	}
 	w2 := newTestWorker(t, &fakeSource{}, &fakeModel{}, &fakeSender{})
@@ -49,7 +54,7 @@ func TestManualCompletionPersistsClosedRoundAndStopsOnlyMatchingThread(t *testin
 	if err := w2.loadRuntime("server-1"); err != nil {
 		t.Fatal(err)
 	}
-	if !w2.roundClosed("filehelper", "trace-1") || w2.runtime.Deliveries[0].State != "stopped" {
+	if !w2.roundClosed("filehelper", "trace-1") || w2.runtime.Deliveries[0].State != "stopped" || w2.runtime.Deliveries[1].State != "stopped" || w2.runtime.Deliveries[2].State != "stopped" || w2.runtime.Deliveries[3].State != "waiting" {
 		t.Fatal("closed marker was not durable")
 	}
 }

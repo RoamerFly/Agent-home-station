@@ -23,10 +23,16 @@ func (w *Worker) processHostMediaResume(ctx context.Context) {
 		return
 	}
 	result := MediaResumeResult{State: "blocked", Reason: "media_resume_original_not_found"}
-	if request.Account == w.runtime.Account && request.Trace != "" && request.ID != "" {
+	if w.roundClosed(request.Thread, request.Trace) {
+		result.State, result.Reason = "cancelled", "round_manually_closed"
+	} else if request.Account == w.runtime.Account && request.Trace != "" && request.ID != "" {
 		for _, old := range w.runtime.Media {
 			if old.Key != request.Key || old.Input.Thread != request.Thread || old.Input.Account != request.Account {
 				continue
+			}
+			if w.inputRoundClosed(old.Input) || w.roundClosed(old.Input.Thread, old.Trace) {
+				result.State, result.Reason = "cancelled", "round_manually_closed"
+				break
 			}
 			if old.ID == "" && old.State == "stopped" {
 				result.Reason = "media_resume_original_not_submitted"
