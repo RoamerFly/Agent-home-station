@@ -220,6 +220,10 @@ pre,.technical-json,.agent-task-row pre { white-space:pre-wrap; overflow-wrap:an
 .round-tool-name { color:#1d4ed8; background:#e8f0ff; }
 .round-tool-args { color:#6d3ca5; background:#f2eafd; }
 .round-tool-file { color:#126b45; background:#e3f5eb; }
+.round-tool-metrics { color:var(--muted); background:var(--soft); }
+.round-usage-summary { display:grid; gap:8px; margin:0 0 18px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--soft); }
+.round-usage-summary>strong { font-size:13px; }.round-usage-summary>small { font-size:11px; }
+.round-usage-stats { display:flex; flex-wrap:wrap; gap:6px 14px; }.round-usage-line { font-size:12px; font-variant-numeric:tabular-nums; }
 .round-technical { margin-top:8px; font-size:12px; }
 .round-output { padding:14px; border-radius:12px; background:var(--soft); border:1px solid var(--line); margin-bottom:18px; }
 .receipt-accepted { color:var(--good); }.receipt-pending { color:var(--warn); }.round-output small { display:block; font-size:12px; margin-top:4px; }

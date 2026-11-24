@@ -297,6 +297,7 @@ func (p *permittedTools) listenAudioBatches(ctx context.Context, wav []byte, inv
 		if err != nil {
 			return mediaAudioObservation{}, nil, err
 		}
+		policy.roundMessageID = p.trace.TraceID
 		result, err := policy.observe(ctx)
 		return result, policy.checkCompleted, err
 	})
@@ -480,6 +481,7 @@ func (p *permittedTools) callMediaAudioService(ctx context.Context, requestKey s
 			if err != nil {
 				return mediaAudioObservation{}, nil, err
 			}
+			policy.roundMessageID = p.trace.TraceID
 			observed, err := policy.observe(ctx)
 			return observed, policy.checkCompleted, err
 		})

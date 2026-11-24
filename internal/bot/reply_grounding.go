@@ -29,6 +29,7 @@ func (w *Worker) deliveryEvidenceReader(in companion.Input) (*Worker, error) {
 }
 
 func (w *Worker) prepareGroundedText(ctx context.Context, in companion.Input, text string) (companion.Input, string, error) {
+	ctx = w.usageContext(ctx, in.Thread, in.TraceID)
 	if w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(in) {
 		return in, text, errors.New("conversation_grant_changed")
 	}

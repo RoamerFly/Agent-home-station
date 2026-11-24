@@ -87,6 +87,15 @@ func (m *Manager) record(r bot.Record) {
 	entry.ModelMaxFormatAttempts = r.ModelMaxFormatAttempts
 	entry.ModelProtocolCode = logText(r.ModelProtocolCode, 64)
 	entry.ReviewFailure = r.ReviewFailure
+	entry.UsageModel = logText(r.UsageModel, 128)
+	entry.UsagePurpose = logText(r.UsagePurpose, 128)
+	entry.UsagePriceSource = r.UsagePriceSource
+	entry.UsageReported = r.UsageReported
+	entry.UsagePriced = r.UsagePriced
+	entry.InputTokens = r.InputTokens
+	entry.OutputTokens = r.OutputTokens
+	entry.CacheHitTokens = r.CacheHitTokens
+	entry.EstimatedCosts = r.EstimatedCosts
 	entry.RetryAttempts = r.RetryAttempts
 	entry.RetryAt = r.RetryAt
 	entry.Source = r.ThreadID

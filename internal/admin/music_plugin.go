@@ -313,7 +313,9 @@ func (p *musicPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 		reply, err := p.post(ctx, endpoint, headers, body, limit, timeout)
 		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
 		usage.Model, usage.Purpose = p.model, "plugin_music_generation"
-		if p.p.manager.billing == nil || p.p.manager.billing.Record(billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		model := billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
+		p.p.manager.recordModelUsageDetail(p.p.trace.Thread, p.p.trace.TraceID, j.Tool, j.ID, model, usage)
+		if p.p.manager.billing == nil || p.p.manager.billing.Record(model, usage) != nil {
 			return nil, errors.New("music_usage_record_failed")
 		}
 		if err != nil {

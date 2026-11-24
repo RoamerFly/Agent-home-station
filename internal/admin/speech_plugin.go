@@ -297,7 +297,11 @@ func (p *speechPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		if p.admin != nil {
 			usage.Purpose = "plugin_speech_admin_test"
 		}
-		if p.hostManager().billing == nil || p.hostManager().billing.Record(billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		model := billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
+		if p.p != nil {
+			p.hostManager().recordModelUsageDetail(p.p.trace.Thread, p.p.trace.TraceID, j.Tool, j.ID, model, usage)
+		}
+		if p.hostManager().billing == nil || p.hostManager().billing.Record(model, usage) != nil {
 			return nil, errors.New("speech_usage_record_failed")
 		}
 		if err != nil {

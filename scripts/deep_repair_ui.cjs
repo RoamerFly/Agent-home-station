@@ -31,6 +31,7 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
     if(req.method()!=='GET'){
      const body=req.postDataJSON();writes.push({path:u.pathname,body});
      if(u.pathname==='/api/logs/round/process')return reply(route,{item:{message_id:body.message_id,status:'queued',reason:'原消息已进入处理队列'}});
+     if(u.pathname==='/api/logs/round/close')return reply(route,{closed:true});
      if(u.pathname==='/api/memory/services/automatic'){assert.deepEqual(body,{enabled:body.enabled},'daily switch must not submit advanced settings');settings={...settings,enabled:body.enabled};return reply(route,{settings,embedding,maintenance,embedding_key_configured:true,maintenance_key_configured:true,semantic_configured:true})}
      if(u.pathname==='/api/memory/services'){settings=body.settings;embedding={...body.embedding,api_key:undefined};maintenance={...body.maintenance,api_key:undefined};return reply(route,{settings,embedding,maintenance,embedding_key_configured:true,maintenance_key_configured:true,semantic_configured:true})}
      if(u.pathname===`/api/memory/${scope}/entries/editable`&&body.action==='correct'){assert.equal(body.expected_revision,2);assert.equal(body.sources[0].event_id,'anchor');editableEntry={...editableEntry,detail:body.detail,version:3};return reply(route,editableEntry)}
@@ -75,6 +76,10 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
   await topDialog().getByText('原消息已进入处理队列',{exact:true}).waitFor();
   assert(writes.some(x=>x.path==='/api/logs/round/process'&&x.body.message_id==='synthetic-message'&&x.body.thread_id==='synthetic@chatroom'));
   assert.equal(await page.locator('dialog[open]').count(),1);
+  await topDialog().getByRole('button',{name:'关闭回合',exact:true}).click();
+  await topDialog().getByText('回合已关闭，后续处理已停止。',{exact:true}).waitFor();
+  assert(writes.some(x=>x.path==='/api/logs/round/close'&&x.body.message_id==='synthetic-message'&&x.body.thread_id==='synthetic@chatroom'));
+  assert.equal(await page.locator('dialog[open]').count(),1,'closing a round must not open a confirmation dialog');
   assert.equal(await topDialog().getByRole('button',{name:'回复依据',exact:true}).count(),0);
   assert(requests.some(r=>r.path==='/api/reply-audits'&&new URLSearchParams(r.search).get('message_id')==='synthetic-message'),'execution dialog must preserve trigger message');
   await page.keyboard.press('Escape');

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
 )
@@ -87,13 +88,14 @@ type Config struct {
 	// ScopedAnalyzer handles only the inbound media types selected by the host.
 	ScopedAnalyzer ScopedMediaAnalyzer
 	StateDir       string
-	ClosedRounds  []RoundIdentity
+	ClosedRounds   []RoundIdentity
 	AllowedThreads []string
 	Prefix         string
 	PollInterval   time.Duration
 	MaxAge         time.Duration
 	Log            func(string)
 	Record         func(Record)
+	Usage          func(string, string, deepseek.Usage)
 	GroupRules     map[string]GroupRule
 	Channel        string
 }

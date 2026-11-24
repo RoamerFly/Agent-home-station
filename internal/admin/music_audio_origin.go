@@ -223,5 +223,9 @@ func (o *musicAudioOrigin) observationPolicy(ctx context.Context, wav []byte, wi
 		sources[id] = revision
 	}
 	inv := pluginhost.Invocation{Account: o.task.Account, Thread: o.task.Thread, Requester: o.p.trace.Sender, Purpose: "observe generated song samples", RequestKey: source + ":" + agentID(o.authorization, o.epoch), SourceVersions: sources, EvidenceEpoch: o.epoch, Authorization: o.authorization}
-	return o.p.manager.newBoundMediaAudioObservationPolicy(ctx, wav, inv, 1, o.Check, musicAudioSamplePrompt, 0, 90)
+	policy, err := o.p.manager.newBoundMediaAudioObservationPolicy(ctx, wav, inv, 1, o.Check, musicAudioSamplePrompt, 0, 90)
+	if err == nil {
+		policy.roundMessageID = o.p.trace.TraceID
+	}
+	return policy, err
 }

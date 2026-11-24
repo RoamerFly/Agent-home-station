@@ -6,6 +6,18 @@ import (
 	"wechat-bot/internal/deepseek"
 )
 
+type roundUsageBinding struct{}
+
+func (w *Worker) usageContext(ctx context.Context, thread, message string) context.Context {
+	if w.config.Usage == nil || thread == "" || message == "" || ctx.Value(roundUsageBinding{}) != nil {
+		return ctx
+	}
+	ctx = context.WithValue(ctx, roundUsageBinding{}, true)
+	return deepseek.WithUsageObserver(ctx, func(u deepseek.Usage) {
+		w.config.Usage(thread, message, u)
+	})
+}
+
 func modelRecord(thread, message string, d deepseek.Diagnostics) Record {
 	return Record{ThreadID: thread, MessageID: message, ModelHTTPStatus: d.HTTPStatus, ModelAttempts: d.Attempts, ModelMaxAttempts: d.MaxAttempts, ModelStage: d.Stage, ModelRetryDelayMS: d.RetryDelayMS, ModelFinishReason: d.FinishReason, ModelContentBytes: d.ContentBytes, ModelJSONValid: d.JSONValid, ModelFormatAttempt: d.FormatAttempt, ModelMaxFormatAttempts: d.MaxFormatAttempts, ModelProtocolCode: d.ProtocolCode, DurationMS: d.DurationMS, Origin: "model"}
 }
@@ -26,6 +38,7 @@ func modelEventRecord(thread, message, event string, d deepseek.Diagnostics) Rec
 }
 
 func (w *Worker) modelContext(ctx context.Context, thread, message string) context.Context {
+	ctx = w.usageContext(ctx, thread, message)
 	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
 		w.activity(toolDiagnosticRecord(thread, message, d))
 	})

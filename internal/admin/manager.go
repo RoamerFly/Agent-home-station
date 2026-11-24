@@ -68,6 +68,15 @@ type LogEntry struct {
 	ModelMaxFormatAttempts int                      `json:"model_max_format_attempts,omitempty"`
 	ModelProtocolCode      string                   `json:"model_protocol_code,omitempty"`
 	ReviewFailure          *companion.ReviewFailure `json:"review_failure,omitempty"`
+	UsageModel             string                   `json:"usage_model,omitempty"`
+	UsagePurpose           string                   `json:"usage_purpose,omitempty"`
+	UsagePriceSource       string                   `json:"usage_price_source,omitempty"`
+	UsageReported          bool                     `json:"usage_reported,omitempty"`
+	UsagePriced            bool                     `json:"usage_priced,omitempty"`
+	InputTokens            int64                    `json:"input_tokens,omitempty"`
+	OutputTokens           int64                    `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64                    `json:"cache_hit_tokens,omitempty"`
+	EstimatedCosts         map[string]float64       `json:"estimated_costs,omitempty"`
 	CallID                 string                   `json:"call_id,omitempty"`
 	Tool                   string                   `json:"tool,omitempty"`
 	ToolArgs               string                   `json:"tool_args,omitempty"`
@@ -740,7 +749,9 @@ func (m *Manager) start(c Config) {
 			m.log("bot_saved_state_unavailable")
 			return
 		}
-		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTaskReplyReady: m.taskReplyReady, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, ClosedRounds: closedRounds, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTaskReplyReady: m.taskReplyReady, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, ClosedRounds: closedRounds, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record, Usage: func(thread, message string, u deepseek.Usage) {
+			m.recordModelUsage(thread, message, modelForBilling(c), u)
+		}}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")

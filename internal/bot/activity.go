@@ -30,6 +30,10 @@ type Record struct {
 	MediaCount                                                                                                      int
 	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string
 	ReviewFailure                                                                                                   *companion.ReviewFailure
+	UsageModel, UsagePurpose, UsagePriceSource                                                                      string
+	UsageReported, UsagePriced                                                                                      bool
+	InputTokens, OutputTokens, CacheHitTokens                                                                       int64
+	EstimatedCosts                                                                                                  map[string]float64
 }
 
 func (w *Worker) activity(record Record) {
