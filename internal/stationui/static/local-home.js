@@ -388,7 +388,7 @@
     if (current.wechatRelocation.get(id)?.busy || current.setupBusy || current.loading) return;
     const entry = { busy: digest ? "confirm" : "read", controller: new AbortController(), digest: "" };
     current.wechatRelocation.set(id, entry);
-    const visible = () => current === apps && activeView === "apps" && $("#app-dialog").open &&
+    const visible = () => current === apps && activeView === "apps" && $("#app-configuration").open &&
       appAccountVisible("wechat") && current.wechatRelocation.get(id) === entry;
     const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/relocation/readiness";
     renderApps();
@@ -1645,7 +1645,7 @@
     work.pending = new Map([...work.pending].filter(([, pending]) => pending.has("cancel")));
   }
   function shouldPollDouyinWebLogin(current, value) {
-    return current === apps && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" &&
+    return current === apps && activeView === "apps" && $("#app-configuration").open && current.openID === "douyin" &&
       (appAccountVisible("douyin") || appConfiguration?.section === "browse") && value?.active === true;
   }
   function scheduleDouyinWebLoginPoll(current) {
@@ -2200,7 +2200,7 @@
       $("#memory-source-label").hidden = false;
       button.textContent = "刷新微信来源";
       if (!value.sources.length) {
-        current.error = "当前没有获准微信来源，请在微信进入应用后的账号与授权中授权工作站查询范围。";
+        current.error = "当前没有获准微信来源，请在微信工作台的账号与授权中授权工作站查询范围。";
         renderMemoryPage();
       }
     } catch (error) {
@@ -2553,10 +2553,10 @@
       card.dataset.connection = evidence.state;
       head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
-      open.type = "button"; open.setAttribute("aria-label", "管理" + label);
-      open.setAttribute("aria-controls", "app-dialog"); open.setAttribute("aria-expanded", String(apps.openID === record.id));
+      open.type = "button"; open.setAttribute("aria-label", "打开" + label + "工作台");
+      open.setAttribute("aria-controls", "app-configuration");
       open.dataset.app = record.id;
-      const foot = appElement("span", "管理应用  ›", "app-card-footer");
+      const foot = appElement("span", "打开工作台  ›", "app-card-footer");
       open.append(head, appEvidenceRows(evidence), appElement("p", version, "app-card-version"), foot); card.append(open);
       const power = appPowerSwitch(record);
       if (power) card.append(power);
@@ -2568,17 +2568,11 @@
         if (apps.openID && apps.openID !== record.id) {
           clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
         }
-        const dialog = $("#app-dialog"), changing = apps.openID !== record.id;
-        if (changing) appFeedback("");
-        apps.openID = record.id; apps.detailTab ||= "capabilities";
-        if (!dialog.open) dialog.show();
-        renderApps();
-        if (changing) $("#app-dialog-body").scrollTop = 0;
-        $("#app-dialog-title").focus({ preventScroll: true });
-        renderLiveSafety();
+        appFeedback("");
+        apps.openID = record.id;
+        openAppConfiguration("overview");
         if (record.id === "douyin") {
           void loadDouyinWebLogin(apps);
-          if (apps.detailTab === "account" && apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
         }
       });
       cards.push(card);
@@ -2589,12 +2583,12 @@
       list.replaceChildren(appElement("p", text, "apps-empty"));
     }
     if (focused) [...list.querySelectorAll("[data-app]")].find((button) => button.dataset.app === focused)?.focus({ preventScroll: true });
-    if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
+    if (renderDetail && $("#app-configuration").open && records.has(apps.openID)) renderAppConfiguration();
+    else if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
   }
   let appConfiguration = null;
   function appAccountVisible(id) {
-    if (activeView !== "apps" || !$("#app-dialog").open || apps.openID !== id) return false;
-    if (!$("#app-configuration").open) return false;
+    if (activeView !== "apps" || !$("#app-configuration").open || apps.openID !== id) return false;
     const section = appConfiguration?.section;
     return section === "account" || (id === "wechat" && section === "conversations");
   }
@@ -2999,7 +2993,7 @@
     const form = appElement("form", "", "configuration-surf-form");
     const feedback = appElement("p", "", "app-scope-note"); feedback.setAttribute("role", "status");
     node.append(appElement("h4", "应用浏览与互动"), status,
-      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用的「进入应用 → 互动任务」核对。", "app-scope-note"), form, feedback);
+      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用工作台的「互动任务」核对。", "app-scope-note"), form, feedback);
     const key = connection + ":apps";
     let saved, busy = false, serial = 0;
     async function refresh() {
@@ -3400,7 +3394,7 @@
             (available.some((source) => source.kind === kind) ? "" : " · 当前来源已撤销")));
           group.append(label);
         }
-        if (!available.length) group.append(appElement("p", "请在抖音进入应用中核对本机记忆留存与读取授权。", "app-scope-note"));
+        if (!available.length) group.append(appElement("p", "请在抖音工作台中核对本机记忆留存与读取授权。", "app-scope-note"));
         form.append(group);
       }
       const save = appElement("button", "保存微信" + rangeLabel, "button compact primary"); save.type = "submit"; save.disabled = busy;
@@ -4756,7 +4750,7 @@
     dialog.classList.toggle("wechat-legacy-skin", id === "wechat" || id === "douyin");
     dialog.classList.toggle("douyin-workbench-skin", id === "douyin");
     $("#app-dialog-body").replaceChildren();
-    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 进入应用"));
+    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + "工作台"));
     dialog.showModal();
     renderAppConfiguration();
     $("#app-configuration-title").focus({ preventScroll: true });
@@ -4815,7 +4809,7 @@
           appConfigurationShortcut("管理资料与版本", "source")];
         break;
       case "capabilities": {
-        controls = [appCapabilityRows(evidence), appConfigurationShortcut("进入应用配置", "overview")];
+        controls = [appCapabilityRows(evidence), appConfigurationShortcut("打开工作台", "overview")];
         break;
       }
       default:
@@ -4874,7 +4868,7 @@
       const generation = ++draft.generation;
       const controller = new AbortController(); draft.controller = controller; draft.busy = true; draft.error = ""; draft.result = null;
       renderApps();
-      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
+      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-configuration").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
       try {
         const body = automatic ? { discover: true } : { executable: draft.path.trim() };
         const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify(body), signal: controller.signal });
@@ -5058,7 +5052,7 @@
     if (task.state === "failed" && task.progress?.stage === "rejected") return ["未提交成功", "本次发布已被拒绝。"];
     const normal = publicationStates[task.state] || publicationStates.awaiting_receipt;
 	const creatorIssues = {
-	  creator_login_required: "创作者中心需要重新登录，请在抖音应用详情打开登录窗口。",
+	  creator_login_required: "创作者中心需要重新登录，请在抖音工作台打开登录窗口。",
 	  creator_profile_busy: "专属登录窗口仍在使用，关闭并确认保存后可继续原任务。",
 	  creator_controls_unavailable: "创作者页面未准备好，或网页控件发生变化；尚未确认提交。",
 	  creator_upload_incomplete: "视频上传尚未完成，或页面已清除所选文件。",
@@ -7647,11 +7641,20 @@
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();
     renderLiveSafety();
-    if (activeView === "apps" && $("#app-dialog").open) {
-      renderApps();
-      $("#app-dialog-body").scrollTop = closed?.returnScroll || 0;
-      const shortcut = closed?.returnSection && $("#app-dialog-body").querySelector('[data-configuration-section="' + CSS.escape(closed.returnSection) + '"]');
-      (shortcut || (closed?.returnFocus?.isConnected && closed.returnFocus) || $("#app-configuration-open")).focus({ preventScroll: true });
+    if (activeView === "apps") {
+      if ($("#app-dialog").open) {
+        renderApps();
+        $("#app-dialog-body").scrollTop = closed?.returnScroll || 0;
+        const shortcut = closed?.returnSection && $("#app-dialog-body").querySelector('[data-configuration-section="' + CSS.escape(closed.returnSection) + '"]');
+        (shortcut || (closed?.returnFocus?.isConnected && closed.returnFocus) || $("#app-configuration-open")).focus({ preventScroll: true });
+      } else {
+        const opener = closed?.record.id;
+        apps.openID = "";
+        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+        renderApps(false);
+        const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
+        (button || $("#apps-search")).focus({ preventScroll: true });
+      }
     }
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());

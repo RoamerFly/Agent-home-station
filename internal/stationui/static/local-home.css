@@ -816,7 +816,7 @@ body.is-home-ready {
 .memory-detail .button { justify-self: start; }
 .is-home-ready .apps-view { grid-template-rows: auto auto auto minmax(0, 1fr); padding: 0; overflow: hidden; scrollbar-gutter: auto; }
 .is-home-ready .apps-view > :is(.apps-feedback:empty, .work-register) { margin: 0; }
-.apps-layout { display: grid; grid-template-columns: minmax(248px, .78fr) minmax(0, 1.22fr); grid-row: -2 / -1; gap: var(--s-4); min-height: 0; min-width: 0; }
+.apps-layout { display: grid; grid-template-columns: minmax(0, 1fr); grid-row: -2 / -1; gap: var(--s-4); min-height: 0; min-width: 0; }
 .app-directory { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--s-2); min-width: 0; min-height: 0; }
 .app-filters { display: flex; gap: var(--s-1); min-width: 0; }
 .app-filters input { flex: 1; width: 0; min-width: 0; }
@@ -863,7 +863,7 @@ body.is-home-ready {
   .chat-aside { display: flex; align-items: center; gap: var(--s-3); }
   .chat-character { flex: 0 0 auto; width: 88px; height: 88px; }
   .recent-memory { flex: 1; min-width: 0; max-height: 128px; overflow: auto; padding: 0; }
-  .apps-layout { grid-template-columns: minmax(210px, .6fr) minmax(0, 1.4fr); }
+  .apps-layout { grid-template-columns: minmax(0, 1fr); }
   #app-dialog .app-layer:not(.douyin-live-client) { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
@@ -974,10 +974,7 @@ body.is-home-ready {
   font-weight: var(--fw-strong);
   letter-spacing: .08em;
 }
-.is-home-ready .apps-layout {
-  grid-template-columns: minmax(300px, .86fr) minmax(0, 1.14fr);
-  gap: var(--s-5);
-}
+.is-home-ready .apps-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s-5); }
 .is-home-ready .app-directory {
   gap: var(--s-3);
   padding: var(--s-3);
@@ -1121,9 +1118,7 @@ body.is-home-ready {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
 }
-.is-home-ready .apps-layout {
-  grid-template-columns: minmax(0, 1.65fr) minmax(300px, .9fr);
-}
+.is-home-ready .apps-layout { grid-template-columns: minmax(0, 1fr); }
 .is-home-ready .app-card-entry {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) 220px;
