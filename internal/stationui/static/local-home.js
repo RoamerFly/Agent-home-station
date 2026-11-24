@@ -4533,6 +4533,18 @@
     switch (section) {
       case "overview":
         controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
+        if (record.id === "douyin") {
+          const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
+          const overview = appElement("section", "", "app-layer douyin-workbench-overview");
+          const account = appElement("div", "", "douyin-workbench-account");
+          account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
+          const routes = appElement("div", "", "douyin-workbench-routes");
+          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
+            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => selectAppConfiguration(view, id)));
+          }
+          overview.append(account, routes);
+          controls.splice(1, 0, overview);
+        }
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
@@ -4739,7 +4751,10 @@
     stopAppConfigurationReads();
     const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
     appConfiguration = view;
-    dialog.classList.toggle("wechat-legacy-skin", id === "wechat");
+    // Both application workbenches share the same card and navigation skin;
+    // their sections and operations remain specific to the selected app.
+    dialog.classList.toggle("wechat-legacy-skin", id === "wechat" || id === "douyin");
+    dialog.classList.toggle("douyin-workbench-skin", id === "douyin");
     $("#app-dialog-body").replaceChildren();
     $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 进入应用"));
     dialog.showModal();
@@ -7628,7 +7643,7 @@
     appConfiguration?.douyinNoticeAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
-    $("#app-configuration").classList.remove("wechat-legacy-skin");
+    $("#app-configuration").classList.remove("wechat-legacy-skin", "douyin-workbench-skin");
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();
     renderLiveSafety();
