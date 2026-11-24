@@ -21,6 +21,33 @@ func (*extraContextModel) AdditionalContextTokens(context.Context, []map[string]
 	return 10000
 }
 
+type textOnlyExtraModel struct{ turns []map[string]string }
+
+func (m *textOnlyExtraModel) Chat(_ context.Context, _ string, turns []map[string]string) (string, error) {
+	m.turns = turns
+	return `{"action":"silent","messages":[]}`, nil
+}
+
+func (*textOnlyExtraModel) AdditionalContextTokens(context.Context, []map[string]string) int {
+	return 100000
+}
+
+func TestPlainChatIgnoresNativeOnlyProviderContext(t *testing.T) {
+	model := &textOnlyExtraModel{}
+	e, err := NewPreview(enabledConfig(), model, "role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.MemoryOptions = func() MemorySettings {
+		settings := MemoryDefaults()
+		settings.ContextWindow, settings.OutputReserve = 50000, 100
+		return settings
+	}
+	if _, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "继续处理", Preview: true}); err != nil || model.turns == nil {
+		t.Fatal("plain Chat was blocked by native-only media/reasoning estimate", err)
+	}
+}
+
 func TestFinalResponseIgnoresNativeOnlyProviderContext(t *testing.T) {
 	model := &extraContextModel{capturePolicyModel: &capturePolicyModel{}}
 	e, err := NewPreview(enabledConfig(), model, "role")

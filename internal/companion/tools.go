@@ -363,8 +363,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		modelTurns := historyNeed.contextForModel(turns)
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
-		modelTurns, err = compactModelContext(ctx, e.model, system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
-		if err != nil {
+		// This first pass is shared by native and plain Chat paths. Provider
+		// media/reasoning is counted only before an actual ChatFunctions call.
+		modelTurns = compactActionTurnsForWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
+		if err := ValidateContextWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
 			return Decision{}, err
 		}
 		var answer string
