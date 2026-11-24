@@ -1549,6 +1549,17 @@ body.is-home-ready {
 .is-home-ready .wechat-legacy-skin #app-configuration-body .station-label {
   border-color:var(--border); background:var(--accent-soft); color:var(--accent);
 }
+.is-home-ready .douyin-workbench-skin .douyin-workbench-overview {
+  display:grid; grid-template-columns:minmax(0,1fr); gap:var(--s-4);
+}
+.is-home-ready .douyin-workbench-skin .douyin-workbench-account h4 {
+  margin:0; color:var(--text); font-size:var(--fs-body);
+}
+.is-home-ready .douyin-workbench-skin .douyin-workbench-account p { margin:var(--s-2) 0 0; }
+.is-home-ready .douyin-workbench-skin .douyin-workbench-routes {
+  display:flex; flex-wrap:wrap; gap:var(--s-2);
+}
+.is-home-ready .douyin-workbench-skin .douyin-workbench-routes .button { min-height:40px; }
 .is-home-ready .wechat-legacy-skin .switch-row {
   display:grid; grid-template-columns:minmax(0,1fr) 40px; align-items:center; gap:var(--s-3);
   padding:var(--s-3) 0; border-top:1px solid var(--border);
