@@ -70,6 +70,9 @@ func CardDescription(m linuxnative.Message) string {
 			parts = append(parts, "分享链接："+raw)
 		}
 		if len(parts) > 0 {
+			if m.AppMessageType != nil && *m.AppMessageType == 5 {
+				return "[收到微信文章分享卡片，仅有标题与简介，正文尚未读取]\n" + strings.Join(parts, "\n")
+			}
 			return cardOnlyHeader + "\n" + strings.Join(parts, "\n")
 		}
 	}
@@ -85,7 +88,8 @@ func CardDescription(m linuxnative.Message) string {
 // ObservedCardDescription changes only the header after the caller has actual
 // media/page evidence. Card text remains distinct from that evidence.
 func ObservedCardDescription(m linuxnative.Message, observedHeader string) string {
-	return strings.Replace(CardDescription(m), cardOnlyHeader, observedHeader, 1)
+	text := strings.Replace(CardDescription(m), "[收到微信文章分享卡片，仅有标题与简介，正文尚未读取]", observedHeader, 1)
+	return strings.Replace(text, cardOnlyHeader, observedHeader, 1)
 }
 
 // PublicShareURL removes credentials, fragments and tracking values before a
@@ -99,6 +103,15 @@ func PublicShareURL(raw string) string {
 	if (u.Hostname() == "www.bilibili.com" || u.Hostname() == "bilibili.com") && strings.HasPrefix(u.Path, "/video/") {
 		if part := u.Query().Get("p"); part != "" {
 			query.Set("p", part)
+		}
+	}
+	// WeChat article /s links are identified by these four query values. A
+	// bare /s is a different page, so dropping them breaks article reading.
+	if u.Hostname() == "mp.weixin.qq.com" && u.Path == "/s" {
+		for _, key := range []string{"__biz", "mid", "idx", "sn"} {
+			if value := u.Query().Get(key); value != "" {
+				query.Set(key, value)
+			}
 		}
 	}
 	u.RawQuery = query.Encode()

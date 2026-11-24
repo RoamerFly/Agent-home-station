@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
 )
@@ -167,15 +169,18 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		return "", toolInputError("station_comfy_not_authorized")
 	}
 	var in struct {
-		Action     string                     `json:"action"`
-		WorkflowID string                     `json:"workflow_id"`
-		Inputs     map[string]json.RawMessage `json:"inputs"`
-		JobID      string                     `json:"job_id"`
-		ArtifactID string                     `json:"artifact_id"`
-		Category   string                     `json:"category"`
-		Offset     int                        `json:"offset"`
-		Limit      int                        `json:"limit"`
-		Goal       string                     `json:"goal"`
+		Action          string                     `json:"action"`
+		WorkflowID      string                     `json:"workflow_id"`
+		Inputs          map[string]json.RawMessage `json:"inputs"`
+		JobID           string                     `json:"job_id"`
+		ArtifactID      string                     `json:"artifact_id"`
+		Category        string                     `json:"category"`
+		Offset          int                        `json:"offset"`
+		Limit           int                        `json:"limit"`
+		Goal            string                     `json:"goal"`
+		SourceMessageID string                     `json:"source_message_id"`
+		SourcePath      string                     `json:"source_path"`
+		FishHome        bool                       `json:"fish_home"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -202,6 +207,68 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		}
 		parameters, _ := json.Marshal(in.Inputs)
 		instruction = "调用本机 project_comfy_run，workflow_id=" + in.WorkflowID + "，inputs=" + string(parameters) + "。返回实际 job_id 和状态；若已完成也返回 artifact_id。不发送到微信。"
+	case "upload":
+		if (in.SourceMessageID == "") == (in.SourcePath == "") {
+			return "", toolInputError("station_comfy_upload_requires_one_source")
+		}
+		if in.FishHome && in.SourceMessageID != "" {
+			return "", toolInputError("station_comfy_upload_scope_invalid")
+		}
+		var data []byte
+		var mime string
+		var err error
+		if in.SourceMessageID != "" {
+			if len(in.SourceMessageID) > 8192 {
+				return "", toolInputError("station_comfy_image_source_unavailable")
+			}
+			message, err := p.manager.native.Message(ctx, in.SourceMessageID)
+			if err != nil || message.AccountID != p.trace.Account || message.ThreadID != p.trace.Thread || message.Direction != "incoming" || message.Type != 3 {
+				return "", toolInputError("station_comfy_image_source_unavailable")
+			}
+			reader, ok := p.manager.native.(incomingReader)
+			if !ok {
+				return "", toolInputError("station_comfy_image_source_unavailable")
+			}
+			data, mime, err = reader.IncomingMedia(ctx, message.ID, 20<<20)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			cfg, err := p.scopedHostConfig(raw)
+			if err != nil || len(cfg.Roots) == 0 {
+				return "", toolInputError("station_comfy_workspace_unavailable")
+			}
+			root := cfg.Roots[0]
+			rel, err := filepath.Rel(root, in.SourcePath)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+				return "", toolInputError("station_comfy_image_source_unavailable")
+			}
+			base, err := os.OpenRoot(root)
+			if err != nil {
+				return "", err
+			}
+			defer base.Close()
+			file, err := base.Open(rel)
+			if err != nil {
+				return "", err
+			}
+			defer file.Close()
+			data, err = io.ReadAll(io.LimitReader(file, (20<<20)+1))
+			if err != nil || len(data) > 20<<20 {
+				return "", toolInputError("station_comfy_image_source_unavailable")
+			}
+			mime = http.DetectContentType(data)
+		}
+		if _, err = mcptools.ValidateMediaType("image", mime, data); err != nil {
+			return "", err
+		}
+		digest := sha256.Sum256(data)
+		session, err := p.stationToolLogin(ctx)
+		if err != nil {
+			return "", err
+		}
+		result, err := p.stationToolRequest(ctx, session, http.MethodPost, "/api/local/project-tools/comfyui/input", map[string]string{"data_base64": base64.StdEncoding.EncodeToString(data), "sha256": hex.EncodeToString(digest[:])})
+		return string(result), err
 	case "job":
 		if in.JobID == "" || len(in.JobID) > 128 || !validID(in.JobID) {
 			return "", toolInputError("station_comfy_job_required")

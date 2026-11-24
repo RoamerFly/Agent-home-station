@@ -44,6 +44,13 @@ func TestCardBodyDescriptionNeverReleasesURLOrInstructions(t *testing.T) {
 	}
 }
 
+func TestPublicShareURLKeepsWeChatArticleIdentity(t *testing.T) {
+	got := PublicShareURL("https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=xyz&t=private&scene=2#part")
+	if got != "https://mp.weixin.qq.com/s?__biz=abc&idx=1&mid=123&sn=xyz" {
+		t.Fatal(got)
+	}
+}
+
 func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
 	subtype := 19
 	message := linuxnative.Message{

@@ -59,7 +59,7 @@ func (s *localProjectTools) comfyModels(ctx context.Context, fish string, raw js
 			if entry.IsDir() {
 				return nil
 			}
-			if entry.Type().IsRegular() && (strings.EqualFold(filepath.Ext(entry.Name()), ".safetensors") || strings.EqualFold(filepath.Ext(entry.Name()), ".ckpt") || strings.EqualFold(filepath.Ext(entry.Name()), ".pt") || strings.EqualFold(filepath.Ext(entry.Name()), ".pth")) {
+			if entry.Type().IsRegular() && (strings.EqualFold(filepath.Ext(entry.Name()), ".safetensors") || strings.EqualFold(filepath.Ext(entry.Name()), ".gguf") || strings.EqualFold(filepath.Ext(entry.Name()), ".ckpt") || strings.EqualFold(filepath.Ext(entry.Name()), ".pt") || strings.EqualFold(filepath.Ext(entry.Name()), ".pth")) {
 				rel, _ := filepath.Rel(root, path)
 				rows = append(rows, map[string]string{"name": filepath.ToSlash(rel), "source": area})
 			}

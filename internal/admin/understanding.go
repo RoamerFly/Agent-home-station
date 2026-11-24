@@ -96,7 +96,7 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 			text := shareMessageDescription(m) + "\n[视频内容读取未完成；现有资料为卡片信息，后续可重读视频。原因：" + sharedVideoReadReason(err) + "]"
 			return text, &bot.ObservationUnavailableError{Observation: text, Reason: sharedVideoReadReason(err)}
 		}
-		if m.Link != nil && m.Link.URL != "" && c.ReadVideos {
+		if m.Link != nil && m.Link.URL != "" && (c.ReadVideos || m.AppMessageType != nil && *m.AppMessageType == 5) {
 			text, err := a.understandSharedVideo(ctx, m)
 			if err == nil {
 				return text, nil

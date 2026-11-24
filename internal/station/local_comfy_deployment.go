@@ -24,6 +24,7 @@ type localComfyDeploymentView struct {
 }
 
 func (s *localProjectTools) comfyDeploymentRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/local/project-tools/comfyui/input", owner.Protect(s.comfyInputUpload))
 	for _, method := range []string{"GET", "PUT"} {
 		mux.HandleFunc(method+" /api/local/project-tools/comfyui/deployment", owner.Protect(s.comfyDeployment))
 	}
