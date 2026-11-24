@@ -88,6 +88,20 @@ func TestLogTaskStatesReadsArchivedCancellation(t *testing.T) {
 	}
 }
 
+func TestLogTaskStatesSettlesOriginalFromLaterFollowup(t *testing.T) {
+	f := setup(t)
+	thread, origin := "group@chatroom", "original-request"
+	ended := agentTask{ID: "archived-completed", Account: "test", Thread: thread, OriginTrace: origin, State: "completed", Updated: time.Now().UTC()}
+	f.manager.agent.mu.Lock()
+	f.manager.agent.archived[ended.ID] = ended
+	f.manager.agent.mu.Unlock()
+	items := []LogEntry{{Event: "task_followup_attached", ThreadID: thread, MessageID: "later-task-attempt", RelatedMessageID: origin, Status: "waiting"}}
+	states := (&Server{manager: f.manager}).logTaskStates(items)
+	if got := states[thread+"\x00"+origin]; got.State != "completed" || got.Active {
+		t.Fatalf("later follow-up revived completed original: %+v", got)
+	}
+}
+
 func TestLogTaskStatesLatestReminderWinsSharedOrigin(t *testing.T) {
 	f := setup(t)
 	thread, origin := "group@chatroom", "reminder-request"

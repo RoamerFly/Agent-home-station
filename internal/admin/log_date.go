@@ -110,6 +110,15 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 				states[key] = logTaskState{State: task.State, Updated: task.Updated, Active: unfinishedExecutionTask(task.State)}
 			}
 		}
+		// A later continuation can be the only activity on the selected day.
+		// Its explicit ownership edge still needs the original task outcome;
+		// quoted or merely related messages are not ownership edges.
+		if roundOwnershipEvent(item.Event) && item.ThreadID != "" && item.RelatedMessageID != "" {
+			key := item.ThreadID + "\x00" + item.RelatedMessageID
+			if task, ok := origins[key]; ok {
+				states[key] = logTaskState{State: task.State, Updated: task.Updated, Active: unfinishedExecutionTask(task.State)}
+			}
+		}
 		if item.Event == "reminder_due" && item.MessageID != "" {
 			if reminder, ok := reminders[item.ThreadID+"\x00"+item.MessageID]; ok {
 				state := reminder.State
@@ -155,6 +164,14 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 		}
 	}
 	return states
+}
+
+func roundOwnershipEvent(event string) bool {
+	switch event {
+	case "generation_followup_consumed", "generation_followup_settled", "backlog_message_grouped", "background_turn_yielded", "message_aggregated", "task_followup_attached":
+		return true
+	}
+	return false
 }
 
 // Duplicate continuations can share one original message. The latest saved
