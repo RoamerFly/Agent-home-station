@@ -1,6 +1,8 @@
 (() => {
   "use strict";
   const $ = (selector) => document.querySelector(selector);
+  const workbenchQuery = new URLSearchParams(window.location.search).get("workbench");
+  const standaloneWorkbenchApp = ["douyin", "bilibili"].includes(workbenchQuery) ? workbenchQuery : "";
   const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView(), toolGrants: null };
   const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
   let activeView = "chat";
@@ -2527,6 +2529,14 @@
     // replaces this navigation with an owned modal window in the packaged app.
     window.location.href = "http://127.0.0.1:8080/?from_station=1";
   }
+  function openApplicationWorkbench(id) {
+    if (!["douyin", "bilibili"].includes(id)) return;
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "application-workbench-open", app_id: id });
+      return;
+    }
+    window.location.href = "/?workbench=" + encodeURIComponent(id);
+  }
   function renderApps(renderDetail = true) {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
@@ -2554,7 +2564,7 @@
       head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
       open.type = "button"; open.setAttribute("aria-label", "打开" + label + "工作台");
-      open.setAttribute("aria-controls", "app-configuration");
+      if (!["wechat", "douyin", "bilibili"].includes(record.id)) open.setAttribute("aria-controls", "app-configuration");
       open.dataset.app = record.id;
       const foot = appElement("span", "打开工作台  ›", "app-card-footer");
       open.append(head, appEvidenceRows(evidence), appElement("p", version, "app-card-version"), foot); card.append(open);
@@ -2563,6 +2573,10 @@
       open.addEventListener("click", () => {
         if (record.id === "wechat") {
           openLegacyWechatConsole();
+          return;
+        }
+        if (record.id === "douyin" || record.id === "bilibili") {
+          openApplicationWorkbench(record.id);
           return;
         }
         if (apps.openID && apps.openID !== record.id) {
@@ -4747,8 +4761,9 @@
     appConfiguration = view;
     // Both application workbenches share the same card and navigation skin;
     // their sections and operations remain specific to the selected app.
-    dialog.classList.toggle("wechat-legacy-skin", id === "wechat" || id === "douyin");
+    dialog.classList.toggle("wechat-legacy-skin", id === "wechat" || id === "douyin" || id === "bilibili");
     dialog.classList.toggle("douyin-workbench-skin", id === "douyin");
+    document.body.classList.toggle("standalone-workbench", Boolean(standaloneWorkbenchApp));
     $("#app-dialog-body").replaceChildren();
     $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + "工作台"));
     dialog.showModal();
@@ -6893,11 +6908,12 @@
       const cards = (catalog.value.applications || []).map((app) => {
         const card = appElement("article", "", "app-tool-group");
         const head = appElement("div", "", "app-tool-group-heading");
-        const manage = appElement("button", app.id === "wechat" ? "管理应用" : "应用中心", "button compact secondary");
+        const manage = appElement("button", ["wechat", "douyin", "bilibili"].includes(app.id) ? "打开工作台" : "应用中心", "button compact secondary");
         manage.type = "button";
-        manage.setAttribute("aria-label", app.id === "wechat" ? "管理微信工具" : `在应用中心管理${app.name || app.id}工具`);
+        manage.setAttribute("aria-label", ["wechat", "douyin", "bilibili"].includes(app.id) ? `打开${app.name || app.id}工作台` : `在应用中心管理${app.name || app.id}工具`);
         manage.addEventListener("click", () => {
           if (app.id === "wechat") openLegacyWechatConsole();
+          else if (app.id === "douyin" || app.id === "bilibili") openApplicationWorkbench(app.id);
           else { setActiveView("apps"); $("#apps-tab").focus(); }
         });
         head.append(appElement("h3", app.name || app.id), manage);
@@ -7280,7 +7296,7 @@
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
       if (activeView === "chat") void loadRecentMemory();
-      await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
+      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   // General capabilities are the owner's to hand over. The list is explicit so
@@ -7518,7 +7534,15 @@
   async function loadSession() {
     try {
       const session = await request("/api/session"); state.csrf = String(session.csrf || session.csrf_token || "");
-      if (!authenticated(session)) { showConnection(); return; } await loadHome();
+      if (!authenticated(session)) { showConnection(); return; }
+      if (standaloneWorkbenchApp) activeView = "apps";
+      await loadHome();
+      if (standaloneWorkbenchApp && state.home?.initialized) {
+        apps.openID = standaloneWorkbenchApp;
+        $("#app-configuration-close").textContent = "关闭工作台";
+        openAppConfiguration("overview");
+        if (!$("#app-configuration").open) showMessage("应用工作台暂时无法读取，请稍后刷新。", "error");
+      }
     } catch (error) { if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); return; } showConnection(); showMessage("暂时无法连接本机服务，请稍后再试。", "error"); }
   }
   async function saveHome(action) {
@@ -7622,7 +7646,14 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-configuration-open").addEventListener("click", openAppConfiguration);
-  $("#app-configuration-close").addEventListener("click", () => $("#app-configuration").close());
+  $("#app-configuration-close").addEventListener("click", () => {
+    if (standaloneWorkbenchApp && window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "application-workbench-close" });
+      return;
+    }
+    if (standaloneWorkbenchApp) { window.location.href = "/"; return; }
+    $("#app-configuration").close();
+  });
   $("#app-configuration-refresh").addEventListener("click", async () => {
     const view = appConfiguration;
     if (!view) return;
@@ -7631,6 +7662,12 @@
   });
   $("#app-configuration").addEventListener("close", () => {
     if ($("#app-configuration").open) return;
+    document.body.classList.remove("standalone-workbench");
+    if (standaloneWorkbenchApp && state.home?.initialized) {
+      if (window.chrome?.webview) window.chrome.webview.postMessage({ type: "application-workbench-close" });
+      else window.location.href = "/";
+      return;
+    }
     const closed = appConfiguration;
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
