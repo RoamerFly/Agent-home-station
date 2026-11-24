@@ -257,7 +257,11 @@ func localComfyBuildParameter(graph map[string]any, item localComfyWorkflowParam
 	if (p.Min != nil && (!localComfyFinite(*p.Min))) || (p.Max != nil && (!localComfyFinite(*p.Max))) || (p.Min != nil && p.Max != nil && *p.Min > *p.Max) {
 		return localComfyWorkflowParameter{}, errors.New("invalid range")
 	}
-	if p.Kind == "string" {
+	if p.Kind == "image" {
+		if p.Min != nil || p.Max != nil || len(p.Choices) != 0 || p.MaxLength < 0 || p.MaxLength > 256 {
+			return localComfyWorkflowParameter{}, errors.New("invalid image")
+		}
+	} else if p.Kind == "string" {
 		if p.MaxLength < 1 || p.MaxLength > 8192 || p.Min != nil || p.Max != nil {
 			return localComfyWorkflowParameter{}, errors.New("invalid string")
 		}
@@ -297,6 +301,12 @@ func localComfyParameterValue(p localComfyWorkflowParameter, raw json.RawMessage
 		return nil, err
 	}
 	switch p.Kind {
+	case "image":
+		value, ok := decoded.(string)
+		if !ok || value == "" || len(value) > 256 || strings.ContainsAny(value, "/\\:") || value == "." || value == ".." || !safeRVCDisplay(value, 256) {
+			return nil, errors.New("bad image name")
+		}
+		return value, nil
 	case "string":
 		value, ok := decoded.(string)
 		if !ok || !safeRVCDisplay(value, p.MaxLength) {
@@ -365,6 +375,8 @@ func localComfyOutputKind(graph map[string]any, id string) string {
 }
 func localComfySafeBuiltinInput(class any, input, kind string) bool {
 	switch class {
+	case "LoadImage":
+		return input == "image" && kind == "image"
 	case "CheckpointLoaderSimple":
 		return input == "ckpt_name" && kind == "string"
 	case "CLIPTextEncode":

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"wechat-bot/internal/strictjson"
@@ -52,6 +53,39 @@ func TestLocalComfyWorkflowRejectsUnknownOrOutOfRangeWithoutClamping(t *testing.
 		if _, _, err := workflow.prepare(values); err == nil {
 			t.Fatalf("%s accepted", name)
 		}
+	}
+}
+
+func TestLocalComfyImageInputRegistersAndPatchesFilename(t *testing.T) {
+	root := t.TempDir()
+	graph := []byte(`{"1":{"class_type":"LoadImage","inputs":{"image":"example.png"}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0],"filename_prefix":"img2img"}}}`)
+	workflow := writeLocalComfyWorkflow(t, root, graph, `[{"id":"input_image","label":"Input image","kind":"image","node":"1","input":"image"}]`)
+	prepared, _, err := workflow.prepare(map[string]json.RawMessage{"input_image": json.RawMessage(`"portrait.png"`)})
+	if err != nil || !strings.Contains(string(prepared), `"portrait.png"`) {
+		t.Fatalf("image input unavailable: %s %v", prepared, err)
+	}
+	for _, name := range []string{`"../private.png"`, `"C:\\private.png"`, `"sub/image.png"`} {
+		if _, _, err := workflow.prepare(map[string]json.RawMessage{"input_image": json.RawMessage(name)}); err == nil {
+			t.Fatalf("unsafe image filename accepted: %s", name)
+		}
+	}
+}
+
+func TestLocalComfyWorkflowRegistryFromEnvironment(t *testing.T) {
+	root := os.Getenv("COMFY_WORKFLOW_REGISTRY_DIR")
+	if root == "" {
+		t.Skip("set COMFY_WORKFLOW_REGISTRY_DIR for an installed registry check")
+	}
+	workflows, err := loadLocalComfyWorkflows(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, workflow := range workflows {
+		found = found || workflow.ID == "img2img"
+	}
+	if !found {
+		t.Fatal("img2img missing from installed registry")
 	}
 }
 
