@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { project: projectRounds, stage, activityTarget } = require('../internal/admin/static/rounds.js');
 // Historical fixtures are evaluated at their last event unless a test supplies
 // wall time explicitly. The production projection always uses the real clock.
-const project = (items, states, now, inbox) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox);
+const project = (items, states, now, inbox, sendStates) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox, sendStates);
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
@@ -265,6 +265,21 @@ test('a final share observation failure ends the round immediately', () => {
  const unavailable=entry(2,{event:'shared_video_observation_unavailable',status:'unavailable',reason:'share_plugin_resolution_needs_review'});
  const [round]=project([start,unavailable]);
  assert.equal(round.status,'failed');assert.equal(round.group,'done');
+});
+test('native accepted cross-conversation send settles standalone queued card', () => {
+ const queued=entry(1,{message_id:'cross-request',event:'cross_conversation_reply_queued',category:'decision',status:'queued',send_id:'send-1'});
+ const receipt={'fixture@chatroom\0send-1':true};
+ assert.equal(project([queued])[0].group,'pending');
+ assert.equal(project([queued],{},undefined,undefined,receipt)[0].status,'accepted');
+ assert.equal(project([queued],{'fixture@chatroom\0cross-request':{state:'pending',active:true,updated:queued.time}},undefined,undefined,receipt)[0].group,'active');
+ assert.equal(project([queued],{},undefined,undefined,{'other@chatroom\0send-1':true})[0].group,'pending');
+ const collision=entry(2,{message_id:'another-request',event:'agent_cross_send',category:'sent',status:'queued',send_id:'send-1'});
+ assert(project([queued,collision],{},undefined,undefined,receipt).every(round=>round.group==='pending'));
+});
+test('sent-file read evidence cannot create a pending conversation card', () => {
+ const rows=['identified','downloading','available'].map((part,i)=>entry(i,{message_id:'owner-sent-file',event:'sent_file_read_'+part,category:'tool',status:part}));
+ const [round]=project(rows);
+ assert.equal(round.group,'done');assert.equal(round.auxiliaryRead,true);
 });
 test('a fresh persisted task or scheduled receipt lookup remains live', () => {
  const id='c'.repeat(64), trace=`task-${id}-20261122T010000.000000001`;

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,71 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 		t.Fatal(e)
 	}
 	return f, p
+}
+
+type taskOriginNative struct {
+	*fakeNative
+	message linuxnative.Message
+}
+
+func (n *taskOriginNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
+	if id == n.message.ID {
+		return n.message, nil
+	}
+	return linuxnative.Message{}, nil
+}
+
+func TestTaskCanBindVerifiedEarlierRequestAndReuseCompletedWork(t *testing.T) {
+	f, p := trustedAgent(t)
+	p.manager.native = &taskOriginNative{fakeNative: f.native, message: linuxnative.Message{
+		ID: "song-request", AccountID: "test", ThreadID: "wxid_owner", SenderID: "wxid_owner",
+		Direction: "incoming", Type: 1, Body: "请唱卜卦", ServerID: "original-server",
+	}}
+	late := "晚安"
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "later-message", OriginalText: &late, Mode: "direct"})
+	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"song-request"}]}`)
+	args := json.RawMessage(`{"key":"cover","title":"唱卜卦","checkpoint":"核对原成品","state":"waiting","origin_message_id":"song-request"}`)
+	raw, err := p.Call(t.Context(), "agent_task", args)
+	var first struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(raw), &first) != nil || first.Task.OriginTrace != "song-request" || first.Task.RequestedText != "请唱卜卦" || first.Task.QuoteServerID != "original-server" || !slices.Contains(first.Task.SourceMessageIDs, "song-request") || first.Task.Constraints.Source != nil {
+		t.Fatalf("earlier request binding failed: %s %v", raw, err)
+	}
+	raw, err = p.Call(t.Context(), "agent_tasks", json.RawMessage(`{"status":"active","query":"卜卦","limit":120}`))
+	var active struct {
+		Items          []agentTask `json:"items"`
+		RequestedLimit int         `json:"requested_limit"`
+		EffectiveLimit int         `json:"effective_limit"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &active) != nil || len(active.Items) != 1 || active.Items[0].OriginTrace != "song-request" || active.RequestedLimit != 120 || active.EffectiveLimit != 100 {
+		t.Fatalf("active task pagination ignored: %s %v", raw, err)
+	}
+	if err := f.manager.validateTaskSource(first.Task); err != nil {
+		t.Fatalf("verified earlier request cannot continue: %v", err)
+	}
+	first.Task.State = "completed"
+	if err := f.manager.agent.task(first.Task); err != nil {
+		t.Fatal(err)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "even-later-message", OriginalText: &late, Mode: "direct"})
+	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"song-request"}]}`)
+	raw, err = p.Call(t.Context(), "agent_task", args)
+	var reused struct {
+		Reused bool `json:"reused_existing"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &reused) != nil || !reused.Reused || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
+		t.Fatalf("completed original was scheduled again: %s %v", raw, err)
+	}
+	raw, err = p.Call(t.Context(), "agent_tasks", json.RawMessage(`{"status":"history","query":"卜卦","limit":120}`))
+	var history struct {
+		Items []struct {
+			Origin string `json:"origin_message_id"`
+		} `json:"items"`
+		RequestedLimit int `json:"requested_limit"`
+		EffectiveLimit int `json:"effective_limit"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &history) != nil || len(history.Items) != 1 || history.Items[0].Origin != "song-request" || history.RequestedLimit != 120 || history.EffectiveLimit != 100 {
+		t.Fatalf("completed work not discoverable: %s %v", raw, err)
+	}
 }
 
 func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {

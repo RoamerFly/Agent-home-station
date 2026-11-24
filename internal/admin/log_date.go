@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -87,14 +88,17 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 	for _, task := range s.manager.agent.list(account, "") {
 		tasks[task.ID] = task
 		if task.Reminder != nil && task.OriginTrace != "" {
-			reminders[task.Thread+"\x00"+task.OriginTrace] = task
+			key := task.Thread + "\x00" + task.OriginTrace
+			if old, exists := reminders[key]; !exists || newerRoundTask(task, old) {
+				reminders[key] = task
+			}
 		} else if task.OriginTrace != "" {
 			thread := task.RequestThread
 			if thread == "" {
 				thread = task.Thread
 			}
 			key := thread + "\x00" + task.OriginTrace
-			if old, exists := origins[key]; !exists || unfinishedExecutionTask(task.State) && !unfinishedExecutionTask(old.State) || unfinishedExecutionTask(task.State) == unfinishedExecutionTask(old.State) && task.Updated.After(old.Updated) {
+			if old, exists := origins[key]; !exists || newerRoundTask(task, old) {
 				origins[key] = task
 			}
 		}
@@ -153,6 +157,41 @@ func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
 	return states
 }
 
+// Duplicate continuations can share one original message. The latest saved
+// outcome wins; an older pending task must not revive a completed round.
+func newerRoundTask(candidate, old agentTask) bool {
+	return candidate.Updated.After(old.Updated) || candidate.Updated.Equal(old.Updated) &&
+		!unfinishedExecutionTask(candidate.State) && unfinishedExecutionTask(old.State)
+}
+
+// Some cross-conversation sends were queued in the activity journal before
+// their native receipt arrived, and no later activity row was recorded. Read
+// the persisted native send by its exact ID; this never submits or retries it.
+func (s *Server) logSendStates(ctx context.Context, items []LogEntry) map[string]bool {
+	accepted := map[string]bool{}
+	native, ok := s.manager.native.(nativeTools)
+	if !ok {
+		return accepted
+	}
+	ids := map[string]string{}
+	for _, item := range items {
+		if (item.Event == "agent_cross_send" || item.Event == "cross_conversation_reply_queued") &&
+			item.Status != "accepted" && item.ThreadID != "" && item.SendID != "" {
+			ids[item.ThreadID+"\x00"+item.SendID] = item.SendID
+		}
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	for key, id := range ids {
+		status, err := native.ToolSendStatus(lookupCtx, id)
+		if err != nil || status.ID != id || status.ThreadID+"\x00"+id != key || status.State != "accepted" || status.ServerID == "" {
+			continue
+		}
+		accepted[key] = true
+	}
+	return accepted
+}
+
 // Pages traverse immutable archive batches, never load all archived bodies into
 // memory. The UI follows continuation positions automatically for a chosen day.
 func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
@@ -206,5 +245,5 @@ func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
 		add(entries)
 	}
 	inbox, loaded := s.logInboxStates()
-	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "inbox_states": inbox, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
+	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
 }

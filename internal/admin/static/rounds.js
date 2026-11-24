@@ -74,7 +74,7 @@
       return { kind: 'page', label: url.hostname + ' · ' + url.pathname, href: url.href };
     } catch { return null; }
   }
-  function project(items, taskStates = {}, now = Date.now(), inbox = {loaded:false, states:{}}) {
+  function project(items, taskStates = {}, now = Date.now(), inbox = {loaded:false, states:{}}, sendStates = {}) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     const latestEntryTime = entries.reduce((latest, item) => Math.max(latest, Date.parse(item.time) || 0), 0);
     const observedTime = Math.max(latestEntryTime, Number(now) || 0);
@@ -302,6 +302,20 @@
       // This also covers interrupted share reads whose final failure was
       // followed by another start and no matching completion.
       const activeTask = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
+      // A cross-conversation send may receive its native receipt after the
+      // last activity row. These rows are standalone delivery cards, not a
+      // progress text that could complete a larger still-running task.
+      const crossSends = round.entries.filter(e => ['agent_cross_send','cross_conversation_reply_queued'].includes(e.event) && e.send_id);
+      if (!activeTask?.active && crossSends.length && crossSends.length === round.entries.length &&
+          crossSends.every(e => sends.get(e.send_id) === round.id && sendStates[e.thread_id + '\0' + e.send_id] === true)) {
+        round.status = 'accepted';
+      }
+      // Reading a file already sent by the owner is an auxiliary observation.
+      // It cannot create a new pending conversation round on its own.
+      if (round.entries.length && round.entries.every(e => String(e.event || '').startsWith('sent_file_read_'))) {
+        round.status = round.entries.some(e => e.category === 'error' || e.status === 'failed') ? 'failed' : 'completed';
+        round.auxiliaryRead = true;
+      }
       const taskAge = observedTime - (Date.parse(activeTask?.updated) || Date.parse(round.updated));
       const scheduledRetry = round.entries.some(e => Date.parse(e.retry_at) > observedTime);
       if (['running', 'cancelling', 'checking_receipt'].includes(round.status) && !activeTask?.active && !scheduledRetry
