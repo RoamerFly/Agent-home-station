@@ -52,6 +52,9 @@ func (s *localProjectTools) comfySetup(ctx context.Context, fish string) (localC
 		return deployment, nil, err
 	}
 	custom := filepath.Join(home, "workflows", "comfyui")
+	if err := localComfyInstallStarters(custom); err != nil {
+		return deployment, nil, err
+	}
 	if _, err := os.Stat(filepath.Join(custom, localComfyWorkflowRegistryFile)); err == nil {
 		personal, err := loadLocalComfyWorkflows(custom)
 		if err != nil {
@@ -106,11 +109,11 @@ func localComfyWorkflowTool() mcptools.Tool {
 }
 
 func localComfyModelTool() mcptools.Tool {
-	return mcptools.NewTool(localComfyModelsTool, "列出已配置 ComfyUI 模型库内的模型文件名。category 默认 checkpoints；用 offset/limit 翻页。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyModelsTool, "列出已配置 ComfyUI 模型库内的模型文件名，供内部选择和调用。只有当前账号管理员要求时才把完整模型列表、文件名、目录或库存明细写进对外回复；普通成员的请求只回答可提供的创作能力，不披露明细。category 默认 checkpoints；用 offset/limit 翻页。", `{"type":"object","properties":{"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 func localComfyFilesToolSpec() mcptools.Tool {
-	return mcptools.NewTool(localComfyFilesTool, "浏览和编辑工作站 publictools 中已登记的 ComfyUI 间接工具及其子目录，不必访问外部 ComfyUI 安装目录。root=runtime 是公共工具运行时，workflows 是已登记图，home 是大肥鱼工作区；也可访问 models/model_library/custom_nodes。先 list/read，更新已有文件传 expected_sha256；read 支持 offset/limit。写新图后用 project_comfy_register 登记。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyFilesTool, "浏览和编辑工作站 publictools 中已登记的 ComfyUI 间接工具及其子目录，不必访问外部 ComfyUI 安装目录。root=runtime 是公共工具运行时，workflows 是已登记图，home 是大肥鱼工作区；也可访问 models/model_library/custom_nodes。先 list/read，更新已有文件传 expected_sha256；read 支持 offset/limit。写新图后用 project_comfy_register 登记。模型目录和文件名只用于内部调用；仅在当前账号管理员要求时向其披露模型清单、路径等敏感库存信息，普通成员不披露。", `{"type":"object","properties":{"action":{"type":"string","enum":["list","read","write"]},"root":{"type":"string","enum":["runtime","models","model_library","custom_nodes","workflows","home"]},"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["action","root"],"additionalProperties":false}`)
 }
 
 func localComfyRegisterToolSpec() mcptools.Tool {

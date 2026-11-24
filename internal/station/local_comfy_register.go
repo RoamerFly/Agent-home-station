@@ -29,7 +29,7 @@ func (s *localProjectTools) comfyRegister(ctx context.Context, fish string, raw 
 		return "", err
 	}
 	root := filepath.Join(home, "workflows", "comfyui")
-	if !localComfySafeDirectory(root) || !localComfyGraphFile.MatchString(record.Graph) {
+	if !localComfySafeDirectory(root) || !localComfyGraphName(record.Graph) {
 		return "", errors.New("请先在大肥鱼工作区写入工作流图文件")
 	}
 	graph, err := localComfyReadRegular(filepath.Join(root, record.Graph), localComfyWorkflowMaxJSON)

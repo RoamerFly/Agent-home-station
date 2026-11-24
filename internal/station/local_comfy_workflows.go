@@ -33,6 +33,23 @@ var localComfyNodeID = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,96}$`)
 var localComfyInputID = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 var localComfyGraphFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$`)
 
+func localComfyGraphName(name string) bool {
+	parts := strings.Split(filepath.ToSlash(name), "/")
+	if len(parts) < 1 || len(parts) > 3 {
+		return false
+	}
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			if !localComfyGraphFile.MatchString(part) {
+				return false
+			}
+		} else if !localComfyWorkflowID.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+
 // localComfyWorkflow is a registered, immutable recipe.  The unexported
 // graphPath and parameter targets are intentionally absent from tool views.
 type localComfyWorkflow struct {
@@ -142,12 +159,12 @@ func loadLocalComfyWorkflows(root string) ([]localComfyWorkflow, error) {
 }
 
 func localComfyBuildWorkflow(root, version string, record localComfyWorkflowRecord) (localComfyWorkflow, error) {
-	if !localComfyWorkflowID.MatchString(record.ID) || !safeRVCDisplay(record.Label, 96) || !localComfyGraphFile.MatchString(record.Graph) ||
+	if !localComfyWorkflowID.MatchString(record.ID) || !safeRVCDisplay(record.Label, 96) || !localComfyGraphName(record.Graph) ||
 		!validLocalRVCHex(record.SHA256, 64) || !localComfyNodeID.MatchString(record.SaveNode) || len(record.Parameters) > 32 {
 		return localComfyWorkflow{}, errors.New("station_comfy_workflow_registry_invalid")
 	}
 	graphPath := filepath.Join(root, record.Graph)
-	if filepath.Dir(graphPath) != root {
+	if rel, err := filepath.Rel(root, graphPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return localComfyWorkflow{}, errors.New("station_comfy_workflow_registry_invalid")
 	}
 	raw, err := localComfyReadRegular(graphPath, localComfyWorkflowMaxJSON)

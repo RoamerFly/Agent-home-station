@@ -38,3 +38,18 @@ func TestStageComfyInputFromWorkspaceImage(t *testing.T) {
 		t.Fatal("mismatched content was accepted")
 	}
 }
+
+func TestStageComfyReferenceVideo(t *testing.T) {
+	data := []byte("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom")
+	digest := sha256.Sum256(data)
+	sha := hex.EncodeToString(digest[:])
+	root := filepath.Join(t.TempDir(), "private", "input")
+	name, err := stageComfyInput(root, sha, data, "mp4")
+	if err != nil || name != "wechat-"+sha+".mp4" {
+		t.Fatalf("stage: %q %v", name, err)
+	}
+	stored, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil || !bytes.Equal(stored, data) {
+		t.Fatalf("stored video mismatch: %v", err)
+	}
+}

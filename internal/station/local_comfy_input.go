@@ -23,13 +23,13 @@ func (s *localProjectTools) comfyInputUpload(w http.ResponseWriter, r *http.Requ
 		Data string `json:"data_base64"`
 		SHA  string `json:"sha256"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 28<<20)
-	if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.Data) > 27<<20 {
+	r.Body = http.MaxBytesReader(w, r.Body, 172<<20)
+	if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.Data) > 171<<20 {
 		http.Error(w, "comfy_input_invalid", http.StatusBadRequest)
 		return
 	}
 	data, err := base64.StdEncoding.DecodeString(in.Data)
-	if err != nil || len(data) == 0 || len(data) > 20<<20 {
+	if err != nil || len(data) == 0 || len(data) > 128<<20 {
 		http.Error(w, "comfy_input_invalid", http.StatusBadRequest)
 		return
 	}
@@ -40,6 +40,11 @@ func (s *localProjectTools) comfyInputUpload(w http.ResponseWriter, r *http.Requ
 	}
 	_, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || (format != "jpeg" && format != "png") {
+		if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+			format = "mp4"
+		}
+	}
+	if format != "jpeg" && format != "png" && format != "mp4" {
 		http.Error(w, "comfy_input_image_invalid", http.StatusBadRequest)
 		return
 	}
@@ -65,7 +70,7 @@ func (s *localProjectTools) comfyInputUpload(w http.ResponseWriter, r *http.Requ
 
 func stageComfyInput(root, sha string, data []byte, format string) (string, error) {
 	digest := sha256.Sum256(data)
-	if hex.EncodeToString(digest[:]) != sha || (format != "jpeg" && format != "png") {
+	if hex.EncodeToString(digest[:]) != sha || (format != "jpeg" && format != "png" && format != "mp4") {
 		return "", errors.New("comfy input identity invalid")
 	}
 	if err := os.MkdirAll(root, 0700); err != nil || !localComfySafeDirectory(root) {
@@ -74,6 +79,8 @@ func stageComfyInput(root, sha string, data []byte, format string) (string, erro
 	ext := ".png"
 	if format == "jpeg" {
 		ext = ".jpg"
+	} else if format == "mp4" {
+		ext = ".mp4"
 	}
 	name := "wechat-" + sha + ext
 	path := filepath.Join(root, name)

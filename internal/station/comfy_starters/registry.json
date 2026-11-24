@@ -1,0 +1,617 @@
+{
+  "schema_version": 1,
+  "comfyui_version": "0.37.2",
+  "workflows": [
+    {
+      "id": "qwen21-text-to-image-hq",
+      "label": "文生图 · Qwen Image 2.1 高质量",
+      "graph": "image/qwen21-text-to-image-hq.json",
+      "sha256": "e81361c37dae382692fbf20e907c9d192e0bdab1092ad663451f64f360b3acf4",
+      "save_node": "8",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "画面描述",
+          "kind": "string",
+          "node": "4",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "negative_prompt",
+          "label": "排除内容",
+          "kind": "string",
+          "node": "4",
+          "input": "negative_prompt",
+          "max_length": 4096
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "6",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 100
+        },
+        {
+          "id": "cfg",
+          "label": "引导强度",
+          "kind": "number",
+          "node": "6",
+          "input": "cfg",
+          "minimum": 1,
+          "maximum": 10
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 2048
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 2048
+        }
+      ]
+    },
+    {
+      "id": "qwen21-image-to-image-hq",
+      "label": "图生图 · Qwen Image 2.1",
+      "graph": "image/qwen21-image-to-image-hq.json",
+      "sha256": "950696decc8ef22dd13d03168ee23ddfc193e4d1cbbdc29801bb71b98bd64a68",
+      "save_node": "8",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "画面描述",
+          "kind": "string",
+          "node": "4",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "negative_prompt",
+          "label": "排除内容",
+          "kind": "string",
+          "node": "4",
+          "input": "negative_prompt",
+          "max_length": 4096
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "6",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 100
+        },
+        {
+          "id": "cfg",
+          "label": "引导强度",
+          "kind": "number",
+          "node": "6",
+          "input": "cfg",
+          "minimum": 1,
+          "maximum": 10
+        },
+        {
+          "id": "input_image",
+          "label": "参考底图",
+          "kind": "image",
+          "node": "9",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "resolution",
+          "label": "参考图处理分辨率",
+          "kind": "integer",
+          "node": "4",
+          "input": "resolution",
+          "minimum": 256,
+          "maximum": 2048
+        },
+        {
+          "id": "denoise",
+          "label": "改动强度",
+          "kind": "number",
+          "node": "6",
+          "input": "denoise",
+          "minimum": 0,
+          "maximum": 1
+        }
+      ]
+    },
+    {
+      "id": "qwen21-mask-inpaint-hq",
+      "label": "蒙版修复 · Qwen Image 2.1",
+      "graph": "image/qwen21-mask-inpaint-hq.json",
+      "sha256": "3f6bd1e345bded8076aa80acd4a7cc3658bdf9554789bf6ae4be0fbf62c5a9a6",
+      "save_node": "8",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "画面描述",
+          "kind": "string",
+          "node": "4",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "negative_prompt",
+          "label": "排除内容",
+          "kind": "string",
+          "node": "4",
+          "input": "negative_prompt",
+          "max_length": 4096
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "6",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 100
+        },
+        {
+          "id": "cfg",
+          "label": "引导强度",
+          "kind": "number",
+          "node": "6",
+          "input": "cfg",
+          "minimum": 1,
+          "maximum": 10
+        },
+        {
+          "id": "mask_image",
+          "label": "白色修复区域的蒙版",
+          "kind": "image",
+          "node": "10",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "input_image",
+          "label": "参考底图",
+          "kind": "image",
+          "node": "9",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "resolution",
+          "label": "参考图处理分辨率",
+          "kind": "integer",
+          "node": "4",
+          "input": "resolution",
+          "minimum": 256,
+          "maximum": 2048
+        },
+        {
+          "id": "denoise",
+          "label": "改动强度",
+          "kind": "number",
+          "node": "6",
+          "input": "denoise",
+          "minimum": 0,
+          "maximum": 1
+        }
+      ]
+    },
+    {
+      "id": "h3-text-to-video",
+      "label": "文生视频 · MiniMax H3",
+      "graph": "video/h3-text-to-video.json",
+      "sha256": "a634f6cfc3a1735761dcef79cb12408f4a151d4e20b6662235d6987ee7f2643e",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      ]
+    },
+    {
+      "id": "h3-image-to-video",
+      "label": "图生视频 · MiniMax H3",
+      "graph": "video/h3-image-to-video.json",
+      "sha256": "d86f454cac078b7e4a7762be0daa76bc076a0ad86d7c67eb86a2c0a0656873aa",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "input_image_1",
+          "label": "参考图 1",
+          "kind": "image",
+          "node": "20",
+          "input": "image",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "h3-reference-video",
+      "label": "参考视频生视频 · MiniMax H3",
+      "graph": "video/h3-reference-video.json",
+      "sha256": "2f8fea24be8bb793698b779b11e7c3f1f83414690646052cb06a46d162c01fb3",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "input_video",
+          "label": "参考视频文件名",
+          "kind": "string",
+          "node": "30",
+          "input": "file",
+          "max_length": 256,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "h3-universal-single",
+      "label": "全能参考 · 单图加视频",
+      "graph": "video/h3-universal-single.json",
+      "sha256": "22ef0e872f35f000341a70c6234d16cf4f8d9a847654d590c71ed043ab4df6e1",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "input_image_1",
+          "label": "参考图 1",
+          "kind": "image",
+          "node": "20",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "input_video",
+          "label": "参考视频文件名",
+          "kind": "string",
+          "node": "30",
+          "input": "file",
+          "max_length": 256,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "h3-universal-multi",
+      "label": "全能参考 · 多图加视频",
+      "graph": "video/h3-universal-multi.json",
+      "sha256": "492b072c8bee1b9d63f0ebf57a255b13d26d03df3e84e273ad693d1e589790b9",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "input_image_1",
+          "label": "参考图 1",
+          "kind": "image",
+          "node": "20",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "input_image_2",
+          "label": "参考图 2",
+          "kind": "image",
+          "node": "21",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "input_image_3",
+          "label": "参考图 3",
+          "kind": "image",
+          "node": "22",
+          "input": "image",
+          "required": true
+        },
+        {
+          "id": "input_video",
+          "label": "参考视频文件名",
+          "kind": "string",
+          "node": "30",
+          "input": "file",
+          "max_length": 256,
+          "required": true
+        }
+      ]
+    }
+  ]
+}

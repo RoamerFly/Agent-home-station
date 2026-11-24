@@ -222,14 +222,14 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 				return "", toolInputError("station_comfy_image_source_unavailable")
 			}
 			message, err := p.manager.native.Message(ctx, in.SourceMessageID)
-			if err != nil || message.AccountID != p.trace.Account || message.ThreadID != p.trace.Thread || message.Direction != "incoming" || message.Type != 3 {
+			if err != nil || message.AccountID != p.trace.Account || message.ThreadID != p.trace.Thread || message.Direction != "incoming" || (message.Type != 3 && message.Type != 43) {
 				return "", toolInputError("station_comfy_image_source_unavailable")
 			}
 			reader, ok := p.manager.native.(incomingReader)
 			if !ok {
 				return "", toolInputError("station_comfy_image_source_unavailable")
 			}
-			data, mime, err = reader.IncomingMedia(ctx, message.ID, 20<<20)
+			data, mime, err = reader.IncomingMedia(ctx, message.ID, 128<<20)
 			if err != nil {
 				return "", err
 			}
@@ -253,13 +253,17 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 				return "", err
 			}
 			defer file.Close()
-			data, err = io.ReadAll(io.LimitReader(file, (20<<20)+1))
-			if err != nil || len(data) > 20<<20 {
+			data, err = io.ReadAll(io.LimitReader(file, (128<<20)+1))
+			if err != nil || len(data) > 128<<20 {
 				return "", toolInputError("station_comfy_image_source_unavailable")
 			}
 			mime = http.DetectContentType(data)
 		}
-		if _, err = mcptools.ValidateMediaType("image", mime, data); err != nil {
+		mediaKind := "image"
+		if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+			mediaKind = "video"
+		}
+		if _, err = mcptools.ValidateMediaType(mediaKind, mime, data); err != nil {
 			return "", err
 		}
 		digest := sha256.Sum256(data)
