@@ -458,6 +458,20 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
+		if p.State == "accepted" && p.WakePending {
+			// A legacy ordinary-message review may have held the one-shot wake
+			// after every text bubble was already accepted. Finish it without
+			// consulting the model or revisiting the sent reply.
+			w.scheduleConversationWake(c, p.Input, p.WakeAfterSeconds, p.WaitForReply, p.WakeReason)
+			if w.persistErr != nil {
+				return
+			}
+			p.WakePending = false
+			w.persistErr = w.saveRuntime()
+			if w.persistErr != nil {
+				return
+			}
+		}
 		if p.State == "stopped" && p.StopReason == "reply_evidence_epoch_changed" {
 			w.recheckUnsentReply(p)
 		}

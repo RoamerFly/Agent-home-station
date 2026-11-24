@@ -212,6 +212,21 @@ func (w *Worker) loadRuntime(server string) error {
 			if p.Quote != nil {
 				p.Input.QuoteServerID = p.Quote.ServerID
 			}
+			// Older queues recorded every new message as an interruption. Retain
+			// only the original requester's explicit self-corrections before any
+			// persisted review can run after an upgrade.
+			if p.ReviewReason == "new_message" {
+				p.retainExplicitCorrections()
+				if p.State == "review_pending" && len(p.Updates) == 0 {
+					// Index is authoritative if a legacy return state is malformed.
+					if p.Index == len(p.Messages) {
+						p.State = "accepted"
+					} else {
+						p.State = "queued"
+					}
+					p.ReviewReason, p.ReviewReturnState = "", ""
+				}
+			}
 		}
 		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() && !(p.State == "review_pending" && p.ReviewReason == "new_message" && p.ReviewReturnState == "accepted") || p.Input.Thread == "" || p.Slot < 0 {
 			return errors.New("persistent utterance plan invalid; retained")

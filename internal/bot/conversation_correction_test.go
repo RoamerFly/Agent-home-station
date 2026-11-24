@@ -93,3 +93,61 @@ func TestInvalidCorrectionJudgmentDoesNotStrandText(t *testing.T) {
 		t.Fatal("correction triggered a loop", model.calls, n.submissions, p.State)
 	}
 }
+
+func TestLegacyOrdinaryMessageReviewIsClearedOnLoad(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"cancel"}`}
+	w, c, n, in := planWorker(t, model)
+	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"原回复"}})
+	p := w.runtime.Plans[0]
+	p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "queued"
+	p.Updates = []companion.ConversationEvent{{MessageID: "ordinary", Sender: in.Sender, Text: "再说一件新事"}}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "原回复", State: "prepared", Key: "original-key"})
+	if err := w.saveRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	p = w.runtime.Plans[0]
+	if p.State != "queued" || p.ReviewReason != "" || p.ReviewReturnState != "" || len(p.Updates) != 0 || len(p.ReviewedUpdateIDs) != 1 || p.ReviewedUpdateIDs[0] != "ordinary" {
+		t.Fatal("old ordinary message still requested a review", p)
+	}
+	if len(w.runtime.Deliveries) != 1 || w.runtime.Deliveries[0].Key != "original-key" || w.runtime.Deliveries[0].State != "prepared" {
+		t.Fatal("old send intent changed", w.runtime.Deliveries)
+	}
+	readyPlans(w)
+	w.reconcileUtterancePlans(t.Context())
+	if model.calls != 0 || len(n.submissions) != 0 {
+		t.Fatal("old ordinary message caused model review or duplicate send", model.calls, n.submissions)
+	}
+}
+
+func TestLegacyCompletedReviewKeepsOneShotWake(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"cancel"}`}
+	w, c, n, in := planWorker(t, model)
+	c.Config.Conversation.AllowWake = true
+	c.Config.Permissions.Proactive = true
+	c.Config.ProactiveThreads = []string{in.Thread}
+	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"原回复"}})
+	p := w.runtime.Plans[0]
+	p.Index, p.Slot, p.Sent = 1, 1, []string{"原回复"}
+	p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "accepted"
+	p.WakePending, p.WakeAfterSeconds = true, 90
+	p.Updates = []companion.ConversationEvent{{MessageID: "ordinary", Sender: in.Sender, Text: "再说一件新事"}}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Bubble: 0, Text: "原回复", State: "accepted", Key: "original-key", ServerID: "server-message"})
+	if err := w.saveRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	p = w.runtime.Plans[0]
+	if p.State != "accepted" || !p.WakePending || p.Index != 1 || len(p.Sent) != 1 || w.runtime.Deliveries[0].ServerID != "server-message" {
+		t.Fatal("accepted legacy reply lost its delivery or pending wake", p)
+	}
+	w.reconcileUtterancePlans(t.Context())
+	w.reconcileUtterancePlans(t.Context())
+	if p.WakePending || len(w.runtime.Wakes) != 1 || w.runtime.Wakes[0].Parent != in.TraceID || model.calls != 0 || len(n.submissions) != 0 {
+		t.Fatal("legacy wake was lost, duplicated, or reviewed", p.WakePending, w.runtime.Wakes, model.calls, n.submissions)
+	}
+}
