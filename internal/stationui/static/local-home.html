@@ -199,13 +199,12 @@
                   </div>
                   <div id="apps-list" class="apps-list" aria-busy="false"></div>
                 </div>
-                <div class="app-detail-placeholder"><strong>应用详情</strong><p>选择左侧应用，查看账号、授权与可用能力。</p></div>
                 <dialog id="app-dialog" class="app-dialog" aria-labelledby="app-dialog-title">
                   <header class="app-dialog-header">
-                    <div><p class="app-detail-kicker">应用详情</p><h2 id="app-dialog-title" tabindex="-1">应用设置</h2></div>
-                    <div class="app-dialog-actions"><button id="app-configuration-open" class="button compact primary" type="button">进入应用</button><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+                    <div><p class="app-detail-kicker">应用工作台</p><h2 id="app-dialog-title" tabindex="-1">应用设置</h2></div>
+                    <div class="app-dialog-actions"><button id="app-configuration-open" class="button compact primary" type="button">打开工作台</button><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
                   </header>
-                  <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用详情分区"></nav>
+                  <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用分区"></nav>
                   <div id="app-dialog-feedback" class="app-dialog-feedback"></div>
                   <div id="app-dialog-body" class="app-dialog-body"></div>
                 </dialog>
@@ -343,17 +342,17 @@
   <dialog id="app-configuration" class="app-dialog app-configuration" aria-labelledby="app-configuration-title">
     <header class="app-dialog-header">
       <div>
-        <h2 id="app-configuration-title" tabindex="-1">进入应用</h2>
+        <h2 id="app-configuration-title" tabindex="-1">应用工作台</h2>
         <p id="app-configuration-status"></p>
       </div>
       <div class="app-dialog-actions">
         <button id="app-configuration-refresh" class="button compact secondary" type="button">刷新</button>
-        <button id="app-configuration-close" class="button compact quiet" type="button">返回应用</button>
+        <button id="app-configuration-close" class="button compact quiet" type="button">返回应用列表</button>
       </div>
     </header>
     <div id="app-configuration-feedback" class="app-dialog-feedback"></div>
     <div class="app-configuration-layout">
-      <nav id="app-configuration-nav" aria-label="应用配置分区"></nav>
+      <nav id="app-configuration-nav" aria-label="应用工作台分区"></nav>
       <section id="app-configuration-body" class="app-dialog-body" aria-label="当前分区"></section>
     </div>
   </dialog>
