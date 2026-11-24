@@ -381,7 +381,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			}
 		} else {
 			if in.Key == "" || len(in.Key) > 128 || in.Title == "" {
-				return "", toolInputError("新任务需要key和title")
+				return "", toolInputError("新任务请同时传key和title；续办现有任务请传agent_tasks返回的id")
 			}
 			if p.privileged() && strings.Contains(in.Title, "歌") {
 				for _, old := range m.agent.active(p.trace.Account, "") {

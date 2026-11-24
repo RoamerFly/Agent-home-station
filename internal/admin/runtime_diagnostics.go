@@ -25,6 +25,16 @@ func (e *RuntimeFailure) SafeToolFailure() (string, string) {
 func processAdmissionFailure(reason, scope string) error {
 	e := &RuntimeFailure{Code: "process_admission_rejected", Stage: "admission", Message: "程序未启动：参数或执行环境不符合要求", NotStarted: true, EffectiveScope: scope, Continuation: "检查原操作的拒绝原因，更正参数后再提交；拒绝不代表结果未知"}
 	switch {
+	case strings.Contains(reason, "执行起始目录不可用"):
+		e.Code = "working_directory_unavailable"
+		e.Stage = "scope"
+		e.Message = "程序未启动：工作目录不可用"
+		e.Continuation = "先用server_status取得本会话工作目录；省略path时会自动使用该目录"
+	case strings.Contains(reason, "命令执行未授权或参数无效"):
+		e.Code = "process_arguments_invalid"
+		e.Stage = "arguments"
+		e.Message = "程序未启动：命令、请求编号或执行参数无效"
+		e.Continuation = "action=start需要command或argv其中之一及新的request_key；path可省略，默认本会话工作目录"
 	case strings.Contains(reason, "路径不在已授权"):
 		e.Code = "path_scope_denied"
 		e.Stage = "scope"

@@ -24,6 +24,13 @@ func TestProcessAdmissionDiagnosticsDoNotExposeUntrustedOutput(t *testing.T) {
 	}
 }
 
+func TestProcessAdmissionMissingWorkingDirectoryAdvice(t *testing.T) {
+	f := processAdmissionFailure("执行起始目录不可用", "scope-id").(*RuntimeFailure)
+	if f.Code != "working_directory_unavailable" || !strings.Contains(f.Continuation, "server_status") {
+		t.Fatal(f)
+	}
+}
+
 func TestNamedSpeechNeverDefaultsWhenRegisteredVoiceRequested(t *testing.T) {
 	voices := []voiceEntry{{ID: "mom-speech", Name: "mom", Engine: "GPT-SoVITS"}, {ID: "mom-sing", Name: "mom", Engine: "RVC"}, {ID: "default", Name: "character"}}
 	for _, id := range []string{"", "default"} {

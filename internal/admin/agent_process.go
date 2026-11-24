@@ -54,6 +54,12 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 		return "", &RuntimeFailure{Code: "execution_scope_unavailable", Stage: "scope", Message: "程序未启动：当前请求的执行范围不可用", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前账号、会话及global授权后再调用server_status"}
 	}
 	cfg.Isolation.GPU = in.GPU
+	// The caller's current workspace is the natural working directory for a
+	// newly written script. Requiring the model to repeat that path caused
+	// otherwise valid group commands to fail admission before they ran.
+	if in.Action == "start" && in.Path == "" && len(cfg.Roots) > 0 {
+		in.Path = cfg.Roots[0]
+	}
 	if !p.workspaceExecutionAllowed() || cfg.Mode != "full" {
 		return "", &RuntimeFailure{Code: "execution_permission_denied", Stage: "authorization", Message: "后台程序执行未授权", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前真实请求者和执行权限；不得重用其他账号或会话的授权"}
 	}
