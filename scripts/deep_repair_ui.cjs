@@ -30,6 +30,7 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
    if(u.pathname.startsWith('/api/')){
     if(req.method()!=='GET'){
      const body=req.postDataJSON();writes.push({path:u.pathname,body});
+     if(u.pathname==='/api/logs/round/process')return reply(route,{item:{message_id:body.message_id,status:'queued',reason:'原消息已进入处理队列'}});
      if(u.pathname==='/api/memory/services/automatic'){assert.deepEqual(body,{enabled:body.enabled},'daily switch must not submit advanced settings');settings={...settings,enabled:body.enabled};return reply(route,{settings,embedding,maintenance,embedding_key_configured:true,maintenance_key_configured:true,semantic_configured:true})}
      if(u.pathname==='/api/memory/services'){settings=body.settings;embedding={...body.embedding,api_key:undefined};maintenance={...body.maintenance,api_key:undefined};return reply(route,{settings,embedding,maintenance,embedding_key_configured:true,maintenance_key_configured:true,semantic_configured:true})}
      if(u.pathname===`/api/memory/${scope}/entries/editable`&&body.action==='correct'){assert.equal(body.expected_revision,2);assert.equal(body.sources[0].event_id,'anchor');editableEntry={...editableEntry,detail:body.detail,version:3};return reply(route,editableEntry)}
@@ -69,6 +70,10 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
   },message);
   await openRound();
   await topDialog().getByRole('heading',{name:'旧版模型诊断已完成',exact:true}).waitFor();
+  assert.equal(await topDialog().getByRole('button',{name:'手动诊断草稿'}).count(),0);
+  await topDialog().getByRole('button',{name:'手动触发处理'}).click();
+  await topDialog().getByText('原消息已进入处理队列',{exact:true}).waitFor();
+  assert(writes.some(x=>x.path==='/api/logs/round/process'&&x.body.message_id==='synthetic-message'&&x.body.thread_id==='synthetic@chatroom'));
   assert.equal(await page.locator('dialog[open]').count(),1);
   assert.equal(await topDialog().getByRole('button',{name:'回复依据',exact:true}).count(),0);
   assert(requests.some(r=>r.path==='/api/reply-audits'&&new URLSearchParams(r.search).get('message_id')==='synthetic-message'),'execution dialog must preserve trigger message');
@@ -79,7 +84,7 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
   assert.equal(await topDialog().locator('.conversation-summary:visible').count(),0);
   await topDialog().getByText('这次互动没有可核对的来源记录。',{exact:true}).waitFor();
   await page.keyboard.press('Escape');
-  for(const [state,title] of [['checked','旧版模型诊断已完成'],['repaired_and_checked','旧版诊断后草稿已校验'],['final_check_rejected','核验未通过，已停止发送'],['review_failed','核验未通过，已停止发送']]){
+  for(const [state,title] of [['checked','旧版模型诊断已完成'],['repaired_and_checked','旧版诊断后草稿已校验'],['final_check_rejected','核验未通过，已停止发送'],['request_failed','模型请求未完成，消息未发送'],['review_failed','模型复核未完成，消息未发送']]){
    evidence.items[0].state=state;await openRound();await topDialog().getByRole('heading',{name:title,exact:true}).waitFor();await page.keyboard.press('Escape');
   }
   evidence.items[0].state='reviewed';
@@ -96,14 +101,11 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
    await topDialog().getByRole('heading',{name:'旧版模型诊断已完成',exact:true}).waitFor();
    assert((await topDialog().textContent()).includes('回复对象：小甲'));
    const sourceLinks=topDialog().locator('.reply-source-link');
-   assert.equal(await sourceLinks.count(),2,'source roles must deduplicate a repeated anchor');
-   assert.match((await sourceLinks.nth(0).innerText())+(await sourceLinks.nth(1).innerText()),/触发消息/);
-   assert.match((await sourceLinks.nth(0).innerText())+(await sourceLinks.nth(1).innerText()),/媒体来源/);
+   assert.equal(await sourceLinks.count(),1,'the original message is already in the timeline');
+   assert.match(await sourceLinks.first().innerText(),/媒体来源/);
+   assert.equal(await topDialog().getByRole('button',{name:/触发消息/}).count(),0);
    await shot(`evidence-${theme}-${viewport.width}`);
    await sourceLinks.first().click();
-   await topDialog().getByText('对话对象：小乙',{exact:true}).waitFor();assert((await topDialog().textContent()).includes('版本 2'));await page.keyboard.press('Escape');
-   assert(requests.some(r=>r.path===`/api/memory/${scope}/sources/anchor`&&new URLSearchParams(r.search).get('revision')==='2'),'audit source must request the recorded version');
-   await sourceLinks.last().click();
    await topDialog().getByText('媒体上传者：小乙 · 已读取',{exact:true}).waitFor();assert(!(await topDialog().textContent()).includes('undefined'));
    await shot(`source-${theme}-${viewport.width}`);await page.keyboard.press('Escape');await page.keyboard.press('Escape');
    await page.evaluate(()=>window.WechatMemory.open('synthetic-scope'));
@@ -125,12 +127,6 @@ async function reply(route,data,options={}){await route.fulfill({json:data,...op
   }
   // The audit carries the revision used in this interaction. A later edit must
   // never be displayed as its evidence, and an erased source remains unavailable.
-  sourceMode='changed';
-  await openRound();
-  await topDialog().locator('.reply-source-link').filter({hasText:'触发消息'}).click();
-  await topDialog().getByText('原始来源已更新，请从当前记录重新读取',{exact:true}).waitFor();
-  assert.equal(await topDialog().getByText('这是一段后续改写的原话，不能作为旧回合的依据。',{exact:true}).count(),0);
-  await page.keyboard.press('Escape');await page.keyboard.press('Escape');
   sourceMode='forgotten';
   await openRound();
   await topDialog().locator('.reply-source-link').filter({hasText:'媒体来源'}).click();

@@ -434,7 +434,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		reset.ResetMedia()
 	}
 	settings := c.ContextConfig()
-	if !input.Preview && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
+	if !input.Preview && len(input.UnreadMessages) == 0 && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
 		_, compressionErr := e.CompressContext(ctx, input, false)
 		if compressionErr != nil && e.ToolLog != nil {
 			e.ToolLog("context_compression_failed")

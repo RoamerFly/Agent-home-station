@@ -82,6 +82,11 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		if wake.State != "waiting" {
 			continue
 		}
+		if w.roundClosed(wake.Input.Thread, wake.Parent) || w.inputRoundClosed(wake.Input) {
+			wake.State = "stopped"
+			w.persistErr = w.saveRuntime()
+			continue
+		}
 		fromSurf := w.surfOrigin(wake.Input)
 		if fromSurf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(wake.Input.Thread) {
 			wake.State = "stopped"

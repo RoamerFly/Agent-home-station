@@ -438,6 +438,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	}
 	defer func() {
 		for _, d := range w.runtime.Media {
+			if w.roundClosed(d.Input.Thread, d.Trace) {
+				continue
+			}
 			w.refreshMediaParent(d.Trace)
 			if d.State == "accepted" && !d.CrossSettled && d.CrossRequester != "" && w.config.MediaSeedSettled != nil {
 				if e := w.config.MediaSeedSettled(d.Trace, d.Key, d.Status); e != nil {
@@ -452,6 +455,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	for index, d := range w.runtime.Media {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
+		}
+		if w.roundClosed(d.Input.Thread, d.Trace) {
+			continue
 		}
 		// The receipt journal may have committed just before a crash while this
 		// worker checkpoint still says prepared/unknown. Restore the fact before

@@ -8,7 +8,7 @@ import (
 	"wechat-bot/internal/companion"
 )
 
-func TestGroupPlanRechecksUnsentReplyAfterEvidenceEpochChanges(t *testing.T) {
+func TestGroupPlanSendsWithoutReviewWhenBoundSourcesAreUnchanged(t *testing.T) {
 	model := &planReviewModel{answer: `{"action":"continue"}`}
 	w, engine, native, in := planWorker(t, model)
 	in.Thread, in.IsGroup, in.TraceID = "room@chatroom", true, "group-original"
@@ -27,6 +27,8 @@ func TestGroupPlanRechecksUnsentReplyAfterEvidenceEpochChanges(t *testing.T) {
 	if !w.queueUtterancePlan(engine, in, companion.Decision{Action: "reply", Messages: []string{"原消息的回复"}, ReplyContexts: []companion.ReplyContext{proof}}) {
 		t.Fatal("plan not queued")
 	}
+	// A restart may resume a saved plan long after its original send slot.
+	w.runtime.Plans[0].Created = time.Now().Add(-31 * time.Minute)
 	later := in
 	later.TraceID, later.Text, later.ReplyContext = "group-later", "新的群消息", nil
 	later.Source = nil
@@ -51,13 +53,8 @@ func TestGroupPlanRechecksUnsentReplyAfterEvidenceEpochChanges(t *testing.T) {
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	p := w.runtime.Plans[0]
-	if p.State != "review_pending" || p.Index != 0 || len(p.Sent) != 0 || len(p.ReplyContexts) != 0 || p.ReviewEvidence != nil || len(native.submissions) != 0 || len(w.runtime.Deliveries) != 0 {
-		t.Fatalf("unsent reply did not enter review without submission: state=%s index=%d sent=%d proof=%d deliveries=%d submissions=%d", p.State, p.Index, len(p.Sent), len(p.ReplyContexts), len(w.runtime.Deliveries), len(native.submissions))
-	}
-	readyPlans(w)
-	w.reconcileUtterancePlans(context.Background())
-	if model.calls != 1 || p.State != "queued" || p.ReviewEvidence == nil {
-		t.Fatalf("current-context review did not resume the original plan: calls=%d state=%s evidence=%v", model.calls, p.State, p.ReviewEvidence)
+	if p.State != "accepted" || p.Index != 1 || len(p.Sent) != 1 || model.calls != 0 || len(native.submissions) != 1 || len(w.runtime.Deliveries) != 1 || w.runtime.Deliveries[0].Input.ReplyContext == nil || w.runtime.Deliveries[0].Input.ReplyContext.EvidenceEpoch == proof.EvidenceEpoch {
+		t.Fatalf("unchanged bound source was unnecessarily reviewed or not sent: state=%s index=%d reviews=%d deliveries=%d submissions=%d", p.State, p.Index, model.calls, len(w.runtime.Deliveries), len(native.submissions))
 	}
 }
 
@@ -76,7 +73,7 @@ func TestReceiptOnlyPlanDoesNotReportCompletedRound(t *testing.T) {
 	}
 }
 
-func TestPrivatePlanRechecksUnsentReplyAfterEvidenceEpochChanges(t *testing.T) {
+func TestPrivatePlanSendsWithoutReviewWhenBoundSourcesAreUnchanged(t *testing.T) {
 	model := &planReviewModel{answer: `{"action":"continue"}`}
 	w, engine, native, in := planWorker(t, model)
 	w.queueUtterancePlan(engine, in, companion.Decision{Action: "reply", Messages: []string{"原私聊回复"}, ReplyContexts: []companion.ReplyContext{*in.ReplyContext}})
@@ -93,13 +90,8 @@ func TestPrivatePlanRechecksUnsentReplyAfterEvidenceEpochChanges(t *testing.T) {
 	readyPlans(w)
 	w.reconcileUtterancePlans(context.Background())
 	p := w.runtime.Plans[0]
-	if p.State != "review_pending" || !p.EpochReplan || p.Index != 0 || len(native.submissions) != 0 {
-		t.Fatalf("private unsent reply was sent or stopped instead of replanned: state=%s epoch_replan=%v submissions=%d", p.State, p.EpochReplan, len(native.submissions))
-	}
-	readyPlans(w)
-	w.reconcileUtterancePlans(context.Background())
-	if model.calls != 1 || p.State != "queued" || p.EpochReplan || p.ReviewEvidence == nil {
-		t.Fatalf("private replan did not create current evidence: calls=%d state=%s epoch_replan=%v evidence=%v", model.calls, p.State, p.EpochReplan, p.ReviewEvidence)
+	if p.State != "accepted" || p.Index != 1 || p.EpochReplan || model.calls != 0 || len(native.submissions) != 1 || len(w.runtime.Deliveries) != 1 {
+		t.Fatalf("private unchanged source was unnecessarily reviewed or not sent: calls=%d state=%s epoch_replan=%v submissions=%d", model.calls, p.State, p.EpochReplan, len(native.submissions))
 	}
 }
 

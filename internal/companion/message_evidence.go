@@ -404,7 +404,11 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			ref = &SourceRef{MessageID: event.MessageID, Sender: event.Sender, Account: in.Account, Thread: in.Thread}
 		}
 		if ev, ok := e.replyReferenceEvent(context.Background(), in, ref); ok {
-			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia}
+			at, _ := time.Parse(time.RFC3339Nano, event.At)
+			if at.IsZero() {
+				at, _ = time.Parse(time.RFC3339Nano, ev.At)
+			}
+			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia, Time: at}
 			row := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
 			if event.MediaReadFailed && ev.Source != nil && ev.Source.MessageType == 43 && ev.Trace == event.MessageID && ev.Sender == event.Sender {
 				row["media_read_status"] = "此视频读取失败，未取得内容证据。只处理本回合其他独立请求。"
@@ -412,7 +416,87 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			}
 			rows = append(rows, row)
 		} else {
-			rows = append(rows, map[string]any{"message_id": event.MessageID, "message_sender_id": event.Sender, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference", "source": event.Source})
+			rows = append(rows, map[string]any{"message_id": event.MessageID, "message_sender_id": event.Sender, "at": event.At, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference", "source": event.Source})
+		}
+	}
+	return compactUnreadEvidence(rows, 48<<10)
+}
+
+// A restart can collect dozens of messages into one current_message turn.
+// Keep every sender, time and message identity in that turn, while excerpting
+// older large bodies and media observations so the native function transcript
+// fits its per-message transport limit. Full records remain readable by ID.
+func compactUnreadEvidence(rows []map[string]any, limit int) []map[string]any {
+	if len(rows) == 0 || limit <= 0 {
+		return rows
+	}
+	encoded, _ := json.Marshal(rows)
+	if len(encoded) <= limit {
+		return rows
+	}
+	perRow := max(96, (limit-2)/len(rows)-1)
+	for i, row := range rows {
+		short := map[string]any{}
+		for _, key := range []string{"message_id", "at", "message_sender_id", "message_sender_name", "user_text_state", "evidence_kind", "media_read_status"} {
+			if value, ok := row[key]; ok {
+				short[key] = value
+			}
+		}
+		if source, ok := row["source"].(*SourceRef); ok && source != nil {
+			short["source"] = &SourceRef{EventID: source.EventID, MessageID: source.MessageID, Account: source.Account, Thread: source.Thread, Sender: source.Sender, MessageType: source.MessageType, OccurredAt: source.OccurredAt}
+		} else if value, ok := row["source"]; ok {
+			short["source"] = value
+		}
+		if value, ok := row["text"].(string); ok {
+			short["text"] = boundedText(value, min(384, perRow/3))
+			if len(value) > len(short["text"].(string)) {
+				short["text_excerpted"] = true
+			}
+		}
+		if observations, ok := row["media_observations"].([]map[string]any); ok && len(observations) > 0 {
+			short["media_available"] = true
+			if observation, ok := observations[0]["observation"].(string); ok && observation != "" {
+				short["media_observation_excerpt"] = boundedText(observation, min(256, perRow/4))
+			}
+		}
+		for _, key := range []string{"message_sender_name", "media_observation_excerpt", "evidence_kind", "user_text_state"} {
+			encoded, _ = json.Marshal(short)
+			if len(encoded) <= perRow {
+				break
+			}
+			delete(short, key)
+		}
+		encoded, _ = json.Marshal(short)
+		if len(encoded) > perRow {
+			if value, ok := short["text"].(string); ok {
+				short["text"] = boundedText(value, max(0, perRow-len(encoded)+len(value)-16))
+			}
+		}
+		rows[i] = short
+	}
+	// Preserve the newest evidence if even compact identities exceed the wire
+	// budget. The marker makes omission explicit and the original records remain
+	// accessible through the source message IDs in the persistent store.
+	omitted := 0
+	for len(rows) > 0 {
+		encoded, _ = json.Marshal(rows)
+		if len(encoded) <= limit {
+			break
+		}
+		rows = rows[1:]
+		omitted++
+	}
+	if omitted > 0 {
+		marker := map[string]any{"older_messages_omitted": omitted, "reason": "current_turn_size_limit"}
+		rows = append([]map[string]any{marker}, rows...)
+		for len(rows) > 1 {
+			encoded, _ = json.Marshal(rows)
+			if len(encoded) <= limit {
+				break
+			}
+			rows = append(rows[:1], rows[2:]...)
+			omitted++
+			marker["older_messages_omitted"] = omitted
 		}
 	}
 	return rows

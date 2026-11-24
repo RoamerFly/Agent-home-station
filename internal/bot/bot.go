@@ -87,6 +87,7 @@ type Config struct {
 	// ScopedAnalyzer handles only the inbound media types selected by the host.
 	ScopedAnalyzer ScopedMediaAnalyzer
 	StateDir       string
+	ClosedRounds  []RoundIdentity
 	AllowedThreads []string
 	Prefix         string
 	PollInterval   time.Duration

@@ -291,7 +291,9 @@ func (w *stationWechatWorker) updateAgentTask(in companion.Input, state string, 
 			copy := *delivery
 			task.Delivery = &copy
 		}
-		if retry > 0 {
+		if state == "manual_completion" {
+			task.State, task.Next = "cancelled", time.Time{}
+		} else if retry > 0 {
 			task.State, task.Next = "waiting", time.Now().UTC().Add(retry)
 		} else if state == "yielded_to_message" {
 			task.State, task.Next = "waiting", time.Now().UTC().Add(bot.DeliveryRetryBackoff(task.Runs))

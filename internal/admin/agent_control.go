@@ -753,6 +753,21 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) (finishErr e
 	if in.TaskID == "" {
 		return
 	}
+	if state == "manual_completion" {
+		if task, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok {
+			switch task.State {
+			case "completed", "cancelled", "stopped", "expired", "failed":
+				return
+			}
+			task.State = "cancelled"
+			task.Next = time.Time{}
+			task.LastResult = "执行回合已手动关闭，后续任务不再调度"
+			if _, err := m.agent.updateSnapshot(task); err != nil {
+				saveFailure("task_checkpoint_save_failed", err)
+			}
+		}
+		return
+	}
 	if state == "reply" {
 		if task, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok &&
 			task.DeliveryThread != "" && task.DeliveryThread != task.Thread {

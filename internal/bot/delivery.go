@@ -464,6 +464,9 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if w.roundClosed(d.Thread, d.Trace) {
+			continue
+		}
 		if d.State == "accepted" || d.State == "stopped" || d.State == "awaiting_evidence" {
 			continue
 		}

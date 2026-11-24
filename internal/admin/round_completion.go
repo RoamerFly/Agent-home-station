@@ -21,19 +21,26 @@ func (s *Server) manualRoundClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := s.manager
-	m.mu.Lock()
-	found := false
-	for _, entries := range [][]LogEntry{m.logs, m.journal} {
-		for _, entry := range entries {
-			if entry.ThreadID == in.ThreadID && entry.MessageID == in.MessageID {
-				found = true
-				break
-			}
-		}
+	found, err := s.roundExistsInHistory(in.ThreadID, in.MessageID)
+	if err != nil {
+		fail(w, http.StatusConflict, "执行回合历史记录暂不可读；关闭操作未生效")
+		return
 	}
-	m.mu.Unlock()
 	if !found {
 		fail(w, http.StatusNotFound, "没有找到这条执行回合")
+		return
+	}
+	worker := m.currentWorker()
+	if worker == nil {
+		fail(w, http.StatusConflict, "原 Agent 当前未运行，无法确认后续处理已停止；关闭操作未生效")
+		return
+	}
+	if err := worker.ManuallyCompleteRound(r.Context(), in.ThreadID, in.MessageID); err != nil {
+		if strings.Contains(err.Error(), "trace_not_found") {
+			fail(w, http.StatusConflict, "原回合不在当前微信工作进程队列中；关闭操作未生效")
+			return
+		}
+		fail(w, http.StatusConflict, "关闭操作未生效："+err.Error())
 		return
 	}
 	m.record(bot.Record{Event: "round_manually_closed", Category: "decision", ThreadID: in.ThreadID,

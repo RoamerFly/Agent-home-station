@@ -46,6 +46,10 @@ func (w *Worker) tickAgentTask(ctx context.Context) bool {
 	if in == nil {
 		return false
 	}
+	if w.inputRoundClosed(*in) {
+		w.finishAgentTask(*in, "manual_completion")
+		return false
+	}
 	if !w.allowed[in.Thread] {
 		if w.config.AuthorizeThread == nil {
 			return false

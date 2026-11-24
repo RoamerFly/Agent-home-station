@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -151,6 +152,29 @@ func TestStaleEvidenceEpochCannotBeResignedThroughMissingRevision(t *testing.T) 
 	in.ReplyContext = &r
 	if _, _, err := w.prepareGroundedText(context.Background(), in, "旧回复"); err == nil {
 		t.Fatal("stale epoch resigned")
+	}
+}
+
+func TestQueuedTextDoesNotReuseProofAfterItsBoundSourceChanges(t *testing.T) {
+	w, c, in, r := sourcedReplyFixture(t)
+	epoch, err := c.Store.RecallEpoch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.EvidenceEpoch = epoch
+	r.ContextVersion = companion.ReplyContextFingerprint(in, r)
+	in.ReplyContext = &r
+	changed := in
+	source := *in.Source
+	source.Revision++
+	changed.Source = &source
+	changed.Text = "更正后的来源"
+	changed.OriginalText = &changed.Text
+	if err := c.Store.Observe(changed, c.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.prepareGroundedText(context.Background(), in, "旧回复"); !errors.Is(err, errReplyEvidenceEpochChanged) {
+		t.Fatal("changed original source was reused without a fresh decision", err)
 	}
 }
 

@@ -107,6 +107,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 	}))
 	mux.HandleFunc("POST /api/logs/round/manual-complete", s.protected(s.manualRoundCompletion))
 	mux.HandleFunc("POST /api/logs/round/close", s.protected(s.manualRoundClose))
+	mux.HandleFunc("POST /api/logs/round/process", s.protected(s.manualRoundProcess))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))
 	mux.HandleFunc("POST /api/bot/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, false) }))
 	mux.HandleFunc("POST /api/model/test", s.protected(s.testModel))

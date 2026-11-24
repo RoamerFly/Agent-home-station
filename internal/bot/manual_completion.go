@@ -5,27 +5,44 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/companion"
 )
 
 type manualCompletionRequest struct {
-	trace string
-	done  chan error
+	thread string
+	trace  string
+	done   chan error
+}
+
+// RoundIdentity identifies a manually closed round across account-local
+// conversations. A native message ID alone is not a durable round key.
+type RoundIdentity struct {
+	Thread string
+	Trace  string
 }
 
 // ManuallyComplete stops the durable work associated with one incoming
 // message. It never submits or retries a WeChat message; existing evidence is
 // kept and a terminal activity record is appended for the console.
 func (w *Worker) ManuallyComplete(ctx context.Context, trace string) error {
+	return w.ManuallyCompleteRound(ctx, "", trace)
+}
+
+// ManuallyCompleteRound closes one identified conversation round. The closed
+// marker is persisted with its queues, so a restart cannot revive its work.
+func (w *Worker) ManuallyCompleteRound(ctx context.Context, thread, trace string) error {
 	if w == nil || w.manualCompletions == nil {
 		return errors.New("bot_manual_completion_unavailable")
 	}
 	trace = strings.TrimSpace(trace)
-	if trace == "" {
+	thread = strings.TrimSpace(thread)
+	if trace == "" || len(trace) > 512 || len(thread) > 256 {
 		return errors.New("bot_manual_completion_trace_invalid")
 	}
 	done := make(chan error, 1)
 	select {
-	case w.manualCompletions <- manualCompletionRequest{trace: trace, done: done}:
+	case w.manualCompletions <- manualCompletionRequest{thread: thread, trace: trace, done: done}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -41,7 +58,7 @@ func (w *Worker) drainManualCompletions(ctx context.Context) error {
 	for {
 		select {
 		case request := <-w.manualCompletions:
-			err := w.completeTrace(request.trace)
+			err := w.completeTrace(request.thread, request.trace)
 			request.done <- err
 		case <-ctx.Done():
 			return nil
@@ -51,44 +68,132 @@ func (w *Worker) drainManualCompletions(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) completeTrace(trace string) error {
+func roundKey(thread, trace string) string { return thread + "\x00" + trace }
+
+func (w *Worker) roundClosed(thread, trace string) bool {
+	return w != nil && w.runtime != nil && w.runtime.ClosedRounds[roundKey(thread, trace)]
+}
+
+func (w *Worker) inputRoundClosed(in companion.Input) bool {
+	return w.roundClosed(in.Thread, in.TraceID) || in.OriginTraceID != "" && w.roundClosed(in.Thread, in.OriginTraceID)
+}
+
+func (w *Worker) completeTrace(thread, trace string) error {
 	if w.runtime == nil {
 		return errors.New("bot_manual_completion_not_ready")
 	}
-	found := false
-	for _, d := range w.runtime.Deliveries {
-		if d == nil || d.Trace != trace || d.State == "accepted" || d.State == "stopped" {
-			continue
-		}
-		d.State = "stopped"
-		d.Reason = "manual_completion"
-		d.Next = zeroTime()
-		found = true
+	explicitThread := thread != ""
+	if thread == "" {
+		thread = traceThread(w.runtime, trace)
 	}
-	for _, p := range w.runtime.Plans {
-		if p == nil || p.Input.TraceID != trace || p.terminal() {
-			continue
-		}
-		p.State = "stopped"
-		p.StopReason = "manual_completion"
-		p.Next = zeroTime()
-		found = true
-	}
-	for i := range w.runtime.Inbox {
-		if w.runtime.Inbox[i].Event.Data.MessageID == trace && w.runtime.Inbox[i].Phase != "completed" && w.runtime.Inbox[i].Phase != "replied" {
-			w.runtime.Inbox[i].Phase = "completed"
-			found = true
-		}
-	}
-	if !found {
+	if thread == "" {
 		return errors.New("bot_manual_completion_trace_not_found")
 	}
+	if w.roundClosed(thread, trace) {
+		return nil
+	}
+	found, tasks := w.stopRoundQueues(thread, trace)
+	if !found && !explicitThread {
+		return errors.New("bot_manual_completion_trace_not_found")
+	}
+	if w.runtime.ClosedRounds == nil {
+		w.runtime.ClosedRounds = map[string]bool{}
+	}
+	w.runtime.ClosedRounds[roundKey(thread, trace)] = true
 	w.persistErr = w.saveRuntime()
 	if w.persistErr != nil {
 		return w.persistErr
 	}
-	w.activity(Record{Event: "round_manually_completed", Category: "decision", ThreadID: traceThread(w.runtime, trace), MessageID: trace, Reason: "manual_completion", Status: "completed", Origin: "admin"})
+	if w.generation != nil {
+		if job := w.generation.jobs[thread]; job != nil && (job.input.TraceID == trace || job.input.OriginTraceID == trace) {
+			job.cancel()
+			delete(w.generation.jobs, thread)
+		}
+	}
+	for _, in := range tasks {
+		w.finishAgentTask(in, "manual_completion")
+	}
+	w.activity(Record{Event: "round_manually_completed", Category: "decision", ThreadID: thread, MessageID: trace, Reason: "manual_completion", Status: "completed", Origin: "admin"})
 	return nil
+}
+
+// stopRoundQueues only changes local durable state. It is also used to migrate
+// historical close records before any startup recovery can run.
+func (w *Worker) stopRoundQueues(thread, trace string) (bool, map[string]companion.Input) {
+	found := false
+	tasks := map[string]companion.Input{}
+	collectTask := func(in companion.Input) {
+		if in.TaskID != "" {
+			tasks[in.TaskID] = in
+		}
+	}
+	for _, d := range w.runtime.Deliveries {
+		if d == nil || d.Trace != trace || d.Thread != thread {
+			continue
+		}
+		collectTask(d.Input)
+		if d.State != "accepted" {
+			d.State, d.Reason, d.Next = "stopped", "manual_completion", zeroTime()
+		}
+		found = true
+	}
+	for _, p := range w.runtime.Plans {
+		if p == nil || p.Input.TraceID != trace || p.Input.Thread != thread {
+			continue
+		}
+		collectTask(p.Input)
+		p.PendingRecall, p.Updates, p.WakePending = nil, nil, false
+		if p.State != "accepted" {
+			p.State, p.StopReason, p.Next = "stopped", "manual_completion", zeroTime()
+		}
+		found = true
+	}
+	for _, d := range w.runtime.Media {
+		if d == nil || d.Trace != trace || d.Input.Thread != thread {
+			continue
+		}
+		collectTask(d.Input)
+		if d.State != "accepted" {
+			if w.generation != nil {
+				w.stopMediaPreparation(d.Key)
+			}
+			d.UserCancelled, d.State, d.Reason = true, "stopped", "manual_completion"
+			d.Next, d.ReconcileAfter = zeroTime(), zeroTime()
+		}
+		found = true
+	}
+	for _, reply := range w.runtime.MediaReplies {
+		if reply == nil || reply.Trace != trace || reply.Input.Thread != thread {
+			continue
+		}
+		collectTask(reply.Input)
+		if reply.State != "accepted" {
+			reply.State, reply.Next = "stopped", zeroTime()
+		}
+		found = true
+	}
+	for _, wake := range w.runtime.Wakes {
+		if wake == nil || wake.Input.Thread != thread || wake.Parent != trace && wake.Input.TraceID != trace {
+			continue
+		}
+		collectTask(wake.Input)
+		wake.State = "stopped"
+		found = true
+	}
+	for i := range w.runtime.Inbox {
+		if w.runtime.Inbox[i].Event.Data.ThreadID == thread && (w.runtime.Inbox[i].Event.Data.MessageID == trace || w.runtime.Inbox[i].BacklogParent == trace || w.runtime.Inbox[i].FollowupParent == trace) {
+			w.runtime.Inbox[i].Phase = "completed"
+			w.runtime.Inbox[i].RetryAfter = zeroTime()
+			found = true
+		}
+	}
+	if w.generation != nil {
+		if job := w.generation.jobs[thread]; job != nil && (job.input.TraceID == trace || job.input.OriginTraceID == trace) {
+			collectTask(job.input)
+			found = true
+		}
+	}
+	return found, tasks
 }
 
 func traceThread(runtime *runtimeState, trace string) string {

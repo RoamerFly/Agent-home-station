@@ -43,6 +43,16 @@ func (w *Worker) prepareGroundedText(ctx context.Context, in companion.Input, te
 		// existing interface; production companion replies always use it.
 		return in, text, nil
 	}
+	// A new, unrelated memory entry can advance the global recall epoch while
+	// this already-authored bubble is waiting for its send slot. Keep its
+	// original wording when every source bound to this bubble is unchanged.
+	// The normal reply validator below still checks the original source,
+	// destination, authorization and text before submission.
+	var err error
+	in, err = w.refreshUnchangedReplyEvidence(ctx, in)
+	if err != nil {
+		return in, text, err
+	}
 	if err := w.validateExistingReplyEvidence(ctx, in); err != nil {
 		return in, text, err
 	}
@@ -222,6 +232,41 @@ func (w *Worker) validateExistingReplyEvidence(ctx context.Context, in companion
 		}
 	}
 	return nil
+}
+
+// refreshUnchangedReplyEvidence handles only a queued text bubble whose
+// explicit sources still have their original revisions. A changed or missing
+// source keeps the old proof invalid and follows the existing recovery path.
+func (w *Worker) refreshUnchangedReplyEvidence(ctx context.Context, in companion.Input) (companion.Input, error) {
+	r := in.ReplyContext
+	e, ok := w.model.(*companion.Engine)
+	if !ok || r == nil || r.EvidenceEpoch == "" || e.Store == nil {
+		return in, nil
+	}
+	epoch, err := e.Store.RecallEpoch(ctx)
+	if err != nil || epoch == r.EvidenceEpoch {
+		return in, err
+	}
+	if len(r.SourceEventIDs) == 0 || len(r.SourceVersions) == 0 {
+		return in, errReplyEvidenceEpochChanged
+	}
+	scope := companion.ScopeID(in.Channel, in.Account, in.Thread)
+	for _, id := range r.SourceEventIDs {
+		if _, bound := r.SourceVersions[id]; !bound {
+			return in, errReplyEvidenceEpochChanged
+		}
+	}
+	for id, version := range r.SourceVersions {
+		event, readErr := e.Store.ReadEvent(ctx, []string{scope}, id)
+		if readErr != nil || event.Revision != version || event.Role != "user" && event.Role != "admin_correction" {
+			return in, errReplyEvidenceEpochChanged
+		}
+	}
+	updated := *r
+	updated.EvidenceEpoch = epoch
+	updated.ContextVersion = companion.ReplyContextFingerprint(in, updated)
+	in.ReplyContext = &updated
+	return in, nil
 }
 
 func groundingDraft(text string, legacy bool) companion.Decision {
