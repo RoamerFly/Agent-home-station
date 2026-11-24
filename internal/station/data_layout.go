@@ -107,7 +107,8 @@ func stationNativeLifecycleRelative(dataDir, name string) string {
 
 // DefaultWorkspaceRoot is exported for the command entry point and legacy
 // migration commands. It keeps old tests and homes on their former path while
-// new release data uses data/main/workspaces.
+// new release data uses data/workspaces. Existing structured homes without
+// that directory retain their historical data/workspace root.
 func DefaultWorkspaceRoot(dataDir string) string { return stationWorkspaceDir(dataDir) }
 
 // ApplicationsRoot and PublicToolsRoot expose the same layout to the command

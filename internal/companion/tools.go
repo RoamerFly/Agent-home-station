@@ -169,6 +169,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
 		system += "\n默认值不是上限；按需用分页/续读参数。批量调用顺序执行，后项不能猜前项结果；按实际反馈修正参数或换方法。"
 	}
+	baseTools := append([]mcptools.Tool(nil), activeTools...)
 	allowed := map[string]bool{}
 	for _, tool := range tools {
 		if localHost {
@@ -250,6 +251,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 	}
 	previousCalls := map[string]string{}
+	blockedWithoutProgress := 0
 	// Failed reads are keyed by the complete normalized call. A failure for one
 	// message or page must never poison another message/page of the same tool.
 	// The actual transient retry budget is enforced inside the single call.
@@ -296,7 +298,11 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		if len(answer) <= 8000 && utf8.ValidString(answer) && strings.TrimSpace(answer) != "" {
 			turns = append(turns, deepseek.AssistantTurn(ctx, answer))
 		}
-		turns = append(turns, map[string]string{"role": "user", "content": "程序格式校验：" + code + "。上一条没有执行任何新工具或发送，请修正为唯一JSON对象。工具调用用 {\"action\":\"tool\",\"tool\":\"实际列表中的工具名\",\"arguments\":{}}；最终回复用 {\"action\":\"reply\",\"messages\":[\"自然回复\"],\"media_ids\":[]}。messages 的条数由实际语义决定，不设固定数量；每一项是一条完整独立消息，不要为了格式或长度机械拆分、合并或截断。不要重做已成功的工具，不编造素材ID；保持当前请求和之前已取得的结果。"})
+		guidance := "程序格式校验：" + code + "。上一条没有执行任何新工具或发送，请修正为唯一JSON对象。工具调用用 {\"action\":\"tool\",\"tool\":\"实际列表中的工具名\",\"arguments\":{}}；最终回复用 {\"action\":\"reply\",\"messages\":[\"自然回复\"],\"media_ids\":[]}。messages 的条数由实际语义决定，不设固定数量；每一项是一条完整独立消息，不要为了格式或长度机械拆分、合并或截断。不要重做已成功的工具，不编造素材ID；保持当前请求和之前已取得的结果。"
+		if code == "decision_tool_unknown" {
+			guidance += "目标名称未在本轮授权目录中；用 discover_tools 查询准确名称及分页，仍无匹配则换现有能力。"
+		}
+		turns = append(turns, map[string]string{"role": "user", "content": guidance})
 		return true
 	}
 	if need.Kind == "surf" && allowed["web_discover"] && max > 0 {
@@ -343,6 +349,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			// A new effective user instruction must be replanned by the model;
 			// do not force reads for a superseded original range.
 			historyNeed = nil
+			blockedWithoutProgress = 0
 			followupRounds++
 			pendingCalls = nil // Re-plan siblings proposed before the new request.
 			need = resourceNeed(turns)
@@ -355,6 +362,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		modelTurns := historyNeed.contextForModel(turns)
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
+		modelTurns = compactActionTurnsForWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
 		if err := ValidateContextWindow(system, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
 			return Decision{}, err
 		}
@@ -373,6 +381,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if autonomous {
 				budget = "\n自主行动没有工具次数配额。每次依据真实反馈决定下一步，失败先查原因并修复再验证；长时间等待请保存任务检查点，避免忙轮询。发送未知时读取目标会话真实记录再恢复原任务。"
 			}
+			modelTurns = compactActionTurnsForWindow(system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve)
 			if err := ValidateContextWindow(system+budget, modelTurns, catalogBytes, settings.ContextWindow, settings.OutputReserve); err != nil {
 				return Decision{}, err
 			}
@@ -464,7 +473,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if repairFormat("decision_tool_unknown", answer) {
 				continue
 			}
-			return reviewSurf(silent("tool_unavailable_or_budget_exhausted"))
+			return finalize("tool_not_in_authorized_catalog")
 		}
 		if response.Action == "tool" {
 			a := bytes.TrimSpace(response.Arguments)
@@ -659,11 +668,17 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			return reviewSurf(response.Decision)
 		}
 		unmetered := autonomous || deliveryFeedbackTool(response.Tool)
-		if calls >= max && !unmetered || e.Tools == nil || !allowed[response.Tool] {
+		if calls >= max && !unmetered {
 			if need.Required && need.Kind != "surf" {
 				return finalize("resource_not_obtained")
 			}
-			return reviewSurf(silent("tool_unavailable_or_budget_exhausted"))
+			return reviewSurf(silent("tool_budget_exhausted"))
+		}
+		if e.Tools == nil || !allowed[response.Tool] {
+			if need.Required && need.Kind != "surf" {
+				return finalize("tool_backend_unavailable")
+			}
+			return reviewSurf(silent("tool_backend_unavailable"))
 		}
 		args := response.Arguments
 		if len(args) == 0 {
@@ -696,6 +711,20 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 
 		if old, ok := previousCalls[callKey]; ok && strings.HasPrefix(response.Tool, "web_") && !autonomous && !(response.Tool == "web_media_download" && strings.HasPrefix(old, "工具调用失败：")) {
 			blockedResult = "程序没有重复执行相同请求；上一次结果：" + old + "。请换有效来源/参数，或如实给出最终回复。"
+		}
+		if old, ok := previousCalls[callKey]; ok && response.Tool == "discover_tools" {
+			var prior struct {
+				Matches []string `json:"matches"`
+			}
+			if json.Unmarshal([]byte(old), &prior) == nil && discoveredPageActive(activeTools, prior.Matches) {
+				blockedResult = "这一工具目录页已提供；请使用刚列出的工具、改查其他页，或根据现有结果回复。"
+			}
+		}
+		if blockedResult != "" {
+			blockedWithoutProgress++
+			if blockedWithoutProgress >= 2 {
+				return finalize("tool_no_progress")
+			}
 		}
 		if !started && blockedResult == "" && response.Tool != "discover_tools" {
 			if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
@@ -823,6 +852,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 								}
 							}
 						}
+						activeTools = append([]mcptools.Tool(nil), baseTools...)
 						for _, t := range discovered {
 							activeTools = exposeTool(activeTools, t)
 							allowed[t.Name] = true
@@ -894,6 +924,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			pendingCalls = nil
 		}
 		if blockedResult == "" {
+			blockedWithoutProgress = 0
 			previousCalls[callKey] = boundedText(result, 1500)
 			if callErr == nil {
 				delete(failedReadOnlyCalls, callKey)
@@ -941,7 +972,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					for _, t := range tools {
 						if t.Name == nextTool {
 							if nativeFunctions {
-								activeTools = exposeTool(activeTools, t)
+								activeTools = exposeTool(append([]mcptools.Tool(nil), baseTools...), t)
 							}
 							if hint != "" {
 								result += "\n" + hint
@@ -992,6 +1023,22 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		turns = append(turns, deepseek.AssistantTurn(ctx, answer), map[string]string{"role": "user", "content": payload})
 	}
 	return reviewSurf(silent("tool_budget_exhausted"))
+}
+
+func discoveredPageActive(active []mcptools.Tool, names []string) bool {
+	for _, name := range names {
+		found := false
+		for _, tool := range active {
+			if tool.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func deliveryFeedbackTool(name string) bool {

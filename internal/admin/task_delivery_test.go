@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"context"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 	"wechat-bot/internal/bot"
@@ -211,5 +214,133 @@ func TestClaimSettlesCompletedProcessPlaceholderCreatedAfterStartup(t *testing.T
 	got, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
 	if !ok || got.State != "completed" || got.Delivery != nil || got.ProcessID != task.ProcessID {
 		t.Fatalf("claim did not settle completed process placeholder: %+v", got)
+	}
+}
+func TestTaskToolReturnsCommittedDeliveryState(t *testing.T) {
+	f, p := trustedAgent(t)
+	task := agentTask{ID: "pending-receipt", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "running", PendingOperations: []string{"awaiting-receipt"}}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"id":"pending-receipt","state":"completed","checkpoint":"work finished"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct{ Task agentTask }
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || response.Task.State != "waiting_delivery" || response.Task.State != saved.State || !response.Task.WorkCompleted {
+		t.Fatalf("response=%+v stored=%+v", response.Task, saved)
+	}
+}
+
+func TestProcessWatcherIdentityIncludesProcessID(t *testing.T) {
+	f := setup(t)
+	f.manager.config.Companion.Enabled = true
+	for _, item := range []struct{ id, process string }{{"old", "a"}, {"distinct", "b"}, {"new", "a"}} {
+		task := agentTask{ID: item.id, ProcessID: item.process, Title: "后台程序", OriginTrace: "shared-request", Account: "test", Thread: "filehelper", Sender: "owner", State: "waiting", Next: time.Now().Add(time.Hour)}
+		if err := f.manager.agent.task(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	active := map[string]int{}
+	for _, task := range f.manager.agent.active("test", "filehelper") {
+		if task.State == "waiting" {
+			active[task.ProcessID]++
+		}
+	}
+	if active["a"] != 1 || active["b"] != 1 {
+		t.Fatal(active)
+	}
+}
+
+func TestFinishAgentTaskReportsCheckpointWriteFailure(t *testing.T) {
+	for _, state := range []string{"yielded_to_message", "silent"} {
+		t.Run(state, func(t *testing.T) {
+			f := setup(t)
+			task := agentTask{ID: "write-failure", ProcessID: "running-process", Account: "test", Thread: "filehelper", Sender: "owner", State: "running"}
+			if err := f.manager.agent.task(task); err != nil {
+				t.Fatal(err)
+			}
+			original := f.manager.agent.dir
+			f.manager.agent.dir = filepath.Join(original, "agent-state.json")
+			defer func() { f.manager.agent.dir = original }()
+			f.manager.finishAgentTask(companion.Input{Account: task.Account, Thread: task.Thread, TaskID: task.ID}, state)
+			saved, _ := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+			if saved.State != "running" {
+				t.Fatal(saved.State)
+			}
+			for _, entry := range f.manager.logs {
+				if entry.Event == "task_checkpoint_save_failed" {
+					return
+				}
+			}
+			t.Fatal("missing persistence failure diagnostic")
+		})
+	}
+}
+func TestMusicTaskReuseRequiresSameConversationAndRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, thread, origin string
+		reuse                bool
+	}{
+		{"same request", "wxid_owner", "turn-1", true},
+		{"different conversation", "room@chatroom", "turn-1", false},
+		{"different request", "wxid_owner", "earlier", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, p := trustedAgent(t)
+			old := agentTask{ID: "old-song-task", Title: "测试歌曲", MusicJob: "old-job", Account: p.trace.Account, Thread: tc.thread, OriginTrace: tc.origin, Sender: p.trace.Sender, State: "waiting"}
+			if err := f.manager.agent.task(old); err != nil {
+				t.Fatal(err)
+			}
+			result, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"song","title":"测试歌曲","state":"waiting","checkpoint":"wait for job"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response struct {
+				Task   agentTask
+				Reused bool `json:"reused_existing"`
+			}
+			if err := json.Unmarshal([]byte(result), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Reused != tc.reuse || (response.Task.ID == old.ID) != tc.reuse {
+				t.Fatal(result)
+			}
+		})
+	}
+}
+
+func TestMusicTaskWaitsForDeliveryPermissionWithoutRepeatedWrites(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.Permissions.SendVoice = false
+	f.manager.config.Companion.Permissions.SendFile = false
+	f.manager.mu.Unlock()
+	task := agentTask{ID: "permission-wait", MusicJob: "old-job", Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, State: "waiting"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	var saved agentTask
+	for i := 0; i < 2; i++ {
+		in, err := f.manager.claimAgentTask(time.Now(), func(string) bool { return false })
+		if err != nil || in != nil {
+			t.Fatal(in, err)
+		}
+		got, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+		if !ok || got.LastResult == "" || got.State != "waiting" || got.MusicJob != task.MusicJob {
+			t.Fatal(got)
+		}
+		if i > 0 && !got.Updated.Equal(saved.Updated) {
+			t.Fatal("repeated unchanged update")
+		}
+		saved = got
 	}
 }

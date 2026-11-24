@@ -150,6 +150,8 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 	if t.State == "completed" || t.State == "waiting_delivery" {
 		t.WorkCompleted = true
 	}
-	_, _ = m.agent.updateSnapshot(t)
+	if _, err := m.agent.updateSnapshot(t); err != nil {
+		m.log("task_checkpoint_save_failed")
+	}
 	return true
 }

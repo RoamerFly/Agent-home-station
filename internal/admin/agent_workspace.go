@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 )
@@ -199,29 +200,28 @@ func (p *permittedTools) callWorkspace(_ context.Context, name string, raw json.
 		if name == "workspace_search" && strings.TrimSpace(in.Query) == "" {
 			return "", toolInputError("搜索需要query")
 		}
-		var docs []map[string]any
-		all, err := p.manager.workspace.List(scope, in.Query)
-		e = err
-		if in.Offset > len(all) {
-			return "", toolInputError("文档分页起点超出范围")
-		}
 		limit := in.Limit
 		if limit == 0 {
 			limit = 30
 		}
-		end := in.Offset + min(limit, len(all)-in.Offset)
-		for _, d := range all[in.Offset:end] {
+		page, err := p.manager.workspace.Page(scope, in.Query, in.Offset, limit)
+		e = err
+		if e != nil {
+			break
+		}
+		if in.Offset > page.Total {
+			return "", toolInputError("文档分页起点超出范围")
+		}
+		docs := []map[string]any{}
+		for _, d := range page.Documents {
 			row := map[string]any{"name": d.Name, "revision": d.Revision}
 			if name == "workspace_search" {
-				r := []rune(d.Content)
-				if len(r) > 500 {
-					r = r[:500]
-				}
-				row["excerpt"] = string(r)
+				row["excerpt"] = workspaceExcerpt(d.Content, in.Query)
 			}
 			docs = append(docs, row)
 		}
-		value = map[string]any{"documents": docs, "scope": scope, "total": len(all), "next_offset": end, "has_more": end < len(all)}
+		end := in.Offset + len(page.Documents)
+		value = map[string]any{"documents": docs, "scope": scope, "total": page.Total, "next_offset": end, "has_more": end < page.Total, "warnings": page.Warnings}
 	default:
 		return "", toolInputError("未知工作区工具")
 	}
@@ -232,6 +232,22 @@ func (p *permittedTools) callWorkspace(_ context.Context, name string, raw json.
 	return string(b), e
 }
 
+func workspaceExcerpt(content, query string) string {
+	runes := []rune(content)
+	if len(runes) <= 500 {
+		return content
+	}
+	start := 0
+	if match := strings.Index(strings.ToLower(content), strings.ToLower(query)); match >= 0 {
+		center := utf8.RuneCountInString(content[:min(match, len(content))])
+		start = max(0, center-120)
+		if start+500 > len(runes) {
+			start = len(runes) - 500
+		}
+	}
+	return string(runes[start : start+500])
+}
+
 // The first turn receives only an index.  Long working guides, project
 // registrations, execution paths and conversation notes are all retrievable
 // through the corresponding tools.  Loading them pre-emptively made ordinary
@@ -240,15 +256,13 @@ func (p *permittedTools) AgentContext(ctx context.Context) string {
 	if _, e := p.workspaceScope(true); e != nil {
 		return ""
 	}
-	guides, _ := p.manager.workspace.List("shared", "")
-	index := []string{}
-	for _, d := range guides {
-		index = append(index, d.Name)
-		if len(index) == 12 {
-			break
-		}
+	index, total, err := p.manager.workspace.Names("shared", 12)
+	context := map[string]any{"kind": "agent_workspace_index", "workspace_policy": "本会话独立；群成员只读本群。跨会话仅管理员获准任务。项目与工具按需发现。", "requester_is_trusted_owner": p.privileged(), "wechat_directory_tool": "管理员跨会话任务先用wechat_conversations解析真实名称和ID。", "shared_guide_index": index, "shared_guides_total": total, "shared_guide_has_more": total > len(index), "instruction": "普通聊天直接回应。任务需资料时按需读工作区或项目；跨会话仅管理员授权。投递以真实回执为准。"}
+	if err != nil {
+		context["shared_guide_index_unavailable"] = true
+		context["shared_guides_total"] = nil
 	}
-	b, _ := json.Marshal(map[string]any{"kind": "agent_workspace_index", "workspace_policy": "本会话独立；群成员只读本群。跨会话仅管理员获准任务。项目与工具按需发现。", "requester_is_trusted_owner": p.privileged(), "wechat_directory_tool": "管理员跨会话任务先用wechat_conversations解析真实名称和ID。", "shared_guide_index": index, "shared_guides_total": len(guides), "shared_guide_has_more": len(guides) > len(index), "instruction": "普通聊天直接回应。任务需资料时按需读工作区或项目；跨会话仅管理员授权。投递以真实回执为准。"})
+	b, _ := json.Marshal(context)
 	return string(b)
 }
 func (s *Server) workspaceRoutes(mux *http.ServeMux) {
@@ -271,16 +285,16 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 			respond(w, 200, v)
 			return
 		}
-		all, e := s.manager.workspace.List(scope, "")
+		page, e := s.manager.workspace.Page(scope, "", 0, 0)
 		if e != nil {
 			fail(w, 400, e.Error())
 			return
 		}
 		names := []map[string]string{}
-		for _, d := range all {
+		for _, d := range page.Documents {
 			names = append(names, map[string]string{"name": d.Name, "revision": d.Revision})
 		}
-		respond(w, 200, map[string]any{"scope": scope, "documents": names, "processes": s.manager.processes.List(""), "layout": s.manager.managedLayoutStatus()})
+		respond(w, 200, map[string]any{"scope": scope, "documents": names, "warnings": page.Warnings, "processes": s.manager.processes.List(""), "layout": s.manager.managedLayoutStatus()})
 	}))
 	mux.HandleFunc("POST /api/agent/workspace", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Scope, Name, Content, Revision string }

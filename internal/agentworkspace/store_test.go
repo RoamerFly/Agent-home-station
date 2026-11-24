@@ -77,3 +77,36 @@ func TestNotesPersistAndConflictWithoutCrossScopeAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceIndexAndPageSurviveMalformedNote(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Read("shared", "prepare.md"); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"a-broken.md": strings.Repeat("x", 65537),
+		"b-good.md":   "普通笔记",
+		"c-tail.md":   strings.Repeat("前", 600) + "目标词在结尾",
+	} {
+		if err := os.WriteFile(filepath.Join(root, "shared", name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, total, err := s.Names("shared", 2)
+	if err != nil || total != 3 || len(names) != 2 || names[0] != "a-broken.md" {
+		t.Fatal(names, total, err)
+	}
+	page, err := s.Page("shared", "", 0, 2)
+	if err != nil || page.Total != 3 || len(page.Documents) != 2 || page.Documents[0].Name != "a-broken.md" || page.Documents[0].Revision != "" || page.Documents[1].Content != "" || len(page.Warnings) != 1 {
+		t.Fatal(page, err)
+	}
+	search, err := s.Page("shared", "目标词", 0, 1)
+	if err != nil || search.Total != 1 || len(search.Documents) != 1 || search.Documents[0].Name != "c-tail.md" || !strings.Contains(search.Documents[0].Content, "目标词") || len(search.Warnings) != 1 {
+		t.Fatal(search, err)
+	}
+}

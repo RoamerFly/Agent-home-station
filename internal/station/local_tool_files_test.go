@@ -62,7 +62,7 @@ func TestLifecycleCatalogIncludesPublicTools(t *testing.T) {
 }
 
 func TestFormalToolFilesHideScratchAndValidation(t *testing.T) {
-	for _, p := range []string{"/data/a/null-1.tmp", "/data/music/x-voice-work/vocals.wav", "/data/validation-20261117/mom.wav", "/data/music/input/source.wav"} {
+	for _, p := range []string{"/data/a/null-1.tmp", "/data/music/x-voice-work/vocals.wav", "/data/validation-20261117/mom.wav", "/data/music/input/source.wav", "/data/music/base/source.wav"} {
 		if toolFileKind(p) != "" {
 			t.Fatal("intermediate visible", p)
 		}

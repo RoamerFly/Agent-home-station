@@ -28,6 +28,7 @@ type Commit func(context.Context, []Event) error
 
 type Session struct {
 	mu       sync.Mutex
+	drainMu  sync.Mutex
 	scope    Scope
 	events   []Event
 	seen     map[string]bool
@@ -69,10 +70,13 @@ func (s *Session) Drain(ctx context.Context) ([]Event, error) {
 	if s == nil {
 		return nil, nil
 	}
+	// Keep the selected prefix in the queue until the durable commit succeeds.
+	// A second drain waits here while Offer can still append new observations.
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
 	s.mu.Lock()
 	end := min(len(s.events), 8)
 	events := append([]Event(nil), s.events[:end]...)
-	s.events = s.events[end:]
 	s.mu.Unlock()
 	for i, e := range events {
 		if err := ctx.Err(); err != nil {
@@ -93,9 +97,10 @@ func (s *Session) Drain(ctx context.Context) ([]Event, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, e := range events {
+	for _, e := range s.events[:end] {
 		s.consumed[e.ID] = true
 	}
+	s.events = s.events[end:]
 	return events, nil
 }
 

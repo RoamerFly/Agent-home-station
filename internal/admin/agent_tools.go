@@ -384,8 +384,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", toolInputError("新任务请同时传key和title；续办现有任务请传agent_tasks返回的id")
 			}
 			if p.privileged() && strings.Contains(in.Title, "歌") {
-				for _, old := range m.agent.active(p.trace.Account, "") {
-					if old.Sender == p.trace.Sender && old.MusicJob != "" && old.Title == in.Title &&
+				for _, old := range m.agent.active(p.trace.Account, deliveryThread) {
+					sameRequest := old.OriginTrace != "" && (old.OriginTrace == origin || old.OriginTrace == p.trace.TraceID)
+					if sameRequest && sourceThread == p.trace.Thread && deliveryThread == p.trace.Thread && old.Sender == p.trace.Sender && old.MusicJob != "" && old.Title == in.Title &&
 						(old.State == "pending" || old.State == "waiting" || old.State == "running") {
 						return encode(map[string]any{"task": old, "reused_existing": true, "instruction": "继续查询此任务的原 music_job，不重复提交或创建提醒"}, nil)
 					}
@@ -432,7 +433,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if in.Title != "" {
 			t.Title = in.Title
 		}
-		if err := m.agent.task(t); err != nil {
+		t, err := m.agent.saveTask(t)
+		if err != nil {
 			return "", err
 		}
 		m.record(bot.Record{Event: "agent_task_saved", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: t.Title, Status: t.State, Reason: "persistent_checkpoint_saved", Origin: "agent"})

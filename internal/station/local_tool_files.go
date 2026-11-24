@@ -74,7 +74,7 @@ func toolFileKind(path string) string {
 	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".wav", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".mp4", ".webm", ".png", ".jpg", ".jpeg", ".webp", ".pdf", ".docx", ".xlsx", ".pptx":
-		if strings.Contains(p, "/input/") || strings.Contains(p, "/base/") || strings.Contains(p, "/assets/") || strings.Contains(p, "/downloads/") {
+		if strings.Contains(p, "/assets/") || strings.Contains(p, "/downloads/") {
 			return "素材"
 		}
 		return "产物"

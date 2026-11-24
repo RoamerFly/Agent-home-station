@@ -149,8 +149,8 @@ func (m *catalogModel) ChatFunctions(_ context.Context, _ string, turns []map[st
 		}
 		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":7,"limit":7}}`, nil
 	case 3:
-		if !has("catalog_11") {
-			m.t.Fatal("later tool schema remained hidden")
+		if !has("catalog_11") || has("catalog_06") {
+			m.t.Fatal("later page missing or old schemas kept across pages")
 		}
 		return `{"action":"tool","tool":"catalog_11","arguments":{}}`, nil
 	default:

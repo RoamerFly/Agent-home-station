@@ -2,7 +2,9 @@ package companion
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -31,5 +33,38 @@ func TestFailureTextIsModelAuthoredAndModelOutageProducesNoChat(t *testing.T) {
 	d, err = r.finalResponse(context.Background(), "role", nil, "download_failed", "connection refused")
 	if err == nil || len(d.Messages) != 0 {
 		t.Fatal("model outage synthesized a chat reply", d, err)
+	}
+}
+
+func TestFinalResponseUsesConfiguredContextWindow(t *testing.T) {
+	model := &capturePolicyModel{}
+	e, err := NewPreview(enabledConfig(), model, "role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.MemoryOptions = func() MemorySettings {
+		settings := MemoryDefaults()
+		settings.ContextWindow, settings.OutputReserve = 2200, 100
+		return settings
+	}
+	turns := []map[string]string{{"role": "user", "content": `{"kind":"current_message","text":"继续处理"}`}}
+	for i := 0; i < 12; i++ {
+		if i == 6 {
+			turns = append(turns, map[string]string{"role": "user", "content": `{"kind":"current_followup","text":"改用新方案"}`})
+		}
+		call, _ := json.Marshal(map[string]any{"action": "tool", "tool": "probe", "arguments": map[string]int{"page": i}})
+		result, _ := json.Marshal(map[string]any{"tool": "probe", "source": "untrusted_tool_result", "result": strings.Repeat("旧结果", 300), "execution": map[string]string{"status": "succeeded", "result_id": fmt.Sprint(i)}})
+		turns = append(turns, map[string]string{"role": "assistant", "content": string(call)}, map[string]string{"role": "user", "content": string(result)})
+	}
+	r := &AgentRunner{Engine: e}
+	if _, err := r.finalResponse(t.Context(), "role", turns, "tool_no_progress", "同一页没有变化"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateContextWindow(model.system, model.turns, nil, 2200, 100); err != nil {
+		t.Fatal(err)
+	}
+	joined := fmt.Sprint(model.turns)
+	if !strings.Contains(joined, "current_message") || !strings.Contains(joined, "改用新方案") || !strings.Contains(joined, "execution_feedback") || !strings.Contains(joined, "result_id") {
+		t.Fatal("final response lost current request, follow-up, feedback or receipt")
 	}
 }

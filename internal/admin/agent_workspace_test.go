@@ -10,6 +10,14 @@ import (
 	"wechat-bot/internal/companion"
 )
 
+func TestWorkspaceSearchExcerptIncludesLateMatch(t *testing.T) {
+	content := strings.Repeat("前", 600) + "目标词在结尾" + strings.Repeat("后", 50)
+	excerpt := workspaceExcerpt(content, "目标词")
+	if !strings.Contains(excerpt, "目标词") || len([]rune(excerpt)) > 500 {
+		t.Fatal("search excerpt omitted match", excerpt)
+	}
+}
+
 func TestDeliveryWorkingRuleMergesAndSurvivesRestart(t *testing.T) {
 	f := setup(t)
 	d, e := f.manager.workspace.Read("shared", "AGENTS.md")

@@ -237,12 +237,111 @@ func ValidateContextWindow(system string, turns []map[string]string, toolJSON []
 	if window == 0 {
 		return nil
 	}
-	total := EstimateTokens(system) + EstimateTokens(string(toolJSON)) + reserve
-	for _, t := range turns {
-		total += EstimateTokens(t["content"]) + 8
-	}
+	total := estimatedContextTokens(system, turns, toolJSON, reserve)
 	if total > window {
 		return fmt.Errorf("model_context_window_exceeded: estimated input %d + output reserve %d exceeds configured window %d; read sources in pages or split task, current message was not truncated", total-reserve, reserve, window)
 	}
 	return nil
+}
+
+func estimatedContextTokens(system string, turns []map[string]string, toolJSON []byte, reserve int) int {
+	total := EstimateTokens(system) + EstimateTokens(string(toolJSON)) + reserve
+	for _, t := range turns {
+		total += EstimateTokens(t["content"]) + 8
+	}
+	return total
+}
+
+// Build a model-only view of older actions against the configured window. The
+// durable transcript stays complete; the current request, latest follow-up and
+// newest tool result remain intact. Older operation receipts are represented in
+// a compact user packet rather than leaving orphaned function results.
+func compactActionTurnsForWindow(system string, turns []map[string]string, toolJSON []byte, window, reserve int) []map[string]string {
+	turns = compactActionTurns(system, turns)
+	if window <= 0 || estimatedContextTokens(system, turns, toolJSON, reserve) <= window {
+		return turns
+	}
+	current := -1
+	for i, turn := range turns {
+		var event struct{ Kind string }
+		if json.Unmarshal([]byte(turn["content"]), &event) == nil && event.Kind == "current_message" {
+			current = i
+		}
+	}
+	if current < 0 {
+		return turns
+	}
+	for current > 0 && estimatedContextTokens(system, turns, toolJSON, reserve) > window {
+		turns = turns[1:]
+		current--
+	}
+	for _, tail := range []int{12, 4, 2} {
+		if estimatedContextTokens(system, turns, toolJSON, reserve) <= window || len(turns)-current <= tail+2 {
+			break
+		}
+		end := len(turns) - tail
+		if toolFeedbackTurn(turns[end]) {
+			end-- // Keep the assistant call with its result.
+		}
+		if end <= current+1 {
+			continue
+		}
+		latestFollowup := -1
+		for i := end - 1; i > current; i-- {
+			var event struct{ Kind string }
+			if json.Unmarshal([]byte(turns[i]["content"]), &event) == nil && event.Kind == "current_followup" {
+				latestFollowup = i
+				break
+			}
+		}
+		excerpts := make([]string, 0, end-current)
+		for i := current + 1; i < end; i++ {
+			if i == latestFollowup {
+				continue
+			}
+			excerpts = append(excerpts, compactActionReceipt(turns[i]))
+		}
+		data := budgetTokenText(strings.Join(excerpts, "\n"), max(120, min(800, window/10)))
+		packet, _ := json.Marshal(map[string]any{"kind": "action_history_excerpt", "data": data, "instruction": "较早操作已压缩；成功操作不重复，完整结果按已有编号续读。"})
+		kept := append([]map[string]string{}, turns[:current+1]...)
+		kept = append(kept, map[string]string{"role": "user", "content": string(packet)})
+		if latestFollowup >= 0 {
+			kept = append(kept, turns[latestFollowup])
+		}
+		turns = append(kept, turns[end:]...)
+	}
+	for i := current + 1; i < len(turns)-2 && estimatedContextTokens(system, turns, toolJSON, reserve) > window; i++ {
+		var packet map[string]any
+		if json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil || packet["source"] != "untrusted_tool_result" {
+			continue
+		}
+		result, ok := packet["result"].(string)
+		if !ok || EstimateTokens(result) <= 160 {
+			continue
+		}
+		packet["result"] = budgetTokenText(result, 160)
+		packet["excerpt"] = true
+		encoded, _ := json.Marshal(packet)
+		turns[i] = map[string]string{"role": turns[i]["role"], "content": string(encoded)}
+	}
+	return turns
+}
+
+func toolFeedbackTurn(turn map[string]string) bool {
+	var packet struct{ Source string }
+	return json.Unmarshal([]byte(turn["content"]), &packet) == nil && packet.Source == "untrusted_tool_result"
+}
+
+func compactActionReceipt(turn map[string]string) string {
+	var packet struct {
+		Tool      string          `json:"tool"`
+		Result    string          `json:"result"`
+		Source    string          `json:"source"`
+		Execution json.RawMessage `json:"execution"`
+	}
+	if json.Unmarshal([]byte(turn["content"]), &packet) == nil && packet.Source == "untrusted_tool_result" {
+		value, _ := json.Marshal(map[string]any{"tool": packet.Tool, "execution": packet.Execution, "result_excerpt": boundedText(packet.Result, 180)})
+		return string(value)
+	}
+	return boundedText(turn["content"], 180)
 }

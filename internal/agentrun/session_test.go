@@ -57,7 +57,7 @@ func TestOfferVersusSealHasOnlyOneOwner(t *testing.T) {
 func TestDrainFailureDoesNotClaimConsumptionAndBatchingDoesNotDrop(t *testing.T) {
 	s := New(Scope{Account: "a", Thread: "t", Sender: "s", RunID: "r"}, nil, func(context.Context, []Event) error { return context.Canceled })
 	s.Offer("a", Event{ID: "failed", Thread: "t", Sender: "s"})
-	if _, err := s.Drain(context.Background()); err == nil || s.Consumed("failed") {
+	if _, err := s.Drain(context.Background()); err == nil || s.Consumed("failed") || !s.Pending() {
 		t.Fatal("failed durable commit acknowledged")
 	}
 	s = New(Scope{Account: "a", Thread: "t", Sender: "s", RunID: "r"}, nil, nil)
@@ -74,5 +74,41 @@ func TestDrainFailureDoesNotClaimConsumptionAndBatchingDoesNotDrop(t *testing.T)
 	}
 	if count != 19 || !s.Seal() {
 		t.Fatal("batching lost input", count)
+	}
+}
+
+func TestDrainRetriesPrepareAndCommitWithoutDroppingLaterOffers(t *testing.T) {
+	for _, failure := range []string{"prepare", "commit"} {
+		t.Run(failure, func(t *testing.T) {
+			attempts := 0
+			prepare := func(_ context.Context, e Event) (Event, error) {
+				if failure == "prepare" && attempts == 0 {
+					attempts++
+					return Event{}, context.Canceled
+				}
+				e.Text = "prepared"
+				return e, nil
+			}
+			commit := func(_ context.Context, events []Event) error {
+				if failure == "commit" && attempts == 0 {
+					attempts++
+					return context.Canceled
+				}
+				return nil
+			}
+			s := New(Scope{Account: "a", Thread: "t", Sender: "s", RunID: "r"}, prepare, commit)
+			first := Event{ID: "first", Thread: "t", Sender: "s"}
+			s.Offer("a", first)
+			if _, err := s.Drain(context.Background()); err == nil || !s.Pending() || s.Consumed(first.ID) {
+				t.Fatal("failed batch was removed")
+			}
+			if !s.Offer("a", first) || !s.Offer("a", Event{ID: "second", Thread: "t", Sender: "s"}) {
+				t.Fatal("retry or later observation rejected")
+			}
+			events, err := s.Drain(context.Background())
+			if err != nil || len(events) != 2 || events[0].ID != "first" || events[1].ID != "second" || events[0].Text != "prepared" || !s.Consumed("first") || !s.Consumed("second") || s.Pending() {
+				t.Fatal(events, err)
+			}
+		})
 	}
 }

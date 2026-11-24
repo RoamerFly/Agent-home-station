@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from managed_music_runner import command, launch_windows
+from managed_music_runner import canonical, command, launch_windows
 from music_unix_client import open_request
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 from managed_music_ipc import AccountIPC
@@ -136,6 +136,17 @@ def registered_comfy_command(config_file, url, state):
             "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-auto-launch", "--disable-metadata",
             *(["--cpu"] if device=="cpu" else ["--cuda-device",str(int(config.get("cuda_device",0)))])]
 
+def managed_account_workspace(workspace, private):
+    workspace, private = canonical(workspace), canonical(private)
+    legacy = private.parent == workspace / "pri_workspace"
+    release = (workspace.name == "home" and workspace.parent.name == "workspaces"
+               and private == workspace.parent / "wechat")
+    if not (legacy or release):
+        raise ValueError("music_account_directory_required")
+    account_scope(private)
+    return private
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -174,15 +185,12 @@ def main():
             if not json.load(reply).get("ready"):
                 raise SystemExit(1)
         return
-    workspace = Path(args.workspace).resolve(strict=True)
+    workspace = Path(args.workspace)
     public = Path(args.public_root).resolve(strict=True) if args.public_root else workspace / "public_workspace"
     from managed_music_runner import managed_public_root
     public = managed_public_root(public)
     if not args.private: raise ValueError("music_private_workspace_required")
-    private = Path(args.private).resolve(strict=True)
-    if private.parent != workspace / "pri_workspace":
-        raise ValueError("music_account_directory_required")
-    account_scope(private)
+    private = managed_account_workspace(workspace, args.private)
     state = private / "music"
     for name in ("input", "output", "user", "base", "jobs"):
         (state / name).mkdir(parents=True, exist_ok=True)

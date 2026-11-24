@@ -11,11 +11,36 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
 from managed_music_runner import command, managed_public_root
-from managed_music_service import comfy_memory_arguments, external_comfy_url, registered_comfy_command, yue_project_paths
+from managed_music_service import comfy_memory_arguments, external_comfy_url, managed_account_workspace, registered_comfy_command, yue_project_paths
 from music_unix_client import open_request
 
 
 class MusicMemoryPolicyTests(unittest.TestCase):
+    def test_workspace_accepts_bound_release_account_and_legacy_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            workspace = root / "data/workspaces/home"
+            private = workspace.parent / "wechat"
+            workspace.mkdir(parents=True)
+            private.mkdir()
+            scope = hashlib.sha256(b"test-account").hexdigest()
+            identity = {"account_id": "test-account", "scope": scope, "directory": "old-readable-name"}
+            (private / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            self.assertEqual(managed_account_workspace(workspace, private), private)
+            legacy = workspace / "pri_workspace" / scope
+            legacy.mkdir(parents=True)
+            self.assertEqual(managed_account_workspace(workspace, legacy), legacy)
+
+            other = root / "other/workspaces/wechat"
+            other.mkdir(parents=True)
+            (other / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "music_account_directory_required"):
+                managed_account_workspace(workspace, other)
+            identity["scope"] = "0" * 64
+            (private / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "music_account_directory_required"):
+                managed_account_workspace(workspace, private)
+
     def test_yue_paths_use_relocated_package_workflows(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

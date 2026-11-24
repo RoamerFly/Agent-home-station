@@ -454,12 +454,17 @@ func (a *agentControl) listTasks(account, thread string, history bool) []agentTa
 	return out
 }
 func (a *agentControl) task(t agentTask) error {
+	_, err := a.saveTask(t)
+	return err
+}
+
+func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old, exists := a.data.Tasks[t.ID]
 	if exists {
 		if old.Account != t.Account || old.Thread != t.Thread || old.Sender != t.Sender {
-			return errors.New("task_identity_cannot_change")
+			return agentTask{}, errors.New("task_identity_cannot_change")
 		}
 		if old.Constraints != nil {
 			t.Constraints = copyTask(old).Constraints
@@ -467,7 +472,7 @@ func (a *agentControl) task(t agentTask) error {
 		t.OwnerRequested = t.OwnerRequested || old.OwnerRequested
 	}
 	if err := validateTaskConstraints(t); err != nil {
-		return err
+		return agentTask{}, err
 	}
 	if t.State == "completed" {
 		t.WorkCompleted = true
@@ -478,9 +483,9 @@ func (a *agentControl) task(t agentTask) error {
 	if !exists {
 		if retired, ok := a.archived[t.ID]; ok {
 			if retired.Account == t.Account && retired.Thread == t.Thread && retired.State == t.State {
-				return nil
+				return copyTask(retired), nil
 			}
-			return errors.New("任务已结束并移出活跃队列，请用新的任务编号")
+			return agentTask{}, errors.New("任务已结束并移出活跃队列，请用新的任务编号")
 		}
 	}
 	if exists {
@@ -511,7 +516,7 @@ func (a *agentControl) task(t agentTask) error {
 			} else {
 				delete(a.data.Tasks, t.ID)
 			}
-			return e
+			return agentTask{}, e
 		}
 	}
 	if err := a.persist(); err != nil {
@@ -527,9 +532,9 @@ func (a *agentControl) task(t agentTask) error {
 				_ = os.Remove(filepath.Join(a.dir, "reminders", t.ID+".json"))
 			}
 		}
-		return err
+		return agentTask{}, err
 	}
-	return nil
+	return copyTask(t), nil
 }
 func agentID(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
@@ -547,7 +552,7 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	if !c.Enabled || !c.TasksEnabled || !cfg.Companion.Enabled {
 		return nil, nil
 	}
-	seenProcessOrigins := map[string]bool{}
+	seenProcessWatchers := map[[4]string]bool{}
 	for _, t := range m.agent.active(m.native.Account(), "") {
 		if settleCompletedProcessPlaceholder(&t) {
 			if _, err := m.agent.updateSnapshot(t); err != nil {
@@ -563,8 +568,8 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		// process result generation again. The process records and outputs stay
 		// available for inspection.
 		if t.Title == "后台程序" && t.ProcessID != "" && t.OriginTrace != "" {
-			key := t.Account + "\x00" + t.Thread + "\x00" + t.OriginTrace
-			if seenProcessOrigins[key] {
+			key := [4]string{t.Account, t.Thread, t.OriginTrace, t.ProcessID}
+			if seenProcessWatchers[key] {
 				// A duplicate watcher can inherit the zero-count placeholder that
 				// finishAgentTask used before a real delivery plan existed. It has
 				// no receipt to reconcile and must not block archival of the
@@ -573,13 +578,15 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				t.State = "completed"
 				t.WorkCompleted = true
 				t.LastResult = "同一原始消息的重复进程观察任务已收敛，保留最新任务和原进程记录"
-				_, _ = m.agent.updateSnapshot(t)
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					return nil, err
+				}
 				if err := m.agent.retireSettled(); err != nil {
 					m.log("duplicate_process_task_archive_failed")
 				}
 				continue
 			}
-			seenProcessOrigins[key] = true
+			seenProcessWatchers[key] = true
 		}
 		if m.mobileRetired && t.DeviceTask != "" {
 			continue
@@ -625,6 +632,13 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		}
 		if t.MusicJob != "" {
 			if !cfg.Companion.Permissions.SendVoice && !cfg.Companion.Permissions.SendFile {
+				const reason = "等待恢复语音或文件发送权限，保留原音乐任务及投递进度"
+				if t.LastResult != reason {
+					t.LastResult = reason
+					if _, err := m.agent.updateSnapshot(t); err != nil {
+						return nil, err
+					}
+				}
 				continue
 			}
 			if !m.localMusicPluginConfigured(context.Background()) {
@@ -778,7 +792,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 			if t.NotificationText != "" && state == "reply" {
 				t.State = "completed"
 				t.LastResult = "提醒正文已交给发送链，实际发送状态以回执为准"
-				_ = m.agent.task(t)
+				if err := m.agent.task(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
 				return
 			}
 
@@ -786,7 +802,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.State = "waiting"
 				t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				t.LastResult = "后台思考已让位于新消息；原程序、工具结果和行动证据保留。稍后读取真实状态继续，不重新启动已执行操作"
-				_, _ = m.agent.updateSnapshot(t)
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
 				return
 			}
 			if (t.OwnerRequest && state == "reply") || (t.ReminderDue && state == "silent") {
@@ -804,7 +822,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 							t.State = "completed"
 							t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
 						}
-						_ = m.agent.task(t)
+						if err := m.agent.task(t); err != nil {
+							m.log("task_checkpoint_save_failed")
+						}
 						return
 					}
 				}
@@ -813,7 +833,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 				t.State = "waiting_delivery"
 				t.WorkCompleted = true
 				t.LastResult = "已提交原定群聊的成品，等待原发送回执"
-				_, _ = m.agent.updateSnapshot(t)
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
 				return
 			}
 			// Silence is a decision, not a request for an operator. Only close
@@ -838,7 +860,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 					t.State = "needs_review"
 					t.LastResult = "私聊报告本轮未完成：" + state
 				}
-				_ = m.agent.task(t)
+				if err := m.agent.task(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
 				return
 			}
 			if m.finishTaskResult(t, state) {
@@ -847,7 +871,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) {
 			if t.RecoveryMessageID != "" && (state == "reply" || state == "silent" || state == "synchronous_round_finished") {
 				t.State = "completed"
 				t.LastResult = "原消息已交由模型处理；回复已交给发送链路或模型选择安静，实际送达以发送记录为准"
-				_ = m.agent.task(t)
+				if err := m.agent.task(t); err != nil {
+					m.log("task_checkpoint_save_failed")
+				}
 				return
 			}
 			t.State = "needs_review"

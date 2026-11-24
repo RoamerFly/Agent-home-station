@@ -7,10 +7,10 @@
 - env：Python、Windows Agent 运行器、微信原生运行环境等共享环境。
 - data/applications：应用登录、记忆、会话规则、回合、应用任务和媒体记录。
 - data/publictools：工具配置、登记、任务、产物索引；catalog 存单一工作站工具登记和按内容摘要保存的安装版本。摘要目录是版本/完整性索引，不是多个大肥鱼。
-- data/workspace/home：大肥鱼的唯一家目录；diary 日记、projects 项目、works 作品、scratch 草稿、Project Tools 自建工具、Connected Apps 应用工作资料。
+- data/workspaces：大肥鱼的唯一工作区根；按应用分为 home、wechat、douyin、bilibili 等目录，内部资料由 Agent 自行整理。
 - data/main_setting：工作站身份、管理密码、主记忆、日志、浏览器登录资料和桌面服务。
 
-启动时将旧 fish_home/<身份>/home 原目录改名为 workspace/home，将旧工具登记的鱼身份目录改名为 publictools/catalog。内部身份、工具登记内容、应用登录资料保持不变；目标冲突时保留双方内容并报告错误。空的旧容器仅用非递归删除处理。
+启动时将旧 fish_home/<身份>/home 原目录移入当前配置的工作区根下的 home；新构建默认使用 data/workspaces。旧安装若仍配置 data/workspace，需先完成资料迁移再修改工作区根。旧工具登记的鱼身份目录移入 publictools/catalog。内部身份、工具登记内容、应用登录资料保持不变；目标冲突时保留双方内容并报告错误。空的旧容器仅用非递归删除处理。
 
 Build-Desktop 的 LocalStation 构建把经过清单验证的工具放入带用途后缀的 publictools。请使用独立 staging 目录构建，停止正式实例后部署，不直接合并真实模型和私有资料。
 
