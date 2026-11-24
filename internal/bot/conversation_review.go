@@ -129,6 +129,7 @@ func (w *Worker) applyPlanReview(p *utterancePlan, d companion.PendingReview, er
 		return
 	}
 	p.ReviewFailures = 0
+	p.EpochReplan = false
 	p.Updates = nil
 	switch d.Action {
 	case "cancel":
@@ -197,7 +198,7 @@ func (w *Worker) planReviewEvidence(ctx context.Context, c *companion.Engine, p 
 		}
 		ctx = companion.WithStoredGenerationEvidence(ctx, *p.ReviewEvidence)
 	}
-	if !in.IsGroup && (in.ReplyContext == nil || reader.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil {
+	if !in.IsGroup && (in.ReplyContext == nil || reader.bindingEvidenceMissing(in) || replyProofMetadataMissing(in.ReplyContext)) && p.ReviewEvidence == nil && !p.EpochReplan {
 		return ctx, in, errors.New("private_reply_requires_replan")
 	}
 	return ctx, in, nil

@@ -74,7 +74,7 @@
       return { kind: 'page', label: url.hostname + ' · ' + url.pathname, href: url.href };
     } catch { return null; }
   }
-  function project(items, taskStates = {}, now = Date.now(), inbox = {loaded:false, states:{}}, sendStates = {}) {
+  function project(items, taskStates = {}, now = Date.now(), inbox = {loaded:false, states:{}}, sendStates = {}, planStates = {}) {
     const entries = [...items].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     const latestEntryTime = entries.reduce((latest, item) => Math.max(latest, Date.parse(item.time) || 0), 0);
     const observedTime = Math.max(latestEntryTime, Number(now) || 0);
@@ -200,6 +200,7 @@
       else if (item.status === 'retrying' && stage(item) === 'delivery') round.status = 'retrying_delivery';
       else if (['unknown', 'waiting'].includes(item.status) && stage(item) === 'delivery') round.status = 'waiting';
       else if (['accepted', 'observed'].includes(item.status) && stage(item) === 'delivery') round.status = item.event === 'message_progress' ? 'running' : 'accepted';
+      else if (item.event === 'send_failed') round.status = 'waiting';
       else if (item.category === 'error' && !item.tool) round.status = ['queued', 'processing', 'running'].includes(item.status) ? 'running' : 'failed';
       else if (item.event === 'context_compression_completed' && item.status === 'completed' && ['running','received','queued'].includes(round.status) && round.entries.some(e=>e.event==='context_compression_started')) round.status = 'completed';
       else if (item.event === 'message_processed' && ['running','received','queued'].includes(round.status)) round.status = 'completed';
@@ -324,13 +325,32 @@
         round.status = failed ? 'failed' : 'stopped';
         round.staleUnfinished = true;
       }
-      // A long-running receipt lookup is accounting for one old send, not an
-      // active conversation. Keep the uncertain receipt in the timeline while
-      // removing the completed text turn from the ongoing-round list.
-      if (round.status === 'checking_receipt' && !activeTask?.active &&
-          round.entries.some(e => e.event === 'utterance_plan_stopped' && e.reason === 'receipt_only_reconciliation')) {
-        round.status = 'completed';
+      // A receipt-only continuation still has an unconfirmed send. Historical
+      // logs may lack a persisted plan, so the stop event cannot complete it.
+      if (round.entries.some(e => e.event === 'utterance_plan_stopped' && e.reason === 'receipt_only_reconciliation') &&
+          !round.entries.some(e => e.event === 'task_delivery_updated' && e.status === 'completed')) {
+        round.status = activeTask?.active || scheduledRetry ? 'checking_receipt' : 'waiting';
         round.receiptOnly = true;
+      }
+      // Sending is part of the round. A model decision or an earlier accepted
+      // progress message cannot complete a plan with unsent bubbles.
+      let plan;
+      for (const item of round.entries) {
+        const candidate = planStates[item.thread_id + '\0' + item.message_id];
+        if (candidate && (!plan || Date.parse(candidate.created) >= Date.parse(plan.created))) plan = candidate;
+      }
+      const manualCompletion = round.entries.some(e => e.event === 'round_manually_completed');
+      if (!manualCompletion && plan) {
+        if (plan.state === 'accepted' && plan.index >= plan.total) round.status = 'accepted';
+        else if (plan.total > plan.index) {
+          if (plan.state === 'waiting_receipt' || plan.stop_reason === 'receipt_only_reconciliation' && (activeTask?.active || scheduledRetry)) round.status = 'checking_receipt';
+          else if (['submitting', 'sending'].includes(plan.state) || activeTask?.active) round.status = 'running';
+          else if (['model_cancel', 'manual_completion', 'media_queue_cancelled', 'media_cancel_requested_by_user', 'media_superseded_by_new_request'].includes(plan.stop_reason)) round.status = 'stopped';
+          else round.status = 'waiting';
+        }
+      } else if (!manualCompletion && !plan) {
+        const lastFailure = round.entries.findLastIndex(e => e.event === 'send_failed');
+        if (lastFailure >= 0 && !round.entries.slice(lastFailure + 1).some(e => e.event === 'message_sent' && e.status === 'accepted' || e.event === 'task_delivery_updated' && e.status === 'completed') && !['checking_receipt', 'waiting_receipt'].includes(round.status)) round.status = activeTask?.active ? 'running' : 'waiting';
       }
       if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,13 +144,22 @@ func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
 	if loaded || states != nil {
 		t.Fatal("missing checkpoint must not be treated as an empty inbox")
 	}
-	data := []byte(`{"inbox":[{"phase":"received","event":{"data":{"messageId":"message-one","content":"private text"}}}]}`)
+	data := []byte(`{"inbox":[{"phase":"received","event":{"data":{"messageId":"message-one","content":"private text"}}}],"utterance_plans":[{"trace":"message-one","state":"stopped","stop_reason":"reply_evidence_epoch_changed","index":0,"messages":["private reply"],"input":{"thread":"group@chatroom"}}]}`)
 	if err := os.WriteFile(filepath.Join(f.manager.stateDir, "messages-v2.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	states, loaded = server.logInboxStates()
 	if !loaded || states["message-one"].Phase != "received" || len(states) != 1 {
 		t.Fatal("inbox phase projection failed")
+	}
+	_, plans, loaded := server.logRuntimeStates()
+	plan := plans["group@chatroom\x00message-one"]
+	if !loaded || len(plans) != 1 || plan.State != "stopped" || plan.StopReason != "reply_evidence_epoch_changed" || plan.Index != 0 || plan.Total != 1 {
+		t.Fatal("unfinished plan projection failed", plans)
+	}
+	projected, _ := json.Marshal(plans)
+	if strings.Contains(string(projected), "private reply") || strings.Contains(string(projected), "private text") {
+		t.Fatal("private message content leaked into plan status")
 	}
 }
 

@@ -12,6 +12,8 @@ type replyGroundingEngine interface {
 	ReviewGroundedReply(context.Context, companion.Input, companion.Decision) (companion.Decision, error)
 }
 
+var errReplyEvidenceEpochChanged = errors.New("reply_evidence_epoch_changed")
+
 // Evidence helpers only read the source and engine. Bind both before checking
 // a queued reply; the generation's per-conversation adapter has already exited.
 func (w *Worker) deliveryEvidenceReader(in companion.Input) (*Worker, error) {
@@ -210,7 +212,7 @@ func (w *Worker) validateExistingReplyEvidence(ctx context.Context, in companion
 		}
 		epoch, err := e.Store.RecallEpoch(ctx)
 		if err != nil || epoch != r.EvidenceEpoch {
-			return errors.New("reply_evidence_epoch_changed")
+			return errReplyEvidenceEpochChanged
 		}
 	}
 	if r.EvidenceAuthorization != "" {

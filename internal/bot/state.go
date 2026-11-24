@@ -68,7 +68,7 @@ func saveCheckpoint(path string, c checkpoint) error {
 	if err != nil || closeErr != nil {
 		return errors.New("cannot save bot checkpoint")
 	}
-	if os.Rename(f.Name(), path) != nil {
+	if replaceQueueCheckpoint(f.Name(), path) != nil {
 		return errors.New("cannot replace bot checkpoint")
 	}
 	return syncDirectory(filepath.Dir(path))

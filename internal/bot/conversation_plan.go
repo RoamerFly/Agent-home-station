@@ -12,6 +12,7 @@ import (
 
 type utterancePlan struct {
 	ReviewEvidence   *companion.GenerationEvidence `json:"review_evidence,omitempty"`
+	EpochReplan      bool                          `json:"epoch_replan,omitempty"`
 	ReplyContexts    []companion.ReplyContext      `json:"reply_contexts,omitempty"`
 	Paused           bool                          `json:"paused,omitempty"`
 	WakeReason       string                        `json:"wake_reason,omitempty"`
@@ -36,6 +37,7 @@ type utterancePlan struct {
 }
 
 func (p *utterancePlan) terminal() bool { return p.State == "accepted" || p.State == "stopped" }
+
 func (w *Worker) pendingConversationThread(thread string) bool {
 	if w.generation != nil && w.generation.jobs[thread] != nil {
 		return true
@@ -193,6 +195,34 @@ func (w *Worker) planDelivery(p *utterancePlan) *delivery {
 	}
 	return nil
 }
+
+// Older versions stopped an unsent plan when a newer memory revision made its
+// reply proof stale. Reuse its original trace and review the remaining text;
+// only an intent with no submission or receipt may be retired this way.
+func (w *Worker) recheckUnsentReply(p *utterancePlan) bool {
+	if p.Index >= len(p.Messages) {
+		return false
+	}
+	if d := w.planDelivery(p); d != nil {
+		if d.ID != "" || d.ServerID != "" || d.SubmittedText != "" {
+			return false
+		}
+		d.State, d.Reason = "stopped", "unsubmitted_text_needs_replan"
+		p.Slot++ // Retire only this unsubmitted idempotency key.
+	}
+	p.ReplyContexts = append([]companion.ReplyContext(nil), p.ReplyContexts[:min(p.Index, len(p.ReplyContexts))]...)
+	p.Input.ReplyContext = nil
+	p.ReviewEvidence = nil
+	p.EpochReplan = true
+	p.State, p.StopReason = "review_pending", ""
+	p.Next = time.Now()
+	w.persistErr = w.saveRuntime()
+	if w.persistErr != nil {
+		return false
+	}
+	w.activity(Record{Event: "utterance_plan_paused", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "waiting", Reason: "reply_evidence_epoch_changed"})
+	return true
+}
 func (w *Worker) acceptPlanBubble(c *companion.Engine, p *utterancePlan, text string) {
 	in := p.Input
 	if p.Index < len(p.ReplyContexts) {
@@ -275,6 +305,9 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
+		if p.State == "stopped" && p.StopReason == "reply_evidence_epoch_changed" {
+			w.recheckUnsentReply(p)
+		}
 		if p.Paused || p.terminal() || visited[p.Input.Thread] || !p.InboxChecked {
 			continue
 		}
@@ -299,7 +332,7 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 				if w.persistErr != nil {
 					return
 				}
-				w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "completed", Reason: p.StopReason})
+				w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "waiting", Reason: p.StopReason})
 			} else {
 				delete(visited, p.Input.Thread)
 			}
@@ -365,6 +398,20 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			p.State = "waiting_receipt"
 			p.Next = time.Now().Add(time.Second)
 			w.persistErr = w.saveRuntime()
+		} else if errors.Is(err, errReplyEvidenceEpochChanged) {
+			// A new memory revision invalidated the unsent text's proof before
+			// submission. The original reply can be reviewed with current context;
+			// accepted bubbles and their receipt evidence remain untouched.
+			if d := w.planDelivery(p); d != nil {
+				if d.ID != "" || d.ServerID != "" || d.SubmittedText != "" {
+					d.State, d.Next = "waiting", time.Now()
+					p.State = "waiting_receipt"
+					p.Next = time.Now().Add(time.Second)
+					w.persistErr = w.saveRuntime()
+					continue
+				}
+			}
+			w.recheckUnsentReply(p)
 		} else {
 			p.State, p.StopReason = "stopped", sending.FailureReason(err)
 			w.persistErr = w.saveRuntime()

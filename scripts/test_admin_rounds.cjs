@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { project: projectRounds, stage, activityTarget } = require('../internal/admin/static/rounds.js');
 // Historical fixtures are evaluated at their last event unless a test supplies
 // wall time explicitly. The production projection always uses the real clock.
-const project = (items, states, now, inbox, sendStates) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox, sendStates);
+const project = (items, states, now, inbox, sendStates, planStates) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox, sendStates, planStates);
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
@@ -18,17 +18,36 @@ test('status filters group terminal failures separately from unresolved receipts
   ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
   ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
   ['reminder_overdue','decision','expired','reminder_overdue_while_offline','done'],
-  ['send_failed','error','failed','send_outcome_unknown','done'],
+  ['send_failed','error','failed','send_outcome_unknown','pending'],
   ['message_sent','sent','accepted','','done']
  ];
  for(const [event,category,status,reason,group] of cases){
   const r=project([entry(1,{event,category,status,reason})])[0];
   assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
-  if(status==='needs_review'||reason==='send_outcome_unknown'){
+  if(status==='needs_review'){
    const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
    assert.equal(project([...r.entries,processed])[0].group,'done');
   }
+  if(reason==='send_outcome_unknown') assert.equal(project([...r.entries,entry(2,{event:'message_processed',category:'decision',status:'completed'})])[0].group,'pending');
  }
+});
+
+test('an unsent semantic reply cannot make its execution round completed',()=>{
+ const rows=[
+  entry(1,{event:'message_received',category:'received',status:'received'}),
+  entry(2,{event:'utterance_plan_queued',category:'decision',status:'queued',reason:'semantic_message_plan'}),
+  entry(3,{event:'send_failed',category:'error',status:'failed',reason:'reply_evidence_epoch_changed'}),
+  entry(4,{event:'bot_runtime_failed',category:'error',status:'failed',reason:'bot_saved_state_unavailable'}),
+ ];
+ const key='fixture@chatroom\0message-1';
+ const stopped={state:'stopped',stop_reason:'reply_evidence_epoch_changed',index:0,total:1,created:at(2)};
+ const [unfinished]=project(rows,{},undefined,undefined,undefined,{[key]:stopped});
+ assert.equal(unfinished.status,'waiting');assert.equal(unfinished.group,'pending');
+ assert.equal(project(rows)[0].group,'pending');
+ const [receiptPending]=project(rows,{},undefined,undefined,undefined,{[key]:{...stopped,state:'waiting_receipt'}});
+ assert.equal(receiptPending.group,'active');
+ const [delivered]=project([...rows,entry(5,{event:'message_sent',category:'sent',status:'accepted'})],{},undefined,undefined,undefined,{[key]:{...stopped,state:'accepted',index:1}});
+ assert.equal(delivered.status,'accepted');assert.equal(delivered.group,'done');
 });
 
 test('an expired reminder leaves the original chat round unchanged', () => {
@@ -57,13 +76,17 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  assert.equal(round.group,'done');
  assert.equal(round.orphanReceipt,true);
 });
-test('receipt-only continuation closes the old round while retaining uncertain receipt evidence',()=>{
+test('receipt-only continuation remains unfinished until a verified receipt',()=>{
  const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
- const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'合成旧回复'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'合成旧回复'});
  const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
  const [round]=project([inbound,wait,detached]);
- assert.equal(round.group,'done');assert.equal(round.status,'completed');assert.equal(round.receiptOnly,true);
+ assert.equal(round.group,'pending');assert.equal(round.status,'waiting');assert.equal(round.receiptOnly,true);
  assert.equal(round.timeline.some(e=>e.event==='delivery_waiting'),true);
+ const scheduled=entry(2,{...wait,retry_at:at(12)});
+ assert.equal(project([inbound,scheduled,detached])[0].group,'active');
+ const confirmed=entry(4,{event:'task_delivery_updated',category:'decision',status:'completed'});
+ assert.equal(project([inbound,wait,detached,confirmed])[0].group,'done');
 });
 test('old stopped review with an accepted segment leaves the execution list',()=>{
  const accepted=entry(1,{message_id:'old-review',event:'message_sent',category:'sent',status:'accepted',send_id:'segment-1'});
@@ -110,7 +133,7 @@ test('a 25-message unread batch retains all evidence but has a single timeline e
  const [round]=project(items);
  assert.equal(round.batchSize,25);assert.equal(round.batchMessages.length,25);
  assert.deepEqual(round.timeline.map(x=>x.event),['unread_batch_summary','send_failed']);
- assert.equal(round.entries.length,items.length);assert.equal(round.status,'failed');assert.equal(round.hasDiagnostics,true);
+ assert.equal(round.entries.length,items.length);assert.equal(round.status,'waiting');assert.equal(round.hasDiagnostics,true);
 });
 
 test('one autonomous decision is visible, with its scheduled follow-up and raw context available',()=>{

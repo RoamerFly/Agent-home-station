@@ -1,5 +1,5 @@
 (() => {
- 'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false,taskStates:{},sendStates:{},inbox:{loaded:false,states:{}}};
+ 'use strict';const $=s=>document.querySelector(s),state={items:[],pending:null,busy:false,ready:false,taskStates:{},sendStates:{},planStates:{},inbox:{loaded:false,states:{}}};
  const categories={received:'接收消息',sent:'发送消息',decision:'处理决定',tool:'工具调用',error:'异常与失败',system:'系统运行'};
  const stickerEvents={sticker_observation_unavailable:'表情包已接收，画面暂不可读'};
  Object.assign(stickerEvents,{cross_media_recovery_blocked:'跨会话附件记录未通过校验，保留原记录待检查',cross_media_receipt_restored:'已按持久回执恢复附件投递状态'});
@@ -63,7 +63,7 @@
  Object.assign(events,{group_input_read_failed:'附件读取失败，本轮群回复已停止',private_failure_report_unavailable:'主人私聊故障报告未能排队',conversation_batch_started:'合并处理本轮群消息',backlog_message_grouped:'纳入本会话未读汇总',backlog_conversation_started:'统一查看本会话未读消息'});Object.assign(reasons,{offline_conversation_batch:'结合所有未读消息及原始时间综合判断，不逐条补答'});const roundStates={queued:'已排队',received:'已接收',running:'执行中',completed:'已完成',accepted:'微信已接受',checking_receipt:'Agent 自动查回执',waiting:'等待处理结果',waiting_receipt:'等待微信回执',retrying_tool:'等待工具重试',retrying_model:'等待模型重试',retrying_delivery:'等待微信重试',cancelling:'正在停止剩余部分',partially_cancelled:'部分已发送，其余已取消',partially_completed:'部分完成',failed:'执行失败',needs_review:'已停止，结果未确认',silent:'选择安静',skipped:'已跳过',blocked:'已阻止',stopped:'已停止'};
  const stageNames={receive:'接收',decision:'判断',tool:'工具',delivery:'发送',system:'运行'};
  Object.assign(reasons,{topic_concluded:'话题已经结束，本轮未发言',awaiting_participant:'在等对方回应，本轮未发言',nothing_to_add:'暂时没有新内容可补充',proactive_trigger:'查看是否适合主动发言',independent_conversation_wake:'按上次安排回来看一看',model_requested_later_reassessment:'已安排稍后再看',cross_conversation_result_private_delivery_handled:'结果已交给私聊投递',cross_conversation_private_route_unavailable:'无法定位私聊接收方',cross_conversation_media_requires_explicit_delivery:'跨会话附件需指定投递目标',private_diagnostic_only:'群内不公开运行诊断',unverified_model_response:'回复内容未能核实',tool_budget_exhausted:'工具调用次数已用尽'});
- let epoch=0,dateEpoch=0,dateItems=[],dateTaskStates={},dateSendStates={},dateReady=false;
+ let epoch=0,dateEpoch=0,dateItems=[],dateTaskStates={},dateSendStates={},datePlanStates={},dateReady=false;
  const dateKey=raw=>time(raw).slice(0,10);
  const today=()=>dateKey(new Date().toISOString());
  $('#log-date').value=today();
@@ -144,8 +144,8 @@
   const clock=node(li,'time',time(item.time),'round-step-time');clock.dateTime=item.time;
  }
 
- let projectionSource=null,projectionTasks=null,projectionSends=null,projectionInbox=null,projectionMinute=-1,projected=[],lastRenderedMinute=-1;
- function rounds(){const minute=Math.floor(Date.now()/60000);if(projectionSource!==state.items||projectionTasks!==state.taskStates||projectionSends!==state.sendStates||projectionInbox!==state.inbox||projectionMinute!==minute){projected=window.WechatRounds.project(state.items,state.taskStates,Date.now(),state.inbox,state.sendStates);projectionSource=state.items;projectionTasks=state.taskStates;projectionSends=state.sendStates;projectionInbox=state.inbox;projectionMinute=minute}return projected}
+ let projectionSource=null,projectionTasks=null,projectionSends=null,projectionPlans=null,projectionInbox=null,projectionMinute=-1,projected=[],lastRenderedMinute=-1;
+ function rounds(){const minute=Math.floor(Date.now()/60000);if(projectionSource!==state.items||projectionTasks!==state.taskStates||projectionSends!==state.sendStates||projectionPlans!==state.planStates||projectionInbox!==state.inbox||projectionMinute!==minute){projected=window.WechatRounds.project(state.items,state.taskStates,Date.now(),state.inbox,state.sendStates,state.planStates);projectionSource=state.items;projectionTasks=state.taskStates;projectionSends=state.sendStates;projectionPlans=state.planStates;projectionInbox=state.inbox;projectionMinute=minute}return projected}
  async function diagnose(scope,a,status){const confirm=window.WechatDialogs.open({title:'手动诊断草稿',subtitle:'会使用当前模型并计入用量，只读取这条已保存草稿及仍有效的来源。不会发送微信、修改草稿或重试原任务。'}),result=node(confirm.body,'p','确认后开始诊断。','hint');const run=button(confirm.body,'开始诊断',async()=>{run.disabled=true;result.textContent='正在诊断…';try{const data=await window.WechatAdmin.api('/api/memory/'+scope+'/reply-audits/'+encodeURIComponent(a.id)+'/diagnose',{method:'POST',json:{}});if(!confirm.alive())return;const d=data.diagnosis||{},lines=[];if(d.action)lines.push('结论：'+({reply:'草稿可保留',silent:'建议不发送'}[d.action]||d.action));if(d.reason)lines.push('说明：'+d.reason);if(Array.isArray(d.messages)&&d.messages.length)lines.push('诊断后的草稿：'+d.messages.join('\n'));
     result.textContent=lines.join('\n')||'诊断已完成；没有发送微信。';status.textContent='手动诊断完成，结果只在本窗口显示。'}catch(e){if(confirm.alive())result.textContent=e.message;status.textContent='手动诊断未完成；原草稿未修改，也没有发送微信。'}finally{run.disabled=false}});run.className='primary'}
  const missingSources = '这次互动没有可核对的来源记录。';
@@ -259,14 +259,14 @@
   lastRenderedMinute=Math.floor(Date.now()/60000);
   const pane=$('#log-list'),position=pane.scrollTop,pageY=window.scrollY;
   const anchor=[...pane.children].find(el=>el.getBoundingClientRect().bottom>pane.getBoundingClientRect().top),anchorID=anchor?.dataset.roundId,offset=anchor?anchor.offsetTop-pane.scrollTop:0;
-  pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items,dateReady?dateTaskStates:state.taskStates,Date.now(),state.inbox,dateReady?dateSendStates:state.sendStates).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
+  pane.replaceChildren();const all=window.WechatRounds.project(dateReady?dateItems:state.items,dateReady?dateTaskStates:state.taskStates,Date.now(),state.inbox,dateReady?dateSendStates:state.sendStates,dateReady?datePlanStates:state.planStates).filter(r=>dateKey(r.time)===$('#log-date').value),filtered=all.filter(matches);
   $('#log-count').textContent=filtered.length+' 个'+($('#log-view').value==='system'?'系统时段':'执行回合');
   const counts={pending:0,active:0,done:0};for(const round of all)if(!round.system)counts[round.group]++;
   for(const [group,count] of Object.entries(counts))$('#round-'+group).textContent=count;
   if(!filtered.length)node(pane,'p','这一天没有匹配的执行回合。','empty');for(const round of filtered)roundRow(pane,round);
   if(anchorID){const restored=[...pane.children].find(el=>el.dataset.roundId===anchorID);pane.scrollTop=restored?restored.offsetTop-offset:position}else pane.scrollTop=position;
  }
- function consume(items,latest=false){for(const item of items){window.WechatNames?.remember(item.thread_id,item.source);window.WechatNames?.remember(item.sender,item.sender_name)}state.items=items;if(dateReady&&$('#log-date').value===today()){const merged=new Map(dateItems.map(x=>[key(x),x]));for(const x of items)if(dateKey(x.time)===today())merged.set(key(x),x);dateItems=[...merged.values()];dateTaskStates={...dateTaskStates,...state.taskStates};dateSendStates={...dateSendStates,...state.sendStates}}state.pending=null;$('#log-new').hidden=true;render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}));if(latest)$('#log-list').scrollTop=0}
+ function consume(items,latest=false){for(const item of items){window.WechatNames?.remember(item.thread_id,item.source);window.WechatNames?.remember(item.sender,item.sender_name)}state.items=items;if(dateReady&&$('#log-date').value===today()){const merged=new Map(dateItems.map(x=>[key(x),x]));for(const x of items)if(dateKey(x.time)===today())merged.set(key(x),x);dateItems=[...merged.values()];dateTaskStates={...dateTaskStates,...state.taskStates};dateSendStates={...dateSendStates,...state.sendStates};datePlanStates={...datePlanStates,...state.planStates}}state.pending=null;$('#log-new').hidden=true;render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}));if(latest)$('#log-list').scrollTop=0}
  async function refresh(force=false){
   if(!window.WechatAdmin?.isAuthenticated()||state.busy)return;
   state.busy=true;const stamp=epoch;$('#refresh-logs').disabled=true;
@@ -285,11 +285,14 @@
    const sendStates={...state.sendStates,...(result.send_states||{})};
    const sendStatesChanged=JSON.stringify(sendStates)!==JSON.stringify(state.sendStates);
    if(sendStatesChanged){state.sendStates=sendStates;if(dateReady&&$('#log-date').value===today())dateSendStates={...dateSendStates,...sendStates}}
+   const planStates=result.plan_states||{};
+   const planStatesChanged=JSON.stringify(planStates)!==JSON.stringify(state.planStates);
+   if(planStatesChanged){state.planStates=planStates;if(dateReady&&$('#log-date').value===today())datePlanStates={...datePlanStates,...planStates}}
    const inbox={loaded:result.inbox_loaded===true,states:result.inbox_states||{}};
    const inboxChanged=JSON.stringify(inbox)!==JSON.stringify(state.inbox);
    if(inboxChanged)state.inbox=inbox;
    if(!state.ready){state.ready=true;consume(items);return}
-   if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index]))){if(taskStatesChanged||sendStatesChanged||inboxChanged||lastRenderedMinute!==Math.floor(Date.now()/60000)){render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}))}return}
+   if(items.length===state.items.length&&items.every((item,index)=>key(item)===key(state.items[index]))){if(taskStatesChanged||sendStatesChanged||planStatesChanged||inboxChanged||lastRenderedMinute!==Math.floor(Date.now()/60000)){render();window.dispatchEvent(new CustomEvent('wechat-admin:activity-updated',{detail:{rounds:rounds()}}))}return}
    if(force===true||$('#log-follow-latest').checked){consume(items,force!==true);return}
 	   state.pending=items;const old=new Set(state.items.map(key)),changed=items.filter(item=>!old.has(key(item))),changedRounds=window.WechatRounds.project(changed);
 	   $('#log-new').textContent=changedRounds.length?'有 '+changedRounds.length+' 组进展，可从侧栏刷新':'执行记录已更新';$('#log-new').hidden=false;window.dispatchEvent(new Event('wechat-admin:activity-pending'));
@@ -301,12 +304,12 @@
  async function loadDate(){
   const request=++dateEpoch,stamp=epoch,day=$('#log-date').value;if(!day)return;
   const progress=$('#log-date-progress');progress.textContent='正在读取当天记录…';
-  let after='',items=[],batches=0;dateReady=false;dateItems=[];dateTaskStates={};dateSendStates={};render();
+  let after='',items=[],batches=0;dateReady=false;dateItems=[];dateTaskStates={};dateSendStates={};datePlanStates={};render();
   try{do{
    const q=new URLSearchParams({date:day});if(after)q.set('after',after);
    const result=await window.WechatAdmin.api('/api/logs?'+q);
    if(request!==dateEpoch||stamp!==epoch)return;
-   items.push(...(result.items||[]));batches+=result.archive_batches||0;dateTaskStates={...dateTaskStates,...(result.task_states||{})};dateSendStates={...dateSendStates,...(result.send_states||{})};state.inbox={loaded:result.inbox_loaded===true,states:result.inbox_states||{}};
+   items.push(...(result.items||[]));batches+=result.archive_batches||0;dateTaskStates={...dateTaskStates,...(result.task_states||{})};dateSendStates={...dateSendStates,...(result.send_states||{})};datePlanStates={...datePlanStates,...(result.plan_states||{})};state.inbox={loaded:result.inbox_loaded===true,states:result.inbox_states||{}};
    const seen=new Set();dateItems=items.filter(x=>{const id=key(x);if(seen.has(id))return false;seen.add(id);return true});dateReady=true;render();
    after=result.next||'';progress.textContent=after?'正在补齐当天历史记录…':'';
   }while(after)}catch(error){if(request===dateEpoch&&stamp===epoch)progress.textContent='当天记录尚未读完，请点击刷新重试。'}
@@ -326,5 +329,5 @@
   return decision&&round.status==='silent'?'自主评估 · '+label(decision):'自主发言评估';
  }
  window.WechatActivity={rounds,openRound,openConversation,openSend,roundForMessage,time,activitySummary,status:round=>round.system?'运行记录':window.WechatRounds.groupLabels[round.group],refresh:async()=>{await refresh(true);await loadDate()},loadPending:()=>{if(state.pending)consume(state.pending)}};
- window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];dateTaskStates={};dateSendStates={};$('#log-date').value=today();state.items=[];state.taskStates={};state.sendStates={};state.inbox={loaded:false,states:{}};state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
+ window.addEventListener('wechat-admin:logout',()=>{epoch++;dateEpoch++;dateReady=false;dateItems=[];dateTaskStates={};dateSendStates={};datePlanStates={};$('#log-date').value=today();state.items=[];state.taskStates={};state.sendStates={};state.planStates={};state.inbox={loaded:false,states:{}};state.pending=null;state.ready=false;$('#log-list').replaceChildren();$('#log-search').value='';$('#log-new').hidden=true});
 })();

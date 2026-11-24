@@ -108,7 +108,12 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		switch delivery.State {
 		case "accepted":
 			if !wasRunning {
-				if task.WorkCompleted || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly {
+				// A receipt-only checkpoint has no remaining work after its sole
+				// delivery is accepted. A saved goal or checkpoint still needs the
+				// Agent to finish the underlying request.
+				receiptOnly := task.Goal == "" && task.Checkpoint == "" && len(task.Actions) == 0 &&
+					len(task.PendingOperations) == 0 && task.Reminder == nil && task.NotificationText == "" && task.DeliveryJob == ""
+				if task.WorkCompleted || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly || receiptOnly {
 					task.State = "completed"
 					task.WorkCompleted = true
 				} else {

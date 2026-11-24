@@ -50,12 +50,20 @@ type logInboxState struct {
 	Phase string `json:"phase"`
 }
 
+type logPlanState struct {
+	State      string `json:"state"`
+	StopReason string `json:"stop_reason,omitempty"`
+	Index      int    `json:"index"`
+	Total      int    `json:"total"`
+	Created    string `json:"created,omitempty"`
+}
+
 // The inbox checkpoint is the source of truth for old queued cards. Return
-// only message IDs and phases; message bodies and native events stay private.
-func (s *Server) logInboxStates() (map[string]logInboxState, bool) {
+// only phases and plan counts; message bodies and native events stay private.
+func (s *Server) logRuntimeStates() (map[string]logInboxState, map[string]logPlanState, bool) {
 	data, err := os.ReadFile(filepath.Join(s.manager.stateDir, "messages-v2.json"))
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	var snapshot struct {
 		Inbox []struct {
@@ -66,9 +74,20 @@ func (s *Server) logInboxStates() (map[string]logInboxState, bool) {
 				} `json:"data"`
 			} `json:"event"`
 		} `json:"inbox"`
+		Plans []struct {
+			Trace      string            `json:"trace"`
+			State      string            `json:"state"`
+			StopReason string            `json:"stop_reason"`
+			Index      int               `json:"index"`
+			Created    string            `json:"created"`
+			Messages   []json.RawMessage `json:"messages"`
+			Input      struct {
+				Thread string `json:"thread"`
+			} `json:"input"`
+		} `json:"utterance_plans"`
 	}
 	if json.Unmarshal(data, &snapshot) != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	states := make(map[string]logInboxState, len(snapshot.Inbox))
 	for _, item := range snapshot.Inbox {
@@ -76,7 +95,19 @@ func (s *Server) logInboxStates() (map[string]logInboxState, bool) {
 			states[item.Event.Data.MessageID] = logInboxState{Phase: item.Phase}
 		}
 	}
-	return states, true
+	plans := make(map[string]logPlanState, len(snapshot.Plans))
+	for _, plan := range snapshot.Plans {
+		if plan.Input.Thread == "" || plan.Trace == "" || plan.Index < 0 || plan.Index > len(plan.Messages) {
+			continue
+		}
+		plans[plan.Input.Thread+"\x00"+plan.Trace] = logPlanState{State: plan.State, StopReason: plan.StopReason, Index: plan.Index, Total: len(plan.Messages), Created: plan.Created}
+	}
+	return states, plans, true
+}
+
+func (s *Server) logInboxStates() (map[string]logInboxState, bool) {
+	inbox, _, loaded := s.logRuntimeStates()
+	return inbox, loaded
 }
 
 func (s *Server) logTaskStates(items []LogEntry) map[string]logTaskState {
@@ -261,6 +292,6 @@ func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
 		}
 		add(entries)
 	}
-	inbox, loaded := s.logInboxStates()
-	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
+	inbox, plans, loaded := s.logRuntimeStates()
+	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "plan_states": plans, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
 }
