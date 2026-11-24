@@ -70,6 +70,23 @@ func TestWaitForReplyIgnoresOtherGroupMembers(t *testing.T) {
 	}
 }
 
+func TestDisabledAutonomyStopsPersistedConversationWake(t *testing.T) {
+	model := &planReviewModel{answer: `{"action":"silent","messages":[]}`}
+	w, c, _, in := planWorker(t, model)
+	c.Config.Conversation.AllowWake = true
+	c.Config.Permissions.Proactive = true
+	c.Config.ProactiveThreads = []string{in.Thread}
+	w.scheduleConversationWake(c, in, 1, false)
+	if len(w.runtime.Wakes) != 1 {
+		t.Fatal("wake not scheduled")
+	}
+	w.runtime.Wakes[0].Due = time.Now().Add(-time.Second)
+	c.Config.Permissions.Proactive = false
+	if w.tickConversationWake(context.Background()) || w.runtime.Wakes[0].State != "stopped" || model.calls != 0 {
+		t.Fatal("disabled autonomy continued an old wake", w.runtime.Wakes[0], model.calls)
+	}
+}
+
 func TestWakeWaitsForOriginalReceiptAndNeverRunsCancelledTask(t *testing.T) {
 	model := &planReviewModel{answer: `{"action":"silent","messages":[]}`}
 	w, c, _, in := planWorker(t, model)

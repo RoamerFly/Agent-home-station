@@ -29,6 +29,11 @@ type surfSettings struct {
 	MaxSessionsPerDay  int                    `json:"max_sessions_per_day"`
 	Topics             []string               `json:"topics"`
 	Threads            []string               `json:"threads"`
+	// Autonomous conversation targets share the browsing switch. They live in
+	// surf.json after migration; config.json retains its old fields only for
+	// compatibility with older installations and callers.
+	ProactiveThreads []string                  `json:"proactive_threads"`
+	ProactiveRules   []companion.ProactiveRule `json:"proactive_rules"`
 }
 
 type surfInteractionGrant struct {
@@ -39,6 +44,7 @@ type surfInteractionGrant struct {
 	Enabled         bool     `json:"enabled"`
 }
 type surfState struct {
+	AutonomyUnified  bool         `json:"autonomy_unified,omitempty"`
 	SettingsRevision int          `json:"settings_revision,omitempty"`
 	Settings         surfSettings `json:"settings"`
 	Next             time.Time    `json:"next"`
@@ -49,7 +55,21 @@ type surfState struct {
 }
 
 func surfDefaults() surfState {
-	return surfState{Settings: surfSettings{Discovery: defaultDiscovery(), IntervalMinutes: 60, IntervalMaxMinutes: 150, MaxSessionsPerDay: 4, Topics: []string{"可爱的动物与海洋趣闻", "轻松好听的音乐", "有趣的动画或生活短视频", "好吃的和日常小发现"}, Threads: []string{}}}
+	return surfState{Settings: surfSettings{Discovery: defaultDiscovery(), IntervalMinutes: 60, IntervalMaxMinutes: 150, MaxSessionsPerDay: 4, Topics: []string{"可爱的动物与海洋趣闻", "轻松好听的音乐", "有趣的动画或生活短视频", "好吃的和日常小发现"}, Threads: []string{}, ProactiveThreads: []string{}, ProactiveRules: []companion.ProactiveRule{}}}
+}
+
+// A legacy installation had independent permissions. Both had to be enabled
+// before the merged behavior may start, so migration never enables browsing
+// when only conversation was previously enabled (or the reverse).
+func (s *surfState) applyAutonomy(c *Config) {
+	if !s.AutonomyUnified {
+		s.Settings.Enabled = s.Settings.Enabled && c.Companion.Permissions.Proactive
+		s.Settings.ProactiveThreads = append([]string{}, c.Companion.ProactiveThreads...)
+		s.Settings.ProactiveRules = append([]companion.ProactiveRule{}, c.Companion.ProactiveRules...)
+	}
+	c.Companion.Permissions.Proactive = s.Settings.Enabled
+	c.Companion.ProactiveThreads = append([]string{}, s.Settings.ProactiveThreads...)
+	c.Companion.ProactiveRules = append([]companion.ProactiveRule{}, s.Settings.ProactiveRules...)
 }
 func loadSurf(dir string) (surfState, error) {
 	s := surfDefaults()
@@ -130,7 +150,7 @@ func (m *Manager) claimSurf(now time.Time) (*bot.SurfTask, error) {
 	if m.surfManualThread != "" {
 		return m.claimManualSurfLocked(now, s)
 	}
-	if !s.Settings.Enabled || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
+	if !s.Settings.Enabled || !m.config.Companion.Permissions.Proactive || !m.config.Companion.Enabled || !m.mcp.Enabled || !m.mcp.WebFetchEnabled || m.config.Companion.Quiet(now) || now.Before(s.Next) {
 		return nil, nil
 	}
 	_, holdErr := os.Lstat(m.memoryUpdateHoldPath())
@@ -296,6 +316,31 @@ func (m *Manager) surfAllowedAt(thread string, now time.Time) bool {
 	}
 	return false
 }
+
+// A worker can take longer than stop's bounded wait to finish a cancelled
+// operation. A failed surf save has not changed either configuration file, so
+// resume the old worker once that exact run finishes. A later save or Close
+// supersedes this recovery while holding op.
+func (m *Manager) resumeAfterSurfStop(done chan struct{}) {
+	<-done
+	m.op.Lock()
+	defer m.op.Unlock()
+	m.mu.Lock()
+	current := m.done == done
+	config := cloneConfig(m.config)
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	_ = m.stop()
+	m.packageMu.Lock()
+	closed := m.packagesClosed
+	m.packageMu.Unlock()
+	if !closed && config.Enabled {
+		m.start(config)
+	}
+}
+
 func (s *Server) surfRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/surf/run", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -375,17 +420,34 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 		m.op.Lock()
 		defer m.op.Unlock()
 		m.mu.Lock()
-		defer m.mu.Unlock()
+		previous := cloneConfig(m.config)
+		state := m.surf
+		// Old clients only sent the browsing fields. Keep the existing
+		// conversation selection when both new fields are absent.
+		if input.ProactiveThreads == nil && input.ProactiveRules == nil {
+			input.ProactiveThreads = append([]string{}, previous.Companion.ProactiveThreads...)
+			input.ProactiveRules = append([]companion.ProactiveRule{}, previous.Companion.ProactiveRules...)
+		}
 		seen := map[string]bool{}
 		for _, id := range input.Threads {
 			if !permittedRecipient(m.config, id) || seen[id] {
+				m.mu.Unlock()
 				fail(w, 400, "分享目标必须是已授权且不重复的会话")
 				return
 			}
 			seen[id] = true
 		}
-		state := m.surf
+		next := cloneConfig(previous)
+		next.Companion.Permissions.Proactive = input.Enabled
+		next.Companion.ProactiveThreads = append([]string{}, input.ProactiveThreads...)
+		next.Companion.ProactiveRules = append([]companion.ProactiveRule{}, input.ProactiveRules...)
+		m.mu.Unlock()
+		if err := validate(next); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
 		state.Settings = input
+		state.AutonomyUnified = true
 		state.SettingsRevision++
 		delay, err := surfRandomDelay(input)
 		if err != nil {
@@ -393,13 +455,34 @@ func (s *Server) surfRoutes(mux *http.ServeMux) {
 			return
 		}
 		state.Next = time.Now().Add(delay)
-		state.Next = surfEffectiveNext(time.Now(), state, m.config.Companion)
+		state.Next = surfEffectiveNext(time.Now(), state, next.Companion)
 		b, _ := json.Marshal(state)
+		// Stop the current worker before replacing the single authoritative file.
+		// A failed write leaves both disk and memory at the previous state.
+		m.mu.Lock()
+		stopping := m.done
+		m.mu.Unlock()
+		if err := m.stop(); err != nil {
+			if stopping != nil {
+				go m.resumeAfterSurfStop(stopping)
+			}
+			fail(w, 503, err.Error())
+			return
+		}
 		if e := writePrivate(filepath.Join(m.dir, "surf.json"), b); e != nil {
+			if previous.Enabled {
+				m.start(previous)
+			}
 			fail(w, 500, e.Error())
 			return
 		}
+		m.mu.Lock()
 		m.surf = state
+		m.config = next
+		m.mu.Unlock()
+		if next.Enabled {
+			m.start(next)
+		}
 		respond(w, 200, state.Settings)
 	}))
 }

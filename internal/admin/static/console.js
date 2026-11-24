@@ -39,11 +39,11 @@
   const toolbar=page.querySelector(':scope>.page-toolbar-card');if(toolbar)toolbar.after(nav);else page.prepend(nav);nav.after(body);
   pairs.forEach((p,i)=>{p.pane.hidden=i!==0;p.button.setAttribute('aria-pressed',String(i===0))});
  }
- const permissionPage=$('permissions'),authority=permissionPage.querySelector('.agent-authority'),proactive=$('proactive-panel');
- const others=[...permissionPage.children].filter(e=>e.matches('details.panel')&&e!==authority&&e!==proactive&&e.id!=='channels-settings-panel');
+ const permissionPage=$('permissions'),authority=permissionPage.querySelector('.agent-authority');
+ const others=[...permissionPage.children].filter(e=>e.matches('details.panel')&&e!==authority&&e.id!=='channels-settings-panel');
  const quiet=others.find(e=>e.querySelector('#quiet-start')),operations=others.find(e=>e.querySelector('#agent-operation-list'));
  workflow($('provider'),[['聊天模型',[$('config-form')]],['声音与歌曲',[$('provider').querySelector('.speech-panel')]],['分享内容读取',[$('channels-settings-panel')]]]);
- workflow(permissionPage,[['聊天与发送',[$('permissions-panel')]],['自主行为',[quiet,proactive]],['工作区与账号授权',[authority,operations]]]);
+ workflow(permissionPage,[['聊天与发送',[$('permissions-panel')]],['安静时段',[quiet]],['工作区与账号授权',[authority,operations]]]);
  const preview=document.querySelector('#companion .companion-grid>aside>details');if(preview)expandPanel(preview);
  const overview=$('overview'),billing=overview.querySelector('.billing-panel');overview.querySelector('.metric-grid').after(billing);
  for(const grid of document.querySelectorAll('.field-grid'))for(const cell of [...grid.children])if(!cell.children.length&&!cell.textContent.trim())cell.remove();

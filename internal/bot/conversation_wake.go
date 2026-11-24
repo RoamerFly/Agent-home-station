@@ -82,6 +82,16 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		if wake.State != "waiting" {
 			continue
 		}
+		selected := false
+		for _, id := range c.Config.ProactiveThreads {
+			selected = selected || id == wake.Input.Thread
+		}
+		if !c.Config.Permissions.Proactive || !selected {
+			wake.State = "stopped"
+			w.persistErr = w.saveRuntime()
+			w.activity(Record{Event: "conversation_wake_stopped", Category: "decision", ThreadID: wake.Input.Thread, MessageID: wake.Parent, Status: "stopped", Reason: "autonomous_conversation_disabled"})
+			continue
+		}
 		if w.roundClosed(wake.Input.Thread, wake.Parent) || w.inputRoundClosed(wake.Input) {
 			wake.State = "stopped"
 			w.persistErr = w.saveRuntime()

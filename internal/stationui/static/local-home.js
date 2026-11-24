@@ -2775,9 +2775,12 @@
     void refresh();
     async function refresh() {
       try {
-        const result = await Promise.all([request(path + "/surf", { signal }), request(path + "/surf-reader", { signal })]);
+        const nextSchedule = await request(path + "/surf", { signal });
         if (!active()) return;
-        [schedule, reader] = result;
+        schedule = nextSchedule;
+        if (schedule.managed_by_legacy) { render(); return; }
+        reader = await request(path + "/surf-reader", { signal });
+        if (!active()) return;
         sharing.refresh();
         appSurf.refresh();
         render();
@@ -2786,7 +2789,7 @@
       }
     }
     async function write(action, draft, readerAction = false) {
-      if (busy || !active()) return;
+      if (busy || !active() || schedule?.managed_by_legacy) return;
       busy = true;
       feedback.textContent = "";
       for (const node of content.querySelectorAll("button")) node.disabled = true;
@@ -2820,6 +2823,13 @@
       }
     }
     function render() {
+      if (schedule.managed_by_legacy) {
+        status.textContent = "当前微信由旧版控制台管理。实际开关状态、目标和活动记录请在统一设置中查看。";
+        box.replaceChildren(appElement("h4", "自主发言与网上冲浪"), status,
+          appElement("p", "打开旧版微信控制台后，进入「活动 → 自主发言与冲浪」。", "app-scope-note"),
+          memoryButton("打开自主发言与冲浪设置", "button compact primary", openLegacyWechatConsole));
+        return;
+      }
       status.textContent = schedule.enabled
         ? (schedule.public_reader_ready || schedule.application_reader_ready ? "已启用，随微信工作器运行" : "已启用，等待获准的读取入口") +
           (schedule.next ? " · 下次可运行 " + new Date(schedule.next).toLocaleString("zh-CN") : "")
@@ -3524,7 +3534,7 @@
       model_chose_silence: "角色选择保持安静", grounding_check_failed: "回复复核未完成，草稿未发送", grounding_check_rejected: "回复复核未通过，草稿未发送",
       grounding_context_invalidated: "复核前依据已变化，草稿已作废", grounding_check_stopped_unverified_reply: "回复复核未完成，草稿未发送",
       invalid_model_decision: "模型返回的决策格式无效，未发送", invalid_tool_arguments: "工具参数格式无效", tool_unavailable_or_budget_exhausted: "工具不可用或调用次数已用尽",
-      hourly_reply_budget: "回复预算已用尽", quiet_hours: "处于安静时段", proactive_permission_denied: "主动问候权限未开启", text_reply_permission_denied: "发送权限不足",
+      hourly_reply_budget: "回复预算已用尽", quiet_hours: "处于安静时段", proactive_permission_denied: "自主发言与冲浪未开启", text_reply_permission_denied: "发送权限不足",
       media_unavailable_or_permission_denied: "生成媒体不可用或没有发送权限", source_identity_conflict_or_unavailable: "消息来源身份冲突，未生成回复", auth_required: "微信登录需要重新验证",
       submission_outcome_unknown: "原生发送未取得可验证回执，结果待确认", receipt_wait_timeout: "等待发送回执超时，结果待确认", receipt_lookup_failed: "读取发送回执失败，结果待确认",
       send_outcome_unknown: "发送结果不确定，未自动重发", wechat_rejected: "微信拒绝了本次消息", service_rejected: "微信服务拒绝了本次消息", wechat_not_ready: "微信登录或发送连接未就绪",

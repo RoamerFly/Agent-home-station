@@ -275,6 +275,10 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if surfErr != nil {
 		return nil, surfErr
 	}
+	surf.applyAutonomy(&c)
+	if err := validate(c); err != nil {
+		return nil, err
+	}
 	agent, err := newAgentControl(dir)
 	if err != nil {
 		return nil, err
@@ -492,6 +496,11 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 		next.Companion = previous.Companion
 	}
 	next.Companion = companion.Normalize(next.Companion)
+	// The unified autonomous switch and its conversation targets are owned by
+	// surf.json. A stale full config form must not re-enable or erase them.
+	next.Companion.Permissions.Proactive = previous.Companion.Permissions.Proactive
+	next.Companion.ProactiveThreads = append([]string{}, previous.Companion.ProactiveThreads...)
+	next.Companion.ProactiveRules = append([]companion.ProactiveRule{}, previous.Companion.ProactiveRules...)
 	var personaErr error
 	next, personaErr = m.withPersonaDocument(next)
 	if personaErr != nil {

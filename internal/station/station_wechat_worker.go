@@ -750,6 +750,11 @@ func (w *stationWechatWorker) changePolicy(next stationWechatPolicy) error {
 }
 
 func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, running bool) (apphost.ConnectionLifecycle, error) {
+	// The legacy admin owns the native account and queue in this desktop mode.
+	// restore() skips the station worker; manual starts must obey the same fence.
+	if running && os.Getenv("AHS_LEGACY_WECHAT") == "1" {
+		return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleCutover
+	}
 	native, err := s.WorkerSender(ctx, id)
 	if err != nil {
 		return apphost.ConnectionLifecycle{}, err

@@ -184,7 +184,7 @@
 </nav>
 <nav class="context-nav" aria-label="页内导航" data-nav-group="logs" hidden>
 <button class="nav-link subnav-link" data-section="logs" type="button">执行回合</button>
-<button class="nav-link subnav-link" data-section="surf" type="button">网上冲浪</button>
+<button class="nav-link subnav-link" data-section="surf" type="button">自主发言与冲浪</button>
 <button class="nav-link subnav-link" data-reminder-tab="true" data-section="surf" type="button">提醒任务</button>
 </nav>
 <nav class="context-nav" aria-label="页内导航" data-nav-group="companion" hidden>
@@ -1192,15 +1192,11 @@
 </pre>
 </details>
 <article class="panel" id="permissions-panel">
-<h3>群聊与主动行为</h3>
+<h3>群聊与媒体</h3>
 <label for="group-collection-seconds">群消息收集窗口（秒）</label>
 <input id="group-collection-seconds" type="number" min="0" step="0.001" required aria-describedby="group-collection-hint">
 <p id="group-collection-hint" class="hint">从第一条消息开始计时。0 秒立即处理；重新上线时，每个会话的未读消息一起处理。</p>
-<label class="switch-row">
-<span>主动问候</span>
-<input id="perm-proactive" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
+<p class="hint">主动发言与网上冲浪统一在<a data-section-link="surf" href="#surf">自主发言与冲浪</a>中设置。</p>
 <label class="switch-row">
 <span>自主发送图片</span>
 <input id="perm-send-image" type="checkbox">
@@ -1321,16 +1317,39 @@
 <input id="quiet-end" type="time">
 </div>
 </div>
-<p class="hint">约束主动问候和自主冲浪；开始与结束相同表示不设安静时段。</p>
+<p class="hint">约束主动发言和网上冲浪；开始与结束相同表示不设安静时段。</p>
 </details>
-<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel">
-<summary>自主续聊</summary>
-<div class="section-heading">
-<h3 class="sr-only" id="proactive-title">主动问候</h3>
-<button class="primary" id="save-proactive" type="button">保存续聊设置</button>
+</section>
+<section aria-labelledby="page-title" class="page" id="surf">
+<nav aria-label="活动类型" class="surf-tabs" role="tablist">
+<button aria-controls="surf-pane" aria-selected="true" class="active" id="surf-tab" role="tab" type="button">自主发言与冲浪</button>
+<button aria-controls="reminder-pane" aria-selected="false" id="reminder-tab" role="tab" type="button" tabindex="-1">提醒任务</button>
+</nav>
+<section aria-labelledby="reminder-tab" class="panel reminder-pane" id="reminder-pane" role="tabpanel" hidden>
+<div class="section-heading"><div><h2>提醒任务</h2><p class="hint">未到期提醒会在这里保留；到期后进入执行回合。工作站离线导致过期的提醒需要主人手动处理。</p></div><button class="secondary" id="reminder-refresh" type="button">刷新提醒</button></div>
+<p aria-live="polite" class="hint" id="reminder-state" role="status">正在读取提醒任务…</p>
+<div aria-live="polite" class="reminder-list" id="reminder-list"></div>
+</section>
+<div id="surf-pane">
+<div class="surf-summary">
+<span id="surf-schedule">正在读取…</span>
+<button class="secondary" id="surf-refresh" type="button">刷新活动</button>
 </div>
+<p class="hint">主动发言的评估和投递记录在<a data-section-link="logs" href="#logs">执行回合</a>中查看；下方保留冲浪浏览轨迹与收藏。</p>
+<details class="panel surf-settings">
+<summary>自主发言与网上冲浪设置</summary>
+<fieldset disabled id="surf-settings-fields">
+<legend class="sr-only">自主发言与网上冲浪设置项</legend>
+<label class="switch-row">
+<span>启用自主发言与网上冲浪</span>
+<input id="surf-enabled" type="checkbox">
+<span aria-hidden="true" class="switch"></span>
+</label>
+<p class="hint">默认关闭。开启后，大肥鱼可在已选目标自主评估是否发言，并按兴趣探索内容；群聊收到消息后的自主接话仍由该群的回复规则决定。</p>
+<details aria-labelledby="proactive-title" class="proactive-settings disclosure" id="proactive-panel">
+<summary>主动发言目标</summary>
+<h3 class="sr-only" id="proactive-title">主动发言目标</h3>
 <p class="hint">结合最近话题与关系记忆自主评估，可接话、使用工具探索或安静。模型可安排下次评估；默认评估间隔带随机变化，不要求群里先冷场，不设每日硬额度。</p>
-<div class="field-grid"></div>
 <div class="inline-actions">
 <label for="proactive-search">查找目标</label>
 <input id="proactive-search" maxlength="128" placeholder="名称、备注或 ID" type="search">
@@ -1340,29 +1359,7 @@
 <div id="proactive-targets"></div>
 <p class="hint">只显示已授权回复的群聊和好友；可在<a data-section-link="rules" href="#rules">回复规则</a>添加。主动行为遵守目标授权和安静时段。</p>
 </details>
-</section>
-<section aria-labelledby="page-title" class="page" id="surf">
-<div class="surf-summary">
-<span id="surf-schedule">正在读取…</span>
-<button class="secondary" id="surf-refresh" type="button">刷新活动</button>
-</div>
-<nav aria-label="活动类型" class="surf-tabs" role="tablist">
-<button aria-controls="surf-pane" aria-selected="true" class="active" id="surf-tab" role="tab" type="button">网上冲浪</button>
-<button aria-controls="reminder-pane" aria-selected="false" id="reminder-tab" role="tab" type="button" tabindex="-1">提醒任务</button>
-</nav>
-<section aria-labelledby="reminder-tab" class="panel reminder-pane" id="reminder-pane" role="tabpanel" hidden>
-<div class="section-heading"><div><h2>提醒任务</h2><p class="hint">未到期提醒会在这里保留；到期后进入执行回合。工作站离线导致过期的提醒需要主人手动处理。</p></div><button class="secondary" id="reminder-refresh" type="button">刷新提醒</button></div>
-<p aria-live="polite" class="hint" id="reminder-state" role="status">正在读取提醒任务…</p>
-<div aria-live="polite" class="reminder-list" id="reminder-list"></div>
-</section>
-<div id="surf-pane">
-<details class="panel surf-settings">
-<summary>自主冲浪设置</summary>
-<label class="switch-row">
-<span>启用 AI 自主网上冲浪</span>
-<input id="surf-enabled" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
+<h3 class="surf-config-heading">网上冲浪内容与分享</h3>
 <label class="switch-row">
 <span>强制分享已核实内容</span>
 <input aria-describedby="surf-force-hint" id="surf-force-share" type="checkbox">
@@ -1405,8 +1402,9 @@
 </div>
 <p class="hint" id="surf-share-state"></p>
 <p class="hint">安静时段不启动、不扣次数。此前已启动的浏览仍计次数，包括失败或选择不分享；重启不重置预算。</p>
-<button class="primary" id="surf-save" type="button">保存冲浪设置</button>
+<button class="primary" disabled id="surf-save" type="button">保存自主活动设置</button>
 <span aria-live="polite" class="hint" id="surf-save-state"></span>
+</fieldset>
 </details>
 <details class="panel surf-history-panel" id="surf-history-panel">
 <summary>浏览轨迹与收藏</summary>

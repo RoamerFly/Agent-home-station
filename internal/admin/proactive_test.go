@@ -22,23 +22,28 @@ func TestProactiveConfigurationRoundtripAndAllowedNamedTargets(t *testing.T) {
 	c.PrivateEnabled = true
 	c.DirectIDs = []string{"friend"}
 	c.GroupRules = []GroupRule{{ID: "room@chatroom", Name: "配置的群名", Mode: "mention"}}
-	c.Companion.ProactiveThreads = []string{"room@chatroom", "friend"}
-	c.Companion.ProactiveRules = []companion.ProactiveRule{{Thread: "friend", IdleMinutes: 120, MaxPerDay: 2}}
 	code, body, _ := f.request("POST", "/api/config", ConfigInput{Config: c}, true, true)
 	if code != 200 {
 		t.Fatal(code, string(body))
 	}
+	settings := surfDefaults().Settings
+	settings.ProactiveThreads = []string{"room@chatroom", "friend"}
+	settings.ProactiveRules = []companion.ProactiveRule{{Thread: "friend", IdleMinutes: 120, MaxPerDay: 2}}
+	code, body, _ = f.request("POST", "/api/surf", settings, true, true)
+	if code != 200 {
+		t.Fatal(code, string(body))
+	}
 	var view ConfigView
-	_ = json.Unmarshal(body, &view)
+	view = f.manager.Config()
 	if len(view.Companion.ProactiveRules) != 1 || view.Companion.ProactiveRules[0].IdleMinutes != 120 || len(view.Companion.ProactiveThreads) != 2 {
 		t.Fatal("roundtrip changed selection or overrides", string(body))
 	}
-	data, err := os.ReadFile(filepath.Join(f.dir, "config.json"))
+	data, err := os.ReadFile(filepath.Join(f.dir, "surf.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var saved Config
-	if json.Unmarshal(data, &saved) != nil || saved.Companion.ProactiveRules[0].MaxPerDay != 2 || len(saved.Companion.ProactiveThreads) != 2 {
+	var saved surfState
+	if json.Unmarshal(data, &saved) != nil || !saved.AutonomyUnified || saved.Settings.ProactiveRules[0].MaxPerDay != 2 || len(saved.Settings.ProactiveThreads) != 2 {
 		t.Fatal("scheduling config was not persisted")
 	}
 	// Returned snapshots cannot mutate the manager's scheduling data.
@@ -71,8 +76,8 @@ func TestProactiveConfigurationRoundtripAndAllowedNamedTargets(t *testing.T) {
 		t.Fatal("unauthorized proactive target saved", code)
 	}
 	c.PrivateEnabled = true
-	c.Companion.ProactiveRules[0].Thread = "unallowed"
-	if code, _, _ := f.request("POST", "/api/config", ConfigInput{Config: c}, true, true); code != 400 {
+	settings.ProactiveRules[0].Thread = "unallowed"
+	if code, _, _ := f.request("POST", "/api/surf", settings, true, true); code != 400 {
 		t.Fatal("unselected override saved", code)
 	}
 }

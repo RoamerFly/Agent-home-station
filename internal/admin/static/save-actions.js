@@ -28,7 +28,7 @@
    if(owner&&visible(owner)){
     if(dialog?.open)target=dialogHost(dialog);
     else if(page?.classList.contains('active-page')&&!page.closest('dialog'))target=host;
-    else if(button.id==='save-floating'&&!owner.closest('[hidden]')&&!main.some(b=>['save-config','save-permissions','save-rules','save-companion','save-proactive'].includes(b.id)))target=host;
+    else if(button.id==='save-floating'&&!owner.closest('[hidden]')&&!main.some(b=>['save-config','save-permissions','save-rules','save-companion'].includes(b.id)))target=host;
    }
    if(target){if(button.parentElement!==target)target.append(button);if(target===host)main.push(button)}
    else if(marker.isConnected&&button.previousSibling!==marker)marker.after(button);

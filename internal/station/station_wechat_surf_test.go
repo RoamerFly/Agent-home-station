@@ -144,8 +144,20 @@ func TestStationSurfOwnerRoute(t *testing.T) {
 		return out
 	}
 	req("GET", url("one"), nil, false, 401)
-	f.login()
-	req("GET", url("one"), nil, false, 200)
+	session := req("GET", "/api/session", nil, false, 200)
+	f.csrf, _ = session["csrf"].(string)
+	if f.csrf == "" {
+		t.Fatal("local owner session did not return CSRF token")
+	}
+	t.Setenv("AHS_LEGACY_WECHAT", "0")
+	if got := req("GET", url("one"), nil, false, 200); got["managed_by_legacy"] != false {
+		t.Fatal("ordinary surf view incorrectly reports legacy ownership", got["managed_by_legacy"])
+	}
+	t.Setenv("AHS_LEGACY_WECHAT", "1")
+	if got := req("GET", url("one"), nil, false, 200); got["managed_by_legacy"] != true {
+		t.Fatal("surf view omitted legacy ownership", got["managed_by_legacy"])
+	}
+	t.Setenv("AHS_LEGACY_WECHAT", "0")
 	empty := req("GET", strings.TrimSuffix(url("one"), "/surf")+"/surf-history?limit=25", nil, false, 200)
 	if empty["limit"] != float64(25) || len(empty["rows"].([]any)) != 0 {
 		t.Fatal("empty history lost requested parameters", empty)
@@ -161,6 +173,9 @@ func TestStationSurfOwnerRoute(t *testing.T) {
 	saved := req("PUT", url("one"), input, true, 200)
 	if saved["enabled"] != false || saved["revision"] != float64(1) || saved["last_key"] != nil {
 		t.Fatal(saved)
+	}
+	if _, ok := saved["managed_by_legacy"]; ok {
+		t.Fatal("PUT response unexpectedly changed its ownership fields")
 	}
 	req("PUT", url("one"), input, true, 200)
 	input.Key = "stale-request"
