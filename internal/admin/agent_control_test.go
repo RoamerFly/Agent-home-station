@@ -141,6 +141,27 @@ func TestTaskContinuationUpdatesItsExistingCheckpoint(t *testing.T) {
 	}
 }
 
+func TestOwnerCancellationArchivesSupersededTaskImmediately(t *testing.T) {
+	f, p := trustedAgent(t)
+	raw, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"old-song","title":"旧歌曲续办","checkpoint":"等待旧作业","state":"waiting"}`))
+	var created struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(raw), &created) != nil || created.Task.ID == "" {
+		t.Fatalf("create task: %s %v", raw, err)
+	}
+	f.login()
+	code, _, _ := f.request(http.MethodPost, "/api/agent/tasks/"+created.Task.ID, map[string]string{"action": "cancel"}, true, true)
+	if code != http.StatusOK {
+		t.Fatalf("cancel status: %d", code)
+	}
+	if len(f.manager.agent.active("test", "wxid_owner")) != 0 {
+		t.Fatal("cancelled task remained in the active list")
+	}
+	history := f.manager.agent.taskHistory("test", "wxid_owner")
+	if len(history) != 1 || history[0].ID != created.Task.ID || history[0].State != "cancelled" {
+		t.Fatalf("cancelled task not archived: %+v", history)
+	}
+}
+
 func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
 	_, p := trustedAgent(t)
 	if !p.agentToolEnabled("station_comfy") {

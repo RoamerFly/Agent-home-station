@@ -1295,6 +1295,9 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 					fail(w, 409, "任务状态已改变，请刷新")
 					return
 				}
+				if err := s.manager.agent.retireSettled(); err != nil {
+					s.manager.log("task_archive_save_failed")
+				}
 				respond(w, 200, t)
 				return
 			}
@@ -1360,6 +1363,11 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if !saved {
 				fail(w, 409, "任务状态已改变，请刷新")
 				return
+			}
+			if in.Action == "cancel" {
+				if err := s.manager.agent.retireSettled(); err != nil {
+					s.manager.log("task_archive_save_failed")
+				}
 			}
 
 			respond(w, 200, t)
