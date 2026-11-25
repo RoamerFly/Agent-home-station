@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"wechat-bot/internal/characterrefs"
 	"wechat-bot/internal/companion"
 )
 
@@ -65,7 +66,7 @@ func (m *Manager) withPersonaDocument(c Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	c.Companion.Persona = content
+	c.Companion.Persona = characterrefs.Append(m.personaDocumentPath(), content, 32000)
 	c.Companion.PersonaDocument = true
 	return c, nil
 }

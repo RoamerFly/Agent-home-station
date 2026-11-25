@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"wechat-bot/internal/characterrefs"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
@@ -246,11 +247,18 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 				return "", err
 			}
 		} else {
-			cfg, err := p.scopedHostConfig(raw)
-			if err != nil || len(cfg.Roots) == 0 {
-				return "", toolInputError("station_comfy_workspace_unavailable")
+			// A verified owner can upload the fish's shared character references
+			// from any authorized conversation, without mounting the rest of home.
+			root := ""
+			if p.privileged() && characterrefs.Contains(p.manager.personaDocumentPath(), in.SourcePath) {
+				root = characterrefs.Directory(p.manager.personaDocumentPath())
+			} else {
+				cfg, err := p.scopedHostConfig(raw)
+				if err != nil || len(cfg.Roots) == 0 {
+					return "", toolInputError("station_comfy_workspace_unavailable")
+				}
+				root = cfg.Roots[0]
 			}
-			root := cfg.Roots[0]
 			rel, err := filepath.Rel(root, in.SourcePath)
 			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 				return "", toolInputError("station_comfy_image_source_unavailable")
