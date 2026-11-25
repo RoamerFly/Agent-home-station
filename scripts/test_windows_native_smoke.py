@@ -22,7 +22,9 @@ class WindowsNativeSmoke(unittest.TestCase):
         package = Path(os.environ["WECHAT_WINDOWS_NATIVE_PACKAGE"]).resolve(strict=True)
         scratch = ROOT / "temp" / "windows-native-smoke" / ("合成 空白实例 " + str(time.time_ns()))
         scratch.mkdir(parents=True)
-        shutil.copytree(package / "runtimes", scratch / "runtimes")
+        # The portable package now stages resources under env/. The legacy
+        # controller fixture still uses the runtimes/ layout in its scratch kit.
+        shutil.copytree(package / "env", scratch / "runtimes")
         # Use the same explicit user ownership as a fresh desktop install.
         # Elevated Windows CI otherwise gives Python-created folders the
         # Administrators group owner, which the native backend correctly rejects.
@@ -58,7 +60,7 @@ class WindowsNativeSmoke(unittest.TestCase):
                 self.assertNotEqual(connection.connect_ex(("127.0.0.1", port)), 0)
         record = {"result": "passed", "cycles": 2, "real_login": False, "real_send": False,
                   "real_model_call": False, "ports_closed": True,
-                  "package_manifest": json.loads((package / "runtimes/windows-x64/windows-native-manifest.json").read_text(encoding="utf-8"))}
+                  "package_manifest": json.loads((package / "env/windows-x64/windows-native-manifest.json").read_text(encoding="utf-8"))}
         (scratch / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
         print("Native Windows lifecycle evidence:", scratch)
 
