@@ -10,7 +10,12 @@ import (
 )
 
 func historicalReminderSettled(t agentTask) bool {
-	terminal := t.State == "completed" || t.State == "cancelled" || t.State == "stopped" || t.State == "expired"
+	// A cancelled reminder will not resume or retry. The administrator can
+	// remove it even when an earlier delivery receipt was never confirmed.
+	if t.State == "cancelled" {
+		return true
+	}
+	terminal := t.State == "completed" || t.State == "stopped" || t.State == "expired"
 	return terminal && len(t.PendingOperations) == 0 && (t.Delivery == nil || t.Delivery.State == "accepted")
 }
 

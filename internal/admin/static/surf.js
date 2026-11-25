@@ -70,13 +70,11 @@
    complete.type = 'button';complete.disabled = terminal || target.state === 'running' || toolActive || unsettled;
    if (!complete.disabled) complete.addEventListener('click', () => changeReminder(target.id, 'complete', complete));
    else complete.title = terminal ? '任务已经结束' : '仍有执行或发送结果需要核对';
-   const ended = task => ['completed','cancelled','stopped','expired'].includes(task.state) && !task.pending_operations?.length && (!task.delivery || task.delivery.state === 'accepted');
+   const ended = task => task.state === 'cancelled' || ['completed','stopped','expired'].includes(task.state) && !task.pending_operations?.length && (!task.delivery || task.delivery.state === 'accepted');
    if (ended(item) && ended(target)) {
-    const remove = node(actions, 'button', '删除历史', 'secondary');
+    const remove = node(actions, 'button', '删除任务', 'secondary');
     remove.type = 'button';
-    remove.addEventListener('click', async () => {
-     if (await window.WechatDialogs.confirmAction({title:'删除历史提醒',message:'删除这条已结束的提醒任务及其已结束的续办记录？',confirmText:'删除历史',danger:true})) await changeReminder(item.id, 'delete', remove);
-    });
+    remove.addEventListener('click', () => changeReminder(item.id, 'delete', remove));
    }
    if (target.state === 'needs_review' && !target.reminder_due) {
     const resume = node(actions, 'button', '处理提醒', 'primary');

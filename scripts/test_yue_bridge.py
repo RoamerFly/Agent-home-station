@@ -6,11 +6,24 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, _merge_profile_runtime_config, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality, registered_comfy_url
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, _merge_profile_runtime_config, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality, registered_comfy_url, review_job_summaries, delete_review_jobs
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_review_record_deletion_keeps_completed_jobs_and_rolls_back_failed_save(self):
+        jobs={'a'*32:{'state':'needs_review','engine':'yue','created':2},
+              'b'*32:{'state':'needs_review','engine':'yue','created':1},
+              'c'*32:{'state':'completed','engine':'rvc','file':'finished.wav'}}
+        self.assertEqual([row['id'] for row in review_job_summaries(jobs)],['b'*32,'a'*32])
+        with self.assertRaises(ValueError):delete_review_jobs(jobs,['c'*32],lambda:None)
+        with self.assertRaises(OSError):delete_review_jobs(jobs,['a'*32],lambda:(_ for _ in ()).throw(OSError('disk full')))
+        self.assertIn('a'*32,jobs)
+        saved=[]
+        self.assertEqual(delete_review_jobs(jobs,['a'*32,'b'*32],lambda:saved.append(dict(jobs))),2)
+        self.assertEqual(jobs,{'c'*32:{'state':'completed','engine':'rvc','file':'finished.wav'}})
+        self.assertEqual(saved,[jobs])
+
     def test_comfy_url_is_loopback_and_canonical(self):
         self.assertEqual(registered_comfy_url('http://127.0.0.1:6191'), 'http://127.0.0.1:6191')
         for value in ('http://localhost:6191', 'http://192.168.1.2:6191',

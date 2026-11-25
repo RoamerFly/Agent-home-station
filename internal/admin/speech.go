@@ -42,6 +42,8 @@ func loadSpeechMigrationSource(dir string) (mediaspec.Config, string, error) {
 	return c, migrationBytesHash(b), c.Validate()
 }
 func (s *Server) speechRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/speech/music-jobs", s.protected(s.listMusicReviewJobs))
+	mux.HandleFunc("DELETE /api/speech/music-jobs/{job}", s.protected(s.deleteMusicReviewJobs))
 	mux.HandleFunc("GET /api/speech/music-service", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		result, err := (&permittedTools{manager: s.manager}).controlMusicService(s.speechPluginTestContext(r), "status")
 		if err != nil {

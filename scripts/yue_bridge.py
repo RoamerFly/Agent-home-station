@@ -24,6 +24,27 @@ import wave
 from urllib.parse import parse_qs, urlsplit
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
+def review_job_summaries(jobs):
+    return sorted(({'id': jid, 'engine': job.get('engine', ''),
+                    'phase': job.get('phase', ''), 'created': job.get('created', 0)}
+                   for jid, job in jobs.items() if isinstance(job, dict) and job.get('state') == 'needs_review'),
+                  key=lambda row: (row['created'], row['id']))
+
+
+def delete_review_jobs(jobs, ids, save):
+    """Forget only stopped review records; keep every media file untouched."""
+    selected = tuple(ids)
+    if any(jid not in jobs or jobs[jid].get('state') != 'needs_review' for jid in selected):
+        raise ValueError('music_review_job_not_deletable')
+    removed = {jid: jobs.pop(jid) for jid in selected}
+    try:
+        save()
+    except OSError:
+        jobs.update(removed)
+        raise
+    return len(selected)
+
+
 def publish_readable_output(state, jid, job, save):
     if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid): return
     filename=job.get('file','')
@@ -628,6 +649,9 @@ def main():
         def do_GET(self):
             if not self.allowed():return
             if station:return self.get_station_rvc()
+            if self.path=='/jobs?state=needs_review':
+                with lock:items=review_job_summaries(jobs)
+                return self.reply(200,{'items':items,'total':len(items)})
             if self.path=='/rvc-health':
                 # A default singing voice is optional. Named profiles are checked
                 # against the submitted request in submit_rvc().
@@ -654,6 +678,24 @@ def main():
                 if bound_account:self.send_header(ACCOUNT_HEADER,bound_account)
                 self.end_headers();self.wfile.write(data);return
             job.pop('file',None);return self.reply(200,job)
+        def do_DELETE(self):
+            if not self.allowed():return
+            if station:return self.reply(404,{'error':'not_found'})
+            if self.path=='/jobs/needs-review':
+                with lock:
+                    selected=[row['id'] for row in review_job_summaries(jobs)]
+                    try:deleted=delete_review_jobs(jobs,selected,save)
+                    except OSError:return self.reply(503,{'error':'music_review_delete_unavailable'})
+                    remaining=len(review_job_summaries(jobs))
+                return self.reply(200,{'deleted':deleted,'remaining_needs_review':remaining})
+            match=re.fullmatch(r'/jobs/([a-f0-9]{32})',self.path)
+            if not match:return self.reply(404,{'error':'not_found'})
+            with lock:
+                try:deleted=delete_review_jobs(jobs,[match[1]],save)
+                except ValueError:return self.reply(409,{'error':'music_review_job_not_deletable'})
+                except OSError:return self.reply(503,{'error':'music_review_delete_unavailable'})
+                remaining=len(review_job_summaries(jobs))
+            return self.reply(200,{'deleted':deleted,'remaining_needs_review':remaining})
         def get_station_rvc(self):
             route=urlsplit(self.path)
             if route.path=='/health' and not route.query:
