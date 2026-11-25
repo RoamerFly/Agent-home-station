@@ -8,9 +8,11 @@
 
 `runtime/managed-service.json` 是固定的宿主协议声明，不是可直接执行的启动文件。循环回环地址、工作流登记、输入字段校验、幂等键、取消、输出文件核验和素材登记均由站点宿主负责。
 
-### 登记 Wan 2.1 文生视频
+## 工作流与数据位置
 
-本包包含 `examples/wan21-text-video.json` 工作流和 `examples/wan21-text-video.registration.json` 登记记录。将工作流放到本机已登记的工作流目录后，把登记记录加入其中的 `registry.json` 的 `workflows` 列表。保持原有图像工作流条目。
+工具包保存程序、依赖和使用说明，不保存正在使用的工作流。工作站的共享工作流图和 `registry.json` 位于 `release/data/resources/comfyui/workflows`，自定义节点位于 `release/data/resources/comfyui/custom_nodes`；大肥鱼自行创建的工作流位于 `release/data/workspaces/home/workflows/comfyui`。在工作站登记新工作流后，使用 `comfyui.workflows` 核对可调用的编号和参数。
+
+Wan 2.1 文生视频等现有流程从上述数据目录读取。更新工具包时保留 `release/data`，不要用工具包文件覆盖工作流登记或生成结果。
 
 | 模型目录 | 文件 |
 | --- | --- |

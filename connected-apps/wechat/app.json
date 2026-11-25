@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "wechat",
   "name": "微信",
-  "version": "0.1.67",
+  "version": "0.1.68",
   "host_protocol": 1,
   "application_protocol": 1,
   "host_compatibility": ">=0.1.0 <1.0.0",
@@ -39,7 +39,7 @@
     "share.read"
   ],
   "files": {
-    "CHANGELOG.md": "9611911518e200d4153c589d94470601e9fb0d3c4e17d563911388eea50afcdd",
+    "CHANGELOG.md": "1a762cfe0590d45dc58127e05d80abdbc9b15dd7904456e6fd38aef57d7dfe2a",
     "MIGRATION.md": "e3cd9975333c241ff761183bd80d76c9eb825b05bb4e04b6a093dbfae952f2d0",
     "PERMISSIONS.md": "f0051811869c5bc613f145452a4593a55514cde2cb05752094b288734333e319",
     "README.md": "b5be787cb90288a99331bdcdc28951a461cc8874875e75e108363be6de57546f",
@@ -108,9 +108,7 @@
     "adapter/write_guard.go": "38d0e40f0747b2245e54a2dba5784e98dc9cb1d88a2789dfe75d2c118138f923",
     "capabilities.json": "bbdeb872b36220639af35e56a1bf1a67356e8d0f55235b2b88378eaa55072ccb",
     "config.schema.json": "8491177ce18b8c2860389a81e3022162f5ba7d98024abf04251bf0eb8d16bd57",
-    "config/README.md": "b8abc4aaf42f02970bb3b7db56301c2444dc4a180ff8f249648a795bf662a5d7",
     "runtime/components.json": "133bfcc8a8ca387ef01acdacbc4d0c52923433ae3e8e9c40843ef89b98dcfa2d",
-    "ui.schema.json": "c38bd0cfc1d56a37eb4d8d241f5dfb0a86dfe116a9e0f2ae502c6e82dddca517",
-    "workspace/README.md": "0bdb5577b891591f700547835f613ce5fcdc9816b2c5028ed872e624bc5d6640"
+    "ui.schema.json": "c38bd0cfc1d56a37eb4d8d241f5dfb0a86dfe116a9e0f2ae502c6e82dddca517"
   }
 }

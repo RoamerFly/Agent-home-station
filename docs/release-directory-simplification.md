@@ -48,3 +48,11 @@
 - Astra 再核对 `env`：`windows-espeak-ng` 的 442 个文件（24,468,135 字节）与 `publictools/audio-cpp-语音识别与生成/runtime/phonemizer` 对应文件 SHA-256 全部相同，现用音频工具登记指向包内副本，因此旧目录也移入同一待删除批次。正式发行包只读检查仍为错误 0、警告 0。若回退到早期音频工具登记，需同时恢复该旧环境路径。
 - `env/windows-station-speech` 的 59,330 个非缓存文件与工具包内一致，但尚未脱离旧环境完成实际冷启动合成，本轮保留。`env/document-workshop`、`env/windows-station-rvc`、`env/windows-media`、`env/windows-agent-host` 和 `env/windows-python-cli` 有当前服务或工具路径引用，保留。重复 DLL 的存在不等于目录可删。
 - 最后一次正式更新从已推送提交构建，启动结果为 `healthy=true`。更新脚本在账号恢复在线前记录过 `native_login=false`；随后直接查询原生端点确认 `authenticated=true`、`connection=online`，两个健康端点仍返回 200。`data` 根目录保持上述八项，旧目录没有回生。
+
+## 2026-11-25 应用占位与 ComfyUI 工作流清理边界
+
+- `applications/wechat/config` 与 `applications/wechat/workspace` 各只有一份 README 占位文件；真实配置、会话和 Agent 工作区位于 `data`。这两个占位文件被应用包 `app.json` 的文件摘要索引，移除源码时须同步更新索引，之后的构建才不会重新打包。
+- 当前 ComfyUI 登记的 `workflows` 指向 `data/resources/comfyui/workflows`；`publictools/comfyui-图像生成/workflows` 的四个 JSON 是旧包内副本，其中 `registry.json` 早于 `data` 中的登记，不能反向覆盖。共享工作流与节点归 `data/resources/comfyui`，个人工作流归 `data/workspaces/home/workflows/comfyui`；工具包保留程序、依赖、模型和 Markdown 用法说明。
+- 发行更新脚本按候选包清单覆盖文件，不自动移除旧包中已取消索引的文件。正式目录的清理需单独核对活动登记和原文件后执行，再检查清单与服务状态。YuE/RVC 运行时中的工作流属于当前推理链路，不随 ComfyUI 旧副本一起清理。
+- 已将微信应用包的两个空占位目录 `applications/wechat/config`、`applications/wechat/workspace`，以及 ComfyUI 工具包的旧 `workflows`、重复 `examples`，移出正式 `release`；原文件保留在 `E:\待删除\agent-home-workstation-release-cleanup-20261125-package-data`。后续候选包不再包含这些文件。源码包版本分别更新为微信 `0.1.68`、ComfyUI `0.1.3`；16 个公共工具的根目录仍各有 `README.md`。
+- 清理前核对正式 ComfyUI 登记指向 `data/resources/comfyui/workflows`，其中 9 个登记图文件均存在且摘要匹配；未改动 `data` 中的工作流、输入、模型或生成结果。正式发行包检查为错误 0、警告 0，迁移清单校验错误 0。检查时发现正式工作站原本没有运行，清理后从当前 `AgentHomeStation.exe` 启动；`:8080/healthz` 与 `:8082/healthz` 返回 200，原生服务 `ready`、桌面微信账号 `authenticated=true` 且 `connection=online`。本轮没有发微信消息或执行新一轮生图。

@@ -2,15 +2,15 @@
 
 根目录只保留 AgentHomeStation.exe、manifest.json、许可证，以及 applications、publictools、env、data 四个目录。
 
-- applications：应用包代码、清单、专用工具；微信、抖音等应用私有数据放 data/applications。
-- publictools：公共工具包，每个工具一个带用途后缀的目录。包 ID 不随物理目录名变化；models/project/runtime 分别为模型、后端工程和执行入口。
+- applications：应用包代码、清单、专用工具；应用包不附带空的 `config/`、`workspace/` 占位目录。微信、抖音等应用私有数据放 data/applications。
+- publictools：公共工具包，每个工具一个带用途后缀的目录。包 ID 不随物理目录名变化；models/project/runtime 分别为模型、后端工程和执行入口，README.md 说明配置与用法。ComfyUI 工具包不存工作流或自定义节点数据。
 - env：工作站自身的 Python、Windows Agent 运行器和媒体依赖；公共工具需要的运行环境以各自工具包中的入口为准。
 - data/applications：应用登录、记忆、会话规则、回合、应用任务和媒体记录。
 - data/publictools：工具配置、登记、任务、产物索引；catalog 存单一工作站工具登记和按内容摘要保存的安装版本。摘要目录是版本/完整性索引，不是多个大肥鱼。
-- data/workspaces：大肥鱼的唯一工作区根；按应用分为 home、wechat、douyin、bilibili 等目录，内部资料由 Agent 自行整理。
+- data/workspaces：大肥鱼的唯一工作区根；按应用分为 home、wechat、douyin、bilibili 等目录，内部资料由 Agent 自行整理。个人 ComfyUI 工作流在 `home/workflows/comfyui`。
 - data/main_setting：工作站身份、管理密码、主记忆、日志、浏览器登录资料和桌面服务。
 - data/tools：工具各自的运行状态和私有配置；`data/publictools` 存公共登记与目录索引，两个目录用途不同。
-- data/resources：共享的音乐素材和 ComfyUI 工作流登记；`data/voices` 保存声线模型；`data/artifacts` 保存受管产物。
+- data/resources：共享的音乐素材；`comfyui/workflows` 保存工作流图和登记，`comfyui/custom_nodes` 保存自定义节点。`data/voices` 保存声线模型；`data/artifacts` 保存受管产物。
 
 `applications` 与 `data/applications` 分别是应用程序和应用状态；`publictools` 与 `data/publictools` 分别是工具程序和工具登记。各工具自带的 Python/CUDA 运行环境有相同文件，但按各自入口独立运行，不能按哈希相同直接去重。`data/publictools/obs-preview/config` 是指向 `data/tools/obs-preview/config` 的目录联接，并未存第二份配置。
 
