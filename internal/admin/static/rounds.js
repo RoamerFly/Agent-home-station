@@ -10,6 +10,7 @@
     : item.category === 'sent' || /^(media_|delivery_|send_|manual_send|message_progress)/.test(item.event) ? 'delivery'
     : item.category === 'decision' || /^(generation_|model_|character_|utterance_)/.test(item.event) ? 'decision' : 'system';
   const identity = item => item.round_id || item.message_id;
+  const isGroupThread = threadID => typeof threadID === 'string' && threadID.endsWith('@chatroom');
   const taskTraceID = id => /^task-(.+)-\d{8}T\d{6}\.\d{9}$/.exec(id || '')?.[1]
     || /^admin-owner-request-([0-9a-f]{64})$/.exec(id || '')?.[1]
     || /^music-result-([0-9a-f]{64})-\d{6}\.\d{9}$/.exec(id || '')?.[1] || '';
@@ -128,7 +129,7 @@
     for (const item of entries) {
       const id = identity(item), task = taskStates[item.thread_id + '\0' + id];
       const phase = inbox.loaded && inbox.states?.[id]?.phase;
-      const active = task ? task.active : item.thread_id.endsWith('@chatroom') && ['processing', 'model_running', 'tool_running', 'sending', 'following'].includes(phase);
+      const active = task ? task.active : isGroupThread(item.thread_id) && ['processing', 'model_running', 'tool_running', 'sending', 'following'].includes(phase);
       if (!id || !active) continue;
       const known = activeOrigins.get(item.thread_id) || new Map();
       const stamp = Date.parse(item.time) || 0;
@@ -136,7 +137,7 @@
       activeOrigins.set(item.thread_id, known);
     }
     for (const item of entries) {
-      if (!item.message_id || item.event !== 'message_received' && (item.event !== 'message_queued' || !item.thread_id.endsWith('@chatroom'))) continue;
+      if (!item.message_id || item.event !== 'message_received' && (item.event !== 'message_queued' || !isGroupThread(item.thread_id))) continue;
       const key = messageKey(item);
       if (!key || parents.has(key)) continue;
       const stamp = Date.parse(item.time) || 0;
@@ -407,7 +408,7 @@
       // The native thread identity is authoritative for the chat type. A
       // stale or hand-written source_kind must never turn a @chatroom round
       // into a private round in the console.
-      round.source_kind = round.system ? 'system' : round.thread_id.endsWith('@chatroom') ? 'group' : 'private';
+      round.source_kind = round.system ? 'system' : isGroupThread(round.thread_id) ? 'group' : 'private';
       round.duration = Math.max(0, Date.parse(round.updated) - Date.parse(round.time));
       round.categories = [...new Set(round.entries.map(x => x.category || 'system'))];
       round.search = round.entries.map(x => [x.source, x.sender, x.thread_id, x.message_id, x.send_id, x.content, x.reason, x.event, x.tool, x.query, x.target_url, x.effect, x.decision_note].filter(Boolean).join(' ')).join(' ').toLocaleLowerCase();

@@ -8,6 +8,19 @@ const project = (items, states, now, inbox, sendStates, planStates) => projectRo
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('system and legacy entries without a thread still project alongside conversation rounds', () => {
+ const startup = { id:'startup', time:at(1), event:'bot_starting', category:'system' };
+ const legacyQueue = { id:'legacy', time:at(2), message_id:'unlinked', event:'message_queued', category:'decision' };
+ const groupMessage = entry(3, { event:'message_received', category:'received', status:'received' });
+ const followup = entry(4, { message_id:'group-followup', event:'message_queued', category:'received', status:'queued' });
+ const rounds = project([startup, legacyQueue, groupMessage, followup], {}, undefined, {
+  loaded:true, states:{ 'message-1':{ phase:'tool_running' } },
+ });
+ assert.equal(rounds.length, 2);
+ assert.deepEqual(rounds.find(round => round.source_kind === 'system').entries, [startup, legacyQueue]);
+ assert.deepEqual(rounds.find(round => round.source_kind === 'group').entries, [groupMessage, followup]);
+});
+
 test('status filters group terminal failures separately from unresolved receipts and active retries',()=>{
  const cases=[
   ['message_received','received','received','','pending'],
