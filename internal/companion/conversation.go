@@ -43,7 +43,7 @@ func (c ConversationSettings) CollectionWindow(thread string) time.Duration {
 		if c.GroupAggregateMS != nil {
 			ms = *c.GroupAggregateMS
 		} else if ms == 2000 {
-			ms = 20000
+			ms = 30000
 		}
 	}
 	return time.Duration(ms) * time.Millisecond

@@ -410,8 +410,8 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			}
 			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia, Time: at}
 			row := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
-			if event.MediaReadFailed && ev.Source != nil && ev.Source.MessageType == 43 && ev.Trace == event.MessageID && ev.Sender == event.Sender {
-				row["media_read_status"] = "此视频读取失败，未取得内容证据。只处理本回合其他独立请求。"
+			if event.MediaReadFailed && ev.Trace == event.MessageID && ev.Sender == event.Sender {
+				row["media_read_status"] = "附件读取未完成，可继续处理本轮消息或按消息 ID 重读。"
 				delete(row, "media_observations")
 			}
 			rows = append(rows, row)

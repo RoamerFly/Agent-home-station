@@ -108,23 +108,44 @@
         if (child && parent && find(parent) !== child) parents.set(child, parent);
       }
     }
+    // Queue entries share the exact collection deadline persisted by the
+    // worker. Link them provisionally so a live window is one card, then let
+    // the definitive batch edge above choose its actual execution anchor.
+    const queuedWindows = new Map();
+    for (const item of entries) {
+      if (item.event !== 'message_queued') continue;
+      const child = messageKey(item);
+      if (!child) continue;
+      const state = inbox.loaded && inbox.states?.[item.message_id];
+      const deadline = state?.direction === 'incoming' ? state.aggregate_until : '';
+      const windowKey = deadline && JSON.stringify([item.thread_id, deadline]);
+      const first = windowKey && queuedWindows.get(windowKey);
+      if (windowKey && !first) queuedWindows.set(windowKey, child);
+      const parent = item.related_message_id ? messageKey(item, item.related_message_id) : first;
+      if (parent && !parents.has(child) && find(parent) !== child) parents.set(child, parent);
+    }
     const activeOrigins = new Map();
     for (const item of entries) {
       const id = identity(item), task = taskStates[item.thread_id + '\0' + id];
-      if (!id || !task?.active) continue;
+      const phase = inbox.loaded && inbox.states?.[id]?.phase;
+      const active = task ? task.active : item.thread_id.endsWith('@chatroom') && ['processing', 'model_running', 'tool_running', 'sending', 'following'].includes(phase);
+      if (!id || !active) continue;
       const known = activeOrigins.get(item.thread_id) || new Map();
       const stamp = Date.parse(item.time) || 0;
       known.set(id, Math.min(known.get(id) ?? stamp, stamp));
       activeOrigins.set(item.thread_id, known);
     }
     for (const item of entries) {
-      if (item.event !== 'message_received' || !item.message_id || taskStates[item.thread_id + '\0' + item.message_id]?.active) continue;
+      if (!item.message_id || item.event !== 'message_received' && (item.event !== 'message_queued' || !item.thread_id.endsWith('@chatroom'))) continue;
       const key = messageKey(item);
       if (!key || parents.has(key)) continue;
       const stamp = Date.parse(item.time) || 0;
       const candidates = [...(activeOrigins.get(item.thread_id) || [])].filter(([id, started]) => id !== item.message_id && started <= stamp);
       candidates.sort((a, b) => b[1] - a[1]);
-      if (candidates.length) parents.set(key, messageKey(item, candidates[0][0]));
+      if (candidates.length) {
+        const parent = messageKey(item, candidates[0][0]);
+        if (find(parent) !== key) parents.set(key, parent);
+      }
     }
     for (const item of entries) {
       const key = messageKey(item);
@@ -238,8 +259,10 @@
       const canonical = round.system ? '' : JSON.parse(round.id)[1];
       round.attempts = new Set(round.entries.map(e => e.message_id).filter(id => id && roundIdentity(id) === canonical)).size;
       round.continuation = !!round.taskID || canonical.startsWith('music-result:');
+      const canonicalTask = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
+      const includedTasks = round.entries.map(e => taskStates[round.thread_id + '\0' + (taskTraceID(e.message_id) || e.message_id)]).filter(Boolean);
+      const task = includedTasks.findLast(t => t.active) || canonicalTask || includedTasks.at(-1);
       {
-        const task = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
         const states = {completed:'completed', cancelled:'stopped', stopped:'stopped', needs_review:'needs_review', failed:'failed', waiting:'waiting', pending:'queued', running:'running', waiting_delivery:'waiting_receipt'};
         if (task && states[task.state]) {
           round.status = task.active ? 'running' : states[task.state];
@@ -315,7 +338,7 @@
       // an untracked round is closed after an hour without any new record.
       // This also covers interrupted share reads whose final failure was
       // followed by another start and no matching completion.
-      const activeTask = taskStates[round.thread_id + '\0' + (round.taskID || canonical)];
+      const activeTask = task;
       // A cross-conversation send may receive its native receipt after the
       // last activity row. These rows are standalone delivery cards, not a
       // progress text that could complete a larger still-running task.

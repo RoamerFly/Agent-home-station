@@ -347,6 +347,46 @@ func (w *Worker) collectionDeadline(thread string, at time.Time, window time.Dur
 	return at.Add(window)
 }
 
+// A live conversation has no collection deadline. Keep its incoming queue
+// records on the active round even before those messages are read.
+func (w *Worker) pendingQueueParent(thread string) string {
+	if w.generation != nil {
+		if job := w.generation.jobs[thread]; job != nil {
+			return job.input.TraceID
+		}
+	}
+	for _, plan := range w.runtime.Plans {
+		if plan.Input.Thread != thread || plan.terminal() || plan.MediaCaption && w.mediaTraceOnlyUnknown(plan.Input.TraceID) {
+			continue
+		}
+		if d := w.planDelivery(plan); d != nil && (d.State == "waiting" && d.UncertainRounds > 0 || d.State == "awaiting_evidence") {
+			continue
+		}
+		return plan.Input.TraceID
+	}
+	for _, media := range w.runtime.Media {
+		if media.Input.Thread == thread && !media.terminal() && !awaitingMediaReceipt(media) {
+			if media.Trace != "" {
+				return media.Trace
+			}
+			if media.Input.TraceID != "" {
+				return media.Input.TraceID
+			}
+		}
+	}
+	for _, reply := range w.runtime.MediaReplies {
+		if reply.Input.Thread == thread && !reply.terminal() && !w.mediaTraceOnlyUnknown(reply.Trace) {
+			if reply.Trace != "" {
+				return reply.Trace
+			}
+			if reply.Input.TraceID != "" {
+				return reply.Input.TraceID
+			}
+		}
+	}
+	return ""
+}
+
 func (w *Worker) drainInbox(ctx context.Context) error {
 	for i := range w.runtime.Inbox {
 		if w.draining() {
@@ -578,17 +618,30 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 					}
 				}
 				item := inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()}
-				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !w.pendingConversationThread(event.Data.ThreadID) {
+				queueParent := ""
+				pending := w.pendingConversationThread(event.Data.ThreadID)
+				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !pending {
 					item.AggregateUntil = w.collectionDeadline(event.Data.ThreadID, item.Updated, c.Config.ConversationConfig().CollectionWindow(event.Data.ThreadID))
 					if !item.AggregateUntil.IsZero() && strings.HasSuffix(event.Data.ThreadID, "@chatroom") {
 						item.CollectedAt = item.Updated
+						if event.Data.Direction == "incoming" {
+							for _, prior := range w.runtime.Inbox {
+								if prior.Phase == "received" && prior.Event.Data.ThreadID == event.Data.ThreadID && prior.Event.Data.Direction == "incoming" && prior.AggregateUntil.Equal(item.AggregateUntil) {
+									queueParent = prior.Event.Data.MessageID
+									break
+								}
+							}
+						}
 					}
+				}
+				if pending && queueParent == "" && event.Data.Direction == "incoming" && strings.HasSuffix(event.Data.ThreadID, "@chatroom") {
+					queueParent = w.pendingQueueParent(event.Data.ThreadID)
 				}
 				w.runtime.Inbox = append(w.runtime.Inbox, item)
 				if err = w.saveRuntime(); err != nil {
 					return err
 				}
-				w.activity(Record{Event: "message_queued", Category: "received", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, Status: "queued", Reason: "durable_inbox", Origin: "wechat"})
+				w.activity(Record{Event: "message_queued", Category: "received", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, RelatedMessageID: queueParent, Status: "queued", Reason: "durable_inbox", Origin: "wechat"})
 			}
 			state.Cursor = event.Cursor
 			if event.Data.MessageID != "" {

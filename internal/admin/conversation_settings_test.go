@@ -13,7 +13,7 @@ func TestGroupCollectionWindowRoundTrip(t *testing.T) {
 	c := f.manager.Config().Config
 	c.Companion.Conversation = companion.ConversationDefaults()
 	const room = "room@chatroom"
-	if c.Companion.Conversation.CollectionWindow(room) != 20*time.Second {
+	if c.Companion.Conversation.CollectionWindow(room) != 30*time.Second {
 		t.Fatal("new group did not get the default window")
 	}
 	for _, ms := range []int{45000, 20000, 0, -1} {

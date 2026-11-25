@@ -47,7 +47,9 @@ func unfinishedExecutionTask(state string) bool {
 }
 
 type logInboxState struct {
-	Phase string `json:"phase"`
+	Phase          string `json:"phase"`
+	AggregateUntil string `json:"aggregate_until,omitempty"`
+	Direction      string `json:"direction,omitempty"`
 }
 
 type logPlanState struct {
@@ -68,10 +70,12 @@ func (s *Server) logRuntimeStates() (map[string]logInboxState, map[string]logPla
 	}
 	var snapshot struct {
 		Inbox []struct {
-			Phase string `json:"phase"`
-			Event struct {
+			Phase          string    `json:"phase"`
+			AggregateUntil time.Time `json:"aggregate_until"`
+			Event          struct {
 				Data struct {
 					MessageID string `json:"messageId"`
+					Direction string `json:"direction"`
 				} `json:"data"`
 			} `json:"event"`
 		} `json:"inbox"`
@@ -101,7 +105,11 @@ func (s *Server) logRuntimeStates() (map[string]logInboxState, map[string]logPla
 	states := make(map[string]logInboxState, len(snapshot.Inbox))
 	for _, item := range snapshot.Inbox {
 		if item.Event.Data.MessageID != "" {
-			states[item.Event.Data.MessageID] = logInboxState{Phase: item.Phase}
+			state := logInboxState{Phase: item.Phase, Direction: item.Event.Data.Direction}
+			if !item.AggregateUntil.IsZero() {
+				state.AggregateUntil = item.AggregateUntil.Format(time.RFC3339Nano)
+			}
+			states[item.Event.Data.MessageID] = state
 		}
 	}
 	type receiptKey struct {

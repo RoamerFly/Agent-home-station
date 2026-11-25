@@ -108,6 +108,21 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		switch delivery.State {
 		case "accepted":
 			if !wasRunning {
+				if task.CrossThreadChildWait {
+					// This accepts the parent's acknowledgement, not the child's
+					// unfinished work. The scheduler observes the child without
+					// starting another parent model turn.
+					task.State = "waiting"
+					task.Next = time.Time{}
+					task.WorkCompleted = false
+					break
+				}
+				if task.CrossThreadChildFailed {
+					task.State = "stopped"
+					task.Next = time.Time{}
+					task.LastResult += "；跨会话子任务未全部完成，原回复已获微信回执"
+					break
+				}
 				// A receipt-only checkpoint has no remaining work after its sole
 				// delivery is accepted. A saved goal or checkpoint still needs the
 				// Agent to finish the underlying request.

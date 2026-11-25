@@ -18,7 +18,7 @@ func (w *Worker) readMediaBeforeDecision(m linuxnative.Message) bool {
 }
 
 func incomingObservationTool() mcptools.Tool {
-	return mcptools.Tool{Name: "incoming_media_read", Description: "Read the actual image, sticker, video or share attached to this request, quote or unread batch. Returns an observation bound to the original message. Supply message_id to select a specific attachment.", InputSchema: json.RawMessage(`{"type":"object","properties":{"message_id":{"type":"string"}},"additionalProperties":false}`)}
+	return mcptools.Tool{Name: "incoming_media_read", Description: "Read an image, sticker, voice, video or share from this request, quote or unread batch. Returns an observation bound to the original message. Supply message_id to select a specific attachment.", InputSchema: json.RawMessage(`{"type":"object","properties":{"message_id":{"type":"string"}},"additionalProperties":false}`)}
 }
 
 func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args json.RawMessage) (string, error) {
@@ -38,6 +38,10 @@ func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args jso
 	for _, m := range in.UnreadMessages {
 		permitted = permitted || m.MessageID == q.Message
 	}
+	// An earlier message in this same group can be revisited by ID after its
+	// collection window has ended. The native message and saved source below
+	// still establish the exact account, group and incoming direction.
+	permitted = permitted || in.IsGroup && q.Message != ""
 	if !permitted || in.Preview || in.Surf || in.ReportOnly || in.Account != w.source.Account() || !w.allowed[in.Thread] {
 		return "", errors.New("incoming_media_not_authorized")
 	}
@@ -49,7 +53,7 @@ func (w *Worker) readTurnMedia(ctx context.Context, in companion.Input, args jso
 		return "", errors.New("incoming_media_not_authorized")
 	}
 	switch m.Type {
-	case 3, 47, 43, 49:
+	case 3, 34, 47, 43, 49:
 	default:
 		return "", errors.New("incoming_media_type_unsupported")
 	}

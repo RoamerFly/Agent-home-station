@@ -98,14 +98,13 @@ func TestScopedMediaObservationReachesPrivateAndGroupedTurns(t *testing.T) {
 	}
 }
 
-func TestUnreadableScopedVideoDoesNotBlockIndependentGroupText(t *testing.T) {
+func TestUnreadableScopedVideoKeepsGroupBatchAvailableForDecision(t *testing.T) {
 	for _, scenario := range []struct {
 		name                                       string
 		backlog, quoteVideo, sameSender, videoOnly bool
-		continues                                  bool
 	}{
-		{name: "separate directed text", continues: true},
-		{name: "later video after reconnect", backlog: true, continues: true},
+		{name: "separate directed text"},
+		{name: "later video after reconnect", backlog: true},
 		{name: "text explicitly quotes unreadable video", quoteVideo: true},
 		{name: "same requester may mean their video", sameSender: true},
 		{name: "video is the only request", videoOnly: true},
@@ -118,8 +117,8 @@ func TestUnreadableScopedVideoDoesNotBlockIndependentGroupText(t *testing.T) {
 			w, _, _ := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, messages []map[string]string) (string, error) {
 				decisions.Add(1)
 				data := messages[len(messages)-1]["content"]
-				if !strings.Contains(data, "请告诉我明天星期几") || !strings.Contains(data, "未取得内容证据") {
-					t.Error("independent request or video failure missing from the decision")
+				if !strings.Contains(data, "附件读取未完成") {
+					t.Error("video failure missing from the decision")
 				}
 				return `{"action":"silent"}`, nil
 			}))
@@ -166,10 +165,7 @@ func TestUnreadableScopedVideoDoesNotBlockIndependentGroupText(t *testing.T) {
 				t.Fatal(err)
 			}
 			pumpGeneration(t, w, func() bool { return w.generation.occupied() == 0 })
-			eventName, expectedDecisions := "group_input_read_failed", int32(0)
-			if scenario.continues {
-				eventName, expectedDecisions = "background_video_read_failed", 1
-			}
+			eventName, expectedDecisions := "batch_media_read_incomplete", int32(1)
 			found := false
 			for _, r := range activity {
 				found = found || r.Event == eventName && r.RelatedMessageID == videoID && r.Reason == "video_probe_invalid"
