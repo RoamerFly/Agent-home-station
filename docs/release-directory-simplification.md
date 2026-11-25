@@ -44,4 +44,7 @@
 - 工作站内部暂存路径已在结构化布局中归入 `data/main_setting/tmp`；原 `data/project-tool-tasks` 与 `data/comfyui-output-stage` 均无文件，空骨架移入同一待删除批次。本地视觉用量 `usage.json` 移入 `data/main_setting/local-vision-usage`，迁移前后 SHA-256 均为 `DB5AC6411300904A696701D617FFC981AB04319ED79C711AAB66754B691A06C7`。旧布局在其他安装中仍可读取已有用量账本。
 - 正式 `data` 根目录现为 `applications`、`artifacts`、`main_setting`、`publictools`、`resources`、`tools`、`voices`、`workspaces` 八个目录。
 - 全发布目录中，至少 10 MB 的同体积候选做哈希比较后发现约 23.65 GiB 的逻辑重复内容，主要是各工具独立运行环境的 CUDA/Python 文件；它们按各自路径运行，不作为可清理副本。`data/publictools/obs-preview/config` 是到 `data/tools/obs-preview/config` 的目录联接，没有第二份配置。
-- 更新脚本报告 `updated/restarted/healthy/native_login=true`；清理后本机 `:8080/healthz` 和 `:8082/healthz` 都返回 200。本次没有发送微信消息或对真实媒体执行新的生成任务。
+- 首次更新脚本报告 `updated/restarted/healthy/native_login=true`；清理后本机 `:8080/healthz` 和 `:8082/healthz` 都返回 200。本次没有发送微信消息或对真实媒体执行新的生成任务。
+- Astra 再核对 `env`：`windows-espeak-ng` 的 442 个文件（24,468,135 字节）与 `publictools/audio-cpp-语音识别与生成/runtime/phonemizer` 对应文件 SHA-256 全部相同，现用音频工具登记指向包内副本，因此旧目录也移入同一待删除批次。正式发行包只读检查仍为错误 0、警告 0。若回退到早期音频工具登记，需同时恢复该旧环境路径。
+- `env/windows-station-speech` 的 59,330 个非缓存文件与工具包内一致，但尚未脱离旧环境完成实际冷启动合成，本轮保留。`env/document-workshop`、`env/windows-station-rvc`、`env/windows-media`、`env/windows-agent-host` 和 `env/windows-python-cli` 有当前服务或工具路径引用，保留。重复 DLL 的存在不等于目录可删。
+- 最后一次正式更新从已推送提交构建，启动结果为 `healthy=true`。更新脚本在账号恢复在线前记录过 `native_login=false`；随后直接查询原生端点确认 `authenticated=true`、`connection=online`，两个健康端点仍返回 200。`data` 根目录保持上述八项，旧目录没有回生。

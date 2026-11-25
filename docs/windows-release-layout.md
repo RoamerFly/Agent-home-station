@@ -16,6 +16,8 @@
 
 工作站临时任务目录归在 `data/main_setting/tmp`，本地视觉调用计数归在 `data/main_setting/local-vision-usage`；手工歌曲试验资料归在 `data/workspaces/home/works/music-experiments`。这些都不在 `data` 根部另开同级工作区。
 
+`env/document-workshop` 仍由微信文档 OCR 与预览读取；`env/windows-station-rvc` 仍供工作站私有 RVC 控制使用；`env/windows-media`、`windows-agent-host` 和 `windows-python-cli` 是当前工作站依赖。旧 `env/windows-espeak-ng` 已归档，现用音频工具从自己的 `runtime/phonemizer` 读取。`env/windows-station-speech` 虽有包内等值的非缓存文件，仍待冷启动合成验证后再整理。
+
 启动时将旧 fish_home/<身份>/home 原目录移入当前配置的工作区根下的 home；新构建和独立服务默认使用 `data/workspaces`。只有复数目录不存在时才沿用现有旧根 `data/workspace` 或 `data/managed-workspaces`。旧安装若仍配置旧根，需先核对并迁移资料再修改工作区根；两个非空根不能直接覆盖合并。旧工具登记的鱼身份目录移入 publictools/catalog。内部身份、工具登记内容、应用登录资料保持不变；目标冲突时保留双方内容并报告错误。空的旧容器仅在确认为普通空目录后逐层清理。
 
 Build-Desktop 的 LocalStation 构建把经过清单验证的工具放入带用途后缀的 publictools。请使用独立 staging 目录构建，停止正式实例后部署，不直接合并真实模型和私有资料。
