@@ -189,7 +189,7 @@ namespace WechatAgent.Desktop {
                                         Assert(Deployment.Text(profile, "account_id") == "account-" + key, "provisioning returned the exact profile");
                                         var profileUrl = d.Url + connections + "/" + Deployment.Text(profile, "id");
                                         profiles.Add(profileUrl);
-                                        var worker = round == 0 ? "disabled" : profiles.Count == 1 ? "paused" : "needs_setup";
+                                        var worker = round > 0 && profiles.Count == 1 ? "paused" : "disabled";
                                         Dictionary<string, object> connection;
                                         var workerDeadline = DateTime.UtcNow.AddSeconds(5);
                                         do {
@@ -219,8 +219,11 @@ namespace WechatAgent.Desktop {
                                     using (var payload = new StringContent("{\"action\":\"start\"}", System.Text.Encoding.UTF8, "application/json"))
                                     using (var refused = client.PostAsync(profiles[0] + "/lifecycle", payload).GetAwaiter().GetResult())
                                         Assert(refused.StatusCode == HttpStatusCode.Conflict, "imported worker cannot bypass the cutover check");
-                                    var started = StationJSON(client, HttpMethod.Post, profiles[1] + "/lifecycle", new { action = "start" });
-                                    Assert(Deployment.Text(started, "worker") == "waiting_login", "unrelated worker waits for its own login");
+                                    using (var payload = new StringContent("{\"action\":\"start\"}", System.Text.Encoding.UTF8, "application/json"))
+                                    using (var refused = client.PostAsync(profiles[1] + "/lifecycle", payload).GetAwaiter().GetResult())
+                                        Assert(refused.StatusCode == HttpStatusCode.Conflict, "legacy console prevents a second station worker on another profile");
+                                    var secondView = Deployment.Json.Deserialize<Dictionary<string, object>>(client.GetStringAsync(profiles[1]).GetAwaiter().GetResult());
+                                    Assert(Deployment.Text((Dictionary<string, object>)secondView["connection"], "worker") == "disabled", "refused start leaves the second worker disabled");
                                     var stopped = StationJSON(client, HttpMethod.Post, profiles[0] + "/lifecycle", new { action = "stop" });
                                     Assert(Deployment.Text(stopped, "worker") == "paused", "pausing one worker preserves the other worker state");
                                 }
@@ -591,7 +594,7 @@ namespace WechatAgent.Desktop {
             }
             if (args.Length == 2 && (args[0] == "--local-native-cycle" || args[0] == "--portable-native-cycle")) {
                 LocalNativeCycle(args[1], args[0] == "--portable-native-cycle");
-                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; synthetic legacy receipt, profiles and independent worker states verified, no login or send.");
+                Console.WriteLine("LocalStation owned wx and Go service passed two real cycles; synthetic legacy receipt, profile persistence and single-owner worker fencing verified, no login or send.");
                 return 0;
             }
             if (args.Length == 2 && args[0] == "--local-cycle") {
