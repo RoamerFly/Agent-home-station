@@ -76,7 +76,7 @@
       "id": "qwen21-image-to-image-hq",
       "label": "图生图 · Qwen Image 2.1",
       "graph": "image/qwen21-image-to-image-hq.json",
-      "sha256": "950696decc8ef22dd13d03168ee23ddfc193e4d1cbbdc29801bb71b98bd64a68",
+      "sha256": "151ac14b22fc12418fc78ab7d2984eec36d969610d00f7459b74face3b4b2491",
       "save_node": "8",
       "parameters": [
         {

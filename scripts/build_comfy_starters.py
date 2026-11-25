@@ -60,7 +60,7 @@ def qwen_graph(mode):
         params += [parameter("input_image", "参考底图", "image", 9, "image", required=True),
                    parameter("resolution", "参考图处理分辨率", "integer", 4, "resolution", minimum=256, maximum=2048),
                    parameter("denoise", "改动强度", "number", 6, "denoise", minimum=0, maximum=1)]
-        g["6"]["inputs"]["denoise"] = 0.65 if mode == "image-to-image" else 0.8
+        g["6"]["inputs"]["denoise"] = 1.0 if mode == "image-to-image" else 0.8
     return g, params
 
 
