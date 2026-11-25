@@ -148,6 +148,18 @@ func stationLifecycleTools() []mcptools.Tool {
 	return []mcptools.Tool{mcptools.NewTool("station_tool_manage", "管理公共工具：status 查询；ensure_ready 启动已启用工具；repair 在空闲时修复或重启，不重复原业务调用；其他动作为显式生命周期操作。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","enable","start","stop","restart"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
 }
 
+func compactProjectToolStatus(views []localProjectToolView) []map[string]any {
+	summaries := make([]map[string]any, 0, len(views))
+	for _, view := range views {
+		summaries = append(summaries, map[string]any{
+			"id": view.ID, "name": view.Name, "installed": view.Installed,
+			"enabled": view.Enabled, "state": view.State,
+			"runtime_ready": view.RuntimeReady, "reason": view.Reason,
+		})
+	}
+	return summaries
+}
+
 func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, raw json.RawMessage) (string, error) {
 	if t.projectTools == nil || t.inspectOnly {
 		return "", errors.New("工作站工具管理不可用")
@@ -191,6 +203,10 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		views = append(views, v)
 	}
 	if action == "status" {
+		if in.ToolID == "" {
+			out, _ := json.Marshal(map[string]any{"tools": compactProjectToolStatus(views), "detail": "station_tool_manage action=status tool_id=<id>"})
+			return string(out), nil
+		}
 		out, _ := json.Marshal(map[string]any{"tools": views})
 		return string(out), nil
 	}

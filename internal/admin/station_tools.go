@@ -40,6 +40,18 @@ type stationToolView struct {
 	VoiceProfiles    any                          `json:"voice_profiles,omitempty"`
 }
 
+func compactStationToolStatus(views []stationToolView) []map[string]any {
+	tools := make([]map[string]any, 0, len(views))
+	for _, tool := range views {
+		tools = append(tools, map[string]any{
+			"id": tool.ID, "name": tool.Name, "installed": tool.Installed,
+			"enabled": tool.Enabled, "state": tool.State,
+			"runtime_ready": tool.RuntimeReady, "reason": tool.Reason,
+		})
+	}
+	return tools
+}
+
 type stationToolSession struct {
 	BaseURL string
 	Cookie  string
@@ -414,7 +426,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 			return "", errors.New("station_tool_status_invalid")
 		}
 		if in.ToolID == "" {
-			out, _ := json.Marshal(map[string]any{"tools": view.Tools, "music_bridge": p.musicBridgeStatus(ctx)})
+			out, _ := json.Marshal(map[string]any{"tools": compactStationToolStatus(view.Tools), "music_bridge": p.musicBridgeStatus(ctx), "detail": "station_tool_manage action=status tool_id=<id>"})
 			return string(out), nil
 		}
 		for _, tool := range view.Tools {
