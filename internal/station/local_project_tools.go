@@ -547,7 +547,7 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 	if !websession.Decode(w, r, &in) {
 		return
 	}
-	if in.Action != "install" && in.Action != "upgrade" && in.Action != "enable" && in.Action != "disable" && in.Action != "start" && in.Action != "stop" && in.Action != "restart" {
+	if in.Action != "install" && in.Action != "upgrade" && in.Action != "enable" && in.Action != "disable" && in.Action != "start" && in.Action != "stop" && in.Action != "restart" && in.Action != "ensure_ready" && in.Action != "repair" {
 		websession.Fail(w, 400, "未知的项目工具操作")
 		return
 	}
@@ -637,6 +637,24 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 	} else {
 		if err != nil || current.Removed || current.Revision != in.Revision {
 			websession.Fail(w, 409, "项目工具版本已变化，请刷新后重试")
+			return
+		}
+		if in.Action == "ensure_ready" || in.Action == "repair" {
+			view, viewErr := s.projectView(ctx, host, id, name)
+			if viewErr != nil {
+				websession.Fail(w, 503, "项目工具状态暂不可读")
+				return
+			}
+			state, recoverErr := s.ensureProjectToolReady(ctx, host, view, in.Action == "repair")
+			if recoverErr == nil && (state == "ready" || state == "restarted") {
+				view, viewErr = s.projectView(ctx, host, id, name)
+				if viewErr != nil {
+					websession.Fail(w, 503, "项目工具恢复后状态暂不可读")
+					return
+				}
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			websession.Respond(w, 200, projectToolRepairResult(view, state, recoverErr))
 			return
 		}
 		if (in.Action == "start" || in.Action == "stop" || in.Action == "restart") && !current.Enabled {

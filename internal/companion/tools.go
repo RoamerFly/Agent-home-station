@@ -162,7 +162,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 `
 		}
 		activeTools = append(activeTools,
-			mcptools.Tool{Name: "tool_overview", Description: "Summarize tools authorized in this conversation by group in one read. Host service states, when available, are separate from tool authorization. Use discover_tools only for detailed schemas.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)},
+			mcptools.Tool{Name: "tool_overview", Description: "Summarize authorized tool groups and counts with host service state in one read. Set group or include_names to list names, with offset/limit for continuation; use discover_tools for schemas.", InputSchema: json.RawMessage(`{"type":"object","properties":{"include_names":{"type":"boolean"},"group":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)},
 			mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)},
 		)
 		system += "\n按需分页或续读；批量操作依次按反馈继续。"
@@ -338,6 +338,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		system += "\n强制分享已开启：优先读取适合目标的新内容并reply；复用已取得的结果。没有合适来源或工具不可用时silent。"
 	}
 	pendingCalls := []string{}
+	discoveredInBatch := false
 	// Delivery tools are feedback loops, not finite action slots. The caller's
 	// cancellation/deadline remains authoritative; other actions retain a budget.
 	followupRounds := 0
@@ -384,7 +385,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			return Decision{}, err
 		}
 		ctx = withGenerationEvidence(ctx, callEvidence)
-		if len(pendingCalls) > 0 {
+		fromPending := len(pendingCalls) > 0
+		if fromPending {
 			answer = pendingCalls[0]
 			pendingCalls = pendingCalls[1:]
 		} else if nativeFunctions {
@@ -436,6 +438,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			continue
 		}
 		if nativeFunctions {
+			if !fromPending {
+				discoveredInBatch = false
+			}
 			calls, batchErr := expandToolBatch(answer, allowed)
 			if batchErr != nil {
 				return Decision{}, batchErr
@@ -821,7 +826,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					return string(b), nil
 				})
 			} else if nativeFunctions && response.Tool == "tool_overview" {
-				result, callErr = e.toolOverview(toolCtx, tools)
+				result, callErr = e.toolOverview(toolCtx, tools, args)
 			} else if nativeFunctions && response.Tool == "discover_tools" {
 				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
 				invocation.attempt++
@@ -865,7 +870,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 								}
 							}
 						}
-						activeTools = append([]mcptools.Tool(nil), baseTools...)
+						if !discoveredInBatch {
+							activeTools = append([]mcptools.Tool(nil), baseTools...)
+							discoveredInBatch = true
+						}
 						for _, t := range discovered {
 							activeTools = exposeTool(activeTools, t)
 							allowed[t.Name] = true

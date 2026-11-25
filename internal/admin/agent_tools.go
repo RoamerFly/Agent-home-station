@@ -42,19 +42,14 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
 	if p.workspaceExecutionAllowed() {
-		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable an external Station package already installed and approved on this workstation. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
+		tools = append(tools, diagnosticsTool())
 	}
 	if p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("station_comfy", "使用 ComfyUI：workflows 查看工作流及参数，models 选模型，author 登记工作流，run 提交，job 查成品，attach 暂存为微信附件。图像输入先 upload(source_message_id 或 source_path)；工作目录文件加 fish_home=true，随后使用返回的 filename。生图优先 qwen21-text-to-image-hq，视频优先 MiniMax H3 工作流。模型清单、文件名和本地路径仅向账号管理员披露；普通成员可正常创作。attach 后仍须发送附件。", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","upload","run","job","attach"]},"source_message_id":{"type":"string"},"source_path":{"type":"string"},"fish_home":{"type":"boolean"},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "启动本机 YuE/RVC 受管服务；查询 music_service_status 就绪后续办原任务。", `{"type":"object","properties":{},"additionalProperties":false}`))
-		tools = append(tools,
-			agentTool("station_tool_status", "Read the public Station project-tool catalog or one tool's lifecycle state. Returns sanitized status, readiness and revision without paths or credentials. Input {tool_id?:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`),
-			agentTool("station_tool_start", "Start one enabled public Station project tool and wait for its host health check. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Does not create a media task or send WeChat. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
-			agentTool("station_tool_stop", "Stop one public Station project tool while retaining its enabled intent. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
-			agentTool("station_tool_restart", "Restart one enabled public Station project tool and wait for its host health check. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
-		)
+		tools = append(tools, agentTool("station_tool_manage", "公共工具状态与恢复：status 列目录；ensure_ready 启动已启用工具；repair 在空闲时修复，不重做原任务；start/restart/stop/enable 为显式操作。音乐桥接用 tool_id=music-bridge。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","start","restart","stop","enable"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
 	}
 	projectTools := p.projectPluginTools(context.Background())
 	tools = append(tools, projectTools...)
@@ -86,6 +81,14 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	return tools
 }
 func (p *permittedTools) agentToolEnabled(name string) bool {
+	// Already running conversations may still name a former lifecycle tool.
+	// The new model catalogue exposes one manage entry instead.
+	if strings.HasPrefix(name, "station_tool_") && name != "station_tool_manage" && p.agentToolsAllowed() && (p.privileged() || p.workspaceExecutionAllowed()) {
+		switch name {
+		case "station_tool_status", "station_tool_enable", "station_tool_start", "station_tool_stop", "station_tool_restart":
+			return true
+		}
+	}
 	tools := p.workspaceAgentTools
 	if wechatapp.ToolName(name) {
 		tools = p.wechatCommunicationTools

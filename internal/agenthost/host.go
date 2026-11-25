@@ -71,6 +71,10 @@ type Input struct {
 }
 type Host struct{ Config Config }
 
+// ErrPathOutsideRoots is returned after a lexical scope check, without opening
+// the rejected path.
+var ErrPathOutsideRoots = errors.New("路径不在已授权工作目录内")
+
 func (h Host) rooted(path string) (*os.Root, string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, "", errors.New("路径必须是已授权目录内的绝对路径")
@@ -86,7 +90,7 @@ func (h Host) rooted(path string) (*os.Root, string, error) {
 		}
 		return root, rel, nil
 	}
-	return nil, "", errors.New("路径不在已授权工作目录内")
+	return nil, "", ErrPathOutsideRoots
 }
 func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, error) {
 	if err := h.Config.Validate(); err != nil {

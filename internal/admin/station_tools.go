@@ -374,22 +374,29 @@ func (p *permittedTools) attachStationComfyArtifact(ctx context.Context, session
 }
 
 func (p *permittedTools) callStationTool(ctx context.Context, action string, raw json.RawMessage) (string, error) {
-	if action != "status" && action != "enable" && action != "start" && action != "stop" && action != "restart" {
-		return "", toolInputError("station_tool_action_invalid")
-	}
-	if !p.workspaceExecutionAllowed() {
+	if !p.privileged() && !p.workspaceExecutionAllowed() {
 		return "", toolInputError("station_tool_not_authorized")
 	}
 	var in struct {
+		Action string `json:"action"`
 		ToolID string `json:"tool_id"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return "", toolInputError("station_tool_arguments_invalid")
 	}
+	if action == "manage" {
+		action = in.Action
+	}
+	if action != "status" && action != "enable" && action != "start" && action != "stop" && action != "restart" && action != "ensure_ready" && action != "repair" {
+		return "", toolInputError("station_tool_action_invalid")
+	}
 	if action != "status" {
 		if _, err := stationToolIDs(in.ToolID); err != nil {
 			return "", err
 		}
+	}
+	if in.ToolID == "music-bridge" {
+		return p.manageMusicBridge(ctx, action)
 	}
 	session, err := p.stationToolLogin(ctx)
 	if err != nil {
@@ -407,7 +414,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 			return "", errors.New("station_tool_status_invalid")
 		}
 		if in.ToolID == "" {
-			out, _ := json.Marshal(view)
+			out, _ := json.Marshal(map[string]any{"tools": view.Tools, "music_bridge": p.musicBridgeStatus(ctx)})
 			return string(out), nil
 		}
 		for _, tool := range view.Tools {
@@ -439,7 +446,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 	if current == nil {
 		return "", errors.New("station_tool_not_found")
 	}
-	if action == "enable" && (!current.ExternalPackage || !current.Installed) {
+	if action == "enable" && (!current.Installed || !current.ExternalPackage && !p.privileged()) {
 		return "", errors.New("station_tool_owner_install_required")
 	}
 	if action == "start" || action == "restart" {
@@ -448,7 +455,7 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 		}
 	}
 	path := "/api/local/project-tools/" + url.PathEscape(id)
-	response, err := p.stationToolRequest(ctx, session, http.MethodPut, path, map[string]any{"action": action, "revision": current.Revision, "idle_only": !p.privileged()})
+	response, err := p.stationToolRequest(ctx, session, http.MethodPut, path, map[string]any{"action": action, "revision": current.Revision, "idle_only": action == "repair" || !p.privileged()})
 	if err != nil {
 		return "", err
 	}

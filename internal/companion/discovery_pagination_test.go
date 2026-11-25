@@ -168,6 +168,44 @@ func TestNativeToolDiscoveryContinuesBeyondFirstEightMatches(t *testing.T) {
 	}
 }
 
+type discoveryBatchModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*discoveryBatchModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("native functions required")
+}
+
+func (m *discoveryBatchModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+	m.step++
+	switch m.step {
+	case 1:
+		return `{"action":"tool_batch","calls":[{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":0,"limit":6}},{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":6,"limit":6}}]}`, nil
+	case 2:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "catalog_01" }) ||
+			!slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "catalog_11" }) {
+			m.t.Fatal("same-batch discovery pages were not combined")
+		}
+		return `{"action":"tool","tool":"catalog_01","arguments":{}}`, nil
+	default:
+		return `{"action":"reply","messages":["已核对"]}`, nil
+	}
+}
+
+func TestNativeToolDiscoveryCombinesPagesWithinOneBatch(t *testing.T) {
+	access := &pagedCatalog{}
+	model := &discoveryBatchModel{t: t}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools, e.MaxToolCalls = access, 5
+	if _, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "查目录", Preview: true}); err != nil || access.calls != 1 || model.step != 3 {
+		t.Fatalf("batch discovery failed: err=%v calls=%d model_steps=%d", err, access.calls, model.step)
+	}
+}
+
 type largePageReplayModel struct {
 	t    *testing.T
 	step int

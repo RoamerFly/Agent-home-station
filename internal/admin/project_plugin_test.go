@@ -13,6 +13,7 @@ import (
 	"time"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mcptools"
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -158,6 +159,76 @@ func projectPolicyJob(t *testing.T, p *permittedTools, name string, raw json.Raw
 func projectBrokerRequest(policy *projectPluginPolicy) json.RawMessage {
 	raw, _ := json.Marshal(map[string]any{"tool": policy.request.Tool, "operation": policy.tool.Operation, "arguments": policy.request.Arguments})
 	return raw
+}
+
+func TestProjectPluginServerListScopeRecovery(t *testing.T) {
+	f, accounts := managedAccountPair(t)
+	p := accounts[0]
+	installProjectPluginTestRuntime(t, p)
+	fishManage(t, f, "test", "bind_fish", 200)
+	outside := filepath.Join(t.TempDir(), "outside-scope")
+	for _, tc := range []struct {
+		name, scope string
+		owner       bool
+	}{
+		{"member conversation", "", false},
+		{"owner global", "global", true},
+		{"owner fish home", "fish_home", true},
+		{"member denied global", "global", false},
+		{"member denied fish home", "fish_home", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trace := companion.Input{Channel: "wechat", Account: p.manager.native.Account(), TraceID: "scope-recovery", Mode: "direct",
+				Thread: "same@chatroom", Sender: "member", IsGroup: true}
+			if tc.owner {
+				trace.Thread, trace.Sender, trace.IsGroup = "wxid_owner", "wxid_owner", false
+			}
+			p.SetTrace(trace)
+			args := map[string]any{"path": outside, "offset": 4, "limit": 3}
+			if tc.scope != "" {
+				args[tc.scope] = true
+			}
+			raw, _ := json.Marshal(args)
+			_, err := p.Call(t.Context(), "server_list", raw)
+			if err == nil {
+				t.Fatal("outside path admitted")
+			}
+			var failure RuntimeFailure
+			description := mcptools.FailureDescription(err)
+			if !tc.owner && tc.scope != "" {
+				if strings.Contains(description, "path_scope_denied") || strings.Contains(description, "server_list") ||
+					strings.Contains(description, filepath.Base(f.dir)) || strings.Contains(description, "outside-scope") {
+					t.Fatalf("unauthorized root hint: %s", description)
+				}
+				return
+			}
+			if json.Unmarshal([]byte(description), &failure) != nil || failure.Code != "path_scope_denied" || !failure.NotStarted {
+				t.Fatalf("missing scoped failure: %s", description)
+			}
+			_, nextJSON, ok := strings.Cut(failure.Continuation, "server_list ")
+			var next map[string]any
+			if !ok || json.Unmarshal([]byte(nextJSON), &next) != nil {
+				t.Fatalf("missing usable arguments: %s", description)
+			}
+			wantRoot := p.executionContext().Conversation
+			switch tc.scope {
+			case "global":
+				wantRoot = p.executionContext().Private
+			case "fish_home":
+				wantRoot, _, err = p.boundFishHome()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if next["path"] != wantRoot || next["limit"] != float64(3) || next["offset"] != nil ||
+				next["global"] != args["global"] || next["fish_home"] != args["fish_home"] || strings.Contains(description, "outside-scope") {
+				t.Fatalf("wrong continuation: %s", description)
+			}
+			if _, err = p.Call(t.Context(), "server_list", json.RawMessage(nextJSON)); err != nil {
+				t.Fatalf("suggested arguments failed: %v", err)
+			}
+		})
+	}
 }
 
 func TestProjectPluginMissingHasNoCoreFallbackAndKeepsNotes(t *testing.T) {

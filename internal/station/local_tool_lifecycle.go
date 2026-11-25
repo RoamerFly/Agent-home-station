@@ -145,15 +145,7 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 }
 
 func stationLifecycleTools() []mcptools.Tool {
-	out := []mcptools.Tool{}
-	for _, action := range []string{"status", "enable", "start", "stop", "restart"} {
-		schema := `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`
-		if action != "status" {
-			schema = `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`
-		}
-		out = append(out, mcptools.NewTool("station_tool_"+action, "工作站公共工具生命周期："+action+"。status 列出工具和未就绪原因；enable 使主人已授权安装的外部工具按需待命；启动、停止和重启用于已启用工具。按次执行的工具启动时检查就绪状态。", schema))
-	}
-	return out
+	return []mcptools.Tool{mcptools.NewTool("station_tool_manage", "管理公共工具：status 查询；ensure_ready 启动已启用工具；repair 在空闲时修复或重启，不重复原业务调用；其他动作为显式生命周期操作。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","enable","start","stop","restart"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
 }
 
 func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -164,6 +156,7 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		return "", err
 	}
 	var in struct {
+		Action string `json:"action"`
 		ToolID string `json:"tool_id"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -179,6 +172,9 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		return "", err
 	}
 	action := strings.TrimPrefix(name, "station_tool_")
+	if action == "manage" {
+		action = in.Action
+	}
 	views := []localProjectToolView{}
 	sources := discoverToolPackages(s.options.CatalogDirectory)
 	if action == "status" {
@@ -198,7 +194,7 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		out, _ := json.Marshal(map[string]any{"tools": views})
 		return string(out), nil
 	}
-	if action != "enable" && action != "start" && action != "stop" && action != "restart" {
+	if action != "enable" && action != "start" && action != "stop" && action != "restart" && action != "ensure_ready" && action != "repair" {
 		return "", errors.New("未知工具操作")
 	}
 	if in.ToolID == "" || len(views) != 1 {
