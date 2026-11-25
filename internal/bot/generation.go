@@ -437,6 +437,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 			}
 			if err == nil {
 				for i := range in.IncomingMedia {
+					previousParts := append([]companion.ObservationPart(nil), in.IncomingMedia[i].ObservationParts...)
 					in.IncomingMedia[i].Observation = summary
 					in.IncomingMedia[i].ObservationState = "observed"
 					in.IncomingMedia[i].ObservedRange = observationEvidence.ObservedRange
@@ -452,6 +453,13 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 						for _, part := range observationEvidence.Parts {
 							if part.Kind == companion.ObservationPublisherDescription {
 								parts = append(parts, part)
+							}
+						}
+						if len(parts) == 0 {
+							for _, part := range previousParts {
+								if part.Kind == companion.ObservationPublisherDescription {
+									parts = append(parts, part)
+								}
 							}
 						}
 						in.IncomingMedia[i].ObservationParts = parts

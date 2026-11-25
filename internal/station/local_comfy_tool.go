@@ -121,7 +121,7 @@ func localComfyRegisterToolSpec() mcptools.Tool {
 }
 
 func localComfyStartToolSpec() mcptools.Tool {
-	return mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号。inputs 只填工作流列表给出的参数。依据工作流的输出类型，从任务查询取得 PNG 或 MP4。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`)
+	return mcptools.NewTool(localComfyStartTool, "启动已批准的本机 ComfyUI 工作流并取得任务编号；服务空闲关闭时会自动启动。inputs 只填工作流列表给出的参数。依据工作流的输出类型，从任务查询取得 PNG 或 MP4。", `{"type":"object","properties":{"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"title":{"type":"string","maxLength":100}},"required":["workflow_id"],"additionalProperties":false}`)
 }
 
 func localComfyJobToolSpec() mcptools.Tool {
@@ -266,10 +266,15 @@ func (e localComfyInvocation) start(ctx context.Context, raw json.RawMessage) (s
 		if err != nil {
 			return "", "", err
 		}
+		var startErr error
 		if created {
-			job = e.submit(ctx, job, args, graph)
+			job, startErr = e.submit(ctx, job, args, graph)
 		}
-		value, err := localProcessJSON(comfyJobView(job))
+		view := comfyJobView(job)
+		if startErr != nil && job.State == "pending" {
+			view["reason"], view["next_step"] = localComfyStartupFailure(startErr)
+		}
+		value, err := localProcessJSON(view)
 		return value, "registered", err
 	})
 }
@@ -300,10 +305,10 @@ func (e localComfyInvocation) checkWorkflow(ctx context.Context, args localComfy
 	return errors.New("ComfyUI 部署或工作流批准已变化")
 }
 
-func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, args localComfyJobInput, graph []byte) pluginhost.Job {
+func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, args localComfyJobInput, graph []byte) (pluginhost.Job, error) {
 	ref, err := comfyui.NewJobRef(job.ID, args.SaveNode)
 	if err != nil {
-		return job
+		return job, err
 	}
 	prepare := comfyui.Prepare
 	if args.VideoOutput {
@@ -311,7 +316,7 @@ func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, ar
 	}
 	prepared, err := prepare(graph, args.GraphSHA256, ref)
 	if err != nil {
-		return job
+		return job, err
 	}
 	err = e.tool.projectTools.comfy.Use(ctx, e.grant.FishID, args.Binding, true, func(client localComfyClient) error {
 		if err := e.checkSource(ctx, args); err != nil {
@@ -356,9 +361,30 @@ func (e localComfyInvocation) submit(ctx context.Context, job pluginhost.Job, ar
 	if err != nil && job.State == "pending" {
 		view := job
 		view.Diagnostic = &pluginhost.JobDiagnostic{Code: "backend_not_started"}
-		return view
+		return view, err
 	}
-	return job
+	return job, err
+}
+
+func localComfyStartupFailure(err error) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "comfyui_start_timeout", "ComfyUI 启动超过本轮等待时间；查看工作站 ComfyUI 状态与日志后重试。"
+	}
+	switch err.Error() {
+	case "station_comfyui_port_occupied_no_adoption":
+		return "comfyui_port_occupied", "托管 ComfyUI 端口已被其他进程占用；检查工作站中的部署端口和占用进程。"
+	case "station_comfyui_start_timeout":
+		return "comfyui_start_timeout", "托管 ComfyUI 未在启动时限内就绪；查看工作站 ComfyUI 日志中的启动错误。"
+	case "station_comfyui_start_failed_check_private_log":
+		return "comfyui_process_start_failed", "解释器或入口未能启动；查看工作站 ComfyUI 日志并核对部署登记。"
+	case "station_comfyui_source_unavailable", "station_comfyui_deployment_pin_invalid":
+		return "comfyui_runtime_changed", "运行文件缺失或版本已变化；核对工作站 ComfyUI 部署登记。"
+	default:
+		return "comfyui_start_failed", "查看工作站 ComfyUI 状态和日志，再重试原工作流。"
+	}
 }
 
 func comfyJobView(job pluginhost.Job) map[string]any {

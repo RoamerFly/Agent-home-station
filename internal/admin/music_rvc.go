@@ -41,6 +41,22 @@ func (p *permittedTools) startRVCCover(ctx context.Context, raw json.RawMessage)
 }
 
 func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcRequest, readReference func() (mediaAsset, []byte, error)) (string, error) {
+	// A YuE result can be the source for a subsequent RVC cover in the same
+	// parent turn. The parent's YuE job is not a duplicate RVC submission.
+	// Only a continuation of an existing RVC job reuses that job.
+	if p.trace.TaskID != "" {
+		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
+			if task.ID != p.trace.TaskID || task.MusicJob == "" || task.MusicSpec == nil || task.MusicSpec.Engine != "rvc" ||
+				songTitle(task.MusicTitle) != songTitle(in.Title) || task.MusicSpec.Reference != in.Reference ||
+				in.VoiceProfile != "" && in.VoiceProfile != task.MusicSpec.VoiceProfile || in.VoiceID != "" && in.VoiceID != task.MusicSpec.VoiceID ||
+				in.Start != nil && *in.Start != task.MusicSpec.ReferenceStart || in.Seconds != nil && *in.Seconds != task.MusicSpec.ReferenceSeconds || len(in.Parameters) > 0 {
+				continue
+			}
+			result, _ := json.Marshal(map[string]any{"job_id": task.MusicJob, "task_id": task.ID, "task_state": task.State,
+				"existing_job": true, "instruction": "当前 RVC 任务已提交；调用 music_local_status 查询此 job_id 的真实状态与成品。"})
+			return string(result), nil
+		}
+	}
 	voices, voiceErr := p.accessibleVoices()
 	if voiceErr != nil {
 		return "", voiceErr
@@ -72,13 +88,6 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 		}
 		if !found {
 			return "", toolInputError("selected_voice_not_found_or_not_authorized")
-		}
-	}
-	if p.trace.TaskID != "" {
-		for _, task := range p.manager.agent.list(p.trace.Account, p.trace.Thread) {
-			if task.ID == p.trace.TaskID && task.MusicJob != "" {
-				return "", toolInputError("已有歌曲任务请查询原job_id，不重新转换")
-			}
 		}
 	}
 	if in.VoiceProfile != "" {

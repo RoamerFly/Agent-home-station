@@ -26,6 +26,49 @@ func TestTypedObservationUsesPartsWithoutRepeatingDisplayBody(t *testing.T) {
 	}
 }
 
+func TestFailedArticleReadRetainsOnlyNativeCardDescription(t *testing.T) {
+	s, config, article := memoryFixture(t)
+	article.Thread = "room@chatroom"
+	article.Text = "[收到微信文章分享卡片]"
+	article.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
+	article.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: article.TraceID, Account: article.Account, Thread: article.Thread, Sender: article.Sender, MessageType: 49, OccurredAt: article.MessageTime, Revision: 1, Integrity: "observed"}
+	article.IncomingMedia = []IncomingMediaRef{{Source: *article.Source, Kind: "share", UploaderID: article.Sender, ObservationState: "observed", ObservationVersion: 1, Observation: "旧的混合观察", ObservationParts: []ObservationPart{
+		{Kind: ObservationPublisherDescription, Range: "微信卡片元数据", Excerpt: "标题：测试文章\n简介：卡片简介"},
+		{Kind: ObservationPageBody, Range: "旧页面", Excerpt: "验证页误判为正文"},
+	}}}
+	if err := s.Observe(article, config, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	ref, ok := s.SourceForInput(article)
+	if !ok {
+		t.Fatal("article source unavailable")
+	}
+	e := &Engine{Store: s, Config: config}
+	batch := Input{Channel: article.Channel, Account: article.Account, Thread: article.Thread, UnreadMessages: []ConversationEvent{{MessageID: article.TraceID, Sender: article.Sender, Source: ref, MediaReadFailed: true}}}
+	rows := e.unreadEvidence(batch)
+	if len(rows) != 1 || rows[0]["media_read_status"] == nil {
+		t.Fatal("read failure missing from batch", rows)
+	}
+	check := func(row map[string]any) {
+		t.Helper()
+		observations, ok := row["media_observations"].([]map[string]any)
+		if !ok || len(observations) != 1 || observations[0]["observation_state"] != "card_only" || observations[0]["result_available"] != false {
+			t.Fatal("card-only evidence missing", row)
+		}
+		parts := typedObservationParts(observations[0]["observation_parts"])
+		if len(parts) != 1 || parts[0].Kind != ObservationPublisherDescription || !strings.Contains(parts[0].Excerpt, "测试文章") {
+			t.Fatal("failed page body leaked or publisher copy lost", parts)
+		}
+	}
+	check(rows[0])
+	ev, err := s.ReadEvent(t.Context(), []string{ScopeID(article.Channel, article.Account, article.Thread)}, ref.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.refreshEvidenceRow(rows[0], ev)
+	check(rows[0])
+}
+
 type evidenceNativeModel struct{ fakeModel }
 
 func (m *evidenceNativeModel) ChatFunctions(ctx context.Context, system string, turns []map[string]string, _ []mcptools.Tool) (string, error) {

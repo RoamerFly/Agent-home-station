@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
@@ -62,6 +64,15 @@ func explicitCorrectionToPriorInput(in companion.Input, m linuxnative.Message) b
 	words := strings.ToLower(strings.TrimSpace(m.Body))
 	if words == "" {
 		return false
+	}
+	if _, after, ok := strings.Cut(words, "不是"); ok {
+		// "是 konan 的声线，不是柯南" directly corrects the prior
+		// request even without saying "刚才". Only the old requester's
+		// matching term selects a read-only judgment; the model decides action.
+		if target := strings.FieldsFunc(after, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) }); len(target) > 0 &&
+			utf8.RuneCountInString(target[0]) >= 2 && strings.Contains(strings.ToLower(in.Text+" "+in.RequestedText), target[0]) {
+			return true
+		}
 	}
 	verb := false
 	for _, part := range []string{"说错", "发错", "写错", "不对", "错了", "更正", "纠正", "修改", "改成", "取消", "撤回", "别发", "不要发", "别做", "不要做", "别继续", "不用继续", "停止", "停下", "cancel", "retract", "wrong", "correct"} {

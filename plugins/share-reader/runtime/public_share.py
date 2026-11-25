@@ -405,6 +405,57 @@ class ShareHTML(HTMLParser):
             walk(value)
 
 
+class WechatArticleHTML(HTMLParser):
+    """Read only the article container, never a verification page's chrome."""
+
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    BLOCK = {"article", "blockquote", "br", "div", "h1", "h2", "h3", "h4", "li", "p", "section"}
+
+    def __init__(self, base):
+        super().__init__(convert_charrefs=True)
+        self.base, self.depth, self.hidden, self.found = base, 0, 0, False
+        self.parts, self.images = [], []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if not self.depth:
+            if values.get("id") == "js_content" and tag in {"article", "div", "section"}:
+                self.depth, self.found = 1, True
+            return
+        if tag in self.BLOCK and not self.hidden:
+            self.parts.append("\n")
+        if tag in {"script", "style", "template", "noscript"}:
+            self.hidden += 1
+        if tag == "img" and not self.hidden:
+            raw = values.get("data-src") or values.get("src")
+            if raw:
+                try:
+                    image = public_url(urljoin(self.base, raw))
+                    if image not in self.images:
+                        self.images.append(image)
+                except ValueError:
+                    pass
+        if tag not in self.VOID:
+            self.depth += 1
+
+    def handle_endtag(self, tag):
+        if not self.depth or tag in self.VOID:
+            return
+        if tag in {"script", "style", "template", "noscript"}:
+            self.hidden = max(0, self.hidden - 1)
+        if tag in self.BLOCK and not self.hidden:
+            self.parts.append("\n")
+        self.depth -= 1
+
+    def handle_data(self, value):
+        if self.depth and not self.hidden:
+            self.parts.append(value)
+
+    def body(self):
+        text = re.sub(r"[ \t\r\f\v]+", " ", "".join(self.parts))
+        return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
 def resolve(args, get):
     allowed = {"url", "video_required", "offset", "limit", "expected_sha256", "max_bytes", "timeout_seconds", "candidate_offset", "candidate_limit"}
     if not isinstance(args, dict) or set(args) - allowed or type(args.get("video_required", False)) is not bool:
@@ -486,20 +537,37 @@ def resolve(args, get):
                 raise ValueError("share_content_empty")
         else:
             host = urlsplit(final).hostname
-            if is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
+            if host == "mp.weixin.qq.com" and urlsplit(final).path == "/s":
+                if args.get("video_required"):
+                    raise ValueError("share_requires_browser")
+                article = WechatArticleHTML(final)
+                article.feed(decoded)
+                if not article.found:
+                    raise ValueError("share_requires_browser")
+                parser = ShareHTML(final)
+                parser.feed(decoded)
+                title = " ".join(" ".join(parser.title).split())
+                text = article.body()
+                if article.images and len(text) < 120:
+                    locators, text = article.images, ""
+                if not text and not locators:
+                    raise ValueError("share_content_empty")
+                platform = "wechat_article"
+            elif is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
                 # These pages need a platform adapter. App landing text is never
                 # a substitute for the received video's actual content.
                 raise ValueError("share_platform_adapter_required")
-            parser = ShareHTML(final)
-            parser.feed(decoded)
-            parser.structured_media()
-            title = " ".join(" ".join(parser.title).split())
-            text = " ".join(" ".join(parser.parts).split())
-            locators = parser.media
-            if locators or args.get("video_required"):
-                text = ""
-            if not locators and (args.get("video_required") or len(text) < 120):
-                raise ValueError("share_requires_browser")
+            else:
+                parser = ShareHTML(final)
+                parser.feed(decoded)
+                parser.structured_media()
+                title = " ".join(" ".join(parser.title).split())
+                text = " ".join(" ".join(parser.parts).split())
+                locators = parser.media
+                if locators or args.get("video_required"):
+                    text = ""
+                if not locators and (args.get("video_required") or len(text) < 120):
+                    raise ValueError("share_requires_browser")
     else:
         raise ValueError("share_content_unsupported")
     source_url = final if platform == "bilibili" else display_url(final)

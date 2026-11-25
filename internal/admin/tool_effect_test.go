@@ -35,3 +35,16 @@ func TestToolArgsSummaryKeepsUsefulParametersWithoutPayload(t *testing.T) {
 		t.Fatal("tool payload leaked into activity summary")
 	}
 }
+
+func TestMusicToolEffectRecordsReusableJobID(t *testing.T) {
+	f := setup(t)
+	p := &permittedTools{manager: f.manager}
+	for _, tc := range []struct{ result, want string }{
+		{`{"job_id":"song-123"}`, "已提交歌曲任务：job_id=song-123"},
+		{`{"job_id":"song-123","existing_job":true}`, "复用歌曲任务：job_id=song-123"},
+	} {
+		if got := p.toolEffect("music_rvc_start", nil, tc.result); got != tc.want {
+			t.Fatalf("job reuse not visible: got %q want %q", got, tc.want)
+		}
+	}
+}

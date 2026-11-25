@@ -24,6 +24,20 @@ func TestOrdinaryNewMessageLeavesOldPlanAlone(t *testing.T) {
 	}
 }
 
+func TestDirectNotCorrectionMatchesOriginalRequestOnly(t *testing.T) {
+	in := companion.Input{Thread: "room@chatroom", Sender: "member", Text: "请用柯南声线唱歌"}
+	corrected := fixtureMessage("correction", in.Thread, "是 konan 的声线，不是柯南", "incoming")
+	corrected.SenderID = in.Sender
+	if !explicitCorrectionToPriorInput(in, corrected) {
+		t.Fatal("direct correction did not reach the active request")
+	}
+	other := fixtureMessage("new", in.Thread, "这不是我的歌", "incoming")
+	other.SenderID = in.Sender
+	if explicitCorrectionToPriorInput(in, other) {
+		t.Fatal("unrelated negative sentence revisited the old request")
+	}
+}
+
 func TestExplicitCorrectionCancelsPreparedTextOnce(t *testing.T) {
 	model := &planReviewModel{answer: `{"action":"cancel","evidence_message_id":"correction","reason":"原请求者撤销"}`}
 	w, c, n, in := planWorker(t, model)

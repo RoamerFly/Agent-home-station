@@ -62,7 +62,7 @@ func toolDiagnosticRecord(thread, message string, d companion.ToolDiagnostic) Re
 	return Record{ThreadID: thread, MessageID: message, Event: d.Event, Category: category, Status: d.Status,
 		CallID: d.CallID, Tool: d.Tool, ToolAttempt: d.Attempt, ToolRetries: d.Retries,
 		ToolRequests: d.Requests, ToolHTTPStatus: d.HTTPStatus, ToolStage: d.Stage,
-		ToolCode: d.Code, DurationMS: d.DurationMS, Origin: "tool"}
+		ToolCode: d.Code, Reason: d.Code, DurationMS: d.DurationMS, Origin: "tool"}
 }
 
 func (w *Worker) modelFailed(thread, message string, err error) {

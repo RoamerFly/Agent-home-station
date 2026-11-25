@@ -7,7 +7,6 @@ import (
 	"errors"
 	"strings"
 
-	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 )
@@ -176,12 +175,6 @@ func (p *permittedTools) callInstalledWeb(ctx context.Context, name string, args
 		}
 	}
 	key := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, p.trace.TraceID, p.trace.TaskID, name, string(args))
-	if companion.RetryingPublicIndex(ctx) && webServiceCapability(name) == "web.search" {
-		var source struct{ Source string }
-		if json.Unmarshal(args, &source) == nil && source.Source == "bilibili" {
-			key = agentID(key, "public-index-retry")
-		}
-	}
 	request, _ := json.Marshal(map[string]any{"plugin": "web-search", "capability": webServiceCapability(name), "arguments": args, "request_key": "compat-" + key})
 	return p.callServicePlugin(ctx, "service_plugin_call", request)
 }

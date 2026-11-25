@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
+	"strings"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/identity"
@@ -62,6 +63,16 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		}}
 		return
 	}
+	if m.Type == 49 && m.AppMessageType != nil && *m.AppMessageType == 5 {
+		if card, ok := nativeArticleCardPart(m); ok {
+			in.IncomingMedia = []companion.IncomingMediaRef{{
+				Source: source, Kind: "share", UploaderID: m.SenderID,
+				Observation: card.Excerpt, ObservationState: "card_only", ObservationVersion: 1,
+				ObservedRange: card.Range, ObservationParts: []companion.ObservationPart{card},
+			}}
+			return
+		}
+	}
 	kind := map[int]string{3: "image", 47: "sticker", 34: "voice", 43: "video", 49: "share"}[m.Type]
 	filename := m.FileAttachmentName()
 	if filename != "" {
@@ -83,6 +94,22 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 			in.IncomingMedia = []companion.IncomingMediaRef{{Source: quoted, Kind: quotedKind, Filename: identity.Clean(quotedFilename), UploaderID: m.ResolvedQuote.SenderID, ObservationState: "pending", ObservationVersion: 1}}
 		}
 	}
+}
+
+func nativeArticleCardPart(m linuxnative.Message) (companion.ObservationPart, bool) {
+	if m.Link == nil || m.IsQuotedText() || m.IsPassiveNotice() {
+		return companion.ObservationPart{}, false
+	}
+	var fields []string
+	for _, field := range []struct{ label, value string }{{"标题", m.Link.Title}, {"简介", m.Link.Description}, {"来源", m.Link.SourceName}} {
+		if value := strings.TrimSpace(field.value); value != "" {
+			fields = append(fields, field.label+"："+boundedQuoteText(value))
+		}
+	}
+	if len(fields) == 0 {
+		return companion.ObservationPart{}, false
+	}
+	return companion.ObservationPart{Kind: companion.ObservationPublisherDescription, Range: "微信卡片元数据", Excerpt: strings.Join(fields, "\n")}, true
 }
 
 // Only the original requester can change an unsent plan. A platform quote

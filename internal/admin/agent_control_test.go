@@ -112,6 +112,35 @@ func TestTaskCanBindVerifiedEarlierRequestAndReuseCompletedWork(t *testing.T) {
 	}
 }
 
+func TestTaskContinuationUpdatesItsExistingCheckpoint(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.native = &taskOriginNative{fakeNative: f.native, message: linuxnative.Message{
+		ID: "turn-1", AccountID: "test", ThreadID: "wxid_owner", SenderID: "wxid_owner",
+		Direction: "incoming", Type: 1, Body: "请用柯南声线唱歌",
+	}}
+	first, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"song","title":"柯南声线","checkpoint":"等待换声","state":"waiting"}`))
+	var created struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(first), &created) != nil || created.Task.ID == "" {
+		t.Fatalf("initial task: %s %v", first, err)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "task-retry", TaskID: created.Task.ID, OriginTraceID: "turn-1", BackgroundResult: true, Mode: "direct"})
+	updated, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"new-song-key","title":"konan声线","checkpoint":"按纠正后的声线继续","state":"waiting","origin_message_id":"turn-1"}`))
+	var resumed struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(updated), &resumed) != nil {
+		t.Fatalf("continuation: %s %v", updated, err)
+	}
+	if resumed.Task.ID != created.Task.ID || resumed.Task.OriginTrace != created.Task.OriginTrace || resumed.Task.ParentID != "" || resumed.Task.Title != "konan声线" || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
+		t.Fatalf("continuation made another task: %+v", resumed.Task)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "later-correction", Mode: "direct"})
+	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"turn-1"}]}`)
+	corrected, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"corrected-key","title":"konan原唱版","checkpoint":"按新的要求继续","state":"waiting","origin_message_id":"turn-1"}`))
+	var linked struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(corrected), &linked) != nil || linked.Task.ID != created.Task.ID || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
+		t.Fatalf("later correction duplicated the original task: %s %v", corrected, err)
+	}
+}
+
 func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
 	_, p := trustedAgent(t)
 	if !p.agentToolEnabled("station_comfy") {

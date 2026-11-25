@@ -184,7 +184,7 @@
     const metrics=[item.duration_ms?elapsed(item.duration_ms):'',item.tool_requests?'请求 '+tokenCount(item.tool_requests)+' 次':'',item.tool_retries?'重试 '+tokenCount(item.tool_retries)+' 次':''].filter(Boolean);
     if(metrics.length)node(meta,'span',metrics.join(' · '),'round-tool-chip round-tool-metrics');
   }else node(content,'strong',label(item));
-  if(tool){node(content,'p',item.status==='failed'||item.category==='error'?'结果：失败':'结果：'+(item.status==='running'?'执行中':'成功'),'tool-result '+(item.status==='failed'||item.category==='error'?'form-error':'receipt-accepted'));if(item.status==='failed'||item.category==='error')node(content,'p','失败原因：'+(reasons[item.reason]||item.reason||'未记录具体原因'),'hint')}
+  if(tool){node(content,'p',item.status==='failed'||item.category==='error'?'结果：失败':'结果：'+(item.status==='running'?'执行中':'成功'),'tool-result '+(item.status==='failed'||item.category==='error'?'form-error':'receipt-accepted'));if(item.status==='failed'||item.category==='error'){const code=item.reason||item.tool_code;node(content,'p','失败原因：'+(reasons[code]||code||'工具调用失败'),'hint')}}
    else if(item.event==='model_usage'){
     const source=[item.usage_model,item.usage_purpose,item.tool&&'工具 '+item.tool,item.call_id&&'调用编号 '+item.call_id].filter(Boolean).join(' · ');
     if(source)node(content,'small',source,'hint');

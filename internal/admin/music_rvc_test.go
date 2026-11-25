@@ -114,6 +114,55 @@ func TestDirectRVCCoverUsesWholeActualRecordingWithoutYuEOrASRLyrics(t *testing.
 	}
 }
 
+func TestRVCSubmissionFromYuEParentAndReuseExistingRVCJob(t *testing.T) {
+	f := setup(t)
+	p, _, _ := f.manager.toolAccess()
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "owner", TraceID: "yue-to-rvc", TaskID: "parent-yue", Mode: "direct", Text: "接着用原录音翻唱"}
+	p.SetTrace(in)
+	asset, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: syntheticReferenceWAV(t, 2), MIME: "audio/wav", Filename: "synthetic.wav"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.manager.agent.task(agentTask{ID: in.TaskID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, Title: "YuE 原创", State: "waiting", MusicJob: "parent-yue-job", MusicSpec: &songSpec{Mode: "original"}}); err != nil {
+		t.Fatal(err)
+	}
+	posts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rvc-health":
+			w.Write([]byte(`{"ready":true,"bridge_version":9}`))
+		case "/rvc-jobs":
+			posts++
+			w.Write([]byte(`{"id":"child-rvc-job","state":"queued"}`))
+		default:
+			t.Errorf("unexpected music endpoint: %s", r.URL.Path)
+			w.WriteHeader(500)
+		}
+	}))
+	defer upstream.Close()
+	legacySpeechFixture := readLegacySpeechTestConfig(t, f.manager)
+	legacySpeechFixture.YuEEnabled, legacySpeechFixture.YuEEndpoint, legacySpeechFixture.YuEToken = true, upstream.URL, "synthetic-token"
+	writeLegacySpeechMigrationFixture(t, f.manager, legacySpeechFixture)
+	installLegacyLocalMusicPlugin(t, f.manager)
+	raw, _ := json.Marshal(map[string]any{"title": "原曲翻唱", "reference_asset_id": asset.ID})
+	result, err := p.Call(t.Context(), "music_rvc_start", raw)
+	if err != nil || posts != 1 {
+		t.Fatalf("YuE parent blocked RVC conversion: result=%s err=%v posts=%d", result, err, posts)
+	}
+	var submitted struct {
+		TaskID string `json:"task_id"`
+	}
+	if err = json.Unmarshal([]byte(result), &submitted); err != nil || submitted.TaskID == "" {
+		t.Fatalf("missing child task: %s %v", result, err)
+	}
+	in.TaskID = submitted.TaskID
+	p.SetTrace(in)
+	result, err = p.Call(t.Context(), "music_rvc_start", raw)
+	if err != nil || posts != 1 || !strings.Contains(result, `"existing_job":true`) || !strings.Contains(result, `"job_id":"child-rvc-job"`) {
+		t.Fatalf("existing RVC job not returned for continuation: result=%s err=%v posts=%d", result, err, posts)
+	}
+}
+
 func TestNamedRVCVoiceCannotFallBackWhenRememberedNameIsOnlyInTitle(t *testing.T) {
 	voices := []voiceEntry{{ID: "private-speech", Name: "Aurora", Engine: "GPT-SoVITS"}, {ID: "private-singing", Name: "Aurora", Engine: "RVC", ProfileID: "private-aurora"}, {ID: "other", Name: "Other", Engine: "RVC", ProfileID: "other-profile"}}
 	for _, text := range []string{"请用 Aurora 声线唱", "Aurora翻唱", "aurora cover"} {

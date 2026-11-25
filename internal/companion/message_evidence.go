@@ -168,6 +168,33 @@ func observationEvidence(media []IncomingMediaRef) []map[string]any {
 	return rows
 }
 
+// An unavailable article page does not erase the fields received in its
+// native WeChat card. Keep only the publisher's copy; a failed read never
+// upgrades that copy to observed page, image or audio content.
+func publisherOnlyMediaObservations(value any) []map[string]any {
+	observations, _ := value.([]map[string]any)
+	var retained []map[string]any
+	for _, observation := range observations {
+		parts, _ := observation["observation_parts"].([]ObservationPart)
+		publisher := make([]ObservationPart, 0, len(parts))
+		for _, part := range parts {
+			if part.Kind == ObservationPublisherDescription && strings.TrimSpace(part.Excerpt) != "" {
+				publisher = append(publisher, part)
+			}
+		}
+		if len(publisher) == 0 {
+			continue
+		}
+		retained = append(retained, map[string]any{
+			"evidence_kind": "media_observation", "producer": "received_card",
+			"source": observation["source"], "kind": observation["kind"],
+			"uploader_id": observation["uploader_id"], "observation_state": "card_only",
+			"observation_parts": publisher, "result_available": false,
+		})
+	}
+	return retained
+}
+
 func observationAvailable(m IncomingMediaRef) bool {
 	switch strings.ToLower(m.ObservationState) {
 	case "observed", "verified", "complete", "completed", "succeeded":
@@ -412,7 +439,11 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			row := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
 			if event.MediaReadFailed && ev.Trace == event.MessageID && ev.Sender == event.Sender {
 				row["media_read_status"] = "附件读取未完成，可继续处理本轮消息或按消息 ID 重读。"
-				delete(row, "media_observations")
+				if card := publisherOnlyMediaObservations(row["media_observations"]); len(card) > 0 {
+					row["media_observations"] = card
+				} else {
+					delete(row, "media_observations")
+				}
 			}
 			rows = append(rows, row)
 		} else {
@@ -525,7 +556,11 @@ func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 	}
 	fields := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
 	if row["media_read_status"] != nil {
-		delete(fields, "media_observations")
+		if card := publisherOnlyMediaObservations(fields["media_observations"]); len(card) > 0 {
+			fields["media_observations"] = card
+		} else {
+			delete(fields, "media_observations")
+		}
 	}
 	for _, key := range []string{"text", "literal_user_text", "user_text_state", "evidence_kind", "media_observations", "source", "quoted_source", "quote_chain", "quoted_by_id", "quoted_author_id", "addressees", "speaker_id", "speaker", "speaker_name_source", "message_sender_id", "message_sender_name", "message_sender_name_source", "incoming_I_means", "uploader_id", "voice_speaker_id", "voice_speaker_state", "at", "source_event_id", "text_excerpted", "full_text_bytes", "personal_context_redacted"} {
 		if value, ok := fields[key]; ok {

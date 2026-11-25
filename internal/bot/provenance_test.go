@@ -46,6 +46,26 @@ func TestInputSourcePreservesImageUploaderAndQuotedAuthor(t *testing.T) {
 	}
 }
 
+func TestArticleSourceKeepsNativeCardCopyWithoutClaimingPageRead(t *testing.T) {
+	_, c, _, in := planWorker(t, &planReviewModel{})
+	in.Thread, in.Sender = "room@chatroom", "member-a"
+	article := 5
+	m := fixtureMessage("article", in.Thread, "", "incoming")
+	m.AccountID, m.SenderID, m.Type, m.AppMessageType = in.Account, in.Sender, 49, &article
+	m.Link = &linuxnative.LinkCard{Title: "测试文章标题", Description: "微信卡片简介", SourceName: "测试来源", URL: "https://mp.weixin.qq.com/s?__biz=synthetic&mid=1&idx=1&sn=synthetic"}
+	bindInputSource(&in, m, c)
+	if len(in.IncomingMedia) != 1 {
+		t.Fatal("article source lost its card", in)
+	}
+	card := in.IncomingMedia[0]
+	if card.Kind != "share" || card.ObservationState != "card_only" || card.Source.MessageID != m.ID || len(card.ObservationParts) != 1 || card.ObservationParts[0].Kind != companion.ObservationPublisherDescription || card.ObservationParts[0].Firsthand() {
+		t.Fatal("card copy was lost or promoted to a page read", card)
+	}
+	if card.ObservationParts[0].Excerpt == "" || card.ObservationParts[0].Excerpt == m.Link.URL {
+		t.Fatal("card title and description unavailable", card)
+	}
+}
+
 func TestRewrittenPlanCannotReuseOriginalTextGrounding(t *testing.T) {
 	w, c, _, in := planWorker(t, &planReviewModel{answer: `{"action":"replace","messages":["新文"]}`})
 	w.queueUtterancePlan(c, in, companion.Decision{Messages: []string{"原文"}, ReplyContexts: []companion.ReplyContext{*in.ReplyContext}})

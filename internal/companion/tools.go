@@ -1177,26 +1177,15 @@ func parameterReadFailure(err error) bool {
 func retryReadOnlyTool(ctx context.Context, call func(context.Context) (string, error)) (string, error) {
 	var result string
 	var err error
-	attemptCtx := ctx
 	for attempt := 0; attempt < 3; attempt++ { // first attempt + two retries
 		if err = ctx.Err(); err != nil {
 			return "", err
 		}
-		result, err = call(attemptCtx)
+		result, err = call(ctx)
 		if err == nil {
 			return result, nil
 		}
 		delay, retryable := transientReadRetry(err)
-		var web *mcptools.WebError
-		if errors.As(err, &web) && web.Code == "search_sources_unavailable" {
-			// The package has already tried its independent public indexes.
-			// Retry the read once, using a different observation key only after
-			// the original read returned this definitive failure.
-			if attempt > 0 {
-				return result, err
-			}
-			attemptCtx = context.WithValue(ctx, publicIndexRetryKey{}, true)
-		}
 		if !retryable || attempt == 2 {
 			return result, err
 		}
@@ -1208,22 +1197,15 @@ func retryReadOnlyTool(ctx context.Context, call func(context.Context) (string, 
 	return result, err
 }
 
-type publicIndexRetryKey struct{}
-
-// RetryingPublicIndex reports an authorized re-observation following a
-// terminal read-only failure. It must never change a mutation's identity.
-func RetryingPublicIndex(ctx context.Context) bool {
-	retry, _ := ctx.Value(publicIndexRetryKey{}).(bool)
-	return retry
-}
-
 func transientReadRetry(err error) (time.Duration, bool) {
 	var web *mcptools.WebError
 	if !errors.As(err, &web) {
 		return 0, false
 	}
+	// The web-search package has already tried the Bilibili endpoint and each
+	// independent public index. Repeating that whole chain adds no new source.
 	if web.Code == "search_sources_unavailable" {
-		return max(time.Second, web.RetryAfter), true
+		return 0, false
 	}
 	retryable := web.Code == "network_unavailable" || web.Code == "network_closed" || web.Code == "network_timeout" || web.Code == "dns_failed" || web.Code == "http_status" && (web.Status == 408 || web.Status == 429 || web.Status == 500 || web.Status == 502 || web.Status == 503 || web.Status == 504)
 	if !retryable {

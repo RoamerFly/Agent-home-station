@@ -71,7 +71,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, agentTool("agent_clock", "Read current local time and timezone before scheduling. Create reminders only for an explicit future time; immediate work continues in its current task. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。来源默认为当前消息；续办先前消息时传已读取的 origin_message_id。跨会话主人任务传真实 source IDs 和 delivery_thread_id；target_task_id 用于取消旧任务。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；当前任务续办会沿用 ID。纠正旧请求可传原消息的 origin_message_id，更新已有任务。pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。跨会话主人任务传真实 source IDs 和 delivery_thread_id；target_task_id 用于取消旧任务。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
@@ -350,8 +350,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if origin == "" {
 			origin = p.trace.TraceID
 		}
-		if in.OriginMessageID != "" && (in.ID != "" || in.TargetTaskID != "" || p.trace.TaskID != "") {
-			return "", toolInputError("origin_message_id只用于新建独立任务")
+		if in.OriginMessageID != "" && in.TargetTaskID != "" {
+			return "", toolInputError("取消任务时不需要指定来源消息")
 		}
 		if in.TargetTaskID != "" {
 			if in.ID != "" || in.State != "cancelled" || !p.privileged() || !p.manager.agent.config().CrossConversation {
@@ -389,7 +389,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		var selectedOriginText, selectedOriginServerID string
 		if in.OriginMessageID != "" {
-			if sourceThread != p.trace.Thread || !p.trustedTaskSourceMessages(sourceThread, []string{in.OriginMessageID}) {
+			trustedOrigin := p.trustedTaskSourceMessages(sourceThread, []string{in.OriginMessageID})
+			if !trustedOrigin && p.trace.TaskID != "" {
+				if current, ok := m.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok {
+					trustedOrigin = current.OriginTrace == in.OriginMessageID && current.Sender == p.trace.Sender && taskSourceThread(current) == sourceThread
+				}
+			}
+			if sourceThread != p.trace.Thread || !trustedOrigin {
 				return "", mcptools.ArgumentError("$.origin_message_id", "先在当前会话读取真实原请求，再使用返回的消息ID")
 			}
 			message, err := m.native.Message(ctx, in.OriginMessageID)
@@ -419,6 +425,35 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if !p.conversationReadAllowed(deliveryThread) || sourceThread != p.trace.Thread && !p.privileged() {
 			return "", toolInputError("任务投递目标未获授权")
+		}
+		// A continuation already has a durable task identity. A fresh key or
+		// title in that turn updates its checkpoint instead of creating a second
+		// timer for the same work. Cross-thread tasks still get their own record.
+		if in.ID == "" && p.trace.TaskID != "" {
+			if current, ok := m.agent.lookupTask(p.trace.TaskID, p.trace.Account, deliveryThread); ok &&
+				current.Sender == p.trace.Sender && taskSourceThread(current) == sourceThread &&
+				current.Reminder == nil && current.PluginJob == nil {
+				in.ID = current.ID
+			}
+		}
+		if in.ID == "" && in.OriginMessageID != "" {
+			// A corrected request may be handled in a later conversation turn.
+			// Reuse its one live task when the caller cites the verified original
+			// message; a changed key or title must not create another timer.
+			candidate := ""
+			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
+				if old.OriginTrace != in.OriginMessageID || old.Sender != p.trace.Sender ||
+					taskSourceThread(old) != sourceThread || old.Reminder != nil || old.PluginJob != nil ||
+					!unfinishedExecutionTask(old.State) {
+					continue
+				}
+				if candidate != "" {
+					candidate = ""
+					break
+				}
+				candidate = old.ID
+			}
+			in.ID = candidate
 		}
 		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged(), ID: in.ID, Account: p.trace.Account, Thread: deliveryThread, RequestThread: p.trace.Thread, SourceThread: sourceThread, SourceMessageIDs: append([]string(nil), in.SourceMessageIDs...), DeliveryThread: deliveryThread, Sender: p.trace.Sender, Title: in.Title}
 		if sourceThread == p.trace.Thread && p.trace.OriginalText != nil && !p.trace.BackgroundResult {
@@ -500,6 +535,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if t.Reminder != nil {
 			return "", toolInputError("这是独立提醒任务；请用agent_reminder查询或取消，不能改写为其他程序任务")
+		}
+		if in.ID != "" {
+			for _, id := range in.SourceMessageIDs {
+				if !contains(t.SourceMessageIDs, id) {
+					t.SourceMessageIDs = append(t.SourceMessageIDs, id)
+				}
+			}
 		}
 		t.Checkpoint = in.Checkpoint
 		t.State = in.State
