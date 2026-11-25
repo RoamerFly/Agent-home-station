@@ -1,0 +1,33 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>安装与启动 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html">大肥鱼使用手册</a><a href="installation.html" aria-current="page">安装与启动</a><a href="first-chat.html">首次配置与第一条回复</a><a href="conversations.html">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html">插件选择、安装与开发</a><a href="operations.html">排障、更新与数据维护</a></nav><article><h1 id="_1">安装与启动</h1>
+<h2 id="windows">已有 Windows 便携包</h2>
+<ol>
+<li>把<strong>整个程序目录</strong>解压到当前用户可以写入的位置。确认根目录有 <code>WechatAgent.exe</code>，旁边有 <code>runtimes/</code>。在桌面创建快捷方式时，目标指向此处的 EXE；单独复制 EXE 会丢失微信后台等运行文件。</li>
+<li>双击 EXE。窗口应直接显示管理页。桌面外壳需要 Microsoft Edge WebView2 Runtime；使用者无须为了基础微信连接安装 WSL、CUDA 或开发工具链。</li>
+<li>首次运行会在程序目录下准备本机数据。默认账号标识为 <code>desktop</code>，管理页使用本机回环端口 8081，原生服务使用 6174。已有部署可以覆盖这些值，因此以本机配置为准。</li>
+<li>进入 <a href="first-chat.html">首次配置</a> 完成微信和模型设置。窗口打开只证明管理端能运行，手机扫码和 Agent 启动分别有状态。</li>
+</ol>
+<p>最小化会留在任务栏。点关闭按钮时可选择托盘运行或退出；托盘菜单可以恢复窗口、启停服务，以及修改已记住的关闭方式。要彻底停机，选择退出并停止服务，等待在途工作收尾。</p>
+<h2 id="windows_1">只有源码时如何构建 Windows 包</h2>
+<p>构建机准备 Git、与 <code>go.mod</code> 匹配的 Go、Python 3.13、Rust 1.93.1、MSVC C++ 工具链、Windows SDK、原生 Perl，以及含真实 <code>ffmpeg.exe</code> 和 <code>ffprobe.exe</code> 的媒体分发目录。首次构建需要能访问所固定的上游依赖。安装程序的快捷入口或包管理器 shim 无法代替媒体二进制。</p>
+<pre><code class="language-powershell">git clone --branch codex/windows-native-backend https://github.com/RoamerFly/wechat-agent.git
+cd wechat-agent
+# 将路径改成你的媒体分发目录；选择一个新的输出目录。
+.\scripts\Build-Desktop.ps1 -Portable -Test -MediaDirectory 'C:\tools\ffmpeg\bin' -OutputDirectory 'dist\first-portable'
+.\dist\first-portable\WechatAgent.exe
+</code></pre>
+<p>构建脚本校验原生客户端和依赖摘要。若报文件缺失或摘要不匹配，先修复报错所指的依赖，然后在新输出目录重建。不要把测试构建直接写进正在使用的数据目录。文档 OCR、语音模型和音乐 GPU 环境需另行准备。<a href="https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/desktop/windows/README.md">Windows 构建说明</a></p>
+<h2 id="linux">Linux 服务器</h2>
+<p>Linux 部署需要可运行的原生微信服务和独立的数据目录。先按分支中的原生客户端清单准备后端，再从仓库根目录构建管理端。</p>
+<pre><code class="language-bash">mkdir -p dist
+go build -o dist/wechat-admin ./cmd/wechat-admin
+</code></pre>
+<p>为管理端配置 <code>WECHAT_ADMIN_DATA_DIR</code>、<code>WECHAT_ADMIN_LISTEN</code>、<code>WECHAT_NATIVE_URL</code>、<code>WECHAT_NATIVE_TOKEN_FILE</code>、<code>WECHAT_NATIVE_ACCOUNT</code>；为持久任务和工作区设置 <code>WECHAT_BOT_STATE_DIR</code>、<code>WECHAT_WORKSPACE_ROOT</code>。令牌文件必须与该原生服务匹配。先在回环地址验证连接、扫码和重启后的账号状态，再配置远程访问。仓库内的 Docker 配置保留了历史部署路线，使用前需单独核对对应版本。<a href="https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/components/native-client/README.md">原生依赖清单</a> · <a href="https://github.com/RoamerFly/wechat-agent/blob/89b0bfa/deploy/README.md">部署说明</a></p>
+<p>下一步：<a href="first-chat.html">扫码并完成第一次对话</a></p></article></main></html>
