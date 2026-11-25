@@ -124,12 +124,17 @@ func TestNativeResponseBatchAndSongArgumentsAreDecodedBeforeExecution(t *testing
 		args         []string
 		wantCode     string
 		wantBatch    bool
+		wantTool     bool
 	}{
 		{name: "two_functions", reason: "tool_calls", args: []string{`{"query":"first"}`, `{"query":"second"}`}, wantBatch: true},
+		{name: "stop_with_function", reason: "stop", args: []string{`{"query":"first"}`}, wantTool: true},
 		{name: "long_lyrics", reason: "tool_calls", args: []string{`{"lyrics":"` + strings.Repeat("歌", 1800) + `"}`}},
 		{name: "invalid_second", reason: "tool_calls", args: []string{`{}`, `{"query":`}, wantCode: "model_tool_arguments_invalid"},
 		{name: "oversized", reason: "tool_calls", args: []string{`{"text":"` + strings.Repeat("x", 17000) + `"}`}, wantCode: "model_tool_arguments_too_large"},
 		{name: "truncated", reason: "length", wantCode: "model_output_token_limit"},
+		{name: "truncated_with_function", reason: "length", args: []string{`{}`}, wantCode: "model_output_token_limit"},
+		{name: "filtered_with_function", reason: "content_filter", args: []string{`{}`}, wantCode: "model_content_filtered"},
+		{name: "incomplete_with_function", reason: "unknown", args: []string{`{}`}, wantCode: "model_response_incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +167,9 @@ func TestNativeResponseBatchAndSongArgumentsAreDecodedBeforeExecution(t *testing
 			_ = json.Unmarshal([]byte(answer), &result)
 			if tc.wantBatch && (result.Action != "tool_batch" || len(result.Calls) != 2) {
 				t.Fatal("calls lost", answer)
+			}
+			if tc.wantTool && result.Action != "tool" {
+				t.Fatal("function lost on stop response", answer)
 			}
 		})
 	}

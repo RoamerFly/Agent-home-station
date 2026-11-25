@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
@@ -100,6 +101,18 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 	if (mode != "direct" && mode != "social" && mode != "proactive") || strings.TrimSpace(text) == "" || len(text) > 8192 || !utf8.ValidString(text) {
 		return companion.Decision{}, errors.New("请选择有效场景并输入不超过 8 KiB 的测试文字")
 	}
+	recordModelEvent := func(event string, d deepseek.Diagnostics) {
+		m.record(bot.Record{Event: "preview_" + event, Category: "model", Origin: "preview", Reason: d.Code, Status: event,
+			ModelHTTPStatus: d.HTTPStatus, ModelAttempts: d.Attempts, ModelMaxAttempts: d.MaxAttempts,
+			ModelStage: d.Stage, ModelFinishReason: d.FinishReason, ModelContentBytes: d.ContentBytes,
+			ModelJSONValid: d.JSONValid, DurationMS: d.DurationMS})
+	}
+	ctx = deepseek.WithRequestObserver(ctx, recordModelEvent)
+	recordModelFailure := func(err error) {
+		if d, ok := deepseek.ErrorDiagnostics(err); ok {
+			recordModelEvent("model_failed", d)
+		}
+	}
 	m.op.Lock()
 	defer m.op.Unlock()
 	m.mu.Lock()
@@ -114,6 +127,7 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 		}
 		answer, err := client.Chat(ctx, system, turns)
 		if err != nil {
+			recordModelFailure(err)
 			return "", errors.New(deepseek.UserMessage(err))
 		}
 		return answer, nil
@@ -124,6 +138,7 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 		}
 		answer, err := client.ChatGrounding(ctx, system, turns, options)
 		if err != nil {
+			recordModelFailure(err)
 			return "", errors.New(deepseek.UserMessage(err))
 		}
 		return answer, nil
@@ -132,7 +147,11 @@ func (m *Manager) preview(ctx context.Context, mode, text string) (companion.Dec
 		if err != nil {
 			return "", err
 		}
-		return client.ChatGroundingValidated(ctx, system, turns, options, validate)
+		answer, err := client.ChatGroundingValidated(ctx, system, turns, options, validate)
+		if err != nil {
+			recordModelFailure(err)
+		}
+		return answer, err
 	}}
 	engine, err := companion.NewPreview(c.sharedCompanion(), model, c.SystemPrompt)
 	if err != nil {
