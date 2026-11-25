@@ -240,7 +240,7 @@
       "id": "h3-text-to-video",
       "label": "文生视频 · MiniMax H3",
       "graph": "video/h3-text-to-video.json",
-      "sha256": "a634f6cfc3a1735761dcef79cb12408f4a151d4e20b6662235d6987ee7f2643e",
+      "sha256": "bdea580fc86dc03f115db974296bc7e142c33cebefe77c589f00b603e292be11",
       "save_node": "14",
       "parameters": [
         {
@@ -302,7 +302,7 @@
       "id": "h3-image-to-video",
       "label": "图生视频 · MiniMax H3",
       "graph": "video/h3-image-to-video.json",
-      "sha256": "d86f454cac078b7e4a7762be0daa76bc076a0ad86d7c67eb86a2c0a0656873aa",
+      "sha256": "3a9c40671db56920fd0e0cc98b2816d4f39f08ce34463690fc05e30e92928314",
       "save_node": "14",
       "parameters": [
         {
@@ -372,7 +372,7 @@
       "id": "h3-reference-video",
       "label": "参考视频生视频 · MiniMax H3",
       "graph": "video/h3-reference-video.json",
-      "sha256": "2f8fea24be8bb793698b779b11e7c3f1f83414690646052cb06a46d162c01fb3",
+      "sha256": "609b878215e28d83d9f2a6d474a8d311b59c08ac5707e15ba79302b1f5eaa99a",
       "save_node": "14",
       "parameters": [
         {
@@ -443,7 +443,7 @@
       "id": "h3-universal-single",
       "label": "全能参考 · 单图加视频",
       "graph": "video/h3-universal-single.json",
-      "sha256": "22ef0e872f35f000341a70c6234d16cf4f8d9a847654d590c71ed043ab4df6e1",
+      "sha256": "be01d42a6ac79ed4e240145492939e9b13fd613c5eb891f7522bbc7c5829d289",
       "save_node": "14",
       "parameters": [
         {
@@ -522,7 +522,7 @@
       "id": "h3-universal-multi",
       "label": "全能参考 · 多图加视频",
       "graph": "video/h3-universal-multi.json",
-      "sha256": "492b072c8bee1b9d63f0ebf57a255b13d26d03df3e84e273ad693d1e589790b9",
+      "sha256": "84277eab6309bcdbde59747aa3d5947c21d36a3eb21216a8fa0632b453a25aa4",
       "save_node": "14",
       "parameters": [
         {
