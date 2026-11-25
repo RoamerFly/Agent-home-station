@@ -665,10 +665,18 @@ func (e *Engine) policy(input Input) string {
 	if c.Permissions.SendImage {
 		images = e.Images
 	}
-	catalog, _ := json.Marshal(images)
-	identityPolicy := "\n\n【角色档案】\n名字：" + c.Name + "\n人物设定：" + c.Persona + "\n外观设定：" + c.Appearance + "\n表达习惯：" + c.Style + "\n相处方式：" + c.Relationship
+	identityPolicy := "\n\n【角色档案】\n名字：" + c.Name
 	if c.PersonaDocument {
 		identityPolicy = "\n\n【角色档案】\n" + c.Persona
+	} else {
+		for _, field := range []struct{ label, value string }{
+			{"人物设定", c.Persona}, {"外观设定", c.Appearance},
+			{"表达习惯", c.Style}, {"相处方式", c.Relationship},
+		} {
+			if strings.TrimSpace(field.value) != "" {
+				identityPolicy += "\n" + field.label + "：" + field.value
+			}
+		}
 	}
 	communicationPolicy := `
 【对话】
@@ -685,7 +693,16 @@ func (e *Engine) policy(input Input) string {
 	if input.Mode == "proactive" && !input.Surf {
 		planPolicy += "自主评估目标见runtime_context；可接话、探索或安静。安静原因可用topic_concluded、awaiting_participant或nothing_to_add。"
 	}
-	return e.system + identityPolicy + messageEvidencePolicy + communicationPolicy + planPolicy + "\n本群补充设定：" + input.PersonaOverride + "\n允许文字回复：" + boolText(c.Permissions.ReplyText) + "\n可用图片素材（素材描述）：" + string(catalog)
+	extra := ""
+	if strings.TrimSpace(input.PersonaOverride) != "" {
+		extra += "\n本群补充设定：" + input.PersonaOverride
+	}
+	extra += "\n允许文字回复：" + boolText(c.Permissions.ReplyText)
+	if len(images) > 0 {
+		catalog, _ := json.Marshal(images)
+		extra += "\n可用图片素材（素材描述）：" + string(catalog)
+	}
+	return e.system + identityPolicy + messageEvidencePolicy + communicationPolicy + planPolicy + extra
 
 }
 func boolText(value bool) string {

@@ -92,6 +92,7 @@ func (m *Manager) record(r bot.Record) {
 	entry.UsagePriceSource = r.UsagePriceSource
 	entry.UsageReported = r.UsageReported
 	entry.UsagePriced = r.UsagePriced
+	entry.CacheHitReported = r.CacheHitReported
 	entry.InputTokens = r.InputTokens
 	entry.OutputTokens = r.OutputTokens
 	entry.CacheHitTokens = r.CacheHitTokens

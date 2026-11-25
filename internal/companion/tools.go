@@ -159,14 +159,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 `
 		} else {
 			system = baseSystem + `
-【原生工具调用】` + nativeToolDiscoveryPolicy + `回复只输出reply/silent JSON，按实际结果叙述。微信 accepted 才算接收；保留指定声线和原文件，长音频每条不超过60秒。
+【原生工具调用】` + nativeToolDiscoveryPolicy + `回复只输出reply/silent JSON，按实际结果叙述；保留指定声线和原文件，长音频每条不超过60秒。
 `
 		}
 		activeTools = append(activeTools,
 			mcptools.Tool{Name: "tool_overview", Description: "Summarize authorized tool groups and counts with host service state in one read. Set group or include_names to list names, with offset/limit for continuation; use discover_tools for schemas.", InputSchema: json.RawMessage(`{"type":"object","properties":{"include_names":{"type":"boolean"},"group":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)},
 			mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)},
 		)
-		system += "\n按需分页或续读；批量操作依次按反馈继续。"
 	}
 	baseTools := append([]mcptools.Tool(nil), activeTools...)
 	allowed := map[string]bool{}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"wechat-bot/internal/deepseek"
@@ -69,6 +70,63 @@ func TestUsageLedgerCachesCostOnceAndPreservesOldPriceAfterRestart(t *testing.T)
 	c.APIKey = "different-account-key"
 	if ModelID(c) == ModelID(defaultTestModel()) {
 		t.Fatal("identities not isolated")
+	}
+}
+
+func TestUnknownCacheUsageDoesNotAssumeZeroHitForCost(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := defaultTestModel()
+	if err := s.SetPrices(c, &Prices{Currency: "CNY", Input: 1, CacheHit: .1, Output: 2}); err != nil {
+		t.Fatal(err)
+	}
+	unknown := deepseek.Usage{Time: time.Now(), Reported: true, Input: 1000, Output: 100}
+	if costs, priced, _ := s.Estimate(c, unknown); priced || costs != nil {
+		t.Fatal("missing cache count was priced", costs, priced)
+	}
+	if err := s.Record(c, unknown); err != nil {
+		t.Fatal(err)
+	}
+	knownZero := unknown
+	knownZero.CacheHitReported = true
+	if costs, priced, _ := s.Estimate(c, knownZero); !priced || math.Abs(costs["CNY"]-.0012) > 1e-12 {
+		t.Fatal("explicit zero cache hit was not priced", costs, priced)
+	}
+	if err := s.Record(c, knownZero); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := loaded.Totals()
+	if total.Reported != 2 || total.Input != 2000 || total.CacheHit != 0 || total.CacheUnknown != 1 || total.Unpriced != 1 || math.Abs(total.Costs["CNY"]-.0012) > 1e-12 {
+		t.Fatal(total)
+	}
+}
+
+func TestLegacyLedgerWithoutCachePresenceStillLoads(t *testing.T) {
+	dir := t.TempDir()
+	legacy := []byte(`{"version":1,"started_at":"2026-10-25T00:00:00Z","total":{"requests":1,"reported_requests":1,"input_tokens":100,"output_tokens":20,"cache_hit_tokens":0,"estimated_costs":{"CNY":0.0003}},"days":{},"models":{},"prices":{}}`)
+	if err := os.WriteFile(filepath.Join(dir, "usage.json"), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total := s.Totals(); total.Reported != 1 || total.CacheUnknown != 0 || total.Costs["CNY"] != .0003 {
+		t.Fatal("legacy estimates changed on load", total)
+	}
+	unknown := deepseek.Usage{Time: time.Now(), Reported: true, Input: 10, Output: 2}
+	if err := s.Record(defaultTestModel(), unknown); err != nil {
+		t.Fatal(err)
+	}
+	if total := s.Totals(); total.CacheUnknown != 1 || total.Costs["CNY"] != .0003 {
+		t.Fatal("new unknown usage changed historical estimate", total)
 	}
 }
 func TestReferencePricePeakAndWeekendAndUnknownModel(t *testing.T) {

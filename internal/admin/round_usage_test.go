@@ -38,7 +38,7 @@ func TestRoundUsageRecordsProviderAttemptsWithoutRebilling(t *testing.T) {
 	}
 	defer copy.Close()
 	logs := copy.Logs()
-	if len(logs) != 2 || logs[0].ThreadID != "room@chatroom" || logs[0].MessageID != "round-1" || !logs[0].UsageReported || !logs[0].UsagePriced || logs[0].InputTokens != 1000 || logs[0].CacheHitTokens != 200 || math.Abs(logs[0].EstimatedCosts["CNY"]-.0029) > 1e-10 {
+	if len(logs) != 2 || logs[0].ThreadID != "room@chatroom" || logs[0].MessageID != "round-1" || !logs[0].UsageReported || !logs[0].UsagePriced || !logs[0].CacheHitReported || logs[0].InputTokens != 1000 || logs[0].CacheHitTokens != 200 || math.Abs(logs[0].EstimatedCosts["CNY"]-.0029) > 1e-10 {
 		t.Fatalf("reported attempt was not persisted: %+v", logs)
 	}
 	if logs[1].UsageReported || logs[1].UsagePriced || logs[1].EstimatedCosts != nil {
@@ -54,7 +54,24 @@ func TestRoundUsageRecordsProviderAttemptsWithoutRebilling(t *testing.T) {
 	if err := json.Unmarshal(data, &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) != 2 || response.Items[0].ThreadID != "room@chatroom" || response.Items[0].MessageID != "round-1" || !response.Items[0].UsageReported || response.Items[0].EstimatedCosts["CNY"] == 0 || response.Items[1].UsageReported || response.Items[1].EstimatedCosts != nil {
+	if len(response.Items) != 2 || response.Items[0].ThreadID != "room@chatroom" || response.Items[0].MessageID != "round-1" || !response.Items[0].UsageReported || !response.Items[0].CacheHitReported || response.Items[0].EstimatedCosts["CNY"] == 0 || response.Items[1].UsageReported || response.Items[1].EstimatedCosts != nil {
 		t.Fatalf("logs API lost provider usage: %+v", response.Items)
+	}
+}
+
+func TestRoundUsageKeepsUnknownCacheSeparateFromReportedZero(t *testing.T) {
+	f := setup(t)
+	model := billing.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro", APIKey: "synthetic-key"}
+	if err := f.manager.billing.SetPrices(model, &billing.Prices{Currency: "CNY", Input: 1, CacheHit: .5, Output: 2}); err != nil {
+		t.Fatal(err)
+	}
+	unknown := deepseek.Usage{Model: model.Model, Time: time.Now(), Reported: true, Input: 1000, Output: 100}
+	zero := unknown
+	zero.CacheHitReported = true
+	f.manager.recordModelUsage("room@chatroom", "unknown-cache", model, unknown)
+	f.manager.recordModelUsage("room@chatroom", "zero-cache", model, zero)
+	logs := f.manager.Logs()
+	if len(logs) != 2 || logs[0].CacheHitReported || logs[0].UsagePriced || logs[0].EstimatedCosts != nil || !logs[1].CacheHitReported || !logs[1].UsagePriced || math.Abs(logs[1].EstimatedCosts["CNY"]-.0012) > 1e-12 {
+		t.Fatalf("round usage lost cache presence: %+v", logs)
 	}
 }

@@ -29,13 +29,14 @@ var ErrInvalidPrices = errors.New("请输入有效币种及每百万Token单价"
 var ErrPriceLimit = errors.New("单价设置达到上限")
 
 type Totals struct {
-	Requests int64              `json:"requests"`
-	Reported int64              `json:"reported_requests"`
-	Input    int64              `json:"input_tokens"`
-	Output   int64              `json:"output_tokens"`
-	CacheHit int64              `json:"cache_hit_tokens"`
-	Unpriced int64              `json:"unpriced_requests"`
-	Costs    map[string]float64 `json:"estimated_costs"`
+	Requests     int64              `json:"requests"`
+	Reported     int64              `json:"reported_requests"`
+	Input        int64              `json:"input_tokens"`
+	Output       int64              `json:"output_tokens"`
+	CacheHit     int64              `json:"cache_hit_tokens"`
+	CacheUnknown int64              `json:"cache_unknown_requests"`
+	Unpriced     int64              `json:"unpriced_requests"`
+	Costs        map[string]float64 `json:"estimated_costs"`
 }
 type modelUsage struct {
 	ID       string `json:"id"`
@@ -131,7 +132,11 @@ func addUsage(t Totals, u deepseek.Usage, p Prices, priced bool) Totals {
 		t.Input += u.Input
 		t.Output += u.Output
 		t.CacheHit += u.CacheHit
-		if priced {
+		cacheKnown := u.CacheHitKnown()
+		if !cacheKnown {
+			t.CacheUnknown++
+		}
+		if priced && cacheKnown {
 			if t.Costs == nil {
 				t.Costs = map[string]float64{}
 			}
@@ -148,7 +153,7 @@ func addUsage(t Totals, u deepseek.Usage, p Prices, priced bool) Totals {
 // provider or changes the aggregate ledger. Missing usage or prices stay
 // unknown rather than becoming a zero-cost request.
 func (s *Store) Estimate(c ModelConfig, u deepseek.Usage) (map[string]float64, bool, string) {
-	if s == nil || !u.Reported {
+	if s == nil || !u.Reported || !u.CacheHitKnown() {
 		return nil, false, ""
 	}
 	if u.Model != "" {

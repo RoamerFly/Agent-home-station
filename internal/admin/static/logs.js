@@ -74,21 +74,22 @@
  const {element: node, button} = window.WechatControls;
  function label(item){const failure=reviewFailure(item);if(failure?.stage==='source_validation')return '发送前来源或对象校验未通过';const value=reasons[item.reason]||events[item.event];return value||'运行状态已更新'}
   const tokenCount=value=>Number(value||0).toLocaleString('zh-CN');
+  const cacheHitKnown=item=>item.cache_hit_reported===true||Number(item.cache_hit_tokens)>0;
   const elapsed=ms=>ms>=1000?(ms/1000).toFixed(ms<10000?1:0)+' 秒':ms+' 毫秒';
   function costLabel(costs){
    const known=Object.entries(costs||{}).filter(([currency,amount])=>currency&&Number.isFinite(Number(amount))&&Number(amount)>=0);
    return known.map(([currency,amount])=>{const value=Number(amount);return currency+' '+(value>0&&value<0.00000001?'<0.00000001':value.toLocaleString('zh-CN',{maximumFractionDigits:8}))}).join(' + ');
   }
   function roundUsage(round){
-   const seen=new Set(),costs={};let calls=0,input=0,output=0,cache=0,reported=0,priced=0;
+   const seen=new Set(),costs={};let calls=0,input=0,output=0,cache=0,cacheUnknown=0,reported=0,priced=0;
    for(const item of round.entries||[]){
     if(item.event!=='model_usage'||item.id&&seen.has(item.id))continue;
     if(item.id)seen.add(item.id);
     calls++;
-    if(item.usage_reported){reported++;input+=Number(item.input_tokens)||0;output+=Number(item.output_tokens)||0;cache+=Number(item.cache_hit_tokens)||0}
+    if(item.usage_reported){reported++;input+=Number(item.input_tokens)||0;output+=Number(item.output_tokens)||0;if(cacheHitKnown(item))cache+=Number(item.cache_hit_tokens)||0;else cacheUnknown++}
     if(item.usage_priced){priced++;for(const [currency,value] of Object.entries(item.estimated_costs||{}))if(Number.isFinite(Number(value)))costs[currency]=(costs[currency]||0)+Number(value)}
    }
-   return {calls,reported,priced,input,output,cache,costs};
+   return {calls,reported,priced,input,output,cache,cacheUnknown,costs};
   }
   function roundTools(round){
    const calls=new Map(),identifiedNames=new Set();let anonymous=0;
@@ -187,9 +188,9 @@
    else if(item.event==='model_usage'){
     const source=[item.usage_model,item.usage_purpose,item.tool&&'工具 '+item.tool,item.call_id&&'调用编号 '+item.call_id].filter(Boolean).join(' · ');
     if(source)node(content,'small',source,'hint');
-    node(content,'p',item.usage_reported?'输入 '+tokenCount(item.input_tokens)+' / 输出 '+tokenCount(item.output_tokens)+' Token（缓存命中 '+tokenCount(item.cache_hit_tokens)+'）':'本次模型请求未返回 Token 用量','round-technical');
+    node(content,'p',item.usage_reported?'输入 '+tokenCount(item.input_tokens)+' / 输出 '+tokenCount(item.output_tokens)+' Token（缓存命中 '+(cacheHitKnown(item)?tokenCount(item.cache_hit_tokens):'未知')+'）':'本次模型请求未返回 Token 用量','round-technical');
     const priceSource={reference:'参考单价',custom:'自定义单价'}[item.usage_price_source]||item.usage_price_source;
-    node(content,'small',item.usage_priced&&costLabel(item.estimated_costs)?'模型 Token 费用估算：'+costLabel(item.estimated_costs)+(priceSource?' · '+priceSource:''):'模型 Token 费用未计价','hint');
+    node(content,'small',item.usage_priced&&costLabel(item.estimated_costs)?'模型 Token 费用估算：'+costLabel(item.estimated_costs)+(priceSource?' · '+priceSource:''):'模型 Token 费用未计价'+(item.usage_reported&&!cacheHitKnown(item)?'（缓存数据未返回）':''),'hint');
    }
   else if(item.reason){const reason=reasons[item.reason];if(reason&&reason!==label(item))node(content,'p',reason,'hint')}
   for(const detail of reviewDetails(item))node(content,'p',detail,'hint review-detail');
@@ -284,7 +285,7 @@
    node(usageBox,'strong','本回合用量');
    const stats=node(usageBox,'div',undefined,'round-usage-stats');
    node(stats,'span',usage.calls?('模型调用 '+tokenCount(usage.calls)+' 次 · '+(usage.reported?'已记录 Token '+tokenCount(usage.input+usage.output):'Token 未返回')+(usage.calls>usage.reported?'（'+tokenCount(usage.calls-usage.reported)+' 次未返回）':'')):'模型 Token：未记录','round-usage-line');
-   if(usage.reported)node(stats,'span','输入 '+tokenCount(usage.input)+' / 输出 '+tokenCount(usage.output)+' · 缓存命中 '+tokenCount(usage.cache),'round-usage-line');
+   if(usage.reported)node(stats,'span','输入 '+tokenCount(usage.input)+' / 输出 '+tokenCount(usage.output)+' · 缓存命中 '+(usage.cacheUnknown===usage.reported?'未知':tokenCount(usage.cache)+(usage.cacheUnknown?'（'+tokenCount(usage.cacheUnknown)+' 次未返回）':'')),'round-usage-line');
    node(stats,'span','模型 Token 费用估算：'+priceSummary(usage)+(usage.priced<usage.calls&&usage.priced?'（另有 '+tokenCount(usage.calls-usage.priced)+' 次未计价）':''),'round-usage-line');
    node(stats,'span',tools.calls?'工具调用 '+tokenCount(tools.calls)+' 次（已结束 '+tokenCount(tools.finished)+' 次）'+(tools.timed?' · 已记录耗时 '+elapsed(tools.duration):'')+(tools.retries?' · 重试 '+tokenCount(tools.retries)+' 次':'')+(tools.requests?' · 外部请求 '+tokenCount(tools.requests)+' 次':''):'工具调用：未记录','round-usage-line');
    node(usageBox,'small','费用仅为已计价的模型 Token 估算；独立工具服务费用未统计。此页面只读取已有记录。','hint');
