@@ -101,7 +101,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			s.logsByDate(w, r)
 			return
 		}
-		items := s.manager.displayLogs(r.Context())
+		items := s.projectCrossMediaLogOrigins(s.manager.displayLogs(r.Context()))
 		inbox, plans, loaded := s.logRuntimeStates()
 		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "plan_states": plans, "inbox_loaded": loaded})
 	}))

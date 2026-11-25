@@ -71,6 +71,10 @@ func (s *Server) crossMediaConsoleRoutes(mux *http.ServeMux) {
 			fail(w, 500, "原批次已标记取消，队列清理待恢复")
 			return
 		}
+		if err := m.settleCrossTask(batch); err != nil {
+			fail(w, 500, "原批次已取消，父任务清理待恢复")
+			return
+		}
 		respond(w, 200, map[string]any{"operation_id": batch.ID, "state": "cancelled", "real_wechat_sends": 0})
 	}))
 	mux.HandleFunc("POST /api/agent/media-batches", s.protected(func(w http.ResponseWriter, r *http.Request) {

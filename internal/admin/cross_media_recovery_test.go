@@ -60,6 +60,130 @@ func acceptedCrossPart(b crossMediaBatch, i int) linuxnative.ToolStatus {
 	return linuxnative.ToolStatus{ID: "job-" + p.Key, State: "accepted", ThreadID: b.Target, SourceID: p.SourceID, ServerID: fmt.Sprint(800 + i)}
 }
 
+func TestCrossMediaLateTaskBindingSettlesAfterReceipt(t *testing.T) {
+	f, p, _ := forwardFixture(t)
+	f.manager.config.Companion.Permissions.SendVoice = true
+	upload := stagedUpload{UploadSource: linuxnative.UploadSource{ID: "late-part", Filename: "part.wav", ContentType: "audio/wav", ByteLength: 15}, Account: "test", Kind: "voice"}
+	asset, err := f.manager.rememberAssetFormats(p.trace, assetOriginal{VoiceComplete: true, Data: []byte("synthetic-late-audio"), MIME: "audio/wav", Filename: "song.wav"}, []stagedUpload{upload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"asset_id": asset.ID, "source_thread_id": p.trace.Thread, "target_thread_id": "source@chatroom", "kind": "voice", "request_key": "late"})
+	result, err := p.Call(context.Background(), "wechat_send_media", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := f.manager.readCrossBatch(response.ID)
+	if err != nil || batch.TaskID != "" {
+		t.Fatalf("batch should be unbound: %+v, %v", batch, err)
+	}
+	parent := agentTask{ID: "late-parent", Account: batch.Account, Thread: batch.Origin, RequestThread: batch.Origin, SourceThread: batch.Source, Sender: batch.Sender, OriginTrace: batch.OriginInput.OriginTraceID, State: "completed", WorkCompleted: true, Next: time.Now()}
+	saved, err := f.manager.agent.saveTask(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.State != "waiting_delivery" || !contains(saved.PendingOperations, batch.ID) {
+		t.Fatalf("late operation not bound: %+v", saved)
+	}
+	if err := f.manager.settleCrossMediaPart(batch.ID, batch.Parts[0].Key, acceptedCrossPart(batch, 0)); err != nil {
+		t.Fatal(err)
+	}
+	settled, ok := f.manager.agent.lookupTask(parent.ID, parent.Account, parent.Thread)
+	if !ok || settled.State != "completed" || len(settled.PendingOperations) != 0 {
+		t.Fatalf("late operation not settled: %+v, found=%v", settled, ok)
+	}
+}
+
+func TestCrossMediaWorkerAdmissionUsesCanonicalSourceMetadata(t *testing.T) {
+	f, _, batch := crossRecoveryFixture(t, 1)
+	seed := batch.Parts[0]
+	if !f.manager.crossSeedAllowed(seed) {
+		t.Fatal("canonical seed was rejected")
+	}
+	seed.Media.ID = "" // The worker checkpoint retains the native source ID, not the temporary handle.
+	if !f.manager.crossSeedAllowed(seed) {
+		t.Fatal("worker admission rejected its own durable batch")
+	}
+	seed.Media.Title = "different.wav"
+	if f.manager.crossSeedAllowed(seed) {
+		t.Fatal("worker admission accepted changed media metadata")
+	}
+}
+
+func TestCrossMediaStatusShowsPreSubmitStopAndCancellation(t *testing.T) {
+	f, p, batch := crossRecoveryFixture(t, 1)
+	part := batch.Parts[0]
+	f.manager.native = &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{}}
+	checkpoint, _ := json.Marshal(map[string]any{"media": []map[string]any{{"key": part.Key, "trace": batch.ID, "input": map[string]string{"thread": batch.Target}, "source_id": part.SourceID, "state": "stopped", "reason": "media_permission_or_quiet_changed"}}})
+	if err := os.MkdirAll(f.manager.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivate(filepath.Join(f.manager.stateDir, "messages-v2.json"), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	status, err := p.crossMediaStatus(context.Background(), batch.ID)
+	if err != nil || !strings.Contains(status, `"state":"stopped"`) || !strings.Contains(status, "media_permission_or_quiet_changed") {
+		t.Fatalf("pre-submit stop hidden from agent: %s %v", status, err)
+	}
+	f.login()
+	readBatch := func() struct {
+		Items []struct {
+			State string `json:"state"`
+			Parts []struct {
+				State string `json:"state"`
+			} `json:"parts"`
+		} `json:"items"`
+	} {
+		t.Helper()
+		code, body, _ := f.request("GET", "/api/agent/media-batches", nil, true, true)
+		var result struct {
+			Items []struct {
+				State string `json:"state"`
+				Parts []struct {
+					State string `json:"state"`
+				} `json:"parts"`
+			} `json:"items"`
+		}
+		if code != 200 || json.Unmarshal(body, &result) != nil || len(result.Items) != 1 {
+			t.Fatalf("batch status unavailable: %d %s", code, body)
+		}
+		return result
+	}
+	if current := readBatch(); current.Items[0].State != "stopped" || current.Items[0].Parts[0].State != "stopped" {
+		t.Fatalf("pre-submit stop hidden from console: %#v", current.Items[0])
+	}
+	batch.CancelledAt = time.Now().UTC()
+	saveCrossRecoveryBatch(t, f, batch)
+	if current := readBatch(); current.Items[0].State != "cancelled" || current.Items[0].Parts[0].State != "cancelled" {
+		t.Fatalf("cancelled batch still appears pending: %#v", current.Items[0])
+	}
+}
+
+func TestHistoricalCrossMediaActivityStaysWithOriginatingMessage(t *testing.T) {
+	f, _, batch := crossRecoveryFixture(t, 1)
+	origin := batch.OriginInput.OriginTraceID
+	items := []LogEntry{
+		{Event: "cross_media_queued", ThreadID: batch.Target, MessageID: origin},
+		{Event: "media_cancel_requested", ThreadID: batch.Target, MessageID: batch.ID, RelatedMessageID: origin},
+		{Event: "message_received", ThreadID: batch.Target, MessageID: "real-target-message"},
+	}
+	got := (&Server{manager: f.manager}).projectCrossMediaLogOrigins(items)
+	for _, index := range []int{0, 1} {
+		if got[index].ThreadID != batch.Origin || got[index].MessageID != origin {
+			t.Fatalf("synthetic destination round was retained: %#v", got[index])
+		}
+	}
+	if got[2].ThreadID != items[2].ThreadID || got[2].MessageID != items[2].MessageID || items[0].ThreadID != batch.Target {
+		t.Fatal("projection changed real target input or original journal", got[2], items[0])
+	}
+}
+
 type receiptLookupNative struct {
 	*forwardNative
 	statuses map[string]linuxnative.ToolStatus
@@ -92,6 +216,10 @@ func TestStoppedAgentCancelsOnlyUnsubmittedCrossMediaBatch(t *testing.T) {
 	}
 	if n.lookups != 1 || n.submits.Load() != 0 {
 		t.Fatal("cancellation sent WeChat", n.lookups, n.submits.Load())
+	}
+	task, ok := f.manager.agent.lookupTask(batch.TaskID, batch.Account, batch.Origin)
+	if !ok || len(task.PendingOperations) != 0 || task.State != "stopped" || !task.Next.IsZero() {
+		t.Fatalf("cancelled batch left a looping parent task: %#v", task)
 	}
 }
 func TestCrossStatusCommitsObservedReceiptsAndSettlesParentWithoutSending(t *testing.T) {

@@ -33,6 +33,7 @@ func (s *Server) crossMediaRoutes(mux *http.ServeMux) {
 			return
 		}
 		rows := []map[string]any{}
+		workerStates := s.manager.crossMediaWorkerStates()
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		names := map[string]string{}
@@ -62,20 +63,31 @@ func (s *Server) crossMediaRoutes(mux *http.ServeMux) {
 			}
 			parts := []map[string]any{}
 			accepted := 0
+			stopped := false
 			for i, p := range batch.Parts {
 				part := map[string]any{"index": i + 1, "kind": p.Media.Kind, "title": p.Media.Title, "state": "pending", "duration_ms": p.Media.DurationMS}
 				if receipt, ok := batch.Receipts[p.Key]; ok && validCrossReceipt(batch, p, receipt) {
 					part["state"] = "accepted"
 					part["server_id"] = receipt.ServerID
 					accepted++
+				} else if !batch.CancelledAt.IsZero() {
+					part["state"] = "cancelled"
+				} else if worker, ok := workerStates[p.Key]; ok && worker.Trace == batch.ID && worker.SourceID == p.SourceID && worker.Thread == batch.Target && worker.JobID == "" && (worker.State == "stopped" || worker.State == "needs_review") {
+					part["state"] = worker.State
+					part["reason"] = worker.Reason
+					stopped = true
 				}
 				parts = append(parts, part)
 			}
 			state := "queued"
 			if batch.SupersededBy != "" {
 				state = "superseded"
+			} else if !batch.CancelledAt.IsZero() {
+				state = "cancelled"
 			} else if crossBatchAccepted(batch) {
 				state = "accepted"
+			} else if stopped {
+				state = "stopped"
 			} else if !s.manager.crossSeedAllowed(batch.Parts[0]) {
 				state = "paused"
 			}

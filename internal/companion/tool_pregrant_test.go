@@ -52,6 +52,22 @@ func TestIncomingMediaReaderPregrantNeedsUnobservedNonFileMedia(t *testing.T) {
 	}
 }
 
+func TestMediaForwardPregrantMatchesCurrentRequest(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"把这个视频转发到103修仙群", true},
+		{"把刚发的图片转发给我", true},
+		{"今天的视频做得怎么样", false},
+	} {
+		packet, _ := json.Marshal(map[string]string{"kind": "current_message", "text": tc.text})
+		if got := needsMediaForward([]map[string]string{{"role": "user", "content": string(packet)}}); got != tc.want {
+			t.Fatalf("text=%q pregrant=%v want=%v", tc.text, got, tc.want)
+		}
+	}
+}
+
 func TestIncomingMediaReaderIsPregrantedOnlyWhenAuthorized(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

@@ -42,6 +42,54 @@ type logTaskState struct {
 	Active  bool      `json:"active,omitempty"`
 }
 
+// Old cross-conversation media records were written under the destination
+// thread with the originating message ID. That made a delivery checkpoint
+// look like an incoming turn in a group that had received no message. Repair
+// only the read-only projection; the original activity journal stays intact.
+func (s *Server) projectCrossMediaLogOrigins(items []LogEntry) []LogEntry {
+	entries, err := os.ReadDir(filepath.Join(s.manager.dir, "cross-media"))
+	if err != nil || len(entries) == 0 {
+		return items
+	}
+	type origin struct{ source, target, message string }
+	byBatch := map[string]origin{}
+	byMessage := map[string]origin{}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		batch, err := s.manager.readCrossBatch(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil || batch.OriginInput == nil || batch.OriginInput.OriginTraceID == "" || batch.Origin == batch.Target {
+			continue
+		}
+		scope := origin{source: batch.Origin, target: batch.Target, message: batch.OriginInput.OriginTraceID}
+		byBatch[batch.ID] = scope
+		byMessage[batch.Target+"\x00"+scope.message] = scope
+	}
+	if len(byBatch) == 0 {
+		return items
+	}
+	projected := append([]LogEntry(nil), items...)
+	for i := range projected {
+		item := &projected[i]
+		if item.Event == "cross_media_queued" {
+			if scope, ok := byMessage[item.ThreadID+"\x00"+item.MessageID]; ok {
+				item.ThreadID = scope.source
+			}
+			continue
+		}
+		scope, ok := byBatch[item.MessageID]
+		if !ok || item.ThreadID != scope.target || !(strings.HasPrefix(item.Event, "media_") || item.Event == "message_sent" || item.Event == "cross_media_receipt_restored") {
+			continue
+		}
+		item.ThreadID, item.MessageID = scope.source, scope.message
+		if item.RelatedMessageID == scope.message {
+			item.RelatedMessageID = ""
+		}
+	}
+	return projected
+}
+
 func unfinishedExecutionTask(state string) bool {
 	return state == "pending" || state == "waiting" || state == "running" || state == "waiting_delivery"
 }
@@ -319,6 +367,7 @@ func (s *Server) logsByDate(w http.ResponseWriter, r *http.Request) {
 		}
 		add(entries)
 	}
+	items = s.projectCrossMediaLogOrigins(items)
 	inbox, plans, loaded := s.logRuntimeStates()
 	respond(w, 200, map[string]any{"items": s.manager.nameLogEntries(r.Context(), items), "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "plan_states": plans, "inbox_loaded": loaded, "date": day, "next": next, "complete": next == "", "archive_batches": len(batches)})
 }

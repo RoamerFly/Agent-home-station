@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -508,6 +509,10 @@ func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 			t.Goal = old.Goal
 		}
 	}
+	a.attachUnboundCrossMediaOperations(&t)
+	if t.State == "completed" && len(t.PendingOperations) > 0 {
+		t.State = "waiting_delivery"
+	}
 	if t.Goal == "" {
 		t.Goal = t.RequestedText
 		if t.Goal == "" {
@@ -663,6 +668,49 @@ func (p *permittedTools) privileged() bool {
 }
 
 func (p *permittedTools) QueueControllerOwner() bool { return p.workspaceExecutionAllowed() }
+
+// A queued cross-conversation send has its own durable worker and receipt
+// journal. Poll that journal without asking the model to rediscover the same
+// tools and report the same "prepared" result on every task wake.
+func (m *Manager) deferQueuedCrossOperations(t agentTask, now time.Time) (bool, error) {
+	if len(t.PendingOperations) == 0 || t.resultKind() != "" || t.RecoveryMessageID != "" {
+		return false, nil
+	}
+	reader := &permittedTools{manager: m, trace: companion.Input{Account: t.Account, Thread: t.Thread, Sender: t.Sender, TaskID: t.ID}}
+	for _, id := range t.PendingOperations {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		raw, err := reader.crossMediaStatus(ctx, id)
+		cancel()
+		if err != nil {
+			return false, nil // An actionable error still goes to the Agent.
+		}
+		var receipt struct {
+			State string `json:"state"`
+			Parts []struct {
+				State string `json:"state"`
+			} `json:"parts"`
+		}
+		if json.Unmarshal([]byte(raw), &receipt) != nil || receipt.State != "queued" {
+			return false, nil
+		}
+		for _, part := range receipt.Parts {
+			switch part.State {
+			case "failed", "partial_failed", "needs_review", "cancelled", "stopped":
+				return false, nil
+			}
+		}
+	}
+	current, ok := m.agent.lookupTask(t.ID, t.Account, t.Thread)
+	if !ok || current.State != "waiting" || !current.Updated.Equal(t.Updated) || !slices.Equal(current.PendingOperations, t.PendingOperations) {
+		return false, nil
+	}
+	current.Next = now.Add(15 * time.Second)
+	_, err := m.agent.updateSnapshot(current)
+	// A concurrent message may already have updated this task. Its own turn
+	// handles the new request; do not race it with this background wake.
+	return true, err
+}
+
 func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*companion.Input, error) {
 	c := m.agent.config()
 	cfg := m.Config()
@@ -773,6 +821,22 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				return nil, err
 			}
 			continue
+		}
+		if len(t.PendingOperations) > 0 {
+			deferred, err := m.deferQueuedCrossOperations(t, now)
+			if err != nil {
+				return nil, err
+			}
+			if deferred {
+				continue
+			}
+			// Receipt lookup may have settled and archived the operation. Do not
+			// claim a stale copy of the task after that side effect.
+			current, ok := m.agent.lookupTask(t.ID, t.Account, t.Thread)
+			if !ok || current.State != "pending" && current.State != "waiting" {
+				continue
+			}
+			t = current
 		}
 		if t.PluginJob != nil {
 			return m.claimPluginTask(t, now)

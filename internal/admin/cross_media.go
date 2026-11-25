@@ -337,6 +337,9 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	}
 	states := []linuxnative.ToolStatus{}
 	all := true
+	stopped := false
+	var workerStates map[string]crossMediaWorkerState
+	workerLoaded := false
 	for _, part := range batch.Parts {
 		status, known := batch.Receipts[part.Key]
 		var err error
@@ -345,6 +348,14 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 		}
 		if errors.Is(err, linuxnative.ErrToolNotFound) {
 			status = linuxnative.ToolStatus{State: "prepared", ThreadID: batch.Target}
+			if !workerLoaded {
+				workerStates = p.manager.crossMediaWorkerStates()
+				workerLoaded = true
+			}
+			if worker, ok := workerStates[part.Key]; ok && worker.Trace == batch.ID && worker.SourceID == part.SourceID && worker.Thread == batch.Target && worker.JobID == "" && (worker.State == "stopped" || worker.State == "needs_review") {
+				status.State, status.Reason = worker.State, worker.Reason
+				stopped = true
+			}
 			all = false
 		} else if err != nil {
 			return "", err
@@ -367,9 +378,54 @@ func (p *permittedTools) crossMediaStatus(ctx context.Context, id string) (strin
 	state := "queued"
 	if all {
 		state = "accepted"
+	} else if stopped {
+		state = "stopped"
 	}
 	out, e := json.Marshal(map[string]any{"operation_id": id, "state": state, "source_thread_id": batch.Source, "target_thread_id": batch.Target, "parts": states})
 	return string(out), e
+}
+
+type crossMediaWorkerState struct {
+	Key      string `json:"key"`
+	Trace    string `json:"trace"`
+	Thread   string `json:"thread"`
+	SourceID string `json:"source_id"`
+	JobID    string `json:"id"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
+}
+
+// The batch journal records accepted receipts; the worker checkpoint records
+// a pre-submit stop. Reading both prevents a stopped batch from appearing
+// indefinitely queued to the Agent and in the private console.
+func (m *Manager) crossMediaWorkerStates() map[string]crossMediaWorkerState {
+	data, err := os.ReadFile(filepath.Join(m.stateDir, "messages-v2.json"))
+	if err != nil {
+		return nil
+	}
+	var snapshot struct {
+		Media []struct {
+			Key   string `json:"key"`
+			Trace string `json:"trace"`
+			Input struct {
+				Thread string `json:"thread"`
+			} `json:"input"`
+			SourceID string `json:"source_id"`
+			JobID    string `json:"id"`
+			State    string `json:"state"`
+			Reason   string `json:"reason"`
+		} `json:"media"`
+	}
+	if json.Unmarshal(data, &snapshot) != nil {
+		return nil
+	}
+	states := make(map[string]crossMediaWorkerState, len(snapshot.Media))
+	for _, media := range snapshot.Media {
+		if media.Key != "" {
+			states[media.Key] = crossMediaWorkerState{Key: media.Key, Trace: media.Trace, Thread: media.Input.Thread, SourceID: media.SourceID, JobID: media.JobID, State: media.State, Reason: media.Reason}
+		}
+	}
+	return states
 }
 
 // crossSeedKnown authorizes only read-only reconciliation of a canonical send
@@ -382,14 +438,20 @@ func (m *Manager) crossSeedKnown(seed bot.MediaSeed) bool {
 	}
 	for _, part := range batch.Parts {
 		if part.Key == seed.Key {
-			canonical, queued := part.Media, seed.Media
-			// SourceID has a separate durable field and is intentionally json:-
-			// in GeneratedMedia. Compare all remaining immutable metadata.
-			canonical.SourceID, queued.SourceID = "", ""
-			return canonical == queued
+			return sameCrossSeedMedia(part.Media, seed.Media)
 		}
 	}
 	return false
+}
+
+func sameCrossSeedMedia(canonical, queued companion.GeneratedMedia) bool {
+	// SourceID is stored separately. The worker checkpoint retains the
+	// immutable media metadata but not the temporary generated-media handle.
+	canonical.SourceID, queued.SourceID = "", ""
+	if queued.ID == "" {
+		canonical.ID = ""
+	}
+	return canonical == queued
 }
 
 func (m *Manager) crossSeedBatch(seed bot.MediaSeed) (crossMediaBatch, bool) {
@@ -403,7 +465,7 @@ func (m *Manager) crossSeedBatch(seed bot.MediaSeed) (crossMediaBatch, bool) {
 		source = seed.OriginThread
 	}
 	for _, p := range batch.Parts {
-		if p.Key == seed.Key && p.SourceID == seed.SourceID && p.Input.Account == seed.Input.Account && p.Input.Thread == seed.Input.Thread && sameCrossOrigin(&p.Input, &seed.Input) && p.OriginThread == seed.OriginThread && p.Requester == seed.Requester && p.OriginTask == seed.OriginTask && source == batch.Source && sameCrossOrigin(p.OriginInput, seed.OriginInput) {
+		if p.Key == seed.Key && p.SourceID == seed.SourceID && p.Input.Account == seed.Input.Account && p.Input.Thread == seed.Input.Thread && sameCrossOrigin(&p.Input, &seed.Input) && p.OriginThread == seed.OriginThread && p.Requester == seed.Requester && p.OriginTask == seed.OriginTask && source == batch.Source && sameCrossOrigin(p.OriginInput, seed.OriginInput) && sameCrossSeedMedia(p.Media, seed.Media) {
 			found = true
 			break
 		}
@@ -577,12 +639,30 @@ func (m *Manager) settleCrossMediaPart(id, key string, status linuxnative.ToolSt
 }
 
 func (m *Manager) settleCrossTask(batch crossMediaBatch) error {
-	if batch.TaskID != "" && (crossBatchAccepted(batch) || batch.SupersededBy != "") {
+	if !(crossBatchAccepted(batch) || batch.SupersededBy != "" || !batch.CancelledAt.IsZero()) {
+		return nil
+	}
+	lateBound := batch.TaskID == ""
+	if lateBound {
+		m.agent.mu.Lock()
+		for id, task := range m.agent.data.Tasks {
+			requestThread := task.RequestThread
+			if requestThread == "" {
+				requestThread = task.Thread
+			}
+			if contains(task.PendingOperations, batch.ID) && task.Account == batch.Account && task.Sender == batch.Sender && requestThread == batch.Origin && taskSourceThread(task) == batch.Source && batch.OriginInput != nil && task.OriginTrace == batch.OriginInput.OriginTraceID {
+				batch.TaskID = id
+				break
+			}
+		}
+		m.agent.mu.Unlock()
+	}
+	if batch.TaskID != "" {
 		a := m.agent
 		a.mu.Lock()
 		t, ok := a.data.Tasks[batch.TaskID]
 		var e error
-		if ok && t.Account == batch.Account && t.Thread == batch.Origin && t.Sender == batch.Sender {
+		if ok && t.Account == batch.Account && t.Sender == batch.Sender && (!lateBound && t.Thread == batch.Origin || lateBound && contains(t.PendingOperations, batch.ID)) {
 			pending := []string{}
 			for _, op := range t.PendingOperations {
 				if op != batch.ID {
@@ -590,6 +670,12 @@ func (m *Manager) settleCrossTask(batch crossMediaBatch) error {
 				}
 			}
 			t.PendingOperations = pending
+			if !batch.CancelledAt.IsZero() && len(pending) == 0 && t.State != "completed" && t.State != "cancelled" {
+				// An administrator cancelled the batch before any native submission.
+				// Stop the old continuation; a corrected request uses a new source
+				// and request key instead of replaying this cancelled operation.
+				t.State, t.WorkCompleted, t.Next = "stopped", false, time.Time{}
+			}
 			if batch.SupersededBy == "" && len(pending) == 0 && t.WorkCompleted && t.State == "waiting_delivery" && (t.Delivery == nil || t.Delivery.State == "accepted") {
 				t.State = "completed"
 			}

@@ -822,6 +822,44 @@ func TestOwnerCrossSeedCanTargetNonReplyConversationWithoutOpeningIt(t *testing.
 	}
 }
 
+func TestOwnerGroupCrossMediaIsAnExplicitQuietHoursRequest(t *testing.T) {
+	w, n, engine, in := mediaWorker(t)
+	zone, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().In(zone)
+	engine.Config.QuietStart = now.Add(-time.Hour).Format("15:04")
+	engine.Config.QuietEnd = now.Add(time.Hour).Format("15:04")
+	in.Thread, in.Mode, in.Text = "room@chatroom", "social", "把这个视频转发到另一个群"
+	in = observeSyntheticMediaRequest(t, w, engine, in)
+	origin, err := w.prepareMediaEvidence(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := in
+	target.Thread, target.OriginTraceID = "target@chatroom", in.TraceID
+	seed := MediaSeed{OriginInput: &origin, Key: "exact-owner-key", Trace: "exact-owner-operation", Input: target, Requester: in.Sender, OriginThread: in.Thread, SourceThread: in.Thread, SourceID: "exact-video-source", Media: companion.GeneratedMedia{ID: "transient-handle", AssetID: "exact-video-asset", Kind: "video", Title: "clip.mp4", CachedMIME: "video/mp4"}}
+	w.config.MediaSeeds = func() []MediaSeed { return []MediaSeed{seed} }
+	w.config.MediaSeedAllowed = func(s MediaSeed) bool {
+		return s.Key == seed.Key && s.SourceID == seed.SourceID && s.Input.Thread == target.Thread && s.Media.AssetID == seed.Media.AssetID && s.Media.Kind == seed.Media.Kind && s.Media.Title == seed.Media.Title && s.Media.CachedMIME == seed.Media.CachedMIME
+	}
+	var recorded []Record
+	w.config.Record = func(record Record) { recorded = append(recorded, record) }
+	w.adoptMediaSeeds()
+	w.reconcileMedia(context.Background())
+	if n.sends != 1 || w.runtime.Media[0].State == "stopped" {
+		t.Fatalf("explicit group transfer stopped before submit: sends=%d state=%s reason=%s", n.sends, w.runtime.Media[0].State, w.runtime.Media[0].Reason)
+	}
+	for _, event := range recorded {
+		if event.Event == "message_sent" || event.Event == "media_stopped" {
+			if event.ThreadID != in.Thread || event.MessageID != in.TraceID {
+				t.Fatalf("cross media event created a target conversation round: %#v", event)
+			}
+		}
+	}
+}
+
 func TestCrossReceiptJournalOverridesStaleWorkerWithoutNativeResend(t *testing.T) {
 	w, n, _, in := mediaWorker(t)
 	in.Thread = "target@chatroom"

@@ -129,15 +129,18 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	baseSystem := system
 	activeTools := []mcptools.Tool{}
 	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
+	pregrantMediaForward := nativeFunctions && !localHost && needsMediaForward(turns)
 	if nativeFunctions {
 		for _, t := range tools {
-			// Keep an ordinary turn small.  History retrieval and reading retained
-			// outputs are the only common primitives; all execution, project and
-			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			// Current media forwarding needs the exact source message and its
+			// operation receipt immediately; other tools remain on demand.
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || pregrantMediaForward && (t.Name == "wechat_read" || t.Name == "wechat_conversations" || t.Name == "wechat_send_media" || t.Name == "wechat_operation_status") || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
+	}
+	if pregrantMediaForward {
+		system += "\n转发刚发的媒体时，先读本会话真实已发消息，按媒体消息编号转发；文字请求编号不是媒体来源。已有 operation_id 只查原操作。"
 	}
 	var catalog []byte
 	if nativeFunctions {

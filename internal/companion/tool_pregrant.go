@@ -46,3 +46,24 @@ func supportedIncomingReadType(messageType int) bool {
 	}
 	return false
 }
+
+func needsMediaForward(turns []map[string]string) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i]["role"] != "user" {
+			continue
+		}
+		var packet struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil {
+			return false
+		}
+		if packet.Kind != "current_message" {
+			continue
+		}
+		return (strings.Contains(packet.Text, "转发") || strings.Contains(strings.ToLower(packet.Text), "forward")) &&
+			(strings.Contains(packet.Text, "视频") || strings.Contains(packet.Text, "图片") || strings.Contains(packet.Text, "文件") || strings.Contains(packet.Text, "语音") || strings.Contains(packet.Text, "这个") || strings.Contains(packet.Text, "这条"))
+	}
+	return false
+}
