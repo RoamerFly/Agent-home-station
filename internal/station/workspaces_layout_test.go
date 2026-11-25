@@ -21,3 +21,41 @@ func TestStructuredWorkspaceUsesMigratedRootWhenPresent(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestWorkspaceRootKeepsExistingLegacyInstallation(t *testing.T) {
+	for _, tc := range []struct {
+		name, legacy string
+		structured   bool
+	}{
+		{"structured", "workspace", true},
+		{"unstructured", "managed-workspaces", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := filepath.Join(t.TempDir(), "data")
+			if tc.structured {
+				if err := os.MkdirAll(filepath.Join(data, "applications"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			legacy := filepath.Join(data, tc.legacy)
+			if err := os.MkdirAll(legacy, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if got := DefaultWorkspaceRoot(data); got != legacy {
+				t.Fatalf("workspace root = %q, want %q", got, legacy)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRootPrefersModernWhenBothExist(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	for _, name := range []string{"applications", "workspace", "workspaces"} {
+		if err := os.MkdirAll(filepath.Join(data, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := DefaultWorkspaceRoot(data), filepath.Join(data, "workspaces"); got != want {
+		t.Fatalf("workspace root = %q, want %q", got, want)
+	}
+}

@@ -190,7 +190,7 @@ func (s *localProjectTools) localVisionUsage(fish string) (*billing.Store, error
 		}
 		return s.visionUsage, nil
 	}
-	directory := filepath.Join(s.home.dataDir, "local-vision-usage", fish)
+	directory := filepath.Join(stationVisionUsageDir(s.home.dataDir), fish)
 	root, err := workspacefs.EnsurePath(directory)
 	if err != nil {
 		return nil, err

@@ -158,7 +158,7 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 	if export == nil && (in.extension == ".docx" || in.extension == ".xlsx") {
 		options.DocumentRuntimeRoot = ""
 	}
-	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, filepath.Join(h.dataDir, "project-tool-tasks"),
+	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, stationProjectToolTasksDir(h.dataDir),
 		host.store, options, operation.pkg, true, func(ctx context.Context, dir string) (localProjectArtifactMaterialized, error) {
 			material, err := in.materialize(ctx, dir)
 			if err == nil && image != nil && image.originalImage != nil && len(image.layout.Illustrations) != 0 {

@@ -230,7 +230,7 @@ func (e localComfyInvocation) finishedView(job pluginhost.Job) map[string]any {
 }
 
 func (e localComfyInvocation) publishComfyImages(ctx context.Context, client localComfyClient, job pluginhost.Job, args localComfyJobInput, ref comfyui.JobRef, count int) (map[string]any, error) {
-	dir := filepath.Join(e.tool.projectTools.home.dataDir, "comfyui-output-stage", job.ID)
+	dir := filepath.Join(stationComfyOutputStageDir(e.tool.projectTools.home.dataDir), job.ID)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return nil, err
@@ -315,7 +315,7 @@ func (e localComfyInvocation) publishComfyVideo(ctx context.Context, client loca
 	if current.Revision != job.Revision {
 		return nil, errors.New("ComfyUI 视频任务状态已变化，请重新查询")
 	}
-	dir := filepath.Join(e.tool.projectTools.home.dataDir, "comfyui-output-stage", job.ID)
+	dir := filepath.Join(stationComfyOutputStageDir(e.tool.projectTools.home.dataDir), job.ID)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return nil, err

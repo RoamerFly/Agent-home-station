@@ -354,7 +354,7 @@ func parseConfig(args []string, executable string) (config, error) {
 
 	workspaceRoot := *workspaceFlag
 	if workspaceRoot == "" {
-		workspaceRoot = filepath.Join(dataDir, "workspace")
+		workspaceRoot = station.DefaultWorkspaceRoot(dataDir)
 	} else if !filepath.IsAbs(workspaceRoot) {
 		return config{}, errors.New("workspace directory must be absolute")
 	}

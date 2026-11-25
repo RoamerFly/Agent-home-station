@@ -35,3 +35,13 @@
 - 已将 ComfyUI 原有四个工作流登记文件逐文件校验复制到 `data/resources/comfyui/workflows`，创建 `data/resources/comfyui/custom_nodes` 作为自建节点目录。旧文件暂留原位，直到新登记与实际服务读取成功。
 - 当前 `env/windows-python-cli` 和 `env/windows-agent-host` 被工作站 Agent 配置直接引用；`windows-agent-host` 还被运行中的公共工具桥接进程引用。`env/windows-station-speech`、`document-workshop`、`windows-media` 仍有站内或旧配置引用。首轮不移动这些运行环境，也不把目录名当成重复证据。
 - 后续逐项把真正的公共工具运行时引用改为各自 `publictools/<工具>/runtime`，核验后再移动无引用副本。`env` 中属于工作站自己的运行器需要先确定新归属并完成配置切换。当前清理仅完成根目录遗留程序与 ComfyUI 工作流数据迁移，尚未达到整目录完成标准。
+
+## 2026-11-25 工作区收拢与目录审查
+
+- Astra 审查正式目录：`data/workspace` 是 7 个空目录、0 个文件；实际 `data/workspaces` 有 1,311 个文件，共 4,239,124,002 字节。正式配置为 `workspace_root=data\\workspaces`。独立服务默认值、工具文件索引和媒体删除扫描中的旧路径已在源码中改为使用当前工作区根，同时保留历史目录读取。
+- 空的 `data/workspace`、`data/applications/wechat/legacy-admin/agent-workspace` 和 `managed-workspaces` 已移到 `E:\待删除\agent-home-workstation-release-cleanup-20261125-ad989707`。无登记引用的 `data/voices/rvc/retired-public-library-20261122` 也完整移入同一保留区，原文件共 108 个、5,635,028,126 字节；其中仍有约 523 MB 与当前私有声线库不同或缺失，因此不做按文件去重。
+- `data/music-experiments` 的 8 个文件、173,730,062 字节已原盘移动到 `data/workspaces/home/works/music-experiments`，文件总字节数保持一致。未移动微信登录、会话、任务或当前声线。
+- 工作站内部暂存路径已在结构化布局中归入 `data/main_setting/tmp`；原 `data/project-tool-tasks` 与 `data/comfyui-output-stage` 均无文件，空骨架移入同一待删除批次。本地视觉用量 `usage.json` 移入 `data/main_setting/local-vision-usage`，迁移前后 SHA-256 均为 `DB5AC6411300904A696701D617FFC981AB04319ED79C711AAB66754B691A06C7`。旧布局在其他安装中仍可读取已有用量账本。
+- 正式 `data` 根目录现为 `applications`、`artifacts`、`main_setting`、`publictools`、`resources`、`tools`、`voices`、`workspaces` 八个目录。
+- 全发布目录中，至少 10 MB 的同体积候选做哈希比较后发现约 23.65 GiB 的逻辑重复内容，主要是各工具独立运行环境的 CUDA/Python 文件；它们按各自路径运行，不作为可清理副本。`data/publictools/obs-preview/config` 是到 `data/tools/obs-preview/config` 的目录联接，没有第二份配置。
+- 更新脚本报告 `updated/restarted/healthy/native_login=true`；清理后本机 `:8080/healthz` 和 `:8082/healthz` 都返回 200。本次没有发送微信消息或对真实媒体执行新的生成任务。

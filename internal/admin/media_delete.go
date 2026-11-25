@@ -71,7 +71,11 @@ func (m *Manager) deleteMediaResources(ctx context.Context, hashes []string, pre
 	// Structured workstation data also owns public-tool outputs and the main workspace.
 	if filepath.Base(m.dir) == "legacy-admin" && filepath.Base(filepath.Dir(m.dir)) == "wechat" && filepath.Base(filepath.Dir(filepath.Dir(m.dir))) == "applications" {
 		data := filepath.Dir(filepath.Dir(filepath.Dir(m.dir)))
-		roots = append(roots, filepath.Join(data, "publictools"), filepath.Join(data, "workspace", "home"))
+		roots = append(roots, filepath.Join(data, "publictools"))
+		if workspaces := m.releaseWorkspaces(); workspaces != "" {
+			roots = append(roots, filepath.Join(workspaces, "home"))
+		}
+		roots = append(roots, filepath.Join(data, "workspace", "home"))
 	}
 	matched := map[string]bool{}
 	for _, root := range roots {

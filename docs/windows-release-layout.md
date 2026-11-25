@@ -1,16 +1,22 @@
 # Windows 开发包目录
 
-根目录只保留 AgentHomeStation.exe、applications、publictools、env、data。
+根目录只保留 AgentHomeStation.exe、manifest.json、许可证，以及 applications、publictools、env、data 四个目录。
 
 - applications：应用包代码、清单、专用工具；微信、抖音等应用私有数据放 data/applications。
 - publictools：公共工具包，每个工具一个带用途后缀的目录。包 ID 不随物理目录名变化；models/project/runtime 分别为模型、后端工程和执行入口。
-- env：Python、Windows Agent 运行器、微信原生运行环境等共享环境。
+- env：工作站自身的 Python、Windows Agent 运行器和媒体依赖；公共工具需要的运行环境以各自工具包中的入口为准。
 - data/applications：应用登录、记忆、会话规则、回合、应用任务和媒体记录。
 - data/publictools：工具配置、登记、任务、产物索引；catalog 存单一工作站工具登记和按内容摘要保存的安装版本。摘要目录是版本/完整性索引，不是多个大肥鱼。
 - data/workspaces：大肥鱼的唯一工作区根；按应用分为 home、wechat、douyin、bilibili 等目录，内部资料由 Agent 自行整理。
 - data/main_setting：工作站身份、管理密码、主记忆、日志、浏览器登录资料和桌面服务。
+- data/tools：工具各自的运行状态和私有配置；`data/publictools` 存公共登记与目录索引，两个目录用途不同。
+- data/resources：共享的音乐素材和 ComfyUI 工作流登记；`data/voices` 保存声线模型；`data/artifacts` 保存受管产物。
 
-启动时将旧 fish_home/<身份>/home 原目录移入当前配置的工作区根下的 home；新构建默认使用 data/workspaces。旧安装若仍配置 data/workspace，需先完成资料迁移再修改工作区根。旧工具登记的鱼身份目录移入 publictools/catalog。内部身份、工具登记内容、应用登录资料保持不变；目标冲突时保留双方内容并报告错误。空的旧容器仅用非递归删除处理。
+`applications` 与 `data/applications` 分别是应用程序和应用状态；`publictools` 与 `data/publictools` 分别是工具程序和工具登记。各工具自带的 Python/CUDA 运行环境有相同文件，但按各自入口独立运行，不能按哈希相同直接去重。`data/publictools/obs-preview/config` 是指向 `data/tools/obs-preview/config` 的目录联接，并未存第二份配置。
+
+工作站临时任务目录归在 `data/main_setting/tmp`，本地视觉调用计数归在 `data/main_setting/local-vision-usage`；手工歌曲试验资料归在 `data/workspaces/home/works/music-experiments`。这些都不在 `data` 根部另开同级工作区。
+
+启动时将旧 fish_home/<身份>/home 原目录移入当前配置的工作区根下的 home；新构建和独立服务默认使用 `data/workspaces`。只有复数目录不存在时才沿用现有旧根 `data/workspace` 或 `data/managed-workspaces`。旧安装若仍配置旧根，需先核对并迁移资料再修改工作区根；两个非空根不能直接覆盖合并。旧工具登记的鱼身份目录移入 publictools/catalog。内部身份、工具登记内容、应用登录资料保持不变；目标冲突时保留双方内容并报告错误。空的旧容器仅在确认为普通空目录后逐层清理。
 
 Build-Desktop 的 LocalStation 构建把经过清单验证的工具放入带用途后缀的 publictools。请使用独立 staging 目录构建，停止正式实例后部署，不直接合并真实模型和私有资料。
 

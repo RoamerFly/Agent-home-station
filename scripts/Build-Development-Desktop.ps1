@@ -44,7 +44,18 @@ $config = [ordered]@{
 }
 if ($DataDirectory) {
     $config.data_root = $DataDirectory
-    $config.workspace_root = Join-Path $DataDirectory 'managed-workspaces'
+    $modernWorkspace = Join-Path $DataDirectory 'workspaces'
+    $structuredLegacyWorkspace = Join-Path $DataDirectory 'workspace'
+    $legacyWorkspace = Join-Path $DataDirectory 'managed-workspaces'
+    if (Test-Path -LiteralPath $modernWorkspace -PathType Container) {
+        $config.workspace_root = $modernWorkspace
+    } elseif (Test-Path -LiteralPath $structuredLegacyWorkspace -PathType Container) {
+        $config.workspace_root = $structuredLegacyWorkspace
+    } elseif (Test-Path -LiteralPath $legacyWorkspace -PathType Container) {
+        $config.workspace_root = $legacyWorkspace
+    } else {
+        $config.workspace_root = $modernWorkspace
+    }
 }
 if (Test-Path -LiteralPath $deploymentPath -PathType Leaf) {
     $existing = Get-Content -Raw -LiteralPath $deploymentPath | ConvertFrom-Json

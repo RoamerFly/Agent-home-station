@@ -215,7 +215,7 @@ func (s *localProjectTools) publicAudioPrepare(ctx context.Context, fish, bindin
 	}
 	options := s.options
 	options.DocumentRuntimeRoot = ""
-	controller, inputPath, outputPath, cleanup, err := openScopedProjectRuntime(ctx, filepath.Join(s.home.dataDir, "project-tool-tasks"),
+	controller, inputPath, outputPath, cleanup, err := openScopedProjectRuntime(ctx, stationProjectToolTasksDir(s.home.dataDir),
 		host.store, options, localAudioPackage, true, func(ctx context.Context, dir string) (localProjectArtifactMaterialized, error) {
 			path := filepath.Join(dir, "input.wav")
 			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
