@@ -122,6 +122,10 @@ namespace WechatAgent.Desktop {
             }
             d.Root = Path.Combine(d.Root, "native-cycle-test-" + Guid.NewGuid().ToString("N"));
             d.StationWorkspace = Path.Combine(d.Root, "managed-workspaces");
+            // An elevated runner may otherwise assign Administrators ownership
+            // to main_setting created by Directory.CreateDirectory during Start.
+            WindowsRuntime.PrivateDirectory(d.Root);
+            WindowsRuntime.PrivateDirectory(d.StationLifecycleRoot);
             d.Url = CycleUrl();
             do { d.StationNativeUrl = CycleUrl(); } while (d.Url == d.StationNativeUrl);
             Environment.SetEnvironmentVariable("AHS_ADMIN_PASSWORD", password);
