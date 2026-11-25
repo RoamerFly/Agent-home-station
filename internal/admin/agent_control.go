@@ -1209,13 +1209,14 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /api/agent/tasks/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Action string `json:"action"`
+			Action           string `json:"action"`
+			ContinuationNote string `json:"continuation_note"`
 			reminderEdit
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if in.Action != "resume" && in.Action != "cancel" && in.Action != "update" && in.Action != "complete" && in.Action != "delete" {
+		if in.Action != "resume" && in.Action != "reopen" && in.Action != "cancel" && in.Action != "update" && in.Action != "complete" && in.Action != "delete" {
 			fail(w, 400, "操作无效")
 			return
 		}
@@ -1228,6 +1229,16 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				return
 			}
 			respond(w, 200, map[string]any{"deleted": ids})
+			return
+		}
+		if in.Action == "reopen" {
+			task, err := s.manager.agent.reopenArchivedTask(r.PathValue("id"), s.manager.native.Account(), in.ContinuationNote)
+			if err != nil {
+				fail(w, 409, err.Error())
+				return
+			}
+			s.manager.record(bot.Record{Event: "agent_task_reopened", Category: "decision", ThreadID: task.Thread, Sender: task.Sender, MessageID: task.OriginTrace, RelatedMessageID: task.ID, Status: "pending", Reason: "admin_explicit_reopen", Origin: "admin"})
+			respond(w, 200, task)
 			return
 		}
 		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok {

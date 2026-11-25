@@ -124,6 +124,89 @@ func TestConfirmedTasksLeaveActiveStorageButRetainScopedDeliveryEvidence(t *test
 	}
 }
 
+func TestAdministratorReopensOriginalArchivedTaskForMissingWork(t *testing.T) {
+	f := setup(t)
+	f.login()
+	id := agentID("image-and-video-original-request")
+	before := agentTask{
+		ID: id, Account: f.native.Account(), Thread: "test@chatroom", Sender: "owner",
+		RequestThread: "test@chatroom", SourceThread: "test@chatroom", DeliveryThread: "test@chatroom",
+		SourceMessageIDs: []string{"source-160"}, OriginTrace: "source-160", RequestedText: "画图并生成视频",
+		Title: "画图并生成视频", Goal: "完成图片与视频并发送", Checkpoint: "原始失败检查点",
+		State: "completed", Delivery: &bot.TaskDelivery{Trace: "first-image", State: "accepted", Expected: 1, Accepted: 1},
+	}
+	if err := f.manager.agent.task(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.agent.retireSettled(); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ := f.request("POST", "/api/agent/tasks/"+id, map[string]string{
+		"action": "reopen", "continuation_note": "已有图片 job_id=sample-job-1；先查询原作业，缺视频才继续，已发图片不重发",
+	}, true, true)
+	if status != 200 {
+		t.Fatalf("reopen %d %s", status, body)
+	}
+	audited := false
+	for _, entry := range f.manager.journal {
+		if entry.Event == "agent_task_reopened" && entry.RelatedMessageID == id {
+			audited = true
+		}
+	}
+	if !audited {
+		t.Fatal("reopen audit missing")
+	}
+	after, ok := f.manager.agent.lookupTask(id, before.Account, "")
+	if !ok || after.ID != id || after.State != "pending" || after.WorkCompleted || after.Next.IsZero() ||
+		after.OriginTrace != before.OriginTrace || after.Goal != before.Goal || after.RequestedText != before.RequestedText ||
+		after.RequestThread != before.RequestThread || after.SourceThread != before.SourceThread || after.DeliveryThread != before.DeliveryThread ||
+		len(after.SourceMessageIDs) != 1 || after.SourceMessageIDs[0] != "source-160" ||
+		after.Delivery == nil || *after.Delivery != *before.Delivery ||
+		!strings.Contains(after.Checkpoint, before.Checkpoint) || !strings.Contains(after.Checkpoint, "sample-job-1") ||
+		!strings.Contains(after.Checkpoint, "first-image") || len(f.manager.agent.taskHistory(before.Account, "")) != 0 {
+		t.Fatalf("original task was not preserved: %+v", after)
+	}
+	status, _, _ = f.request("POST", "/api/agent/tasks/"+id, map[string]string{"action": "reopen"}, true, true)
+	if status != 409 {
+		t.Fatal("duplicate reopen accepted")
+	}
+	// Simulate interruption after active-state persistence but before archive
+	// cleanup: the active version must win on restart.
+	stale, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(f.manager.agent.dir, "archive", "agent-tasks", agentID(id)+".json")
+	if err := os.WriteFile(archivePath, stale, 0600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := newAgentControl(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, ok := reloaded.lookupTask(id, before.Account, "")
+	if !ok || restarted.State != "pending" || !strings.Contains(restarted.Checkpoint, "sample-job-1") || len(reloaded.taskHistory(before.Account, "")) != 0 {
+		t.Fatalf("restart lost reopened task: %+v", restarted)
+	}
+}
+
+func TestAdministratorCannotReopenArchivedTaskWithActiveTool(t *testing.T) {
+	f := setup(t)
+	f.login()
+	id := agentID("archived-with-active-tool")
+	task := agentTask{ID: id, Account: f.native.Account(), Thread: "filehelper", Sender: "owner", State: "completed", MusicJob: "still-running"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.agent.retireSettled(); err != nil {
+		t.Fatal(err)
+	}
+	status, _, _ := f.request("POST", "/api/agent/tasks/"+id, map[string]string{"action": "reopen", "continuation_note": "继续"}, true, true)
+	if status != 409 || len(f.manager.agent.taskHistory(task.Account, "")) != 1 {
+		t.Fatal("active tool task was reopened")
+	}
+}
+
 func TestAcknowledgementDoesNotCompleteWaitingBusinessGoal(t *testing.T) {
 	f := setup(t)
 	task := agentTask{ID: "still-working", Account: "test", Thread: "filehelper", State: "waiting", Checkpoint: "等待外部结果"}
