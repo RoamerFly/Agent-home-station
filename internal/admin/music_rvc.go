@@ -129,16 +129,13 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 	if err != nil {
 		return "", err
 	}
-	health, _, err := p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
-	if _, code := safeToolFailure(err); code == "yue_bridge_unavailable" {
-		started, startErr := p.recoverMusicDependency(ctx)
-		if startErr != nil {
-			return "", startErr
-		}
-		if started {
-			health, _, err = p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
-		}
+	if err := p.ensureMusicDependency(ctx); err != nil {
+		return "", err
 	}
+	health, err := rvcHealthWithRecovery(ctx, func(ctx context.Context) ([]byte, error) {
+		data, _, err := p.yueRequest(ctx, "GET", "/rvc-health", nil, "")
+		return data, err
+	}, p.recoverMusicDependency, func() bool { return p.manager.windowsMusicStatus().Running })
 	if err != nil {
 		return "", err
 	}
@@ -197,6 +194,25 @@ func (p *permittedTools) startRVCWithReference(ctx context.Context, in rvcReques
 	job["instruction"] = "已提交原录音直接换声，分离人声→RVC→混回原伴奏；没有调用YuE作曲。完成后查询music_local_status取得完整附件并按当前需求发送；以实际音频检验音色，不重复提交。"
 	output, _ := json.Marshal(job)
 	return string(output), nil
+}
+
+func rvcHealthWithRecovery(ctx context.Context, probe func(context.Context) ([]byte, error), recoverService func(context.Context) (bool, error), running func() bool) ([]byte, error) {
+	health, err := probe(ctx)
+	if err == nil || ctx.Err() != nil {
+		return health, err
+	}
+	_, code := safeToolFailure(err)
+	if code != "" && code != "yue_bridge_unavailable" || code == "" && running() {
+		return health, err
+	}
+	started, startErr := recoverService(ctx)
+	if startErr != nil {
+		return nil, startErr
+	}
+	if started {
+		return probe(ctx)
+	}
+	return health, err
 }
 
 // The package owns bridge negotiation and request construction. Only the host

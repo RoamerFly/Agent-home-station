@@ -10,12 +10,45 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"wechat-bot/internal/pluginruntime"
 )
+
+func TestStoppedWindowsMusicHealthDoesNotProbeOrReportVersionZero(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows managed music service")
+	}
+	f, p, _ := musicServiceFixture(t)
+	public := filepath.Join(f.manager.managedRoot(), "public_workspace")
+	python := filepath.Join(public, "runtimes", "python.exe")
+	if err := os.MkdirAll(filepath.Dir(python), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(python, []byte("synthetic interpreter"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	control := t.TempDir()
+	entry := filepath.Join(control, "managed_music_service.py")
+	if err := os.WriteFile(entry, []byte("synthetic entry"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _ := json.Marshal(windowsMusicConfig{Enabled: true, Policy: windowsMusicPolicy, Python: python, Entry: entry, Media: control, IPC: control})
+	if err := os.WriteFile(filepath.Join(f.manager.dir, "windows-music.json"), config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.manager.windowsMusicLaunchConfig(); err != nil {
+		t.Fatal("synthetic service registration rejected:", err)
+	}
+	health := p.probeYuE(t.Context())
+	encoded, _ := json.Marshal(health)
+	if health.State != "stopped" || health.Ready || strings.Contains(string(encoded), "bridge_version") {
+		t.Fatalf("stopped service was reported as live or version zero: %s", encoded)
+	}
+}
 
 func TestWindowsMusicIdleFixture(t *testing.T) {
 	if os.Getenv("WECHAT_WINDOWS_MUSIC_IDLE_FIXTURE") == "" {

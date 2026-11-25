@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,40 @@ import (
 	"testing"
 	"wechat-bot/internal/companion"
 )
+
+func TestRVCHealthRecoversStoppedSupervisorAfterPluginDeadline(t *testing.T) {
+	probeCalls, startCalls := 0, 0
+	probe := func(context.Context) ([]byte, error) {
+		probeCalls++
+		if probeCalls == 1 {
+			return nil, errors.New("context deadline exceeded")
+		}
+		return []byte(`{"ready":true}`), nil
+	}
+	start := func(context.Context) (bool, error) {
+		startCalls++
+		return true, nil
+	}
+	health, err := rvcHealthWithRecovery(context.Background(), probe, start, func() bool { return false })
+	if err != nil || string(health) != `{"ready":true}` || probeCalls != 2 || startCalls != 1 {
+		t.Fatalf("stopped supervisor was not recovered once: health=%s err=%v probes=%d starts=%d", health, err, probeCalls, startCalls)
+	}
+
+	probeCalls, startCalls = 0, 0
+	_, err = rvcHealthWithRecovery(context.Background(), probe, start, func() bool { return true })
+	if err == nil || probeCalls != 1 || startCalls != 0 {
+		t.Fatalf("unrelated running-service error triggered start: err=%v probes=%d starts=%d", err, probeCalls, startCalls)
+	}
+
+	probeCalls, startCalls = 0, 0
+	_, err = rvcHealthWithRecovery(context.Background(), func(context.Context) ([]byte, error) {
+		probeCalls++
+		return nil, yueError("yue_bridge_auth_failed")
+	}, start, func() bool { return false })
+	if err == nil || probeCalls != 1 || startCalls != 0 {
+		t.Fatalf("authentication failure triggered start: err=%v probes=%d starts=%d", err, probeCalls, startCalls)
+	}
+}
 
 func TestDirectRVCCoverUsesWholeActualRecordingWithoutYuEOrASRLyrics(t *testing.T) {
 	f := setup(t)

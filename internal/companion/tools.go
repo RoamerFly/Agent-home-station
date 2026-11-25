@@ -26,7 +26,7 @@ type surfReviewer interface {
 // This deliberately stays short because it is present in every native
 // function-calling turn. Discovery names the matches; their exact schemas are
 // supplied by the native function catalogue on the next model request.
-const nativeToolDiscoveryPolicy = "从本轮schema选工具；缺少能力用discover_tools查找，下一轮按新schema调用。按错误修正参数或来源，复用已有结果。"
+const nativeToolDiscoveryPolicy = "从本轮schema选工具；问工具清单先用tool_overview，需具体参数再用discover_tools。按错误修正参数或来源，复用已有结果。"
 
 func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string]string) (decision Decision, runErr error) {
 	ctx, automaticReasoning, reasoningErr := e.taskReasoningContext(ctx)
@@ -161,7 +161,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 【原生工具调用】` + nativeToolDiscoveryPolicy + `回复只输出reply/silent JSON，按实际结果叙述。微信 accepted 才算接收；保留指定声线和原文件，长音频每条不超过60秒。
 `
 		}
-		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
+		activeTools = append(activeTools,
+			mcptools.Tool{Name: "tool_overview", Description: "Summarize tools authorized in this conversation by group in one read. Host service states, when available, are separate from tool authorization. Use discover_tools only for detailed schemas.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)},
+			mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)},
+		)
 		system += "\n按需分页或续读；批量操作依次按反馈继续。"
 	}
 	baseTools := append([]mcptools.Tool(nil), activeTools...)
@@ -192,6 +195,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	}
 	if nativeFunctions {
 		allowed["discover_tools"] = true
+		allowed["tool_overview"] = true
 	}
 	max := e.MaxToolCalls
 	autonomous := false
@@ -731,7 +735,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				return finalize("tool_no_progress")
 			}
 		}
-		if !started && blockedResult == "" && response.Tool != "discover_tools" {
+		if !started && blockedResult == "" && response.Tool != "discover_tools" && response.Tool != "tool_overview" {
 			if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 				return Decision{}, err
 			}
@@ -816,6 +820,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					b, _ := json.Marshal(status)
 					return string(b), nil
 				})
+			} else if nativeFunctions && response.Tool == "tool_overview" {
+				result, callErr = e.toolOverview(toolCtx, tools)
 			} else if nativeFunctions && response.Tool == "discover_tools" {
 				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
 				invocation.attempt++
