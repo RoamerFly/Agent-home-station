@@ -68,6 +68,19 @@ type sendIntent struct {
 	ErrorCode   string `json:"errorCode"`
 }
 
+// Read-only requests may reuse loopback connections. Writes use a separate
+// transport so a stale keep-alive connection cannot trigger an implicit retry.
+type nativeMethodTransport struct {
+	read, write *http.Transport
+}
+
+func (t nativeMethodTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		return t.read.RoundTrip(request)
+	}
+	return t.write.RoundTrip(request)
+}
+
 // New validates immutable configuration and reads the explicit token file.
 // No network request is made here.
 func New(config Config) (*Sender, error) {
@@ -89,9 +102,10 @@ func New(config Config) (*Sender, error) {
 		config.ReadyTimeout = defaultReadyWait
 	}
 
-	transport := &http.Transport{
-		Proxy:             nil,
-		DisableKeepAlives: true, // Transport retries are possible on reused connections.
+	readTransport := &http.Transport{
+		Proxy:               nil,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     30 * time.Second,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, _, splitErr := net.SplitHostPort(address)
 			if splitErr != nil || !literalLoopback(host) {
@@ -100,11 +114,13 @@ func New(config Config) (*Sender, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, address)
 		},
 	}
+	writeTransport := readTransport.Clone()
+	writeTransport.DisableKeepAlives = true // Never retry a write on a reused connection.
 	return &Sender{
 		base: base, token: token, account: config.Account,
 		pollInterval: config.PollInterval, readyTimeout: config.ReadyTimeout,
 		client: &http.Client{
-			Transport: transport,
+			Transport: nativeMethodTransport{read: readTransport, write: writeTransport},
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return errors.New("redirect denied")
 			},

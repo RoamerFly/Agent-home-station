@@ -15,6 +15,11 @@ func TestLocalConversationPolicyKeepsSourcesWithoutApplicationProtocols(t *testi
 			t.Errorf("missing local policy component %q", needed)
 		}
 	}
+	for _, needed := range []string{"未来事项与提醒", "agent_reminder", "agent_task"} {
+		if !strings.Contains(connected, needed) {
+			t.Errorf("missing connected temporal-action policy component %q", needed)
+		}
+	}
 	for _, unavailable := range []string{"wechat_recall", "media_ids", "wake_after_seconds", "reply_contexts"} {
 		if strings.Contains(local, unavailable) {
 			t.Errorf("unconnected protocol entered local policy: %s", unavailable)

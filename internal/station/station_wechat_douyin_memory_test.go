@@ -131,6 +131,8 @@ func checkWechatDouyinMemoryDirection(t *testing.T, f *localHomeFixture, base, o
 	}
 	for _, thread := range []string{origin, ownerID} {
 		tools, in := makeTools("douyin-engine-"+thread, thread, ownerID, question)
+		initialAuthorization := tools.MemoryResultAuthorization()
+		initialEpoch, _ := tools.store.RecallEpoch(t.Context())
 		calls := 0
 		model := localModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
 			calls++
@@ -154,7 +156,8 @@ func checkWechatDouyinMemoryDirection(t *testing.T, f *localHomeFixture, base, o
 		engine.Tools, engine.MaxToolCalls = tools, 6
 		decision, err := engine.Respond(t.Context(), in)
 		if err != nil || calls != 2 || decision.Action != "silent" || decision.Reason != "cross_conversation_result_private_delivery_handled" {
-			t.Fatal(decision, calls, err)
+			currentEpoch, _ := tools.store.RecallEpoch(t.Context())
+			t.Fatalf("decision=%+v calls=%d err=%v initial_authorization=%q current_authorization=%q initial_epoch=%q current_epoch=%q cross_check=%v", decision, calls, err, initialAuthorization, tools.MemoryResultAuthorization(), initialEpoch, currentEpoch, tools.checkCrossResults(t.Context()))
 		}
 		for _, turn := range tools.store.Context(in, config, time.Now()).Messages {
 			if strings.Contains(turn.Text, "合成抖音私下查询结果") || strings.Contains(turn.Text, "微信抖音专属原文") {

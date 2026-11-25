@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,8 +56,13 @@ type stationWechat struct {
 }
 
 type stationWechatPolicy struct {
-	Enabled            bool                           `json:"enabled"`
-	Paused             bool                           `json:"paused"`
+	Enabled bool `json:"enabled"`
+	Paused  bool `json:"paused"`
+	// Behavior is the owner-controlled legacy bot policy.  Keep it as a
+	// pointer so an explicit all-false configuration is distinguishable from
+	// an old policy file that predates this field; the adapter supplies the
+	// legacy defaults for the latter.
+	Behavior           *bot.Options                   `json:"behavior,omitempty"`
 	Grants             map[string]time.Time           `json:"reply_grants"`
 	AttachmentGrants   map[string]time.Time           `json:"attachment_grants,omitempty"`
 	StationLocalAudio  bool                           `json:"station_local_audio,omitempty"`
@@ -94,6 +100,8 @@ const stationWechatPolicyLimit = 128 << 10
 type stationWechatWorker struct {
 	canvasMu         sync.Mutex
 	connectionID     string
+	host             *stationWechat
+	account          string
 	roundMu          sync.Mutex
 	mu               sync.Mutex
 	deliveryMu       sync.Mutex
@@ -107,6 +115,11 @@ type stationWechatWorker struct {
 	surfCancel       context.CancelFunc
 	rollbackAuditMu  sync.Mutex
 	shareMu          sync.Mutex
+	speechMu         sync.Mutex
+	yueMu            sync.Mutex
+	comfyMu          sync.Mutex
+	rvcMu            sync.Mutex
+	externalMu       sync.Mutex
 	share            *stationShareHost
 	dir              string
 	runtimeDir       string
@@ -118,6 +131,112 @@ type stationWechatWorker struct {
 	// the archive evidence remains the authority and an explicit successful
 	// activation clears this display state.
 	cutoverBlocked atomic.Bool
+}
+
+func (s *stationWechat) addBoundOwnerReplyGrant(connection, account string, policy stationWechatPolicy) stationWechatPolicy {
+	state, err := s.wechatOwnerState(connection, account)
+	grants := make(map[string]time.Time, len(policy.Grants)+1)
+	attachments := make(map[string]time.Time, len(policy.AttachmentGrants)+1)
+	mediaReplies := make(map[string]time.Time, len(policy.MediaReplyGrants)+1)
+	for thread, granted := range policy.Grants {
+		grants[thread] = granted
+	}
+	for thread, granted := range policy.AttachmentGrants {
+		attachments[thread] = granted
+	}
+	for thread, granted := range policy.MediaReplyGrants {
+		mediaReplies[thread] = granted
+	}
+	grantOwner := func(sender string, at time.Time) {
+		if grants[sender].IsZero() || grants[sender].Before(at) {
+			grants[sender] = at
+		}
+		if attachments[sender].IsZero() || attachments[sender].Before(at) {
+			attachments[sender] = at
+		}
+		if mediaReplies[sender].IsZero() || mediaReplies[sender].Before(at) {
+			mediaReplies[sender] = at
+		}
+	}
+	if err == nil && state.Binding != nil && !state.Binding.BoundAt.IsZero() {
+		ownerInput := companion.Input{Channel: wechatapp.ID, Account: account, Thread: state.Binding.Sender, Sender: state.Binding.Sender, Directed: true, Mode: "direct"}
+		if s.ownerBoundToWechat(connection, account, ownerInput) {
+			grantOwner(state.Binding.Sender, state.Binding.BoundAt)
+		}
+	}
+	// Older single-account releases have a trusted legacy agent-config.json
+	// with owner_ids but no newer owner-binding.json yet. Preserve that
+	// explicit owner authorization during cutover so the owner's private chat
+	// does not get treated as an ordinary unlisted contact. Other contacts
+	// remain subject to explicit reply grants.
+	for _, sender := range s.legacyOwnerReplyIDs() {
+		if err == nil && state.Binding != nil && state.Binding.Sender != sender {
+			continue
+		}
+		at := grants[sender]
+		if at.IsZero() {
+			at = time.Unix(0, 0).UTC()
+		}
+		grantOwner(sender, at)
+	}
+	policy.Grants = grants
+	policy.AttachmentGrants = attachments
+	policy.MediaReplyGrants = mediaReplies
+	return policy
+}
+
+func (s *stationWechat) legacyOwnerReplyIDs() []string {
+	if s == nil || s.dataDir == "" {
+		return nil
+	}
+	path := filepath.Join(s.dataDir, "applications", wechatapp.ID, "legacy-admin", "agent-config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 8<<20 {
+		return nil
+	}
+	var cfg struct {
+		Enabled  bool     `json:"enabled"`
+		OwnerIDs []string `json:"owner_ids"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil || !cfg.Enabled || len(cfg.OwnerIDs) > 30 {
+		return nil
+	}
+	seen := make(map[string]bool, len(cfg.OwnerIDs))
+	ids := make([]string, 0, len(cfg.OwnerIDs))
+	for _, id := range cfg.OwnerIDs {
+		id = strings.TrimSpace(id)
+		if id != "" && identity.ValidPathID(id) && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (s *stationWechat) ownerBoundToWechat(connection, account string, in companion.Input) bool {
+	if s == nil || s.ownerReader == nil || in.Account != account || in.Sender == "" {
+		return false
+	}
+	owner, err := s.ownerReader()
+	if err != nil || owner.FishID == "" || owner.ID == "" {
+		return false
+	}
+	state, err := s.wechatOwnerState(connection, account)
+	if err == nil && state.Binding != nil {
+		return state.Binding.Sender == in.Sender && state.Binding.Fish == owner.FishID && state.Binding.Owner == owner.ID
+	}
+	if err != nil {
+		return false
+	}
+	// Older single-account installations identified the owner in the trusted
+	// legacy configuration. Keep that binding usable for workstation tools
+	// until an explicit owner-binding record replaces it.
+	for _, sender := range s.legacyOwnerReplyIDs() {
+		if sender == in.Sender {
+			return true
+		}
+	}
+	return false
 }
 
 func bindStationWechat(registry apphost.Registry, dataDir, workspaceRoot string, model stationservices.Model, artifacts stationservices.Artifacts, shareOptions pluginruntime.Options, localASR stationLocalASR, localVision stationLocalVision, documents stationDocumentTools) (apphost.Registry, *stationWechat, error) {
@@ -249,7 +368,7 @@ func (s *stationWechat) worker(id string, create bool) (*stationWechatWorker, er
 	if err != nil {
 		return nil, err
 	}
-	w := &stationWechatWorker{connectionID: id, dir: dir, runtimeDir: runtimeDir, policy: policy}
+	w := &stationWechatWorker{connectionID: id, host: s, dir: dir, runtimeDir: runtimeDir, policy: policy}
 	s.workers[id] = w
 	return w, nil
 }
@@ -631,6 +750,11 @@ func (w *stationWechatWorker) changePolicy(next stationWechatPolicy) error {
 }
 
 func (s *stationWechat) SetConnectionRunning(ctx context.Context, id string, running bool) (apphost.ConnectionLifecycle, error) {
+	// The legacy admin owns the native account and queue in this desktop mode.
+	// restore() skips the station worker; manual starts must obey the same fence.
+	if running && os.Getenv("AHS_LEGACY_WECHAT") == "1" {
+		return apphost.ConnectionLifecycle{}, apphost.ErrLifecycleCutover
+	}
 	native, err := s.WorkerSender(ctx, id)
 	if err != nil {
 		return apphost.ConnectionLifecycle{}, err
@@ -730,6 +854,12 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	if err := activationAllowed(); err != nil {
 		return err
 	}
+	station.account = native.Account()
+	// The bound owner private chat is an implicit reply scope. It is not a
+	// group whitelist entry, so add it to this run's immutable policy snapshot
+	// after rechecking the persisted owner binding. Other private contacts still
+	// require an explicit reply grant.
+	policy = s.addBoundOwnerReplyGrant(station.connectionID, native.Account(), policy)
 	dir := station.dir
 	if err := wechatapp.WaitWorkerLogin(ctx, native); err != nil {
 		return err
@@ -747,10 +877,77 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 	attachment.stationImageVision, attachment.stationVideoVision, attachment.localVision = policy.StationImageVision, policy.StationVideoVision, s.localVision
 	attachment.stationLocalAudio, attachment.localASR = policy.StationLocalAudio, s.localASR
 	attachment.shareHost = func() (*stationShareHost, error) { return s.shareHost(station, native.Account()) }
+	if s.localChat != nil {
+		attachment.projects = s.localChat.projectTools
+		attachment.projectOwnerAllowed = func(in companion.Input) bool { return s.ownerBoundToWechat(station.connectionID, native.Account(), in) }
+		attachment.speechMu = &station.speechMu
+		attachment.yueMu = &station.yueMu
+		attachment.comfyMu = &station.comfyMu
+		attachment.rvcMu = &station.rvcMu
+		attachment.externalMu = &station.externalMu
+	}
 	if s.artifacts != nil {
 		attachment.work = &stationWorkAccess{artifacts: s.artifacts, dir: dir, grants: policy.MediaReplyGrants}
 	}
+	// Public workstation tools use the same registered tool catalog as local
+	// chat, but they are constructed in the local owner's scope only after the
+	// WeChat turn has supplied a verified sender. This keeps project files,
+	// generators and local memory out of ordinary group-member turns and avoids
+	// writing local checkpoints into the WeChat memory database.
+	publicTools := newPublicToolFactoryAccess(func(in companion.Input) companion.ToolAccess {
+		if s.localChat == nil || s.ownerReader == nil {
+			return nil
+		}
+		if !s.ownerBoundToWechat(station.connectionID, in.Account, in) {
+			return nil
+		}
+		store, localInput, err := s.localChat.conversation()
+		if err != nil {
+			return nil
+		}
+		// The workstation receives an independent request identity. WeChat
+		// message IDs, body, source and reply correlation stay in this adapter.
+		localInput.TraceID = identity.RandomToken()
+		tools := s.localChat.tools(store, localInput)
+		tools.projectTools = s.localChat.projectTools
+		tools.publicUseOnly = true
+		tools.run = companion.NewGuardedToolRun(func(ctx context.Context) error {
+			if run.Blocked() || ctx.Err() != nil || policy.Grants[in.Thread].IsZero() || !s.ownerBoundToWechat(station.connectionID, in.Account, in) {
+				return apphost.ErrObservationForbidden
+			}
+			return nil
+		})
+		return tools
+	}, func(in companion.Input) bool {
+		if run.Blocked() || in.Channel != "wechat" || !in.Directed || in.Preview || in.Surf || in.ReportOnly {
+			return false
+		}
+		if policy.Grants[in.Thread].IsZero() || s.ownerReader == nil {
+			return false
+		}
+		return s.ownerBoundToWechat(station.connectionID, in.Account, in)
+	})
+	tools := mergeStationToolAccess(attachment, publicTools, nil)
 	var roundErrorLogged atomic.Bool
+	recordEvent := func(event string) {
+		if event == "" || station.cutoverBlocked.Load() {
+			return
+		}
+		// Keep the old bot's lifecycle events in the same durable execution
+		// journal as message/tool records.  The event intentionally carries no
+		// hidden model output or credentials; the detailed tool result remains in
+		// the existing round/task stores.
+		_ = station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{Event: event, Category: "decision", Origin: "station"})
+	}
+	attachment.shareProgress = func(event, status, reason string) {
+		if event == "" || station.cutoverBlocked.Load() || policy.Grants[attachment.trace.Thread].IsZero() {
+			return
+		}
+		_ = station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{
+			Event: event, Category: "tool", ThreadID: attachment.trace.Thread, MessageID: attachment.trace.TraceID,
+			Tool: "share-reader", ToolStage: "public-media", Status: status, Reason: reason, Origin: "wechat",
+		})
+	}
 	return run.RunQueue(ctx, native, wechatapp.WorkerQueue{
 		ProtectQuote: attachment.protectCrossReply,
 		SurfTask: func(now time.Time) (*bot.SurfTask, error) {
@@ -767,8 +964,53 @@ func (s *stationWechat) runWorker(ctx context.Context, run *wechatapp.WorkerRun,
 				log.Print("WeChat execution journal is unavailable")
 			}
 		},
-		StateDir: station.queueDir(), Groups: policy.groupPolicy(), AllowMediaReplies: len(policy.MediaReplyGrants) != 0,
-		Memory: memory, Model: s.model, Persona: persona, Tools: attachment,
+		Log: recordEvent,
+		ObservationFailed: func(in companion.Input, reason string) error {
+			if policy.Grants[in.Thread].IsZero() {
+				return nil
+			}
+			return station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{Event: "media_observation_failed", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, Reason: reason, Status: "failed"})
+		},
+		MediaRepairRequired: func(in companion.Input, jobID, reason string) error {
+			if policy.Grants[in.Thread].IsZero() {
+				return nil
+			}
+			return station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{Event: "media_repair_required", Category: "error", ThreadID: in.Thread, MessageID: in.TraceID, Reason: reason, Status: "needs_review", SendID: jobID})
+		},
+		BacklogSettled: func(account, thread string, ids []string, action string) {
+			if account != native.Account() || policy.Grants[thread].IsZero() {
+				return
+			}
+			_ = station.recordRound(station.connectionID, native.Account(), time.Now(), bot.Record{Event: "backlog_settled", Category: "decision", ThreadID: thread, Content: action, Reason: strings.Join(ids, ","), Status: "completed"})
+		},
+		SurfAllowed: func(thread string) bool {
+			if run.Blocked() || ctx.Err() != nil {
+				return false
+			}
+			return !policy.Grants[thread].IsZero()
+		},
+		Draining: func() bool { return run.Blocked() || ctx.Err() != nil },
+		AgentTask: func(now time.Time, busy func(string) bool) (*companion.Input, error) {
+			return station.claimAgentTask(now, native.Account(), busy)
+		},
+		AgentTaskActive: station.agentTaskActive,
+		AgentTaskDone: func(in companion.Input, state string) error {
+			return station.updateAgentTask(in, state, nil, 0, "")
+		},
+		AgentTaskRetry: func(in companion.Input, delay time.Duration, reason string) {
+			_ = station.updateAgentTask(in, "retrying_model", nil, delay, reason)
+		},
+		AgentTaskDelivery: func(in companion.Input, delivery bot.TaskDelivery) error {
+			return station.updateAgentTask(in, "", &delivery, 0, "")
+		},
+		MediaSeeds:       station.mediaSeeds,
+		MediaSeedKnown:   station.mediaSeedKnown,
+		MediaSeedAllowed: station.mediaSeedAllowed,
+		MediaSeedReceipt: station.mediaSeedReceipt,
+		MediaSeedSettled: station.settleMediaSeed,
+		StateDir:         station.queueDir(), Groups: policy.groupPolicy(), AllowMediaReplies: len(policy.MediaReplyGrants) != 0,
+		Behavior: policy.Behavior,
+		Memory:   memory, Model: s.model, Persona: persona, Tools: tools,
 		MediaObserver:     stationMediaObserver{tools: attachment, imageSince: policy.AutoImagesSince, videoSince: policy.AutoVideosSince},
 		ReadGroupShare:    attachment.readGroupShareEvidence,
 		DeliveryCancelled: station.deliveryCancelled, WithDeliverySubmit: station.withDeliverySubmit,

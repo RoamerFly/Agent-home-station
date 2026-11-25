@@ -54,8 +54,8 @@ jobs:
       - name: Verify fresh Windows station with WeChat runtime
         shell: powershell
         run: |
-          $native = (Resolve-Path dist/windows-native/runtimes/windows-x64).Path
-          $media = (Resolve-Path dist/windows-native/runtimes/windows-media).Path
+          $native = (Resolve-Path dist/windows-native/env/windows-x64).Path
+          $media = (Resolve-Path dist/windows-native/env/windows-media).Path
           ./scripts/Build-Desktop.ps1 -LocalStation -WithWeChatRuntime -WeChatRuntimeDirectory $native -OutputDirectory dist/station-first-start -Test -Portable -MediaDirectory $media
       - name: Test offline Windows account migration
         shell: powershell
@@ -67,7 +67,7 @@ jobs:
         shell: powershell
         run: |
           $env:WECHAT_WINDOWS_TEST_CONFIG = Join-Path $PWD 'temp/windows-lpac-test.json'
-          python -c "import json,os; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(r/'dist/windows-native/runtimes/windows-python-cli/pythonw.exe'),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
+          python -c "import json,os; from pathlib import Path; r=Path.cwd(); Path(os.environ['WECHAT_WINDOWS_TEST_CONFIG']).write_text(json.dumps({'pythonw':str(r/'dist/windows-native/env/windows-python-cli/pythonw.exe'),'helper':str(r/'scripts/windows_agent_host.pyw'),'spool':str(r/'temp/windows-lpac-spool')}),encoding='utf8')"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare synthetic LPAC test' }
           go test ./internal/agenthost -run '^TestLiveWindowsIsolatedArgv$' -v -count=1
           if ($LASTEXITCODE -ne 0) { throw 'Windows fixed-argument broker test failed' }

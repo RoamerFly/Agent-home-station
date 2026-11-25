@@ -30,6 +30,18 @@ func (e *yueCallError) Error() string {
 }
 func yueError(code string) error                          { return &yueCallError{code: code} }
 func (e *yueCallError) SafeToolFailure() (string, string) { return e.code, e.Error() }
+func (e *yueCallError) ToolRecovery() (string, string) {
+	switch e.code {
+	case "yue_bridge_unavailable", "yue_backend_unavailable":
+		return "restore_dependency_before_submit", "music_service_status"
+	case "yue_submission_unknown":
+		return "check_original_operation", "agent_tasks"
+	case "yue_job_scope_denied", "yue_job_not_found":
+		return "read_original_job", "agent_tasks"
+	default:
+		return "requires_configuration_or_provider_check", "music_service_status"
+	}
+}
 func safeToolFailure(err error) (string, string) {
 	var safe interface{ SafeToolFailure() (string, string) }
 	if errors.As(err, &safe) {

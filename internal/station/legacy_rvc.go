@@ -139,7 +139,7 @@ func loadLegacyRVC(ctx context.Context, dataDir, workspaceRoot, optionsFile stri
 		return legacyRVCLoaded{}, errors.New("请先接续或初始化本机鱼身份")
 	}
 	identityFile.Close()
-	record, err := fishidentity.New(dataDir).Read()
+	record, err := fishidentity.New(stationAuthorityDir(dataDir)).Read()
 	if err != nil || record.LocalOwner == nil || !record.LocalOwner.HomeAccess {
 		return legacyRVCLoaded{}, errors.New("请先为本机主人开启家目录权限")
 	}
@@ -388,7 +388,7 @@ func ImportLegacyRVC(ctx context.Context, dataDir, workspaceRoot, optionsFile, e
 		return LegacyRVCPlan{}, err
 	}
 
-	registry := fishidentity.New(dataDir)
+	registry := fishidentity.New(stationAuthorityDir(dataDir))
 	parentPath, name := filepath.Dir(loaded.Target), filepath.Base(loaded.Target)
 	var parent *os.Root
 	if err := registry.GuardHome(loaded.Plan.FishID, loaded.Plan.OwnerID, loaded.Plan.OwnerRevision, func(fishidentity.Record) error {

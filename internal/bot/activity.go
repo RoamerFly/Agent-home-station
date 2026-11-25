@@ -25,11 +25,15 @@ type Record struct {
 	ModelJSONValid                                                                                                  bool
 	ModelRetryDelayMS                                                                                               int64
 	CallID                                                                                                          string
-	Tool, TargetURL, Query, Effect                                                                                  string
+	Tool, ToolArgs, TargetURL, Query, Effect                                                                        string
 	DurationMS, Bytes                                                                                               int64
 	MediaCount                                                                                                      int
 	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string
 	ReviewFailure                                                                                                   *companion.ReviewFailure
+	UsageModel, UsagePurpose, UsagePriceSource                                                                      string
+	UsageReported, UsagePriced                                                                                      bool
+	InputTokens, OutputTokens, CacheHitTokens                                                                       int64
+	EstimatedCosts                                                                                                  map[string]float64
 }
 
 func (w *Worker) activity(record Record) {
@@ -73,6 +77,9 @@ func (w *Worker) recordIncoming(m linuxnative.Message) {
 	w.activity(Record{Event: "message_received", Category: "received", ThreadID: m.ThreadID, Sender: m.SenderID, Content: messageSummary(m), MessageID: m.ID, MessageTime: m.CreatedAt, Origin: "wechat", Status: "received"})
 }
 func messageSummary(m linuxnative.Message) string {
+	if label, _ := m.CardContext(); label != "" {
+		return label
+	}
 	if m.IsQuotedText() {
 		m.Type = 1
 		return "[引用回复] " + messageSummary(m)
@@ -99,13 +106,7 @@ func messageSummary(m linuxnative.Message) string {
 	if !utf8.ValidString(body) {
 		return "[正文编码无效]"
 	}
-	if len(body) > 4096 {
-		body = body[:4096]
-		for !utf8.ValidString(body) {
-			body = body[:len(body)-1]
-		}
-		body += "…[截断]"
-	}
+
 	return body
 }
 func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {

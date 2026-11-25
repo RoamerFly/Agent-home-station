@@ -31,7 +31,46 @@ def state(primary=VIDEO, backup=BACKUP):
     }}, ensure_ascii=False) + ";window.unrelatedScript='not executed'"
 
 
+def init_state():
+    return "window.INIT_STATE = " + json.dumps({"photo-state": {"photo": {
+        "share_info": "userId=3xauthor&photoId=" + PHOTO,
+        "caption": "INIT_STATE 合成视频",
+        "duration": 97133,
+        "mainMvUrls": [{"url": VIDEO}],
+        "manifest": {"adaptationSet": [{"representation": [{"backupUrl": [BACKUP]}]}]},
+    }}}, ensure_ascii=False)
+
+
 class PublicShareTests(unittest.TestCase):
+    def test_jsonld_video_content_url_is_observed_locator_not_description(self):
+        page = 'https://public.example/article'
+        body = '<script type="application/ld+json">'+json.dumps({'@graph':[
+            {'@type':'VideoObject','contentUrl':'/actual.mp4','thumbnailUrl':'/cover.jpg','description':'not observed'},
+            {'@type':'ImageObject','contentUrl':'/wrong.jpg'}]})+'</script>'
+        result = parser.resolve({'url':page,'video_required':True}, lambda *a:response(body,page))
+        self.assertEqual(result['private_media_locators'], ['https://public.example/actual.mp4'])
+        self.assertEqual(result['text'], '')
+        self.assertFalse(result['video_observed'])
+
+    def test_plain_text_short_information_is_not_rejected_by_length(self):
+        page='https://public.example/info.txt'
+        result=parser.resolve({'url':page},lambda *a:response('开放时间：9:00-17:00',page,'text/plain'))
+        self.assertEqual(result['text'],'开放时间：9:00-17:00')
+        self.assertEqual(result['coverage'],'page_text')
+
+    def test_jsonld_embed_page_is_not_a_downloadable_video(self):
+        page='https://public.example/video'
+        body='<script type="application/ld+json">'+json.dumps({'@type':'VideoObject','embedUrl':'/player','thumbnailUrl':'/cover.jpg'})+'</script>'
+        with self.assertRaisesRegex(ValueError,'share_requires_browser'):
+            parser.resolve({'url':page,'video_required':True},lambda *a:response(body,page))
+
+    def test_current_init_state_shape_is_parsed_for_exact_work(self):
+        result = parser.resolve({"url": PAGE}, lambda *a: response(init_state()))
+        self.assertEqual(result["title"], "INIT_STATE 合成视频")
+        self.assertEqual(result["duration_ms"], 97133)
+        self.assertEqual(result["private_media_locators"], [VIDEO, BACKUP])
+        self.assertEqual(result["coverage"], "media_locator_only")
+
     def test_same_work_canonical_retry_preserves_request_not_display_tokens(self):
         original = "https://v.m.chenzhongtech.com/fw/photo/"+PHOTO+"?shareToken=synthetic"
         calls = []
@@ -42,6 +81,15 @@ class PublicShareTests(unittest.TestCase):
         self.assertEqual(calls, [original, PAGE+"?shareToken=synthetic"])
         self.assertEqual(result["source_url"], PAGE)
         self.assertNotIn("shareToken", json.dumps(result))
+
+    def test_rotating_kuaishou_short_link_host_uses_init_state(self):
+        original = "https://v.kuaishou.com/n1gmEfeR"
+        canonical = "https://kph8gvfz.m.chenzhongtech.com/fw/photo/" + PHOTO + "?cc=share_wxms&photoId=" + PHOTO
+        result = parser.resolve({"url": original, "video_required": True}, lambda *a: response(init_state(), canonical))
+        self.assertEqual(result["platform"], "kuaishou")
+        self.assertEqual(result["object_id"], PHOTO)
+        self.assertEqual(result["title"], "INIT_STATE 合成视频")
+        self.assertEqual(result["private_media_locators"], [VIDEO, BACKUP])
 
     def test_exact_photo_and_candidates_are_not_video_observation(self):
         first = parser.resolve({"url": PAGE, "candidate_limit": 1}, lambda *a: response(state()))
@@ -106,7 +154,7 @@ class PublicShareTests(unittest.TestCase):
         self.assertEqual(result["text"], "")
 
     def test_stdio_context_and_host_read_binding(self):
-        call = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"share.resolve_public","arguments":{"url":PAGE},"_meta":{"wechat/context":{k:"synthetic" for k in ["account","thread","requester","purpose","request_key"]}}}}
+        call = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"share.resolve_public","arguments":{"url":PAGE},"_meta":{"station/call_id":"a" * 64}}}
         frames = [{"jsonrpc":"2.0","id":1,"method":"initialize"},call,{"jsonrpc":"2.0","id":"share-read-1","result":response(state())}]
         output=io.StringIO();main.Wire(io.StringIO("\n".join(json.dumps(x) for x in frames)+"\n"),output).serve()
         values=[json.loads(x) for x in output.getvalue().splitlines()]

@@ -37,6 +37,16 @@ type localComfyTCPRowOwnerPID struct {
 }
 
 func localComfyListenerOwner(port, expectedPID int) error {
+	return localIPv4ListenerOwner(port, expectedPID, false)
+}
+
+// OBS WebSocket binds a wildcard IPv4 listener; requests still use loopback
+// with authentication and must belong to the exact managed OBS process.
+func localOBSListenerOwner(port, expectedPID int) error {
+	return localIPv4ListenerOwner(port, expectedPID, true)
+}
+
+func localIPv4ListenerOwner(port, expectedPID int, allowWildcard bool) error {
 	if port < 1 || port > 65535 || expectedPID <= 0 {
 		return errLocalComfyWrongOwner
 	}
@@ -52,13 +62,16 @@ func localComfyListenerOwner(port, expectedPID int) error {
 	}
 	count := *(*uint32)(unsafe.Pointer(&buffer[0]))
 	rowSize := int(unsafe.Sizeof(localComfyTCPRowOwnerPID{}))
-	if count > uint32((len(buffer)-4)/rowSize) {
+	if count == 0 || count > uint32((len(buffer)-4)/rowSize) {
 		return errLocalComfyNoListener
 	}
-	for index := uint32(0); index < count; index++ {
-		offset := 4 + int(index)*rowSize
-		row := (*localComfyTCPRowOwnerPID)(unsafe.Pointer(&buffer[offset]))
-		if row.State != localComfyTCPStateListening || row.LocalAddr != 0x0100007f || int(syscall.Ntohs(uint16(row.LocalPort))) != port {
+	rows := unsafe.Slice((*localComfyTCPRowOwnerPID)(unsafe.Pointer(&buffer[4])), count)
+	return verifyLocalIPv4ListenerRows(rows, port, expectedPID, allowWildcard)
+}
+
+func verifyLocalIPv4ListenerRows(rows []localComfyTCPRowOwnerPID, port, expectedPID int, allowWildcard bool) error {
+	for _, row := range rows {
+		if row.State != localComfyTCPStateListening || (row.LocalAddr != 0x0100007f && !(allowWildcard && row.LocalAddr == 0)) || int(syscall.Ntohs(uint16(row.LocalPort))) != port {
 			continue
 		}
 		if int(row.OwnerPID) != expectedPID {

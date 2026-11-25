@@ -32,7 +32,10 @@ func (a mediaUnderstanding) observeVideo(ctx context.Context, msg linuxnative.Me
 	if err != nil {
 		return "", err
 	}
-	visualEnabled := installed && a.manager.mediaObservationConfigured(ctx)
+	visualEnabled := a.manager.mediaObservationConfigured(ctx)
+	if _, shared := a.manager.sharedStationVision(); !shared {
+		visualEnabled = installed && visualEnabled
+	}
 	audioEnabled := installed && a.manager.mediaTranscriptionConfigured(ctx)
 	if !visualEnabled && !audioEnabled {
 		if !installed {

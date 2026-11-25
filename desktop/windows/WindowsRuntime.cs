@@ -220,8 +220,12 @@ namespace WechatAgent.Desktop {
                 if (item.Exists && (item.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("数据和程序路径不能穿过链接或重解析点。");
         }
         internal static bool CanUsePrivateDirectoryOwner(SecurityIdentifier owner, SecurityIdentifier user, bool portable) {
-            return user.Equals(owner) || (portable && owner != null &&
-                (owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(WellKnownSidType.LocalSystemSid)));
+            // A package copied between Windows accounts is still the same
+            // application-owned data set. In portable mode the launcher may
+            // re-home its private directory to the current process identity;
+            // do not reject it merely because the previous owner was another
+            // user, Administrators, or SYSTEM.
+            return user.Equals(owner) || portable && owner != null;
         }
         internal static void PrivateDirectory(string path, bool portable = false) {
             NoLinks(path);
@@ -300,6 +304,10 @@ namespace WechatAgent.Desktop {
                         throw new InvalidOperationException("Windows 原生运行文件校验失败，请重新构建完整程序包；用户数据已保留。");
                     if (String.Equals(target, Path.GetFullPath(nativeExe), StringComparison.OrdinalIgnoreCase)) nativeListed = true;
                 }
+                if (stationRuntime && Path.GetFileName(Path.GetDirectoryName(dir)) == "runtime" &&
+                    (!files.ContainsKey("wechat-admin.exe") ||
+                    !String.Equals(Convert.ToString(files["wechat-admin.exe"]), Deployment.Text(manifest, "admin_sha256"), StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("微信应用包运行清单缺少管理控制台或其校验值不匹配。");
                 if (strictInventory && !nativeListed) throw new InvalidOperationException("Windows 原生运行包未登记 wx.exe。");
                 if (cutoverRuntime) {
                     remaining.Add("windows-native-manifest.json");

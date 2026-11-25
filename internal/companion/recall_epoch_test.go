@@ -72,7 +72,7 @@ func TestRecallEpochIndependentMessagesDoNotInvalidate(t *testing.T) {
 }
 
 func TestRecallEpochSourceRevisionConflictAndClear(t *testing.T) {
-	for _, action := range []string{"revision", "collision", "observation", "clear", "summary", "notes", "quarantine"} {
+	for _, action := range []string{"metadata-only", "revision", "collision", "observation", "clear", "summary", "notes", "quarantine"} {
 		t.Run(action, func(t *testing.T) {
 			s, c, in := memoryFixture(t)
 			now := time.Now().UTC()
@@ -86,6 +86,9 @@ func TestRecallEpochSourceRevisionConflictAndClear(t *testing.T) {
 			id := ScopeID(in.Channel, in.Account, in.Thread)
 			var err error
 			switch action {
+			case "metadata-only":
+				in.Source.Revision++
+				err = s.Observe(in, c, now)
 			case "revision", "collision":
 				in.Text = "a revised observation"
 				if action == "revision" {
@@ -118,8 +121,8 @@ func TestRecallEpochSourceRevisionConflictAndClear(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after := recallEpochForTest(t, s); after == before {
-				t.Fatal("changed evidence retained old epoch", action, before)
+			if after := recallEpochForTest(t, s); (after != before) != (action != "metadata-only") {
+				t.Fatal("unexpected evidence epoch", action, before, after)
 			}
 		})
 	}

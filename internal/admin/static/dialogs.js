@@ -21,6 +21,17 @@
   return {dialog,body,close:()=>dialog.open&&dialog.close(),alive:()=>dialog.isConnected&&dialog.open};
  }
  function closeAll(){for(const dialog of [...document.querySelectorAll('dialog[open]')].reverse())dialog.close()}
+ function confirmAction({title,message,confirmText='确认',danger=false}={}){
+  return new Promise(resolve=>{
+   let confirmed=false;
+   const popup=open({title,subtitle:message,onClose:()=>resolve(confirmed)});
+   const actions=document.createElement('div');actions.className='dialog-actions';
+   const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='取消';cancel.addEventListener('click',()=>popup.close());
+   const submit=document.createElement('button');submit.type='button';submit.className=danger?'danger':'primary';submit.textContent=confirmText;
+   submit.addEventListener('click',()=>{confirmed=true;popup.close()});
+   actions.append(cancel,submit);popup.body.append(actions);submit.focus();
+  });
+ }
  function text(parent,value,{title='完整内容',className='',limit=180}={}){
   const content=String(value??'');
   if(content.length<=limit){const span=document.createElement('span');span.className=className;span.textContent=content;parent.append(span);return span}
@@ -31,7 +42,7 @@
   button.addEventListener('click',()=>{const popup=open({title});const body=document.createElement('pre');body.className='readable-full-text';body.textContent=content;popup.body.append(body)});
   parent.append(button);return button;
  }
- window.WechatDialogs={open,closeAll,text};
+ window.WechatDialogs={open,closeAll,confirmAction,text};
  window.addEventListener('wechat-admin:logout',closeAll);
  window.addEventListener('wechat-admin:navigate',e=>{if(!e.detail?.embedded)closeAll()});
 })();

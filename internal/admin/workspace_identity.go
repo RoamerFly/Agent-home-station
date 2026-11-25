@@ -78,6 +78,11 @@ func (m *Manager) configureWorkspaceDirectory() error {
 }
 
 func (m *Manager) privateWorkspaceFor(account string) string {
+	if account == m.native.Account() {
+		if root := m.releaseWorkspaces(); root != "" {
+			return filepath.Join(root, "wechat")
+		}
+	}
 	name := accountDirectory(account)
 	if account == m.native.Account() && m.workspaceDir != "" {
 		name = m.workspaceDir
@@ -85,7 +90,26 @@ func (m *Manager) privateWorkspaceFor(account string) string {
 	return filepath.Join(m.managedRoot(), "pri_workspace", name)
 }
 
+// voiceLibraryPath reads an administrator-owned installation path, never a tool argument.
+func voiceLibraryPath(base, fallback string) string {
+	if raw, err := os.ReadFile(filepath.Join(base, "voice-library-root")); err == nil && len(raw) < 4096 {
+		path := strings.TrimSpace(string(raw))
+		if filepath.IsAbs(path) {
+			return filepath.Clean(path)
+		}
+	}
+	return fallback
+}
+func (m *Manager) publicVoiceLibrary() string {
+	base := filepath.Join(m.managedRoot(), "public_workspace")
+	return voiceLibraryPath(base, filepath.Join(base, "models", "voice-library"))
+}
 func (m *Manager) privateVoiceLibrary() string {
+	base := m.privateWorkspaceFor(m.native.Account())
+	if path := voiceLibraryPath(base, ""); path != "" {
+		return path
+	}
+
 	current := filepath.Join(m.privateWorkspaceFor(m.native.Account()), "voice-library")
 	if _, err := os.Lstat(filepath.Join(current, "catalog.json")); os.IsNotExist(err) {
 		legacy := filepath.Join(m.dir, "voice-library")

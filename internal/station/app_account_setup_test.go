@@ -19,7 +19,7 @@ import (
 func TestLocalWechatAccountSetupUsesOwnerAndExactNativeIdentity(t *testing.T) {
 	base := t.TempDir()
 	host := filepath.Join(base, "host")
-	native := filepath.Join(host, "apps", "wechat", "native")
+	native := filepath.Join(host, "applications", "wechat", "native")
 	if err := os.MkdirAll(native, 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -70,6 +70,36 @@ func TestSuccessfulSpeechDeliveryRetainsVerifiedSynthesisText(t *testing.T) {
 	}
 }
 
+func TestIncompleteVoiceReceiptDoesNotClaimDelivery(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "partial-voice", Kind: "voice", Title: "partial.wav"})
+	n.status.State, n.status.ServerID = "accepted", "parent-receipt"
+	n.status.VoicePartsIncomplete = true
+	n.status.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: "chunk-0"}, {Index: 1, State: "prepared"}}
+	d := w.runtime.Media[0]
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State == "accepted" || d.Reason == "media_server_accepted" || n.sends != 1 {
+		t.Fatalf("incomplete voice receipt was reported as delivered: state=%s reason=%s sends=%d", d.State, d.Reason, n.sends)
+	}
+	if d.State != "checking_receipt" {
+		t.Fatalf("incomplete voice receipt did not enter receipt reconciliation: %#v", d)
+	}
+}
+
+func TestCompleteVoiceReceiptClaimsDelivery(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	w.queueMedia(context.Background(), c, in, companion.GeneratedMedia{ID: "complete-voice", Kind: "voice", Title: "complete.wav"})
+	n.status.State, n.status.ServerID = "accepted", "parent-receipt"
+	n.status.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: "chunk-0"}, {Index: 1, State: "accepted", HasReceipt: true, ServerID: "chunk-1"}}
+	d := w.runtime.Media[0]
+	d.Next = time.Time{}
+	w.reconcileMedia(context.Background())
+	if d.State != "accepted" || d.Reason != "media_server_accepted" || n.sends != 1 {
+		t.Fatalf("complete voice receipt was not accepted: %#v sends=%d", d, n.sends)
+	}
+}
+
 type mediaFake struct {
 	onStatus   func()
 	lookupErrs []error
@@ -118,13 +148,24 @@ func (n *mediaFake) LookupSend(_ context.Context, key string) (linuxnative.ToolS
 	if !n.keys[key] {
 		return linuxnative.ToolStatus{}, linuxnative.ErrToolNotFound
 	}
-	return n.status, nil
+	return n.receiptStatus(), nil
 }
 func (n *mediaFake) ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error) {
 	if n.onStatus != nil {
 		n.onStatus()
 	}
-	return n.status, nil
+	return n.receiptStatus(), nil
+}
+
+// Older media fixtures modelled only the job-level receipt. Keep those
+// synthetic fixtures usable while production code requires the native voice
+// chunk receipts before declaring a voice delivery accepted.
+func (n *mediaFake) receiptStatus() linuxnative.ToolStatus {
+	s := n.status
+	if s.State == "accepted" && s.ServerID != "" && len(s.VoiceChunks) == 0 {
+		s.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: s.ServerID}}
+	}
+	return s
 }
 func TestUpdateDrainWaitsForMediaWithoutCancellingOrTakingNewInbox(t *testing.T) {
 	w, n, c, in := mediaWorker(t)
@@ -614,7 +655,9 @@ func TestMediaRetryUsesOriginalJobPreservesReceiptAndWaits(t *testing.T) {
 	}
 	n.status.State = "accepted"
 	n.status.ServerID = "123"
+	n.status.VoiceChunks[0].ServerID = "chunk-0"
 	n.status.VoiceChunks[1].State = "accepted"
+	n.status.VoiceChunks[1].ServerID = "chunk-1"
 	n.status.VoiceChunks[1].HasReceipt = true
 	d.Next = time.Time{}
 	w.reconcileMedia(context.Background())
@@ -791,7 +834,7 @@ func TestCrossReceiptJournalOverridesStaleWorkerWithoutNativeResend(t *testing.T
 	// Do not depend on native remembering its key or permission staying enabled.
 	w.config.MediaSeedAllowed = func(MediaSeed) bool { return false }
 	w.config.MediaSeedReceipt = func(trace, key string) (linuxnative.ToolStatus, bool) {
-		return linuxnative.ToolStatus{ID: "verified-job", ThreadID: in.Thread, SourceID: seed.SourceID, State: "accepted", ServerID: "verified-receipt"}, trace == seed.Trace && key == seed.Key
+		return linuxnative.ToolStatus{ID: "verified-job", ThreadID: in.Thread, SourceID: seed.SourceID, State: "accepted", ServerID: "verified-receipt", VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: "verified-receipt"}}}, trace == seed.Trace && key == seed.Key
 	}
 	settled := 0
 	w.config.MediaSeedSettled = func(trace, key string, s linuxnative.ToolStatus) error { settled++; return nil }
@@ -817,10 +860,11 @@ func TestAcceptedStatusWithoutReceiptDoesNotCompleteMedia(t *testing.T) {
 	n.status.ServerID = ""
 	d.Next = time.Time{}
 	w.reconcileMedia(context.Background())
-	if d.State == "accepted" || d.Reason != "media_receipt_id_missing" {
+	if d.State == "accepted" || d.State != "checking_receipt" {
 		t.Fatal("unverified accepted status treated as delivered", d)
 	}
 	n.status.ServerID = "late-receipt"
+	n.status.VoiceChunks = []linuxnative.VoiceChunkStatus{{Index: 0, State: "accepted", HasReceipt: true, ServerID: "chunk-0"}}
 	d.Next = time.Time{}
 	w.reconcileMedia(context.Background())
 	if d.State != "accepted" || n.sends != 1 {
@@ -977,5 +1021,24 @@ func TestScopedMediaStopDuringUploadDiscardsLateStaging(t *testing.T) {
 	w.queueMedia(t.Context(), c, in, media)
 	if n.sends != 0 || n.cancels != 0 || w.runtime.Media[0].State != "stopped" {
 		t.Fatal("stopping during staging submitted a native job", n.sends, n.cancels, w.runtime.Media[0].State)
+	}
+}
+
+func TestAcknowledgedCancellationDoesNotBlockUnrelatedMedia(t *testing.T) {
+	w, _, _, _ := mediaWorker(t)
+	old := &mediaDelivery{Trace: "old-file", Input: companion.Input{Thread: "filehelper"}, State: "cancelling", Status: linuxnative.ToolStatus{State: "needs_review", CancelRequested: true}}
+	next := &mediaDelivery{Trace: "new-video", Input: companion.Input{Thread: "filehelper"}, State: "prepared"}
+	w.runtime.Media = []*mediaDelivery{old, next}
+	if _, blocked := w.mediaPredecessor(1, next); blocked {
+		t.Fatal("cancel receipt froze unrelated transfer")
+	}
+	next.Trace = old.Trace
+	if _, blocked := w.mediaPredecessor(1, next); !blocked {
+		t.Fatal("uncertain same batch overtaken")
+	}
+	next.Trace = "new-video"
+	old.Status.CancelRequested = false
+	if _, blocked := w.mediaPredecessor(1, next); !blocked {
+		t.Fatal("live upload was overtaken")
 	}
 }

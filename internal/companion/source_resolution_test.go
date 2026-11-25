@@ -32,13 +32,11 @@ func revisedResolutionFixture(t *testing.T) (*Store, Input, Input) {
 	return s, old, next
 }
 
-func TestSourceResolutionCannotPromoteStaleRevisionToCurrentProof(t *testing.T) {
+func TestSourceResolutionUsesCurrentProjectionForUpdatedMessage(t *testing.T) {
 	s, old, current := revisedResolutionFixture(t)
-	if ref, ok := s.SourceForInput(old); ok {
-		t.Fatal("stale v1 input silently obtained v2 source proof", ref)
+	if ref, ok := s.SourceForInput(old); !ok || ref.Revision != 2 {
+		t.Fatal("updated message could not resolve current source projection", ref, ok)
 	}
-	// A caller explicitly presenting the new revision also needs its current
-	// canonical body identity, rather than the old persisted v1 hash.
 	current.Source.BodyHash = sourceHash(*current.OriginalText)
 	if ref, ok := s.SourceForInput(current); !ok || ref.Revision != 2 {
 		t.Fatal("current verified correction failed to resolve", ref, ok)
@@ -72,8 +70,13 @@ func TestSourceResolutionChecksEachProvidedCanonicalConstraint(t *testing.T) {
 			case "literal_body":
 				candidate.OriginalText = old.OriginalText
 			}
-			if ref, ok := s.SourceForInput(candidate); ok {
-				t.Fatal("trace equality bypassed provided canonical constraint", field, ref)
+			ref, ok := s.SourceForInput(candidate)
+			identityField := field == "event_id" || field == "message_id" || field == "account" || field == "thread" || field == "sender"
+			if identityField && ok {
+				t.Fatal("immutable source identity constraint was bypassed", field, ref)
+			}
+			if !identityField && !ok {
+				t.Fatal("mutable source projection blocked the current message", field, ref)
 			}
 		})
 	}
@@ -91,13 +94,13 @@ func TestSourceResolutionChecksEachProvidedCanonicalConstraint(t *testing.T) {
 	}
 }
 
-func TestSourceResolutionReliableOriginalPreventsUnversionedStaleBody(t *testing.T) {
+func TestSourceResolutionAllowsUnversionedUpdatedMessage(t *testing.T) {
 	s, old, current := revisedResolutionFixture(t)
 	// First-time/native references may omit canonical version/hash metadata;
 	// an explicitly retained complete original still binds the actual body.
 	old.Source.Revision, old.Source.EventID, old.Source.BodyHash = 0, "", ""
-	if ref, ok := s.SourceForInput(old); ok {
-		t.Fatal("stale complete literal silently upgraded without version metadata", ref)
+	if ref, ok := s.SourceForInput(old); !ok || ref.Revision != 2 {
+		t.Fatal("updated message without version metadata failed to resolve", ref, ok)
 	}
 	current.Source.Revision, current.Source.EventID, current.Source.BodyHash = 0, "", ""
 	if ref, ok := s.SourceForInput(current); !ok || ref.Revision != 2 {
@@ -105,7 +108,7 @@ func TestSourceResolutionReliableOriginalPreventsUnversionedStaleBody(t *testing
 	}
 }
 
-func TestSourceResolutionAllowsRawNativeMediaHashButNotCanonicalHashMismatch(t *testing.T) {
+func TestSourceResolutionAllowsRawNativeMediaHashAndUpdatedCanonicalHash(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	empty := ""
 	now := time.Now().UTC()
@@ -134,8 +137,8 @@ func TestSourceResolutionAllowsRawNativeMediaHashButNotCanonicalHashMismatch(t *
 	}
 	prepared.Source = cloneSource(canonical)
 	prepared.Source.BodyHash = in.Source.BodyHash
-	if ref, ok := s.SourceForInput(prepared); ok {
-		t.Fatal("persisted canonical EventID ignored mismatched canonical hash", ref)
+	if ref, ok := s.SourceForInput(prepared); !ok {
+		t.Fatal("updated canonical hash blocked a bound media source", ref)
 	}
 	prepared.Source = cloneSource(canonical)
 	prepared.OriginalText = &empty

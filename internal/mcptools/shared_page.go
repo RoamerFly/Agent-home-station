@@ -17,9 +17,14 @@ var shareMetaTag = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
 var shareMetaAttr = regexp.MustCompile(`(?is)([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 var shareTitle = regexp.MustCompile(`(?is)<title\b[^>]*>(.*?)</title>`)
 
-// A general public-page fallback. A title, an app-launch shell or an embedded
-// player URL is never accepted as evidence of watching a video.
-func ReadPublicShare(ctx context.Context, raw string, limit int64, videoRequired bool) (PublicShare, error) {
+// ReadPublicShareViaHostReader is the host-owned public-share compatibility
+// facade.  Callers in an application worker use this facade rather than the
+// legacy resolver symbol directly; the facade keeps the common page/media
+// validation in one place while the installed share-reader package remains
+// the preferred resolver for authenticated/received-share paths.
+// A title, an app-launch shell or an embedded player URL is never accepted as
+// evidence of watching a video.
+func ReadPublicShareViaHostReader(ctx context.Context, raw string, limit int64, videoRequired bool) (PublicShare, error) {
 	var out PublicShare
 	if len(raw) > 8192 || validPublicURL(raw) != nil || limit < 1 || limit > 64<<20 {
 		return out, &WebError{Code: "invalid_url"}
@@ -84,6 +89,12 @@ func ReadPublicShare(ctx context.Context, raw string, limit int64, videoRequired
 	}
 	out.Kind, out.Text = "page", trimBytes(body, 14000)
 	return out, nil
+}
+
+// ReadPublicShare remains for older isolated callers and tests. New host
+// workers must call ReadPublicShareViaHostReader so the boundary is explicit.
+func ReadPublicShare(ctx context.Context, raw string, limit int64, videoRequired bool) (PublicShare, error) {
+	return ReadPublicShareViaHostReader(ctx, raw, limit, videoRequired)
 }
 
 func parseSharedHTML(data []byte, base string) (string, string, []string) {

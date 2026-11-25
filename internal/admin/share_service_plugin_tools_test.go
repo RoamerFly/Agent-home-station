@@ -87,7 +87,15 @@ func TestShareFacadeProjectionNeverLeaksResolverOrClaimsObservation(t *testing.T
 func TestShareServiceAvailabilityDoesNotRequireBridgeConfiguration(t *testing.T) {
 	f, p := trustedAgent(t)
 	_, store, _, _ := shareBindingFixtureFor(t, "test", shareServicePluginID, true)
+	f.manager.packageMu.Lock()
+	previous := f.manager.packages
 	f.manager.packages = store
+	f.manager.packageMu.Unlock()
+	if previous != nil && previous != store {
+		if err := previous.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if !p.shareServiceCapabilityAvailable(context.Background()) {
 		t.Fatal("installed share reader hidden without bridge credentials")
 	}
@@ -108,7 +116,7 @@ func TestExplicitShareActorIsDistinctFromUploaderAndRevokesBeforeProvider(t *tes
 		t.Fatal(err)
 	}
 	inv := policy.invocation()
-	if inv.Requester != "alice" || inv.OriginSourceSender != native.msg.SenderID || inv.RequestThread != native.msg.ThreadID || inv.Requester == inv.OriginSourceSender {
+	if inv.Requester != "alice" || policy.message.SenderID != native.msg.SenderID || policy.actor.requestThread != native.msg.ThreadID || inv.Requester == policy.message.SenderID {
 		t.Fatalf("actor/source provenance collapsed: %+v", inv)
 	}
 	// Change the authenticated tool turn before any provider callback. Check

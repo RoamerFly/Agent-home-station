@@ -36,6 +36,36 @@ func TestKuaishouAcceptsFileBudgetWithoutUnsupportedPageError(t *testing.T) {
 	}
 }
 
+func TestKuaishouPageUsesMobileSSRUserAgent(t *testing.T) {
+	const id = "3xsynthetic12345"
+	page := map[string]any{"photo-state": map[string]any{"photo": map[string]any{
+		"share_info": "userId=3xauthor&photoId=" + id,
+		"caption":    "synthetic mobile SSR video",
+		"duration":   97133,
+		"mainMvUrls": []any{map[string]any{"url": "https://synthetic.djvod.ndcimgs.com/video.mp4"}},
+	}}}
+	body, _ := json.Marshal(page)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if !strings.Contains(r.Header.Get("User-Agent"), "iPhone") {
+			_, _ = w.Write([]byte(`{"result":2,"error_msg":null}`))
+			return
+		}
+		_, _ = w.Write(append([]byte("<script>window.INIT_STATE = "), body...))
+	}))
+	defer srv.Close()
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}}
+	defer transport.CloseIdleConnections()
+	ctx := context.WithValue(context.Background(), publicSessionKey{}, &publicReadSession{Transport: transport})
+	video, err := DownloadPublicVideoPage(ctx, "http://v.m.chenzhongtech.com/fw/photo/"+id, 512<<20)
+	if err != nil || !video.LinkOnly || video.DurationMS != 97133 || requests != 1 || video.Title != "synthetic mobile SSR video" {
+		t.Fatal("mobile SSR request did not recover exact Kuaishou work", video, err, requests)
+	}
+}
+
 func TestKuaishouUsesExactReceivedPhotoAndBoundedReferences(t *testing.T) {
 	id := "3xsynthetic12345"
 	state := map[string]any{"defaultClient": map[string]any{
@@ -100,5 +130,31 @@ func TestKuaishouNewCDNAndExactPhotoBackupURLs(t *testing.T) {
 	_, urls, err = parseKuaishouPhoto(makePage("https://unavailable.invalid/no.mp4", []string{backup}), id)
 	if err != nil || len(urls) != 1 || urls[0] != backup {
 		t.Fatal("valid backup lost when primary is unavailable", urls, err)
+	}
+}
+
+func TestKuaishouInitStateFallbackReadsExactPhoto(t *testing.T) {
+	id := "3xsynthetic12345"
+	state := map[string]any{
+		"photo-state": map[string]any{
+			"photo": map[string]any{
+				"share_info": "userId=3xauthor&photoId=" + id,
+				"caption":    "synthetic init-state video",
+				"duration":   97133,
+				"mainMvUrls": []any{map[string]any{"url": "https://synthetic.djvod.ndcimgs.com/video.mp4?init=1"}},
+				"manifest": map[string]any{"adaptationSet": []any{map[string]any{
+					"representation": []any{map[string]any{"backupUrl": []any{"https://synthetic.kwaicdn.com/video.mp4?init=2"}}},
+				}}},
+			},
+		},
+	}
+	b, _ := json.Marshal(state)
+	body := append([]byte("<script>window.INIT_STATE = "), b...)
+	p, urls, err := parseKuaishouPhoto(body, id)
+	if err != nil || p.ID != id || p.Duration != 97133 || len(urls) != 2 {
+		t.Fatal(p, urls, err)
+	}
+	if urls[0] != "https://synthetic.djvod.ndcimgs.com/video.mp4?init=1" || urls[1] != "https://synthetic.kwaicdn.com/video.mp4?init=2" {
+		t.Fatal("unexpected init-state media URLs", urls)
 	}
 }

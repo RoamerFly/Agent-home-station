@@ -9,7 +9,7 @@ class VocalWindowTests(unittest.TestCase):
             source=np.arange(size,dtype=np.float32);lengths=[];progress=[]
             def converter(part):lengths.append(len(part));return 16000,part
             rate,result=convert_vocal_windows(source,converter,progress=progress.append)
-            self.assertEqual(rate,16000);np.testing.assert_array_equal(result,source)
+            self.assertEqual(rate,16000);np.testing.assert_allclose(result,source,rtol=0,atol=.001)
             self.assertTrue(all(n==16000*10 for n in lengths))
             self.assertEqual(progress[-1]['completed_samples'],size)
 
@@ -41,6 +41,16 @@ class VocalWindowTests(unittest.TestCase):
         rates=iter([32000,40000])
         with self.assertRaisesRegex(ValueError,'sample_rate_changed'):
             convert_vocal_windows(np.zeros(16000*10),lambda x:(next(rates),np.zeros(16000*30)))
+
+    def test_crossfade_smooths_independently_rendered_window_seam(self):
+        source=np.zeros(16000*17,dtype=np.float32)
+        calls=iter([0,1,2])
+        def convert(part):return 16000,np.full(len(part),next(calls),dtype=np.float32)
+        _,output=convert_vocal_windows(source,convert,crossfade_seconds=.08)
+        self.assertEqual(len(output),len(source))
+        self.assertLess(abs(output[8*16000]-output[8*16000-1]),.001)
+        self.assertGreater(output[8*16000],.49)
+        self.assertLess(output[8*16000],.51)
 
 
 if __name__=='__main__':unittest.main()

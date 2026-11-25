@@ -295,6 +295,11 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 503, "微信冲浪设置暂不可读或保存")
 	default:
 		state.LastKey, state.LastRequest = "", ""
+		var managedByLegacy *bool
+		if !writing {
+			value := os.Getenv("AHS_LEGACY_WECHAT") == "1"
+			managedByLegacy = &value
+		}
 		var continuation *surfActionSummary
 		if s.localChat != nil && s.localChat.surfActions != nil && s.ownerReader != nil {
 			if owner, err := s.ownerReader(); err == nil {
@@ -305,8 +310,9 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 			stationSurfSchedule
 			PublicReaderReady        bool               `json:"public_reader_ready"`
 			ApplicationReaderReady   bool               `json:"application_reader_ready"`
+			ManagedByLegacy          *bool              `json:"managed_by_legacy,omitempty"`
 			InteractionContinuations *surfActionSummary `json:"interaction_continuations,omitempty"`
-		}{state, ready && state.Settings.hasPublicSources(), appReady, continuation})
+		}{state, ready && state.Settings.hasPublicSources(), appReady, managedByLegacy, continuation})
 	}
 }
 

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -9,12 +10,113 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler
-from managed_music_runner import command
-from managed_music_service import comfy_memory_arguments
+from managed_music_runner import command, managed_public_root
+from managed_music_service import comfy_memory_arguments, external_comfy_url, managed_account_workspace, registered_comfy_command, yue_project_paths
 from music_unix_client import open_request
 
 
 class MusicMemoryPolicyTests(unittest.TestCase):
+    def test_workspace_accepts_bound_release_account_and_legacy_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            workspace = root / "data/workspaces/home"
+            private = workspace.parent / "wechat"
+            workspace.mkdir(parents=True)
+            private.mkdir()
+            scope = hashlib.sha256(b"test-account").hexdigest()
+            identity = {"account_id": "test-account", "scope": scope, "directory": "old-readable-name"}
+            (private / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            self.assertEqual(managed_account_workspace(workspace, private), private)
+            legacy = workspace / "pri_workspace" / scope
+            legacy.mkdir(parents=True)
+            self.assertEqual(managed_account_workspace(workspace, legacy), legacy)
+
+            other = root / "other/workspaces/wechat"
+            other.mkdir(parents=True)
+            (other / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "music_account_directory_required"):
+                managed_account_workspace(workspace, other)
+            identity["scope"] = "0" * 64
+            (private / "account.json").write_text(json.dumps(identity), encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "music_account_directory_required"):
+                managed_account_workspace(workspace, private)
+
+    def test_yue_paths_use_relocated_package_workflows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            public = root / 'public-package'
+            controls = root / 'controls'
+            (public / 'runtime/comfy/ComfyUI').mkdir(parents=True)
+            (public / 'runtime/comfy/ComfyUI/main.py').write_text('# synthetic', encoding='utf8')
+            workflows = public / 'workflows'
+            workflows.mkdir()
+            for name in ('audio_yue2_text_to_music.json', 'audio_yue2_music_cover.json'):
+                (workflows / name).write_text('{}', encoding='utf8')
+            shipped = controls / 'workflows'
+            shipped.mkdir(parents=True)
+            for name in ('audio_yue2_text_to_music.json', 'audio_yue2_music_cover.json'):
+                (shipped / name).write_text('wrong package', encoding='utf8')
+            project, selected = yue_project_paths(public, controls)
+            self.assertEqual(project, public / 'runtime')
+            self.assertEqual(selected, workflows)
+
+    def test_registered_child_uses_pinned_runtime_and_private_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            runtime = root / 'runtime'; runtime.mkdir()
+            for name in ('python.exe', 'main.py'):
+                (runtime / name).write_bytes(b'synthetic')
+            (runtime / 'frontend').mkdir(); (root / 'models').mkdir()
+            manifest = {'schema_version': 1, 'policy': 'station-yue-v1',
+                        'files': {name: hashlib.sha256(b'synthetic').hexdigest() for name in ('python.exe', 'main.py')}}
+            (runtime / 'manifest.json').write_text(json.dumps(manifest))
+            config = {'schema_version': 1, 'enabled': True, 'runtime': str(runtime),
+                      'python': 'python.exe', 'entry': 'main.py', 'frontend': 'frontend',
+                      'manifest': 'manifest.json', 'models': str(root / 'models'), 'device': 'cpu'}
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(config))
+            argv = registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            self.assertEqual(argv[argv.index('--port') + 1], '6193')
+            self.assertEqual(argv[argv.index('--output-directory') + 1], str(root / 'private/output'))
+            self.assertIn('--cpu', argv)
+            (runtime / 'main.py').write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'digest_changed'):
+                registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            config['entry'] = '../outside.py'; registration.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, 'path_invalid'):
+                registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+
+    def test_registered_child_accepts_windows_relative_members_and_manifest_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            runtime = root / 'runtime'; runtime.mkdir()
+            (runtime / 'python.exe').write_bytes(b'python')
+            (runtime / 'ComfyUI').mkdir()
+            (runtime / 'ComfyUI' / 'main.py').write_bytes(b'entry')
+            (runtime / 'frontend').mkdir(); (root / 'models').mkdir()
+            manifest = {'schema_version': 1, 'policy': 'station-yue-v1',
+                        'files': {'python.exe': hashlib.sha256(b'python').hexdigest(),
+                                  r'ComfyUI\main.py': hashlib.sha256(b'entry').hexdigest()}}
+            (runtime / 'manifest.json').write_text(json.dumps(manifest), encoding='utf8')
+            config = {'schema_version': 1, 'enabled': True, 'runtime': str(runtime),
+                      'python': r'python.exe', 'entry': r'ComfyUI\main.py', 'frontend': r'frontend',
+                      'manifest': r'manifest.json', 'models': str(root / 'models'), 'device': 'cpu'}
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(config), encoding='utf8')
+            argv = registered_comfy_command(registration, 'http://127.0.0.1:6193', root / 'private')
+            self.assertEqual(Path(argv[0]), runtime / 'python.exe')
+            self.assertEqual(Path(argv[3]), runtime / 'ComfyUI' / 'main.py')
+
+    def test_registered_public_tool_root_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'rvc-换声'
+            (root / 'runtime').mkdir(parents=True)
+            (root / 'plugin.json').write_text(json.dumps({'id': 'rvc'}), encoding='utf8')
+            self.assertEqual(managed_public_root(root), root.resolve())
+            (root / 'plugin.json').write_text('{}', encoding='utf8')
+            with self.assertRaisesRegex(ValueError, 'manifest_invalid'):
+                managed_public_root(root)
+
     def test_device_selection_is_not_forced_to_cpu_by_default(self):
         self.assertEqual(comfy_memory_arguments('auto'), [])
         self.assertEqual(comfy_memory_arguments('normal'), ['--normalvram'])
@@ -24,6 +126,15 @@ class MusicMemoryPolicyTests(unittest.TestCase):
         self.assertEqual(comfy_memory_arguments('auto'), [])
         with self.assertRaisesRegex(ValueError, 'invalid_music_vram_mode'):
             comfy_memory_arguments('--gpu-only --cpu')
+
+    def test_external_comfy_url_is_registered_loopback_only(self):
+        self.assertEqual(external_comfy_url(None), None)
+        self.assertEqual(external_comfy_url('http://127.0.0.1:6191'), 'http://127.0.0.1:6191')
+        for value in ('http://localhost:6191', 'http://192.168.1.2:6191',
+                      'https://127.0.0.1:6191', 'http://127.0.0.1:80',
+                      'http://127.0.0.1:6191/path'):
+            with self.assertRaises(ValueError):
+                external_comfy_url(value)
 
 
 @unittest.skipUnless(sys.platform == "linux" and shutil.which("bwrap"), "Linux Bubblewrap integration")

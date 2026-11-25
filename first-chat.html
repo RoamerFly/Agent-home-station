@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>首次配置与第一条回复 · 微信 Agent</title><style>
+:root{color-scheme:light dark;font:17px/1.75 system-ui,sans-serif}
+body{max-width:72rem;margin:auto;padding:1.5rem;color:CanvasText;background:Canvas}
+header{border-bottom:1px solid GrayText;padding-bottom:.7rem}main{display:grid;grid-template-columns:12rem minmax(0,1fr);gap:2rem}
+nav{margin-top:1.4rem}nav a{display:block;padding:.3rem}article{max-width:54rem;overflow-wrap:anywhere}
+a{color:LinkText}a[aria-current]{font-weight:bold}pre,table{display:block;overflow-x:auto}
+pre{padding:1rem;background:color-mix(in srgb,CanvasText 7%,Canvas)}th,td{padding:.4rem;text-align:left;border-bottom:1px solid GrayText}
+@media(max-width:720px){body{padding:1rem}main{display:block}nav a{display:inline-block;margin-right:.5rem}}
+</style><header>大肥鱼 · 微信 Agent　<a href="https://github.com/RoamerFly/wechat-agent">GitHub</a></header><main><nav aria-label="手册目录"><a href="index.html">大肥鱼使用手册</a><a href="installation.html">安装与启动</a><a href="first-chat.html" aria-current="page">首次配置与第一条回复</a><a href="conversations.html">群聊、偏好与记忆</a><a href="artifacts.html">实战：附件转 PDF 与私人声线</a><a href="plugins.html">插件选择、安装与开发</a><a href="operations.html">排障、更新与数据维护</a></nav><article><h1 id="_1">首次配置与第一条回复</h1>
+<h2 id="1">1. 确定当前账号</h2>
+<p>打开桌面管理页，在顶部账号选择器选中要配置的微信账号。进入设置中的微信账号页，点击 <strong>扫码登录此账号</strong>，在手机微信完成确认。回到管理页检查当前账号显示微信在线。若手机提示“登录 Linux 电脑”，这是当前协议的设备标识，Windows 原生版仍在本机 Windows 上运行。</p>
+<p>多账号部署每次修改前都先看顶部账号名称。某个账号扫码成功，不能证明其他账号已连接。新安装也不会自动继承官方桌面微信的历史消息。</p>
+<h2 id="2">2. 连接模型</h2>
+<p>在 <strong>设置 → 模型与语音</strong> 选择服务商，填写接口地址和该账号使用的 API Key，保存并应用。获取模型列表后，从下拉框选服务端实际提供的模型；列表获取失败时检查地址和鉴权。不要把 Key 粘贴进微信群、群备注或问题报告。</p>
+<p>若启用思考，选择服务商支持的强度，保存后回读模型名称与思考设置。获取列表只查询模型目录；“测试模型连接”会实际调用 API，费用按提供商计量。模型能连接后再开启自动回复，避免把鉴权失败误判成群聊保持安静。</p>
+<h2 id="3">3. 用一个会话验证</h2>
+<ol>
+<li>在会话页选一个有测试授权的私聊，配置允许回复的范围。若先用群聊，选择一个测试群，并让测试者真正 @ 机器人。</li>
+<li>保存会话规则，在管理页启动 Agent。确认微信在线、模型已配置、Agent 运行中三项同时成立。</li>
+<li>在刚授权的会话发送“请用一句话回复：测试收到”。在活动页按今天的日期和该会话查看执行回合。</li>
+<li>查看接收、判断和投递结果。文字已生成但没有回执时，先按 <a href="operations.html">排障与维护</a> 核对原任务。看到微信已接受后再由接收方检查内容。</li>
+</ol>
+<p>如果不再需要这个测试会话，回到会话页收回其授权。暂停 Agent 与退出微信登录是两个操作，短暂停止回复可使用暂停按钮。</p>
+<p>下一步：<a href="conversations.html">给不同群设置偏好</a></p></article></main></html>

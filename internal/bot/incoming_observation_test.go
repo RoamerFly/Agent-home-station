@@ -195,3 +195,25 @@ func TestPackObservationSeparatesTypedPartsButPreservesLegacyBody(t *testing.T) 
 		t.Fatal("typed card duplicated or claimed firsthand observation", typed)
 	}
 }
+
+func TestPrivateMediaReadBeforeEvidenceSnapshot(t *testing.T) {
+	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) { return `{"action":"silent"}`, nil }))
+	e.Tools = &backgroundCapabilityProbe{}
+	w.enableGenerations()
+	defer w.closeGenerations()
+	w.config.Options.ReadImages = true
+	w.config.Options.ReadVideos = true
+	for _, typ := range []int{3, 47, 43, 49, 34} {
+		m := fixtureMessage("private-media", "filehelper", "", "incoming")
+		m.Type = typ
+		if !w.readMediaBeforeDecision(m) {
+			t.Fatalf("private attachment %d left to mutate model snapshot", typ)
+		}
+	}
+	w.config.Options.ReadVideos = false
+	m := fixtureMessage("disabled-video", "filehelper", "", "incoming")
+	m.Type = 43
+	if w.readMediaBeforeDecision(m) {
+		t.Fatal("disabled reader started")
+	}
+}

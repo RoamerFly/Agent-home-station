@@ -40,6 +40,23 @@ func TestUsageIncludesBilledInvalidAnswerAndUnknownAttempts(t *testing.T) {
 	}
 }
 
+func TestNestedUsageObserversReceiveOneProviderAttemptEach(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"usage":{"prompt_tokens":12,"completion_tokens":3},"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	outer, inner, ledger := 0, 0, 0
+	c := &Client{endpoint: server.URL, http: server.Client(), onUsage: func(Usage) { ledger++ }}
+	ctx := WithUsageObserver(context.Background(), func(Usage) { outer++ })
+	ctx = WithUsageObserver(ctx, func(Usage) { inner++ })
+	if _, err := c.requestOnce(ctx, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if outer != 1 || inner != 1 || ledger != 1 {
+		t.Fatalf("provider attempt counted more than once: outer=%d inner=%d ledger=%d", outer, inner, ledger)
+	}
+}
+
 type balanceTransport func(*http.Request) (*http.Response, error)
 
 func (f balanceTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

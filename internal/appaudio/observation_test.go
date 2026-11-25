@@ -29,7 +29,7 @@ func syntheticMedia(t *testing.T, format string, audioSeconds float64) []byte {
 	if audioSeconds > 0 {
 		args = append(args, "-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=440:sample_rate=16000:duration=%.3f", audioSeconds))
 	}
-	video, audio := "libx264", "aac"
+	video, audio := "mpeg4", "aac"
 	if format == "webm" {
 		video, audio = "libvpx", "libopus"
 	}
@@ -195,7 +195,7 @@ func TestReadAudioErrorsDoNotBecomeNoSpeechAndCleanPrivateFiles(t *testing.T) {
 
 func TestReadAudioRejectsChangedSourceAndInvalidLimits(t *testing.T) {
 	media := syntheticMedia(t, "mp4", 3)
-	in := requestFor(t, media, "video/mp4; codecs=avc1")
+	in := requestFor(t, media, "video/mp4; codecs=mp4v.20.1")
 	in.Limit = 1
 	first, err := Read(t.Context(), in, allowed, textTranscriber)
 	if err != nil || first.NextCursor == "" {

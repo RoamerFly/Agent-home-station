@@ -101,6 +101,16 @@ func TestLiveMusicPreparationOfficialPackageBoundOutputs(t *testing.T) {
 	if json.Unmarshal(raw, &body) != nil || body["voice_profile_id"] != "registered-rvc" || body["reference_source_sha256"] != strings.Repeat("a", 64) || body["reference_base64"] != base64.StdEncoding.EncodeToString([]byte("synthetic-reference")) || body["reference_pretrimmed"] != true {
 		t.Fatal("RVC preparation changed selected profile/source/audio", string(raw))
 	}
+	tuning := json.RawMessage(`{"index_rate":0.45,"protect":0.25,"rms_mix_rate":0.3,"filter_radius":0,"vocal_input_gain_db":-6,"true_peak_db":-1}`)
+	prepared, err = access.prepareRVCRequest(t.Context(), healthV12, "合成夹具", "registered-rvc", strings.Repeat("a", 64), 1.25, 8.5, []byte("synthetic-reference"), tuning)
+	if err != nil {
+		t.Fatal("official tuned RVC preparation", err)
+	}
+	raw, _ = json.Marshal(prepared)
+	body = nil
+	if json.Unmarshal(raw, &body) != nil || body["rvc_parameters"] == nil {
+		t.Fatal("RVC preparation lost requested tuning", string(raw))
+	}
 
 	status := map[string]any{"id": "job-1", "engine": "yue", "state": "failed"}
 	var plan struct {

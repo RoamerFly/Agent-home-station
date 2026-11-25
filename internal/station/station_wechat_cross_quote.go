@@ -98,6 +98,11 @@ func findStationCrossQuote(ctx context.Context, worker *stationWechatWorker, mes
 }
 
 func (t *stationAttachmentTools) protectCrossReply(ctx context.Context, message linuxnative.Message) bool {
+	if message.Type == 10000 && (message.Direction == "" || message.Direction == "system") {
+		// The service may remove the direction when replacing a recalled row.
+		// Still look for an outgoing private delivery by its preserved server ID.
+		message.Direction = "outgoing"
+	}
 	if t.crossHost == nil || message.Direction != "outgoing" || strings.HasSuffix(message.ThreadID, "@chatroom") {
 		return false
 	}

@@ -13,22 +13,26 @@ import (
 )
 
 type inboxItem struct {
-	Backlog          bool                              `json:"backlog,omitempty"`
-	BacklogParent    string                            `json:"backlog_parent,omitempty"`
-	FollowupParent   string                            `json:"followup_parent,omitempty"`
-	FollowupConsumed bool                              `json:"followup_consumed,omitempty"`
-	OwnerModelReview bool                              `json:"owner_model_review,omitempty"`
-	ReceivedRecorded bool                              `json:"received_recorded,omitempty"`
-	AggregateUntil   time.Time                         `json:"aggregate_until,omitempty"`
-	CollectedAt      time.Time                         `json:"collected_at,omitempty"`
-	ToolStarted      bool                              `json:"tool_started,omitempty"`
-	Event            linuxnative.Event                 `json:"event"`
-	Phase            string                            `json:"phase"`
-	Updated          time.Time                         `json:"updated"`
-	RetryAfter       time.Time                         `json:"retry_after,omitempty"`
-	RecoveryTools    []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
-	RecoveryEvidence *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
-	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
+	Backlog                  bool                              `json:"backlog,omitempty"`
+	BacklogParent            string                            `json:"backlog_parent,omitempty"`
+	BacklogRecoveryAttempted bool                              `json:"backlog_recovery_attempted,omitempty"`
+	FollowupParent           string                            `json:"followup_parent,omitempty"`
+	FollowupConsumed         bool                              `json:"followup_consumed,omitempty"`
+	OwnerModelReview         bool                              `json:"owner_model_review,omitempty"`
+	ReceivedRecorded         bool                              `json:"received_recorded,omitempty"`
+	AggregateUntil           time.Time                         `json:"aggregate_until,omitempty"`
+	CollectedAt              time.Time                         `json:"collected_at,omitempty"`
+	ToolStarted              bool                              `json:"tool_started,omitempty"`
+	Event                    linuxnative.Event                 `json:"event"`
+	Phase                    string                            `json:"phase"`
+	Updated                  time.Time                         `json:"updated"`
+	RetryAfter               time.Time                         `json:"retry_after,omitempty"`
+	ToolRetryAttempts        int                               `json:"tool_retry_attempts,omitempty"`
+	ToolRetryReason          string                            `json:"tool_retry_reason,omitempty"`
+	RecoveryTools            []companion.RecoveryToolResult    `json:"recovery_tools,omitempty"`
+	RecoveryEvidence         *companion.GenerationEvidence     `json:"recovery_evidence,omitempty"`
+	RecoveryPrivacy          *companion.RecoveryPrivacyBinding `json:"recovery_privacy,omitempty"`
+	ReplayNonce              string                            `json:"replay_nonce,omitempty"`
 }
 
 func (w *Worker) ownerModelReview(id string) bool {
@@ -44,6 +48,8 @@ func (w *Worker) ownerModelReview(id string) bool {
 
 type runtimeState struct {
 	SendGates    map[string]time.Time `json:"send_gates,omitempty"`
+	ClosedRounds map[string]bool      `json:"closed_rounds,omitempty"`
+	Recalls      []*recallIntent      `json:"recalls,omitempty"`
 	Wakes        []*conversationWake  `json:"conversation_wakes,omitempty"`
 	Plans        []*utterancePlan     `json:"utterance_plans,omitempty"`
 	Version      int                  `json:"version"`
@@ -99,6 +105,9 @@ func (w *Worker) queuePhase(id, phase string) {
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.Event.Data.MessageID == id {
+			if w.roundClosed(item.Event.Data.ThreadID, id) && phase != "completed" {
+				return
+			}
 			if item.Phase == phase && (phase == "sending" || phase == "replied" || phase == "needs_review" || phase == "stopped") {
 				return
 			}
@@ -208,8 +217,23 @@ func (w *Worker) loadRuntime(server string) error {
 			if p.Quote != nil {
 				p.Input.QuoteServerID = p.Quote.ServerID
 			}
+			// Older queues recorded every new message as an interruption. Retain
+			// only the original requester's explicit self-corrections before any
+			// persisted review can run after an upgrade.
+			if p.ReviewReason == "new_message" {
+				p.retainExplicitCorrections()
+				if p.State == "review_pending" && len(p.Updates) == 0 {
+					// Index is authoritative if a legacy return state is malformed.
+					if p.Index == len(p.Messages) {
+						p.State = "accepted"
+					} else {
+						p.State = "queued"
+					}
+					p.ReviewReason, p.ReviewReturnState = "", ""
+				}
+			}
 		}
-		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() || p.Input.Thread == "" || p.Slot < 0 {
+		if p == nil || len(p.Messages) < 1 || p.Index < 0 || p.Index > len(p.Messages) || p.Index == len(p.Messages) && !p.terminal() && !(p.State == "review_pending" && p.ReviewReason == "new_message" && p.ReviewReturnState == "accepted") || p.Input.Thread == "" || p.Slot < 0 {
 			return errors.New("persistent utterance plan invalid; retained")
 		}
 	}
@@ -218,7 +242,88 @@ func (w *Worker) loadRuntime(server string) error {
 			return errors.New("persistent media reply invalid; not discarded")
 		}
 	}
-	return nil
+	changed := false
+	legacyTasks := map[string]companion.Input{}
+	for _, closed := range w.config.ClosedRounds {
+		if closed.Thread == "" || closed.Trace == "" {
+			continue
+		}
+		found, tasks := w.stopRoundQueues(closed.Thread, closed.Trace)
+		for id, in := range tasks {
+			legacyTasks[id] = in
+		}
+		if w.roundClosed(closed.Thread, closed.Trace) && !found {
+			continue
+		}
+		if s.ClosedRounds == nil {
+			s.ClosedRounds = map[string]bool{}
+		}
+		s.ClosedRounds[roundKey(closed.Thread, closed.Trace)] = true
+		changed = true
+	}
+	if w.recoverSafeFailedBacklogs() {
+		changed = true
+	}
+	if changed {
+		if err := w.saveRuntime(); err != nil {
+			return err
+		}
+	}
+	for _, in := range legacyTasks {
+		w.finishAgentTask(in, "manual_completion")
+	}
+	return w.persistErr
+}
+
+// A failed offline model turn with no tool or delivery effects can be resumed
+// once after an upgrade/restart. Persist the attempt before generation starts,
+// so a repeatedly failing provider cannot create a restart loop.
+func (w *Worker) recoverSafeFailedBacklogs() bool {
+	if w.runtime == nil || w.config.Options == nil || !w.config.Options.RecoverBacklog {
+		return false
+	}
+	groups := map[string][]int{}
+	for i, item := range w.runtime.Inbox {
+		if item.Backlog && item.BacklogParent != "" && item.Phase == "failed" && !item.BacklogRecoveryAttempted && !item.Updated.IsZero() && time.Since(item.Updated) >= 0 && time.Since(item.Updated) <= 12*time.Hour {
+			key := roundKey(item.Event.Data.ThreadID, item.BacklogParent)
+			groups[key] = append(groups[key], i)
+		}
+	}
+	changed := false
+	for _, indices := range groups {
+		anchor := w.runtime.Inbox[indices[0]].BacklogParent
+		thread := w.runtime.Inbox[indices[0]].Event.Data.ThreadID
+		if w.roundClosed(thread, anchor) {
+			continue
+		}
+		anchorFound, safe := false, true
+		for _, item := range w.runtime.Inbox {
+			if item.Event.Data.ThreadID == thread && item.BacklogParent == anchor && (item.Phase != "failed" || item.BacklogRecoveryAttempted) {
+				safe = false
+				break
+			}
+		}
+		for _, index := range indices {
+			item := &w.runtime.Inbox[index]
+			anchorFound = anchorFound || item.Event.Data.MessageID == anchor
+			if item.ToolStarted || replayHasEffects(w.runtime, item.Event.Data.MessageID) || w.roundClosed(thread, item.Event.Data.MessageID) {
+				safe = false
+				break
+			}
+		}
+		if !anchorFound || !safe {
+			continue
+		}
+		for _, index := range indices {
+			item := &w.runtime.Inbox[index]
+			item.Phase, item.BacklogParent = "received", ""
+			item.BacklogRecoveryAttempted = true
+			item.RetryAfter = time.Time{}
+			item.Updated = time.Now().UTC()
+		}
+		changed = true
+	}
+	return changed
 }
 
 // Fix a group turn's deadline when its first receipt arrives. Later receipts
@@ -251,6 +356,9 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			return nil
 		}
 		item := &w.runtime.Inbox[i]
+		if w.roundClosed(item.Event.Data.ThreadID, item.Event.Data.MessageID) || item.BacklogParent != "" && w.roundClosed(item.Event.Data.ThreadID, item.BacklogParent) {
+			continue
+		}
 		if item.Backlog && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
 			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
 				return err
@@ -263,8 +371,15 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		if time.Now().Before(item.AggregateUntil) {
 			continue
 		}
+		if item.Phase == "waiting_tool_retry" {
+			item.Phase = "retrying_tool"
+			w.activity(Record{Event: "tool_retry_started", Category: "tool", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Tool: "share-reader", ToolStage: "observation", Status: "retrying_tool", Reason: item.ToolRetryReason, RetryAttempts: item.ToolRetryAttempts, Origin: "wechat"})
+			if err := w.saveRuntime(); err != nil {
+				return err
+			}
+		}
 		switch item.Phase {
-		case "received", "processing", "read_pending", "retrying_model":
+		case "received", "processing", "read_pending", "retrying_model", "retrying_tool":
 		default:
 			continue
 		}
@@ -311,6 +426,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	if err := w.loadRuntime(state.ServerID); err != nil {
 		return err
 	}
+	if err := w.drainReplayRequests(ctx); err != nil {
+		return err
+	}
+	if err := w.drainManualCompletions(ctx); err != nil {
+		return err
+	}
 	w.enableGenerations()
 	defer w.closeGenerations()
 	defer w.suspendMedia()
@@ -326,7 +447,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 			w.activity(Record{Event: "tool_task_interrupted", Category: "error", ThreadID: item.Event.Data.ThreadID, MessageID: item.Event.Data.MessageID, Reason: "tool_task_interrupted_not_replayed", Status: "interrupted"})
 			continue
 		}
-		if item.Phase == "model_running" {
+		// A process crash can persist processing before the generation actor
+		// records whether a tool was entered.  Leave no such item stranded in
+		// the UI.  Without a tool checkpoint it is safe to replay the model from
+		// the durable incoming message.  With one, the branch above preserves
+		// the no-replay boundary.
+		if item.Phase == "processing" || item.Phase == "model_running" {
 			item.Phase = "received"
 		}
 		if item.Phase != "sending" {
@@ -388,6 +514,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	}
 	peekedInterruptions := map[string]bool{}
 	for ctx.Err() == nil {
+		if err := w.drainReplayRequests(ctx); err != nil {
+			return err
+		}
+		if err := w.drainManualCompletions(ctx); err != nil {
+			return err
+		}
 		w.applyDeliveryCancellations()
 		if w.persistErr != nil {
 			return w.persistErr
@@ -425,6 +557,17 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 				if item.Event.Data.MessageID == event.Data.MessageID {
 					duplicate = true
 					break
+				}
+			}
+			if event.Kind == "message.committed" && event.Data.Origin == "local_send" && event.Data.MessageID != "" && !duplicate && w.hasPausedDelivery(event.Data.ThreadID) {
+				readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				message, readErr := w.source.Message(readCtx, event.Data.MessageID)
+				cancel()
+				if readErr == nil && message.ThreadID == event.Data.ThreadID && message.Direction == "outgoing" {
+					w.reconcilePausedOutgoing(ctx, message)
+					if w.persistErr != nil {
+						return w.persistErr
+					}
 				}
 			}
 			if event.Kind == "message.committed" && event.Data.MessageID != "" && !duplicate && event.Data.Origin != "local_send" {

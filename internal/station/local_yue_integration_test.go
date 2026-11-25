@@ -5,17 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"wechat-bot/internal/comfyui"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/stationyue"
 )
 
@@ -270,9 +276,163 @@ func TestLocalYuEChatClaimRecoveryCancellationAndDownload(t *testing.T) {
 	if err != nil || failed.State != "failed" || failed.Diagnostic == nil || failed.Diagnostic.Code != "recipe_validation_failed" || backend.submits != beforeSubmits {
 		t.Fatalf("invalid recipe was not closed before dispatch: %+v %v", failed, err)
 	}
+	// The shared music operation accepts only a recipe and optional audio. Its
+	// caller, rather than the backend, owns any message provenance and delivery.
+	publicID := strings.Repeat("a", 64)
+	publicRequest := stationyue.Request{Mode: stationyue.ModeOriginal, Style: "folk", Lyrics: "test", DurationSeconds: 1, Seed: 7}
+	publicDeploy, publicSubmission, err := f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, publicID, publicRequest, nil)
+	wantPublicRef, _ := comfyui.NewJobRef(publicID, localYuESaveNode)
+	if err != nil || publicDeploy.Binding != backend.deploy.Binding || publicSubmission.Effective.Seed != 7 || backend.ref != wantPublicRef || backend.submits != beforeSubmits+1 {
+		t.Fatalf("pure YuE submission: deploy=%s submission=%+v err=%v ref=%+v submits=%d", publicDeploy.Binding, publicSubmission, err, backend.ref, backend.submits)
+	}
+	publicRequest.Mode = stationyue.ModeCover
+	publicID = strings.Repeat("c", 64)
+	_, publicSubmission, err = f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, publicID, publicRequest, backend.wav)
+	if err != nil || publicSubmission.Effective.ReferenceSHA256 != sha256Hex(backend.wav) || backend.uploads != 2 || backend.submits != beforeSubmits+2 {
+		t.Fatalf("pure YuE cover submission: submission=%+v err=%v uploads=%d submits=%d", publicSubmission, err, backend.uploads, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	status, publicProduct, err := f.handler.chat.projectTools.publicYuEStatus(t.Context(), fish, backend.deploy.Binding, publicID, publicSubmission)
+	if err != nil || status.State != comfyui.Completed || !bytes.Equal(publicProduct.FLAC.Data, flac) || publicProduct.Evidence.SHA256 != sha256Hex(flac) || !publicProduct.Duration.Accepted {
+		t.Fatalf("pure YuE verified result: status=%+v product=%+v err=%v", status, publicProduct.Evidence, err)
+	}
+	backend.flac.SHA256 = strings.Repeat("0", 64)
+	_, rejectedProduct, err := f.handler.chat.projectTools.publicYuEStatus(t.Context(), fish, backend.deploy.Binding, publicID, publicSubmission)
+	if err == nil || len(rejectedProduct.FLAC.Data) != 0 {
+		t.Fatalf("unverified FLAC escaped the workstation: product=%+v err=%v", rejectedProduct.Evidence, err)
+	}
+	backend.flac.SHA256 = sha256Hex(flac)
+	token := filepath.Join(t.TempDir(), "native-token")
+	if err := os.WriteFile(token, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	uploads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil || !bytes.Equal(data, flac) || header.Filename != "大肥鱼作品.flac" {
+			t.Errorf("YuE upload mismatch: %v %q", err, header.Filename)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		uploads++
+		fmt.Fprintf(w, `{"id":"synthetic-yue-upload","name":%q,"byteLength":%d,"sha256":"%s"}`, header.Filename, len(data), sha256Hex(data))
+	}))
+	defer server.Close()
+	native, err := linuxnative.New(linuxnative.Config{URL: server.URL, TokenFile: token, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memory.Close()
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "owner", TraceID: "synthetic-yue-message",
+		Text: "请生成原创歌曲", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	in.Source = &companion.SourceRef{InstanceID: memory.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account,
+		Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime}
+	config := companion.Defaults()
+	config.Permissions.Remember = true
+	if err := memory.Observe(in, config, now); err != nil {
+		t.Fatal(err)
+	}
+	in.Source, _ = memory.SourceForInput(in)
+	if in.Source == nil {
+		t.Fatal("synthetic WeChat source not observed")
+	}
+	app := &stationAttachmentTools{native: native, store: memory, dir: t.TempDir(), replies: map[string]time.Time{in.Thread: now.Add(-time.Minute)},
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools, yueMu: new(sync.Mutex),
+		projectOwnerAllowed: func(current companion.Input) bool { return current.Sender == in.Sender }}
+	app.SetTrace(in)
+	listed, err := app.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenGenerate, seenJob := false, false
+	for _, item := range listed {
+		seenGenerate = seenGenerate || item.Name == localYuEStartTool
+		seenJob = seenJob || item.Name == localYuEJobTool
+	}
+	if !seenGenerate || !seenJob {
+		t.Fatal("WeChat did not discover both workstation YuE operations")
+	}
+	appRequest := []byte(`{"mode":"original","style":"folk","lyrics":"test","duration_seconds":1}`)
+	appResult, err := app.Call(t.Context(), localYuEStartTool, appRequest)
+	var appQueued struct {
+		JobID string `json:"job_id"`
+		State string `json:"state"`
+	}
+	if err != nil || json.Unmarshal([]byte(appResult), &appQueued) != nil || appQueued.State != "queued" {
+		t.Fatalf("WeChat YuE submit: %s %v", appResult, err)
+	}
+	beforeRepeat := backend.submits
+	if _, err := app.Call(t.Context(), localYuEStartTool, appRequest); err != nil || backend.submits != beforeRepeat {
+		t.Fatalf("WeChat YuE repeated submission: %v submits=%d", err, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	statusArgs, _ := json.Marshal(map[string]string{"job_id": appQueued.JobID, "action": "status"})
+	appResult, err = app.Call(t.Context(), localYuEJobTool, statusArgs)
+	var completed struct {
+		State string                     `json:"state"`
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if err != nil || json.Unmarshal([]byte(appResult), &completed) != nil || completed.State != "completed" || len(completed.Media) != 1 {
+		t.Fatalf("WeChat YuE result: %s %v", appResult, err)
+	}
+	if _, ok := app.Media(completed.Media[0].ID); !ok {
+		t.Fatal("WeChat YuE product not visible to its original owner")
+	}
+	if upload, err := app.stageReply(t.Context(), in, "file", completed.Media[0].AssetID); err != nil || upload != "synthetic-yue-upload" || uploads != 1 {
+		t.Fatalf("WeChat YuE FLAC upload: %q %v uploads=%d", upload, err, uploads)
+	}
+	other := in
+	other.Sender = "other"
+	if app.canSubmitMedia(t.Context(), other, "file", completed.Media[0].AssetID) {
+		t.Fatal("another sender could reuse YuE product")
+	}
+	coverRequest, _ := json.Marshal(map[string]any{"mode": "cover", "style": "folk", "lyrics": "test", "duration_seconds": 1, "reference_artifact_id": referenceID})
+	beforeCover := backend.submits
+	coverResult, err := app.Call(t.Context(), localYuEStartTool, coverRequest)
+	if err != nil || !strings.Contains(coverResult, `"state":"queued"`) || backend.submits != beforeCover+1 || backend.uploads != 3 {
+		t.Fatalf("WeChat YuE cover: %s %v submits=%d uploads=%d", coverResult, err, backend.submits, backend.uploads)
+	}
+	var coverQueued struct {
+		JobID string `json:"job_id"`
+	}
+	if json.Unmarshal([]byte(coverResult), &coverQueued) != nil || coverQueued.JobID == "" {
+		t.Fatal("cover job ID missing")
+	}
+	cancelArgs, _ := json.Marshal(map[string]string{"job_id": coverQueued.JobID, "action": "cancel"})
+	cancelResult, err := app.Call(t.Context(), localYuEJobTool, cancelArgs)
+	if err != nil || !strings.Contains(cancelResult, `"state":"cancelled"`) || backend.cancels != 2 {
+		t.Fatalf("WeChat YuE cancellation: %s %v cancels=%d", cancelResult, err, backend.cancels)
+	}
+	if _, err := app.Call(t.Context(), localYuEJobTool, statusArgs); err != nil {
+		t.Fatalf("completed original job lost after cancelling cover: %v", err)
+	}
 	enabled := localProjectToolByID(t, f, localYuEPackage)
 	if code, out := f.request("PUT", route, map[string]any{"action": "disable", "revision": localProjectToolRevision(t, enabled)}, true); code != http.StatusOK || backend.stops != 1 {
 		t.Fatalf("disable YuE: %d %#v", code, out)
+	}
+	if _, _, err := f.handler.chat.projectTools.submitPublicYuE(t.Context(), fish, strings.Repeat("d", 64), publicRequest, backend.wav); err == nil || backend.submits != beforeSubmits+4 {
+		t.Fatalf("disabled workstation YuE accepted a new public request: err=%v submits=%d", err, backend.submits)
+	}
+	listed, err = app.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range listed {
+		if item.Name == localYuEStartTool || item.Name == localYuEJobTool {
+			t.Fatal("disabled workstation YuE remained in WeChat tool list")
+		}
 	}
 	if !bytes.Equal(localArtifactDownload(t, f, downloaded), flac) {
 		t.Fatal("disable changed previously verified song")

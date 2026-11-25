@@ -25,7 +25,10 @@ func (h *localHomeService) configureAppCatalog() {
 		return
 	}
 	if executable, err := os.Executable(); err == nil {
-		h.appCatalog = filepath.Join(filepath.Dir(executable), "connected-apps")
+		h.appCatalog = filepath.Join(filepath.Dir(executable), "applications")
+		if _, err := os.Stat(h.appCatalog); errors.Is(err, os.ErrNotExist) {
+			h.appCatalog = filepath.Join(filepath.Dir(executable), "connected-apps")
+		}
 	}
 }
 

@@ -76,3 +76,30 @@ func TestHostMountsBeforeRestoreAndDrainsEveryComponent(t *testing.T) {
 		t.Fatalf("events = %q, want %q", events, want)
 	}
 }
+
+func TestStationSessionStartsOnLoopbackWithoutPassword(t *testing.T) {
+	owner, err := websession.New("synthetic-owner-password", "", "synthetic_station")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(http.NewServeMux(), owner, apphost.Registry{}, t.TempDir(), nil)
+	local := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/session", nil)
+	local.RemoteAddr = "127.0.0.1:12345"
+	reply := httptest.NewRecorder()
+	h.ServeHTTP(reply, local)
+	if reply.Code != http.StatusOK || reply.Header().Get("X-CSRF-Token") == "" || len(reply.Result().Cookies()) == 0 {
+		t.Fatalf("loopback session: status=%d cookie=%d", reply.Code, len(reply.Result().Cookies()))
+	}
+	foreign := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/session", nil)
+	foreign.RemoteAddr = "192.0.2.1:12345"
+	denied := httptest.NewRecorder()
+	h.ServeHTTP(denied, foreign)
+	if denied.Code != http.StatusForbidden || len(denied.Result().Cookies()) != 0 {
+		t.Fatalf("foreign peer received session: status=%d", denied.Code)
+	}
+	missing := httptest.NewRecorder()
+	h.ServeHTTP(missing, httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/login", nil))
+	if missing.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("password route still available: %d", missing.Code)
+	}
+}

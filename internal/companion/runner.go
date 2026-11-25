@@ -16,17 +16,41 @@ type AgentRunner struct {
 
 // runnerHost is private execution context. Policy text and model choice are
 // not reliable signals of where a turn originated.
-type runnerHost struct{ local bool }
+type runnerHost struct {
+	local       bool
+	replayNonce string
+}
 
 type runnerHostContextKey struct{}
 
 func withRunnerHost(ctx context.Context, input Input) context.Context {
-	return context.WithValue(ctx, runnerHostContextKey{}, runnerHost{local: input.Channel == LocalChannel})
+	return context.WithValue(ctx, runnerHostContextKey{}, runnerHost{local: input.Channel == LocalChannel, replayNonce: input.ReplayNonce})
 }
 
 func isLocalRunnerHost(ctx context.Context) bool {
 	host, _ := ctx.Value(runnerHostContextKey{}).(runnerHost)
 	return host.local
+}
+
+// ReplayNonceFromContext returns only a host-issued read-only retry marker.
+func ReplayNonceFromContext(ctx context.Context) string {
+	host, _ := ctx.Value(runnerHostContextKey{}).(runnerHost)
+	return host.replayNonce
+}
+
+type replayNonceContextKey struct{}
+
+// WithReplayNonce binds a bounded read-only retry marker to media inspection.
+func WithReplayNonce(ctx context.Context, nonce string) context.Context {
+	if nonce == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, replayNonceContextKey{}, nonce)
+}
+
+func ReplayNonce(ctx context.Context) string {
+	value, _ := ctx.Value(replayNonceContextKey{}).(string)
+	return value
 }
 
 func (e *Engine) decide(ctx context.Context, system string, turns []map[string]string) (Decision, error) {

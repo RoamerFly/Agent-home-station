@@ -357,8 +357,8 @@ class Wire:
                 elif initialized and method == 'tools/list': result = {'tools':[{'name':'external.http_request','description':'Run one exact host-bound synchronous HTTP tool phase.', 'inputSchema':schema},{'name':'external.job_request','description':'Run exactly one host-bound legacy job start, poll, or cancel phase.', 'inputSchema':job_schema},{'name':'external.poll_request','description':'Run one host-bound legacy Poll-without-Job create or query phase.', 'inputSchema':poll_schema},{'name':'external.mcp_request','description':'Run one host-bound MCP list or call phase.', 'inputSchema':mcp_schema}]}
                 elif initialized and method == 'tools/call':
                     params = object_of(request.get('params'), 'external_arguments_invalid')
-                    context = object_of(params.get('_meta', {}).get('wechat/context'), 'host_context_required')
-                    if not all(isinstance(context.get(k), str) and context[k] for k in ('account','thread','requester','purpose','request_key')): raise ValueError('host_context_required')
+                    call_id = params.get('_meta', {}).get('station/call_id')
+                    if not isinstance(call_id, str) or len(call_id) != 64: raise ValueError('host_context_required')
                     if params.get('name') == 'external.http_request': result = execute(params.get('arguments'), self.host)
                     elif params.get('name') == 'external.job_request': result = job_execute(params.get('arguments'), self.host)
                     elif params.get('name') == 'external.poll_request': result = poll_execute(params.get('arguments'), self.host)

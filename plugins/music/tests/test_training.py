@@ -157,6 +157,33 @@ class RVCManifestTests(unittest.TestCase):
             obj.pipeline([[1,2],[3,4]])
             self.assertEqual(values,[[1,2],[3,4]])
 
+    def test_real_upstream_preprocess_writes_each_slice_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'train').mkdir();(root/'training-source.json').write_text('{}')
+            source='''            for audio in self.slicer.slice(audio):
+                i = 0
+                while 1:
+                    start = int(self.sr * (self.per - self.overlap) * i)
+                    i += 1
+                    if len(audio[start:]) > self.tail * self.sr:
+                        tmp_audio = audio[start : start + int(self.per * self.sr)]
+                        self.norm_write(tmp_audio, output_key, idx1)
+                        idx1 += 1
+                    else:
+                        tmp_audio = audio[start:]
+                        idx1 += 1
+                        break
+            self.norm_write(tmp_audio, output_key, idx1)
+            if should_report(progress_index, total):
+'''
+            file=root/'train/preprocess.py';file.write_text(source)
+            fix_shadow_preprocess(root)
+            fixed=file.read_text()
+            self.assertEqual(fixed.count('self.norm_write(tmp_audio, output_key, idx1)'),2)
+            self.assertIn('tmp_audio = audio[start:]\n                        self.norm_write(tmp_audio, output_key, idx1)',fixed)
+            fix_shadow_preprocess(root)
+            self.assertEqual(file.read_text(),fixed)
+
     def test_official_layout_and_shadow_keep_writes_private(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source';(source/'train').mkdir(parents=True)

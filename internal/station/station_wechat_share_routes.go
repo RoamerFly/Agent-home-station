@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/identity"
@@ -78,7 +77,12 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 				return
 			}
 			if errors.Is(err, sql.ErrNoRows) || item.Removed {
-				prepared, e := store.Prepare(ctx, filepath.Join(s.shareOptions.CatalogDirectory, plugin))
+				packageDir, resolveErr := catalogPackageDir(s.shareOptions.CatalogDirectory, plugin)
+				if resolveErr != nil {
+					websession.Fail(w, 409, "工具发行源缺失或摘要不匹配")
+					return
+				}
+				prepared, e := store.Prepare(ctx, packageDir)
 				if e != nil || prepared.Digest != contract.ManifestSHA256 || prepared.Package.ID != plugin {
 					websession.Fail(w, 409, "工具发行源缺失或摘要不匹配")
 					return

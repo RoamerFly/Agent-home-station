@@ -3,11 +3,9 @@
   "capabilities": [
     {
       "id": "music.generate",
-      "implementation": "ready",
-      "description": "通过宿主绑定的云端接口提交歌曲生成；只返回未经下载或投递验证的提供商音频 URL。",
-      "permissions": [
-        "model.invoke"
-      ],
+      "implementation": "migration-pending",
+      "description": "旧云端歌曲生成入口已退役；使用工作站 YuE 作曲。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {
@@ -29,7 +27,7 @@
       "output_schema": {
         "type": "object"
       },
-      "discoverable": true,
+      "discoverable": false,
       "side_effect": "external_request"
     },
     {

@@ -30,6 +30,23 @@ func TestYieldedTaskKeepsExternalIdentityAndActionEvidence(t *testing.T) {
 	}
 }
 
+func TestManualCompletionCancelsSavedTaskSchedule(t *testing.T) {
+	f := setup(t)
+	task := resultFixture("process")
+	task.State = "waiting"
+	task.Next = time.Now().Add(time.Hour)
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.finishAgentTask(companion.Input{TaskID: task.ID, Account: task.Account, Thread: task.Thread}, "manual_completion"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := f.manager.agent.lookupTask(task.ID, task.Account, task.Thread)
+	if !ok || got.State != "cancelled" || !got.Next.IsZero() || got.ProcessID != task.ProcessID {
+		t.Fatal("closed round left a scheduled task or lost its evidence", got, ok)
+	}
+}
+
 func TestRestartReconcilesKnownExternalJobsWithoutReplayingOperations(t *testing.T) {
 	f := setup(t)
 	for _, kind := range []string{"process", "music", "device", "unknown"} {

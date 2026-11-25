@@ -18,15 +18,17 @@ import (
 // local conversation.  API credentials are intentionally not part of this
 // value: it is safe to return from the local management API.
 type LocalModelSettings struct {
-	Revision        uint64 `json:"revision"`
-	Provider        string `json:"provider"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	MaxTokens       int    `json:"max_tokens"`
-	ThinkingEnabled bool   `json:"thinking_enabled"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	Persona         string `json:"persona"`
-	KeyConfigured   bool   `json:"key_configured"`
+	Revision         uint64 `json:"revision"`
+	Provider         string `json:"provider"`
+	BaseURL          string `json:"base_url"`
+	Model            string `json:"model"`
+	MaxTokens        int    `json:"max_tokens"`
+	ThinkingEnabled  bool   `json:"thinking_enabled"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	TaskReasoning    string `json:"task_reasoning,omitempty"`
+	DirectMediaInput bool   `json:"direct_media_input"`
+	Persona          string `json:"persona"`
+	KeyConfigured    bool   `json:"key_configured"`
 }
 
 // LocalModelInput uses Revision as a compare-and-swap precondition.  An empty
@@ -43,8 +45,9 @@ type localModelRecord struct {
 }
 
 type localModelStore struct {
-	path string
-	mu   sync.Mutex
+	path        string
+	personaPath string
+	mu          sync.Mutex
 }
 
 var errLocalModelRevision = errors.New("本机聊天模型设置已更新，请刷新后再保存")
@@ -142,6 +145,16 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 		return nil, LocalModelSettings{}, err
 	}
 	settings := localModelView(record)
+	if s.personaPath != "" {
+		content, readErr := os.ReadFile(s.personaPath)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) || readErr == nil && (len(content) == 0 || len(content) > 32000 || !utf8.Valid(content)) {
+			return nil, settings, errors.New("角色文档不可读")
+		}
+		if readErr == nil {
+			settings.Persona = string(content)
+			record.Persona = settings.Persona
+		}
+	}
 	if record.APIKey == "" {
 		return nil, settings, errors.New("本机聊天尚未配置模型密钥")
 	}
@@ -188,6 +201,9 @@ func localModelView(record localModelRecord) LocalModelSettings {
 }
 
 func validateLocalModelRecord(record localModelRecord) error {
+	if err := companion.ValidateTaskReasoningMode(record.TaskReasoning); err != nil {
+		return err
+	}
 	if record.Provider != "deepseek" && record.Provider != "openai-compatible" {
 		return errors.New("请选择支持的本机聊天 API 服务商类型")
 	}

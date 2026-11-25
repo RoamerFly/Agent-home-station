@@ -44,8 +44,10 @@ func Open(root string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	dir.Close()
-	return &Store{root: abs, BoundaryRoot: abs}, nil
+	// Keep the pinned root for the lifetime of the store. Closing the root here
+	// only to reopen it on the first operation adds a Windows handle flush and
+	// briefly leaves the workspace without a pinned boundary.
+	return &Store{root: abs, BoundaryRoot: abs, boundary: dir, boundaryPath: abs}, nil
 }
 
 func (s *Store) Close() error {
@@ -140,14 +142,20 @@ func (s *Store) Read(scope, name string) (Document, error) {
 	defer root.Close()
 	return read(root, name)
 }
-func (s *Store) List(scope, query string) ([]Document, error) {
+
+// listRoot pins this scope independently of the store's boundary handle so a
+// long search does not hold the write/close mutex while reading documents.
+func (s *Store) listRoot(scope string) (*os.Root, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	root, _, e := s.directory(scope)
+	s.mu.Unlock()
 	if e != nil {
 		return nil, e
 	}
-	defer root.Close()
+	return root, nil
+}
+
+func documentNames(root *os.Root) ([]string, error) {
 	f, e := workspacefs.OpenDirectory(root, ".")
 	if e != nil {
 		return nil, e
@@ -157,21 +165,103 @@ func (s *Store) List(scope, query string) ([]Document, error) {
 	if e != nil && e != io.EOF {
 		return nil, e
 	}
-	out := []Document{}
+	names := []string{}
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !validName(entry.Name()) {
 			continue
 		}
-		d, e := read(root, entry.Name())
-		if e != nil {
-			return nil, e
-		}
-		if query == "" || strings.Contains(strings.ToLower(d.Name+"\n"+d.Content), strings.ToLower(query)) {
-			out = append(out, d)
-		}
+		names = append(names, entry.Name())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
+	sort.Strings(names)
+	return names, nil
+}
+
+// Names is used for the small first-turn guide index. It never opens note
+// bodies, even when the shared directory contains many or malformed notes.
+func (s *Store) Names(scope string, limit int) ([]string, int, error) {
+	if limit < 0 {
+		return nil, 0, errors.New("文档分页数量无效")
+	}
+	root, e := s.listRoot(scope)
+	if e != nil {
+		return nil, 0, e
+	}
+	defer root.Close()
+	names, e := documentNames(root)
+	if e != nil {
+		return nil, 0, e
+	}
+	total := len(names)
+	if limit > 0 && limit < len(names) {
+		names = names[:limit]
+	}
+	return names, total, nil
+}
+
+type Page struct {
+	Documents []Document
+	Total     int
+	Warnings  []string
+}
+
+// Page reads only the selected documents for a name listing. Content search
+// scans bodies but retains only the requested result page. A malformed note
+// stays visible by name in a listing and cannot blank the other notes.
+func (s *Store) Page(scope, query string, offset, limit int) (Page, error) {
+	if offset < 0 || limit < 0 {
+		return Page{}, errors.New("文档分页参数无效")
+	}
+	root, e := s.listRoot(scope)
+	if e != nil {
+		return Page{}, e
+	}
+	defer root.Close()
+	names, e := documentNames(root)
+	if e != nil {
+		return Page{}, e
+	}
+	page := Page{Documents: []Document{}, Warnings: []string{}}
+	if query == "" {
+		page.Total = len(names)
+		if offset > len(names) {
+			return page, nil
+		}
+		selected := names[offset:]
+		if limit > 0 && limit < len(selected) {
+			selected = selected[:limit]
+		}
+		for _, name := range selected {
+			d, err := read(root, name)
+			if err != nil {
+				page.Warnings = append(page.Warnings, name+": 无法读取正文或版本")
+				d = Document{Name: name}
+			}
+			d.Content = ""
+			page.Documents = append(page.Documents, d)
+		}
+		return page, nil
+	}
+	needle := strings.ToLower(query)
+	for _, name := range names {
+		d, err := read(root, name)
+		if err != nil {
+			page.Warnings = append(page.Warnings, name+": 无法搜索正文")
+			continue
+		}
+		if !strings.Contains(strings.ToLower(d.Name+"\n"+d.Content), needle) {
+			continue
+		}
+		if page.Total >= offset && (limit == 0 || len(page.Documents) < limit) {
+			page.Documents = append(page.Documents, d)
+		}
+		page.Total++
+	}
+	return page, nil
+}
+
+func (s *Store) List(scope, query string) ([]Document, error) {
+	page, err := s.Page(scope, query, 0, 0)
+	return page.Documents, err
 }
 
 // expected="" creates only a missing file. Existing files require the exact

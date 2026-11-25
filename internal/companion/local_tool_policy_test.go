@@ -67,7 +67,7 @@ func TestLocalRespondUsesShortToolPolicyAndCanContinueAfterFileTool(t *testing.T
 			t.Fatalf("local system retained application protocol %q", forbidden)
 		}
 	}
-	for _, required := range []string{"workspace_list", "memory_search", "默认值不是能力上限", "本机结果也不等于任何已接入应用已投递"} {
+	for _, required := range []string{"workspace_list", "memory_search", "默认值不是能力上限", "应用投递按回执表达"} {
 		if !strings.Contains(system, required) {
 			t.Fatalf("local system omitted %q", required)
 		}

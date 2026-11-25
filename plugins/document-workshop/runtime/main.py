@@ -20,7 +20,7 @@ _RUNTIME_DIR = str(Path(__file__).resolve().parent)
 if _RUNTIME_DIR not in sys.path:
     sys.path.insert(0, _RUNTIME_DIR)
 
-from document_logic import DocumentError, basic_verify, inspect, reconstruct, revise_title
+from document_logic import DocumentError, basic_verify, file_digest, inspect, reconstruct, revise_title
 
 FRAME_LIMIT = 4 * 1024 * 1024
 TOOLS = [
@@ -45,14 +45,14 @@ def _inside(root: Path, candidate: Path) -> bool:
         return False
 
 
-def _context(meta: dict) -> tuple[dict, dict]:
-    context = meta.get("wechat/context", {})
+def _context(meta: dict) -> tuple[str, dict]:
+    call_id = meta.get("station/call_id")
     document = meta.get("wechat/document", {})
-    if not isinstance(context, dict) or not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
+    if not isinstance(call_id, str) or len(call_id) != 64:
         raise DocumentError("host_context_required")
     if not isinstance(document, dict) or not isinstance(document.get("inputs"), list):
         raise DocumentError("document_context_required")
-    return context, document
+    return call_id, document
 
 
 def _artifact_id(arguments: dict) -> str:
@@ -161,7 +161,7 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
     if name == "document.inspect":
         path, item = _input(document, arguments)
         mime_type = str(item.get("mime_type", ""))
-        if path.suffix.lower() == ".docx":
+        if path.suffix.lower() in (".docx", ".xlsx"):
             return {"ok": True, "summary": "document_inspected", "evidence": inspect(
                 path,
                 mime_type,
@@ -178,6 +178,8 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         runtime = _runtime("inspect", {"input_root": input_root, "output_root": output_root, "input_path": str(path), "output_dir": str(output), "mime_type": mime_type, "pages": arguments.get("pages", []), "include_layout": bool(arguments.get("include_layout")), "host_ocr": document.get("ocr_observation")})
         if runtime.get("ok") is not True:
             raise DocumentError(runtime.get("code", "document_runtime_inspection_failed"))
+        runtime["sha256"] = file_digest(path)
+        runtime["bytes"] = path.stat().st_size
         return {"ok": True, "summary": "document_inspected", "evidence": runtime, "outputs": []}
     if name == "document.reconstruct":
         if set(arguments) - {"layout", "title", "title_font_size_pt", "images", "filename"}:
@@ -186,7 +188,7 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         product = reconstruct(arguments.get("layout"), output, arguments.get("filename", "document.docx"), arguments.get("title", ""), _images(document, arguments), arguments.get("title_font_size_pt"))
         return {"ok": True, "summary": "editable_docx_created", "evidence": {"sha256": product["sha256"], "text_characters": len(product["text"])}, "outputs": [_safe_output(Path(product["path"]), output, "editable_source", product["mime_type"])]}
     if name == "document.revise_title":
-        if set(arguments) - {"artifact_id", "font_size_pt", "filename"}:
+        if set(arguments) - {"artifact_id", "artifact", "font_size_pt", "filename"}:
             raise DocumentError("document_arguments_invalid")
         path, item = _input(document, arguments)
         if path.suffix.lower() != ".docx":

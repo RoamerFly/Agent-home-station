@@ -8,6 +8,7 @@ of being silently reflowed or sent to Office/LibreOffice.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -30,7 +31,7 @@ def _require_reportlab():
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib.units import mm
-        from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, PageBreak
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.lib.utils import ImageReader
@@ -76,6 +77,14 @@ def _text(node):
     return "".join(value.text or "" for value in node.findall(".//{%s}t" % WORD))
 
 
+def _markup(text):
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;")
+    # Paragraph's HTML parser otherwise collapses the actual Word form blanks.
+    escaped = re.sub(r" {2,}", lambda match: "&#160;" * len(match.group()), escaped)
+    escaped = escaped.replace("\u3000", "&#12288;")
+    return escaped.replace("\n", "<br/>")
+
+
 def _font_size(node):
     value = node.find(".//{%s}rPr/{%s}sz" % (WORD, WORD))
     try:
@@ -93,6 +102,39 @@ def _relations(archive):
     except ET.ParseError as exc:
         raise NativePDFError("native_pdf_docx_invalid") from exc
     return {item.get("Id"): item.get("Target") for item in root if item.get("Id") and item.get("Target")}
+
+
+def _paragraph_format(node):
+    p = node.find('{%s}pPr' % WORD)
+    result = {}
+    face = node.find('.//{%s}rFonts'%WORD)
+    if face is not None: result['font_family'] = face.get('{%s}eastAsia'%WORD) or face.get('{%s}ascii'%WORD)
+    if p is None: return result
+    align = p.find('{%s}jc' % WORD)
+    if align is not None: result['alignment'] = {'left':0,'center':1,'right':2,'both':4}.get(align.get('{%s}val'%WORD),0)
+    for tag, pairs in [('ind', [('firstLine','firstLineIndent'),('left','leftIndent'),('right','rightIndent')]), ('spacing',[('before','spaceBefore'),('after','spaceAfter'),('line','leading')])]:
+        item = p.find('{%s}%s'%(WORD,tag))
+        if item is not None:
+            for attr,key in pairs:
+                raw = item.get('{%s}%s'%(WORD,attr))
+                if raw is not None:
+                    if attr=='line' and item.get('{%s}lineRule'%WORD) not in ('exact','atLeast'):continue
+                    result[key] = float(raw)/20
+    if p.find('{%s}pageBreakBefore'%WORD) is not None:result['page_break']=True
+    return result
+
+def _page_geometry(docx):
+    with zipfile.ZipFile(docx) as z: root=ET.fromstring(z.read('word/document.xml'))
+    section=root.find('.//{%s}sectPr'%WORD)
+    result={}
+    if section is None:return result
+    for tag,pairs in [('pgSz',[('w','width'),('h','height')]),('pgMar',[('top','topMargin'),('bottom','bottomMargin'),('left','leftMargin'),('right','rightMargin')])]:
+        item=section.find('{%s}%s'%(WORD,tag))
+        if item is not None:
+            for attr,key in pairs:
+                raw=item.get('{%s}%s'%(WORD,attr))
+                if raw is not None:result[key]=float(raw)/20
+    return result
 
 
 def _blocks(docx: Path):
@@ -124,7 +166,7 @@ def _blocks(docx: Path):
                     raise NativePDFError("native_pdf_image_relation_unsupported")
                 items.append(("image", target, images["word/" + target]))
             else:
-                items.append(("heading" if style is not None and str(style.get("{%s}val" % WORD, "")).startswith("Heading") else "title" if style is not None and style.get("{%s}val" % WORD) == "Title" else "paragraph", _text(child), _font_size(child)))
+                items.append(("heading" if style is not None and str(style.get("{%s}val" % WORD, "")).startswith("Heading") else "title" if style is not None and style.get("{%s}val" % WORD) == "Title" else "paragraph", _text(child), _font_size(child), _paragraph_format(child)))
         elif tag == "tbl":
             try:
                 table = _docx_block_for_table(child)
@@ -168,23 +210,34 @@ def export_docx(docx: Path, pdf: Path, chinese_font: Path) -> dict:
     font = _font(api, chinese_font)
     blocks = _blocks(docx)
     pdf.parent.mkdir(parents=True, exist_ok=True)
-    doc = api["SimpleDocTemplate"](str(pdf), pagesize=api["A4"], leftMargin=22*api["mm"], rightMargin=22*api["mm"], topMargin=20*api["mm"], bottomMargin=20*api["mm"])
+    geometry = _page_geometry(docx)
+    size = (geometry.pop('width',api['A4'][0]),geometry.pop('height',api['A4'][1]))
+    doc = api["SimpleDocTemplate"](str(pdf), pagesize=size, **geometry)
     body = []
     styles = {
         "paragraph": api["ParagraphStyle"]("Body", fontName=font, fontSize=10.5, leading=17, alignment=api["TA_LEFT"], wordWrap="CJK"),
         "heading": api["ParagraphStyle"]("Heading", fontName=font, fontSize=15, leading=22, spaceBefore=8, spaceAfter=6, wordWrap="CJK"),
-        "title": api["ParagraphStyle"]("Title", fontName=font, fontSize=21, leading=28, alignment=api["TA_CENTER"], spaceAfter=14, wordWrap="CJK"),
+        "title": api["ParagraphStyle"]("Title", fontName=font, fontSize=18, leading=28, alignment=api["TA_LEFT"], spaceAfter=14, wordWrap="CJK"),
     }
     for kind, *values in blocks:
         if kind in styles:
-            text, requested_size = values
+            text, requested_size, formatting = values
             style = styles[kind]
             if requested_size is not None:
                 style = api["ParagraphStyle"](kind + "Custom", parent=style, fontSize=requested_size, leading=max(requested_size * 1.45, style.leading))
-            body.extend([api["Paragraph"](text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), style), api["Spacer"](1, 4)])
+            formatting = dict(formatting)
+            family = formatting.pop('font_family', None)
+            if family in ('宋体', 'SimSun'):
+                local_font = chinese_font.parent / 'SimSun-local.ttf'
+                if local_font.is_file():
+                    api['pdfmetrics'].registerFont(api['TTFont']('DocumentSimSun', str(local_font), subfontIndex=0))
+                    formatting['fontName'] = 'DocumentSimSun'
+            if formatting.pop('page_break',False):body.append(api['PageBreak']())
+            if formatting: style = api['ParagraphStyle'](kind+'Layout',parent=style,**formatting)
+            body.extend([api["Paragraph"](_markup(text), style), api["Spacer"](1, 0 if formatting else 4)])
         elif kind == "table":
             rows, merges, borderless = values
-            data = [[api["Paragraph"](str(cell).replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), styles["paragraph"]) for cell in row] for row in rows]
+            data = [[api["Paragraph"](_markup(str(cell)), styles["paragraph"]) for cell in row] for row in rows]
             repeat = 0 if any(m["row"] == 0 and m["row_span"] > 1 for m in merges) else 1
             table = api["Table"](data, repeatRows=repeat, hAlign="LEFT")
             spans = [("SPAN", (m["column"], m["row"]),

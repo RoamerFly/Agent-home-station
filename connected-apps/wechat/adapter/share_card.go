@@ -22,7 +22,10 @@ type PublisherDescription struct {
 // PublisherCardDescription extracts displayable card copy without allowing a
 // card body, URL, or XML to become an instruction or a media observation.
 func PublisherCardDescription(m linuxnative.Message) (PublisherDescription, bool) {
-	if m.Type != 49 || m.IsQuotedText() || m.FileAttachmentName() != "" {
+	if m.Type != 49 || m.IsQuotedText() || m.IsPassiveNotice() || m.FileAttachmentName() != "" {
+		return PublisherDescription{}, false
+	}
+	if m.IsForwardedConversation() {
 		return PublisherDescription{}, false
 	}
 	if m.Link == nil {
@@ -50,6 +53,13 @@ func PublisherCardDescription(m linuxnative.Message) (PublisherDescription, bool
 // CardDescription returns a safe, card-only presentation for the chat model.
 // It never claims that the linked material has been opened or observed.
 func CardDescription(m linuxnative.Message) string {
+	if m.IsForwardedConversation() {
+		_, body := m.CardContext()
+		if body == "" {
+			return "[微信合并转发] 转发记录正文暂不可用。"
+		}
+		return "[微信合并转发，以下是消息中取得的转发资料]\n" + body
+	}
 	if m.Link != nil {
 		part, hasDescription := PublisherCardDescription(m)
 		parts := []string{}
@@ -60,6 +70,9 @@ func CardDescription(m linuxnative.Message) string {
 			parts = append(parts, "分享链接："+raw)
 		}
 		if len(parts) > 0 {
+			if m.AppMessageType != nil && *m.AppMessageType == 5 {
+				return "[收到微信文章分享卡片，仅有标题与简介，正文尚未读取]\n" + strings.Join(parts, "\n")
+			}
 			return cardOnlyHeader + "\n" + strings.Join(parts, "\n")
 		}
 	}
@@ -75,7 +88,8 @@ func CardDescription(m linuxnative.Message) string {
 // ObservedCardDescription changes only the header after the caller has actual
 // media/page evidence. Card text remains distinct from that evidence.
 func ObservedCardDescription(m linuxnative.Message, observedHeader string) string {
-	return strings.Replace(CardDescription(m), cardOnlyHeader, observedHeader, 1)
+	text := strings.Replace(CardDescription(m), "[收到微信文章分享卡片，仅有标题与简介，正文尚未读取]", observedHeader, 1)
+	return strings.Replace(text, cardOnlyHeader, observedHeader, 1)
 }
 
 // PublicShareURL removes credentials, fragments and tracking values before a
@@ -89,6 +103,15 @@ func PublicShareURL(raw string) string {
 	if (u.Hostname() == "www.bilibili.com" || u.Hostname() == "bilibili.com") && strings.HasPrefix(u.Path, "/video/") {
 		if part := u.Query().Get("p"); part != "" {
 			query.Set("p", part)
+		}
+	}
+	// WeChat article /s links are identified by these four query values. A
+	// bare /s is a different page, so dropping them breaks article reading.
+	if u.Hostname() == "mp.weixin.qq.com" && u.Path == "/s" {
+		for _, key := range []string{"__biz", "mid", "idx", "sn"} {
+			if value := u.Query().Get(key); value != "" {
+				query.Set(key, value)
+			}
 		}
 	}
 	u.RawQuery = query.Encode()

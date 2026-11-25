@@ -47,6 +47,8 @@
 
 若接口直接返回 audio/wav、audio/mpeg 等二进制，只保留 media_kind 并删除 URL 映射即可。支持 voice/image/video/file；歌曲要发成微信原生语音选 voice，要保留音乐文件选 file，并开启对应权限。转码和分段由原生后台处理，微信限制仍可能造成拒绝。
 
+Windows 微信工作台领取 `media_url_path` 或异步 `poll.media_url_path` 的结果时，媒体 URL 只保存在工作站私有记录中。默认只允许从该工具创建或轮询地址的同一来源下载；下载不带 API 请求头或浏览器凭据，也不跟随重定向。服务商把成品放在独立 CDN 时，应在**提交任务之前**为该工具声明 `"media_origins":["https://cdn.example.com"]`，每项只能是 HTTPS 来源（回环地址可用 HTTP），不能含路径、查询或凭据。未获许可的来源会保留原任务待核对，不会重发创建请求；已经提交的任务不会因为之后修改声明而自动改用新权限。
+
 文本接口只配 text_path，不设 media_kind。JSON 返回没有映射到任何文字或媒体时判失败，不能凭空报告成功。目前只支持 JSON 请求，GET/POST/PUT/PATCH；multipart、WebSocket、OAuth 等复杂需求可封装成外部 MCP。
 
 ## 异步任务轮询

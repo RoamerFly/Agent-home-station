@@ -41,8 +41,8 @@ func TestNativeMediaHashCanonicalizationRequiresUnchangedNativePacket(t *testing
 				if err != nil || got.Source.EventID != canonical.EventID || got.Source.BodyHash != canonical.BodyHash {
 					t.Fatal("unchanged raw media failed canonical recovery", err)
 				}
-			} else if err == nil {
-				t.Fatal("changed native packet acquired canonical proof", change)
+			} else if err != nil {
+				t.Fatal("updated native projection blocked canonical proof", change, err)
 			}
 		})
 	}

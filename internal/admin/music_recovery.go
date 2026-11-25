@@ -55,7 +55,20 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		id = agentID(id, in.PreparedJob)
 	}
 	for _, t := range m.agent.list(m.native.Account(), msg.ThreadID) {
-		if t.ID == id || !in.RedeliverPrepared && t.OriginTrace == msg.ID && t.MusicJob != "" {
+		if t.ID == id {
+			// A previous recovery may have delivered only a truthful text
+			// fallback after the bridge was unavailable. It has no MusicJob and
+			// is therefore safe to continue with a new durable recovery round.
+			// Preserve the old task and derive a stable retry ID so repeated
+			// administrator clicks remain idempotent once a real job exists.
+			if t.MusicJob == "" && (t.State == "completed" || t.State == "needs_review" || t.State == "cancelled") {
+				id = agentID(id, "retry-after-no-music-job")
+				continue
+			}
+			respond(w, 200, t)
+			return
+		}
+		if !in.RedeliverPrepared && t.OriginTrace == msg.ID && t.MusicJob != "" {
 			respond(w, 200, t)
 			return
 		}
@@ -69,7 +82,16 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		var result map[string]any
 		_ = json.Unmarshal([]byte(op.Result), &result)
 		if op.ID == agentID(m.native.Account(), msg.ThreadID, msg.ID, op.Tool, string(op.Arguments)) {
-			exists = true
+			// A failed bridge connection creates a durable operation record but
+			// never returns a job ID.  That record must not permanently block an
+			// administrator recovery after the bridge is repaired.  Keep the
+			// idempotency guard for completed/running calls and for any failure
+			// that already carries a real provider job identity.
+			jobID, hasJobID := result["job_id"].(string)
+			if jobID == "" {
+				jobID, hasJobID = result["id"].(string)
+			}
+			exists = op.State != "needs_review" || hasJobID && jobID != ""
 			break
 		}
 	}
@@ -154,6 +176,18 @@ func (s *Server) recoverMusicMessage(w http.ResponseWriter, r *http.Request) {
 		t.Title = "补发歌曲 · " + t.MusicTitle
 	}
 	if err := m.agent.task(t); err != nil {
+		// A previous no-job fallback may already be archived. Preserve that
+		// history and create a fresh administrator retry identity instead of
+		// treating the archived task ID as a permanent lock.
+		if strings.Contains(err.Error(), "任务已结束并移出活跃队列") {
+			t.ID = agentID(t.ID, "retry", randomToken())
+			if retryErr := m.agent.task(t); retryErr == nil {
+				respond(w, http.StatusCreated, t)
+				return
+			} else {
+				err = retryErr
+			}
+		}
 		fail(w, 500, err.Error())
 		return
 	}

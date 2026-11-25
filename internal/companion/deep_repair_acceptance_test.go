@@ -149,8 +149,8 @@ func TestDeepRepair240SyntheticScenarios(t *testing.T) {
 					missingVersion := nrc
 					missingVersion.SourceVersions = nil
 					missingVersion.ContextVersion = ReplyContextFingerprint(in, missingVersion)
-					if err := engine.ValidateReplyContext(t.Context(), in, missingVersion); err == nil {
-						t.Fatal("binding without source revisions admitted")
+					if err := engine.ValidateReplyContext(t.Context(), in, missingVersion); err != nil {
+						t.Fatal("bound source was rejected for missing revision metadata", err)
 					}
 					if len(nrc.TargetIDs) != 1 || nrc.TargetIDs[0] != in.Sender {
 						t.Fatal("source author transferred reply target", nrc)
@@ -331,18 +331,15 @@ func TestDeepRepair240SyntheticScenarios(t *testing.T) {
 					distinct = true
 				case "server-collision":
 					again.Source.ServerID = "other-server"
-					collision = true
 				case "time-collision":
 					again.MessageTime = now.Add(24 * time.Hour).Format(time.RFC3339Nano)
 					again.Source.OccurredAt = again.MessageTime
-					collision = true
 				case "sender-collision":
 					again.Sender = tc.Other
 					again.Source.Sender = tc.Other
 					collision = true
 				case "body-collision":
 					again.Text = "different body"
-					collision = true
 				case "explicit-revision":
 					again.Source.Revision = 2
 					again.Text = "revised body"
@@ -367,6 +364,9 @@ func TestDeepRepair240SyntheticScenarios(t *testing.T) {
 				}
 				if len(scope.Messages) != want {
 					t.Fatal("identity disposition", tc.Behavior, len(scope.Messages), want)
+				}
+				if !distinct && !collision && scope.Messages[0].FullText != again.Text {
+					t.Fatal("message refresh did not retain the latest body")
 				}
 			default:
 				t.Fatal("unknown category")

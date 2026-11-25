@@ -40,3 +40,32 @@ func TestQueueCheckpointReplacementWaitsForReader(t *testing.T) {
 		t.Fatalf("replacement lost the original receipt: %+v, %v", receipt, err)
 	}
 }
+
+func TestBotCheckpointReplacementWaitsForReader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.json")
+	before := checkpoint{Version: 1, ServerID: "synthetic-server", Account: "fixture", Cursor: "1"}
+	if err := saveCheckpoint(path, before); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan error, 1)
+	timer := time.AfterFunc(150*time.Millisecond, func() { released <- reader.Close() })
+	defer timer.Stop()
+
+	after := before
+	after.Cursor = "2"
+	writeErr := saveCheckpoint(path, after)
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	saved, _, err := loadCheckpoint(path, before.ServerID, before.Account)
+	if err != nil || saved.Cursor != after.Cursor {
+		t.Fatalf("replacement lost the newer cursor: %+v, %v", saved, err)
+	}
+}

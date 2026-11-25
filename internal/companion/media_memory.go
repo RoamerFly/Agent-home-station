@@ -189,11 +189,11 @@ func (s *Store) mediaBackfillSourceVisible(scopeID string, scope Scope, trace, r
 		return false
 	}
 	for _, turn := range scope.Messages {
-		if turn.Role != "user" || turn.TraceID != trace || turn.Sender != requester || turn.Source == nil || turn.EventID == "" || turn.Source.Integrity == "conflicted" {
+		if turn.Role != "user" || turn.TraceID != trace || turn.Sender != requester || turn.Source == nil || turn.EventID == "" {
 			continue
 		}
 		var visible bool
-		err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id))`, turn.EventID, scopeID).Scan(&visible)
+		err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id))`, turn.EventID, scopeID).Scan(&visible)
 		if err == nil && visible {
 			return true
 		}

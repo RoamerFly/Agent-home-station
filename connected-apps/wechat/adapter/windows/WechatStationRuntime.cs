@@ -48,12 +48,13 @@ namespace WechatAgent.Desktop {
         }
         void AdmitNativeDirectories() {
             var nativeRoot = d.StationNativeRoot;
+            WindowsRuntime.PrivateDirectory(d.StationLifecycleRoot, UsesPortableData);
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications"), UsesPortableData);
             WindowsRuntime.PrivateDirectory(Path.Combine(d.Root, "applications", "wechat"), UsesPortableData);
             WindowsRuntime.PrivateDirectory(nativeRoot, UsesPortableData);
         }
         void RejectOfflineNativeRelease() {
-            var marker = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-release.json");
+            var marker = Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-release.json");
             try {
                 var attributes = File.GetAttributes(marker);
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -71,7 +72,7 @@ namespace WechatAgent.Desktop {
             }
         }
         void BeginNativeRun() {
-            var path = Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-run.lock");
+            var path = Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-run.lock");
             NoLinkedFile(path);
             var gate = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
             try {
@@ -91,7 +92,7 @@ namespace WechatAgent.Desktop {
             try { gate.Unlock(0, 1); }
             finally { gate.Dispose(); }
         }
-        string NativeStopStatePath() { return Path.Combine(WindowsRuntime.ComparablePath(d.Root), "station-native-stop.json"); }
+        string NativeStopStatePath() { return Path.Combine(WindowsRuntime.ComparablePath(d.StationLifecycleRoot), "station-native-stop.json"); }
         void WriteNativeStopState(string state, string epoch, string serverId, string generation) {
             if (state != "starting" && state != "stopped") throw new ArgumentException("本机成长站停止状态无效。", "state");
             if (String.IsNullOrEmpty(epoch) || epoch.Length != 32 || !epoch.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
@@ -206,16 +207,36 @@ namespace WechatAgent.Desktop {
         internal async Task Start(CancellationToken cancel) {
             // A contested lease or durable release intent is a hard fence.
             BeginNativeRun();
-            var failed = false;
-            try { await Launch(cancel); }
-            catch (Exception) { cancel.ThrowIfCancellationRequested(); failed = true; }
-            if (!failed) return;
-            // Keep the lease while the native-enabled host is using this root.
-            // A failed launch cannot issue clean-stop evidence.
-            await StopNative(true);
-            nativeStopEpoch = null;
-            CloseJob();
-            System.Diagnostics.Trace.TraceWarning("WeChat native startup unavailable; starting local station only.");
+            Exception launchFailure = null;
+            try {
+                await Launch(cancel);
+                return;
+            } catch (Exception error) { launchFailure = error; }
+            if (launchFailure == null) return;
+            var failure = launchFailure;
+            var foreignPort = failure is InvalidOperationException && failure.Message.IndexOf("本机端口", StringComparison.Ordinal) >= 0 && failure.Message.IndexOf("已占用", StringComparison.Ordinal) >= 0;
+            try { await StopNative(true); }
+            catch (Exception cleanup) { failure = new AggregateException(launchFailure, cleanup); }
+            finally {
+                nativeStopEpoch = null;
+                CloseJob();
+                EndNativeRun();
+                try {
+                    var log = Path.Combine(d.Root, "main_setting", "logs", "wechat-native.log");
+                    Directory.CreateDirectory(Path.GetDirectoryName(log));
+                    File.AppendAllText(log, DateTime.UtcNow.ToString("o") + " {\"event\":\"native_start_failed\",\"error\":\"" +
+                        launchFailure.GetType().Name + ": " + launchFailure.Message.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}" + Environment.NewLine, new UTF8Encoding(false));
+                } catch { }
+            }
+            if (cancel.IsCancellationRequested) throw new OperationCanceledException(cancel);
+            // A foreign native port is deliberately not reclaimed. Keep the
+            // local station available for inspection, but release the native
+            // lease so the owner can free the port and retry.
+            if (foreignPort) {
+                System.Diagnostics.Trace.TraceWarning("WeChat native port is occupied; local station remains available without native takeover.");
+                return;
+            }
+            throw new InvalidOperationException("微信原生服务启动失败，工作站未接管微信；请查看微信运行日志后重试。", failure);
         }
 
         internal void AddServerArguments(List<string> args) {

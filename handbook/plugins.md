@@ -31,6 +31,72 @@
 
 最后一步核对目标并创建。工具初始未启用，可从“管理连接工具”编辑声明、鉴权和启用状态。请同时核对“外部工具连接”的安装与授权。本地程序和多文件工具仍可选择“导入本机工具”。
 
+### Windows 工作站主页的同步 HTTP 工具
+
+在工作站的「项目工具」安装并启用「外部工具连接」。自行构建时可用 `Build-Desktop.ps1 -LocalStation -WithExternalTools` 包含该工具。在发行目录的 `data/publictools/registrations/station-external-tools.json` 保存主人授权的连接。下面的例子登记一个无凭据的公开只读接口。
+
+```json
+{
+  "connections": [
+    {
+      "enabled": true,
+      "manifest": {
+        "id": "example",
+        "name": "公开仓库信息",
+        "version": "1.0.0",
+        "tools": [
+          {
+            "name": "repository",
+            "description": "查询公开示例仓库名称",
+            "method": "GET",
+            "url": "https://api.github.com/repos/octocat/Hello-World",
+            "text_path": "full_name",
+            "input_schema": {"type": "object", "properties": {}, "additionalProperties": false}
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+需要凭据的连接可在同一连接记录内填写 `secrets`，并在声明中使用 `{{secret.字段名}}`。登记文件含明文配置，应只保存在工作站的私有数据目录。主页 Agent 可以列出工具、发起请求和分页续读结果，目录中的例子会显示为 `example__repository`。二进制响应需声明 `media_kind`，经校验后作为本机成品下载。关闭工具或移除相应登记后，主聊天会撤回该连接。微信工作台原有连接仍由各自应用管理。
+
+### Windows 工作站主页的异步 HTTP 工具
+
+异步工具同样登记在 `connections[].manifest.tools`。声明 `job.id_path` 和 `poll` 时，查询与可选远程取消使用已核验的任务号，例如 `{{result.id}}`。只有 `poll` 声明时，后续查询使用第一次响应中的字段，例如 `{{result.lookup}}`。在 `poll` 中设置 `status_path`、`done_values`、`failed_values`、结果字段与 `interval_seconds`。Job 使用 `job.deadline_seconds` 和 `job.max_polls`。仅 Poll 的任务使用 `timeout_seconds` 和 `poll.max_attempts`。
+
+`station_external_task_catalog` 分页列出工作站上已登记的 Job 和 Poll。Agent 通过 `station_external_task` 提交，使用返回的 `task_id` 查询或取消。主聊天可在后续回合或重启后继续查看同一任务，服务端任务号和 Poll 查询凭据留在宿主私有记录。希望任务完成后自动回到聊天时，用 `local_task_followup` 的 `schedule` 将同一编号填入 `job_id`，将 `result_tool` 设为 `station_external_task`。宿主按登记的间隔、次数和截止时间推进任务。结果未知时返回待核对状态，并保留原任务编号。
+
+有远程取消端点的 Job 返回服务对取消请求的回执。仅 Poll 或未登记远程取消的 Job 会停止本机轮询。取消聊天续办只停止后续聊天处理。已核验完成的任务可继续分页读取正文，符合声明的二进制结果可下载。
+
+### Windows 工作站主页的 MCP 工具
+
+在同一私有登记文件添加 `mcp_servers`，可以和 `connections` 并用。以下记录分别登记远程公开文档服务和已安装的本机 MCP 工具包。
+
+```json
+{
+  "mcp_servers": [
+    {
+      "id": "aws_docs",
+      "transport": "http",
+      "url": "https://knowledge-mcp.global.api.aws",
+      "enabled": true,
+      "tools": ["aws___read_documentation"]
+    },
+    {
+      "id": "local_example",
+      "transport": "stdio",
+      "plugin_id": "example-installed-mcp",
+      "enabled": true,
+      "tools": ["echo"]
+    }
+  ]
+}
+```
+
+远程服务可按服务要求登记 `headers` 和 `timeout_seconds`。`tools` 只列出允许执行的名称，留空表示当前连接上的所有工具均获准。本机 stdio 只能选择已安装并启用的 MCP 工具包。工作站使用受控的包入口和隔离环境启动。目录游标只在本轮有效，同一请求中的结果续读沿用原调用。工作站校验并返回文本以及受支持的图片、音频成品。外部服务返回错误时显示服务错误。
+
 ## 编写第一个工具
 
 从仓库的 `templates/plugins/` 选一个能运行的模板：本地 Python 选 `python-stdio`，本地 Go 选 `go-stdio`，远程接口选 `http-mcp`。复制到自己的开发目录，给工具设置唯一 ID。

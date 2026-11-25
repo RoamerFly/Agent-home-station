@@ -16,9 +16,20 @@ type receivedChannelsVideo struct {
 	sample videoSample
 }
 
+// channelsObservationFailure keeps the native resolver error for callers that
+// need to decide whether migration or authorization is required, while the
+// group-facing observation path can expose the generic unreadable outcome.
+type channelsObservationFailure struct{ cause error }
+
+func (e *channelsObservationFailure) Error() string { return e.cause.Error() }
+func (e *channelsObservationFailure) Unwrap() error { return e.cause }
+
 func (a mediaUnderstanding) understandChannels(ctx context.Context, msg linuxnative.Message) (string, error) {
 	video, err := a.acquireChannelsVideo(ctx, msg)
 	if err != nil {
+		if err.Error() == "share_plugin_migration_required" {
+			return "", &channelsObservationFailure{cause: err}
+		}
 		return "", err
 	}
 	return a.observeVideo(ctx, msg, video.data, video.sample, true)

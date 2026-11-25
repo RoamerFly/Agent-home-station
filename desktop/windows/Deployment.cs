@@ -21,11 +21,16 @@ namespace WechatAgent.Desktop {
         internal bool StationNativeEnabled = true;
         internal bool Windows { get { return Backend == "windows-native"; } }
         internal bool LocalStation { get { return Backend == "local-station"; } }
-        // The local station starts no WeChat-native runtime unless the owner
-        // explicitly opts in through wechat_native_url and has not disabled startup.
+        // A complete drop-in bundle supplies the default address. The saved switch takes precedence.
         internal bool LocalStationNative { get { return LocalStation && StationNativeEnabled && StationNativeUrl != ""; } }
         internal string PrivateSettingsRoot { get { return LocalStation ? Path.Combine(Root, "main_setting") : Path.Combine(Workspace, "secrets"); } }
         internal string StationNativeRoot { get { return Path.Combine(Root, "applications", "wechat", "native"); } }
+        internal string StationLifecycleRoot {
+            get {
+                var main = Path.Combine(Root, "main_setting");
+                return LocalStation ? main : Root;
+            }
+        }
         internal bool UsesPortableStationData(string launcherDirectory) {
             if (!LocalStation) return false;
             var package = LocalStationDefault(launcherDirectory);
@@ -49,23 +54,24 @@ namespace WechatAgent.Desktop {
                 if (Text(data, "runtime_directory") != "") local.StationExe = Path.Combine(Path.GetFullPath(Path.Combine(workspace, Text(data, "runtime_directory"))), "agent-home-station-server.exe");
                 if (Text(data, "data_root") != "") {
                     local.Root = Path.GetFullPath(Path.Combine(workspace, Text(data, "data_root")));
-                    local.StationWorkspace = Path.Combine(local.Root, "workspace");
+                    local.StationWorkspace = Path.Combine(local.Root, "workspaces");
                 }
                 if (Text(data, "workspace_root") != "") local.StationWorkspace = Path.GetFullPath(Path.Combine(workspace, Text(data, "workspace_root")));
                 if (Text(data, "tool_packages_directory") != "") {
                     var tools = Text(data, "tool_packages_directory");
-                    if (!Path.IsPathRooted(tools) || tools.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
-                        throw new InvalidOperationException("公共工具包目录必须是本机绝对路径。");
-                    local.ToolPackagesDirectory = Path.GetFullPath(tools);
+                    if (tools.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
+                        throw new InvalidOperationException("公共工具包目录路径无效。");
+                    local.ToolPackagesDirectory = Path.GetFullPath(Path.IsPathRooted(tools) ? tools : Path.Combine(workspace, tools));
                     if (Directory.Exists(local.ToolPackagesDirectory)) WindowsRuntime.NoLinks(local.ToolPackagesDirectory);
                 }
                 if (Text(data, "application_packages_directory") != "") {
                     var apps = Text(data, "application_packages_directory");
-                    if (!Path.IsPathRooted(apps) || apps.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
-                        throw new InvalidOperationException("公共应用包目录必须是本机绝对路径。");
-                    local.ApplicationPackagesDirectory = Path.GetFullPath(apps);
+                    if (apps.IndexOfAny(new [] {'\0', '\r', '\n'}) >= 0)
+                        throw new InvalidOperationException("公共应用包目录路径无效。");
+                    local.ApplicationPackagesDirectory = Path.GetFullPath(Path.IsPathRooted(apps) ? apps : Path.Combine(workspace, apps));
                     if (Directory.Exists(local.ApplicationPackagesDirectory)) WindowsRuntime.NoLinks(local.ApplicationPackagesDirectory);
                 }
+                local.ResolveStationWechatPackage();
                 if (Text(data, "admin_url") != "") local.Url = LocalUrl(Text(data, "admin_url"));
                 if (Text(data, "wechat_native_url") != "") local.StationNativeUrl = LocalUrl(Text(data, "wechat_native_url"), true);
                 object nativeEnabled;
@@ -105,8 +111,15 @@ namespace WechatAgent.Desktop {
             if (!LocalStation || String.IsNullOrEmpty(StationNativeUrl))
                 throw new InvalidOperationException("请先在本机部署中配置微信原生地址。");
             var config = Path.Combine(Workspace, "secrets", "local-deployment.json");
-            ValidateDeploymentFile(config);
-            var original = File.ReadAllBytes(config);
+            if (!File.Exists(config) && LocalStation) config = Path.Combine(Root, "main_setting", "local-deployment.json");
+            bool existing = File.Exists(config);
+            if (existing) ValidateDeploymentFile(config);
+            else {
+                // A drop-in application can be enabled before any deployment file exists.
+                config = Path.Combine(Workspace, "data", "main_setting", "local-deployment.json");
+                WindowsRuntime.NoLinks(Path.GetDirectoryName(config));
+            }
+            var original = existing ? File.ReadAllBytes(config) : Encoding.UTF8.GetBytes("{\"backend\":\"local-station\"}");
             var text = Encoding.UTF8.GetString(original).TrimStart('\uFEFF');
             var data = Json.Deserialize<Dictionary<string, object>>(text);
             var saved = Parse(Workspace, data);
@@ -121,10 +134,14 @@ namespace WechatAgent.Desktop {
                     file.Write(bytes, 0, bytes.Length);
                     file.Flush(true);
                 }
-                ValidateDeploymentFile(config);
-                if (!File.ReadAllBytes(config).SequenceEqual(original))
-                    throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
-                File.Replace(temporary, config, null);
+                if (existing) {
+                    ValidateDeploymentFile(config);
+                    if (!File.ReadAllBytes(config).SequenceEqual(original))
+                        throw new InvalidOperationException("部署设置已变化，请重新打开桌面后再修改微信启动开关。");
+                    File.Replace(temporary, config, null);
+                } else {
+                    File.Move(temporary, config);
+                }
                 StationNativeEnabled = enabled;
             } finally {
                 if (File.Exists(temporary)) File.Delete(temporary);
@@ -140,14 +157,43 @@ namespace WechatAgent.Desktop {
             if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || uri.UserInfo != "" || uri.AbsolutePath != "/" || uri.Query != "" || uri.Fragment != "" || (explicitPort && !Regex.IsMatch(value, @"\Ahttp://127\.0\.0\.1:[1-9][0-9]*\z"))) throw new InvalidOperationException("本机服务地址必须使用 http://127.0.0.1:端口。");
             return explicitPort ? value : uri.GetLeftPart(UriPartial.Authority);
         }
+        internal static string PackageRuntimeRoot(string packageRoot) {
+            var env = Path.Combine(packageRoot, "env");
+            return Directory.Exists(env) ? env : Path.Combine(packageRoot, "runtimes");
+        }
         internal static Deployment WindowsDefault(string workspace) {
-            return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(workspace, "runtimes", "windows-x64", "wx.exe"), AdminExe = Path.Combine(workspace, "runtimes", "windows-x64", "wechat-admin.exe") };
+            var packageRuntime = PackageRuntimeRoot(workspace);
+            return new Deployment { Workspace = workspace, Backend = "windows-native", Root = Path.Combine(workspace, "data"), Account = "desktop", Music = "", NativeExe = Path.Combine(packageRuntime, "windows-x64", "wx.exe"), AdminExe = Path.Combine(packageRuntime, "windows-x64", "wechat-admin.exe") };
         }
         internal static Deployment LocalStationDefault(string workspace) {
-            var data = Path.Combine(workspace, "data", "station");
-            data = Path.Combine(workspace, "data");
+            var data = Path.Combine(workspace, "data");
             var runtime = Path.Combine(data, "main_setting", "runtime");
-            return new Deployment { Workspace = workspace, Backend = "local-station", Root = data, StationWorkspace = Path.Combine(data, "workspace"), StationExe = Path.Combine(runtime, "agent-home-station-server.exe"), AdminExe = Path.Combine(runtime, "runtimes", "windows-x64", "wechat-admin.exe"), StationNativeExe = Path.Combine(runtime, "runtimes", "windows-x64", "wx.exe"), Account = "", Music = "", ToolPackagesDirectory = "", ApplicationPackagesDirectory = "", Url = "http://127.0.0.1:8082", LegacyUrl = "http://127.0.0.1:8080", NativeUrl = "", StationNativeUrl = "" };
+            var station = new Deployment {
+                Workspace = workspace, Backend = "local-station", Root = data,
+                StationWorkspace = Path.Combine(data, "workspaces"),
+                StationExe = Path.Combine(runtime, "agent-home-station-server.exe"),
+                ToolPackagesDirectory = Directory.Exists(Path.Combine(workspace, "publictools")) ? Path.Combine(workspace, "publictools") : "",
+                ApplicationPackagesDirectory = Directory.Exists(Path.Combine(workspace, "connected-apps")) && !Directory.Exists(Path.Combine(workspace, "applications"))
+                    ? Path.Combine(workspace, "connected-apps") : Path.Combine(workspace, "applications"),
+                Account = "", Music = "", Url = "http://127.0.0.1:8082", NativeUrl = ""
+            };
+            station.ResolveStationWechatPackage();
+            return station;
+        }
+        void ResolveStationWechatPackage() {
+            var app = Path.Combine(ApplicationPackagesDirectory, "wechat");
+            var bundled = Path.Combine(app, "runtime", "windows-x64");
+            var manifest = Path.Combine(bundled, "windows-native-manifest.json");
+            var packageRuntime = Path.Combine(PackageRuntimeRoot(Workspace), "windows-x64");
+            StationNativeUrl = "";
+            if (Directory.Exists(bundled)) {
+                WindowsRuntime.NoLinks(bundled);
+                packageRuntime = bundled;
+                if (File.Exists(Path.Combine(app, "app.json")) && File.Exists(manifest))
+                    StationNativeUrl = "http://127.0.0.1:6174";
+            }
+            AdminExe = Path.Combine(packageRuntime, "wechat-admin.exe");
+            StationNativeExe = Path.Combine(packageRuntime, "wx.exe");
         }
         // Keep the desktop's local-station login resolution identical to the
         // Go server. The old Windows-native and WSL deployments retain their
@@ -221,7 +267,7 @@ namespace WechatAgent.Desktop {
             // default action instead of showing a command-line error.
             if (args.Length == 0 || args.Length == 1 && args[0] == "--workspace") {
                 var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "data", "main_setting", "runtime", "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "runtimes", "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
+                if (File.Exists(Path.Combine(baseDirectory, "agent-home-station-server.exe")) || File.Exists(Path.Combine(baseDirectory, "data", "main_setting", "runtime", "agent-home-station-server.exe")) || File.Exists(Path.Combine(PackageRuntimeRoot(baseDirectory), "windows-x64", "windows-native-manifest.json"))) return baseDirectory;
                 for (var dir = new DirectoryInfo(baseDirectory); dir != null; dir = dir.Parent)
                     if (File.Exists(Path.Combine(dir.FullName, "secrets", "local-deployment.json"))) return dir.FullName;
                 throw new InvalidOperationException("找不到本机部署。请把程序放在完整工作站目录后直接双击。若使用自定义目录，再传入 --workspace 项目目录。");
@@ -265,6 +311,9 @@ namespace WechatAgent.Desktop {
         readonly ICommandRunner runner;
         readonly HttpClient client;
         readonly CookieContainer cookies = new CookieContainer();
+        readonly HttpClient legacyClient;
+        readonly CookieContainer legacyCookies = new CookieContainer();
+        string legacyCsrf = "";
         readonly Func<TimeSpan, CancellationToken, Task> delay;
         Process anchor;
         WindowsRuntime windows;
@@ -274,11 +323,31 @@ namespace WechatAgent.Desktop {
         internal ServiceController(Deployment deployment, ICommandRunner commands = null, HttpMessageHandler http = null, Func<TimeSpan, CancellationToken, Task> wait = null) {
             d = deployment; runner = commands ?? new HiddenRunner();
             client = new HttpClient(http ?? new HttpClientHandler { UseProxy = false, CookieContainer = cookies, AllowAutoRedirect = false });
+            legacyClient = new HttpClient(new HttpClientHandler { UseProxy = false, CookieContainer = legacyCookies, AllowAutoRedirect = false });
             client.Timeout = TimeSpan.FromSeconds(10); delay = wait ?? Task.Delay;
+            legacyClient.Timeout = TimeSpan.FromSeconds(10);
             if (d.Windows) windows = new WindowsRuntime(d, runner);
             if (d.LocalStation) station = new LocalStationRuntime(d);
         }
         internal CookieCollection SessionCookies() { return cookies.GetCookies(new Uri(d.Url)); }
+        internal async Task<Dictionary<string, object>> SaveShareReaderCredentials(string connection, string provider, string cookie, int revision, CancellationToken token) {
+            if (!d.LocalStation || String.IsNullOrWhiteSpace(connection) || String.IsNullOrWhiteSpace(provider) || String.IsNullOrWhiteSpace(cookie))
+                throw new InvalidOperationException("分享登录信息无效。");
+            return await Request("/api/local/apps/wechat/connections/" + Uri.EscapeDataString(connection) + "/share-reader/credentials", new { provider = provider, cookie = cookie, revision = revision });
+        }
+        internal async Task<Dictionary<string, object>> SaveLegacyShareReaderCredentials(string provider, string cookie, CancellationToken token) {
+            if (!d.LocalStation || String.IsNullOrWhiteSpace(provider) || String.IsNullOrWhiteSpace(cookie)) throw new InvalidOperationException("分享登录信息无效。");
+            var detail = await LegacyRequest("/api/plugin-packages/share-reader", null);
+            var installed = detail.ContainsKey("installed") ? detail["installed"] as Dictionary<string, object> : null;
+            var configuration = detail.ContainsKey("configuration") ? detail["configuration"] as Dictionary<string, object> : null;
+            if (installed == null || installed.ContainsKey("removed") && Convert.ToBoolean(installed["removed"])) throw new InvalidOperationException("旧版微信控制台尚未安装分享内容读取工具。");
+            if (configuration == null || !configuration.ContainsKey("revision")) throw new InvalidOperationException("分享内容读取工具配置不可用，请刷新工具页。");
+            int revision;
+            if (!Int32.TryParse(Deployment.Text(configuration, "revision"), out revision)) throw new InvalidOperationException("分享内容读取工具配置版本不可用。");
+            var values = configuration.ContainsKey("values") ? configuration["values"] as Dictionary<string, object> : null;
+            var secrets = new Dictionary<string, string> { { provider == "assistant" ? "assistant_cookie" : "yuanbao_cookie", cookie } };
+            return await LegacyRequest("/api/plugin-packages/share-reader/configuration", new { revision = revision, values = values ?? new Dictionary<string, object>(), secrets = secrets, clear_secrets = new string[0] });
+        }
         internal Task<CommandResult> Wsl(CancellationToken token, params string[] args) {
             var argv = new [] { "-d", d.Distro, "-u", d.User, "--exec" }.Concat(args).ToArray();
             return runner.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "wsl.exe"), argv, token);
@@ -303,11 +372,41 @@ namespace WechatAgent.Desktop {
                 }
             }
         }
+        async Task<Dictionary<string, object>> LegacyRequest(string path, object body) {
+            if (String.IsNullOrWhiteSpace(d.LegacyUrl)) throw new InvalidOperationException("旧版微信控制台地址不可用。");
+            if (legacyCookies.GetCookies(new Uri(d.LegacyUrl)).Count == 0 || legacyCsrf == "") {
+                using (var handoff = new HttpRequestMessage(HttpMethod.Get, d.LegacyUrl + "/?from_station=1")) {
+                    handoff.Headers.Add("Origin", d.LegacyUrl);
+                    using (var response = await legacyClient.SendAsync(handoff)) {
+                        if (!response.IsSuccessStatusCode) throw new InvalidOperationException("旧版微信控制台未能建立本机工作站会话。");
+                        IEnumerable<string> values;
+                        if (!response.Headers.TryGetValues("X-CSRF-Token", out values)) throw new InvalidOperationException("旧版微信控制台未返回安全会话令牌。");
+                        legacyCsrf = values.FirstOrDefault() ?? "";
+                    }
+                }
+            }
+            using (var request = new HttpRequestMessage(body == null ? HttpMethod.Get : HttpMethod.Post, d.LegacyUrl + path)) {
+                request.Headers.Add("Origin", d.LegacyUrl);
+                request.Headers.Add("X-CSRF-Token", legacyCsrf);
+                if (body != null) request.Content = new StringContent(Deployment.Json.Serialize(body), Encoding.UTF8, "application/json");
+                using (var response = await legacyClient.SendAsync(request)) {
+                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException("旧版微信工具请求失败（HTTP " + (int)response.StatusCode + "）。");
+                    return Deployment.Json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
+                }
+            }
+        }
         internal async Task Login(CancellationToken token) {
-            string password;
             if (d.LocalStation) {
-                password = Deployment.LocalStationPassword(d.Root, Environment.GetEnvironmentVariable("AHS_ADMIN_PASSWORD") ?? "");
-            } else if (d.Windows) {
+                var session = await Request("/api/session", null);
+                csrf = Deployment.Text(session, "csrf");
+                if (csrf == "") throw new InvalidOperationException("本机工作站未返回安全会话令牌。");
+                var runtime = await Request("/api/local/runtime", null);
+                if (Deployment.Text(runtime, "kind") != "local-station" || Convert.ToInt32(runtime["pid"]) != station.PID || !String.Equals(WindowsRuntime.ComparablePath(Deployment.Text(runtime, "data_directory")), WindowsRuntime.ComparablePath(d.Root), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("本机成长站实例身份不匹配，拒绝接管。");
+                return;
+            }
+            string password;
+            if (d.Windows) {
                 var path = Path.Combine(d.Root, "admin", "admin-password");
                 var fallback = Path.Combine(d.Root, "admin", "admin-token");
                 if (!File.Exists(path)) path = fallback;
@@ -318,12 +417,6 @@ namespace WechatAgent.Desktop {
             }
             var login = await Request("/api/login", new { password = password });
             csrf = Deployment.Text(login, "csrf");
-            if (d.LocalStation) {
-                var runtime = await Request("/api/local/runtime", null);
-                if (Deployment.Text(runtime, "kind") != "local-station" || Convert.ToInt32(runtime["pid"]) != station.PID || !String.Equals(WindowsRuntime.ComparablePath(Deployment.Text(runtime, "data_directory")), WindowsRuntime.ComparablePath(d.Root), StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("本机成长站实例身份不匹配，拒绝接管。");
-                return;
-            }
             var status = await Request("/api/status", null);
             if (Deployment.Text(status, "account") != d.Account) throw new InvalidOperationException("端口上的账号与部署配置不符；拒绝管理其他实例。");
         }
@@ -479,6 +572,6 @@ namespace WechatAgent.Desktop {
             }
             if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
-        public void Dispose() { client.Dispose(); StopAnchor(); if (windows != null) windows.Dispose(); if (station != null) station.Dispose(); }
+        public void Dispose() { client.Dispose(); legacyClient.Dispose(); StopAnchor(); if (windows != null) windows.Dispose(); if (station != null) station.Dispose(); }
     }
 }

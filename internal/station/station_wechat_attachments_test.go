@@ -27,10 +27,34 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
+func TestStationAttachmentRecordPreservesGrantAcrossJSON(t *testing.T) {
+	source := wechatapp.AttachmentSource{Account: "test", Dataset: "synthetic", Thread: "room@chatroom", Message: "original", Kind: "file", Filename: "fixture.docx",
+		Grant: time.Date(2026, 1, 1, 10, 0, 0, 0, time.FixedZone("zero-offset-zone", 0))}
+	expected := stationAttachmentRecord{ID: source.AssetID(), Source: source, Bytes: 1}
+	raw, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored stationAttachmentRecord
+	if err = json.Unmarshal(raw, &stored); err != nil || stored.Source.Grant == source.Grant || !stored.matchesSource(source) {
+		t.Fatal("the same attachment grant did not survive JSON storage", err)
+	}
+	changed := source
+	changed.Grant = changed.Grant.Add(time.Second)
+	if stored.matchesSource(changed) {
+		t.Fatal("a different grant reused the cached attachment")
+	}
+	changed = source
+	changed.Message = "another-message"
+	if stored.matchesSource(changed) {
+		t.Fatal("a different message reused the cached attachment")
+	}
+}
+
 func TestLocalWechatAttachmentVerifiesOriginalAndScopesAccess(t *testing.T) {
 	base := t.TempDir()
 	host := filepath.Join(base, "host")
-	nativeRoot := filepath.Join(host, "apps", "wechat", "native")
+	nativeRoot := filepath.Join(host, "applications", "wechat", "native")
 	if err := os.MkdirAll(nativeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}

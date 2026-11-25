@@ -104,6 +104,16 @@ func prepareSaveWorkflow(raw []byte, approvedSHA256 string, ref JobRef, class, s
 		// dictionary before executing the Python node.
 		inputs["format"] = "flac"
 	}
+	if class == "SaveVideo" {
+		if _, exists := inputs["video"]; !exists {
+			return Prepared{}, errors.New("SaveVideo video input required")
+		}
+		inputs["format"] = "mp4"
+		// Newer ComfyUI versions expand the container's nested codec input.
+		// The older SaveVideo schema reads the top-level codec.
+		inputs["format.codec"] = "h264"
+		inputs["codec"] = "h264"
+	}
 	inputs["filename_prefix"] = ref.subfolder() + "/" + stem
 	body, err := json.Marshal(map[string]any{
 		"prompt_id": ref.ID, "client_id": ref.ID, "prompt": graph,
@@ -201,13 +211,17 @@ func (c *Client) CheckVersion(ctx context.Context, expected string) error {
 		return ErrProtocol
 	}
 	switch response.System.Version {
-	case ReferenceVersion, "0.44.0":
-		if expected != "" && response.System.Version != expected {
+	case ReferenceVersion, "0.44.0", "0.45.0":
+		// ReferenceVersion names the host protocol family. A newer audited
+		// Windows ComfyUI may keep the same API while reporting a newer patch
+		// version; callers pinning a different explicit version still require an
+		// exact match.
+		if expected != "" && expected != ReferenceVersion && response.System.Version != expected {
 			return fmt.Errorf("%w: installed ComfyUI version differs from the host pin", ErrProtocol)
 		}
 		return nil
 	default:
-		return fmt.Errorf("%w: expected audited ComfyUI protocol (0.37.2 or 0.44.0)", ErrProtocol)
+		return fmt.Errorf("%w: expected audited ComfyUI protocol (0.37.2, 0.44.0 or 0.45.0)", ErrProtocol)
 	}
 }
 
@@ -313,7 +327,14 @@ func (c *Client) readJob(ctx context.Context, ref JobRef) (State, json.RawMessag
 		return "", nil, ErrProtocol
 	}
 	switch response.State {
-	case Pending, Running, Failed, Cancelled:
+	case Running:
+		// Some ComfyUI builds leave /api/jobs at in_progress after the
+		// prompt has finished. History is the backend's completed output.
+		if historyState, output, ok := c.completedHistory(ctx, ref); ok {
+			return historyState, output, nil
+		}
+		return Running, nil, nil
+	case Pending, Failed, Cancelled:
 		return response.State, nil, nil
 	case Completed:
 		if response.Execution.Completed && response.Execution.Status == "success" {
@@ -321,6 +342,34 @@ func (c *Client) readJob(ctx context.Context, ref JobRef) (State, json.RawMessag
 		}
 	}
 	return "", nil, ErrProtocol
+}
+
+func (c *Client) completedHistory(ctx context.Context, ref JobRef) (State, json.RawMessage, bool) {
+	status, body, err := c.request(ctx, http.MethodGet, "/history/"+ref.ID, nil, maxJSONBytes)
+	if err != nil || status != http.StatusOK {
+		return "", nil, false
+	}
+	var entries map[string]struct {
+		Status struct {
+			Status    string `json:"status_str"`
+			Completed bool   `json:"completed"`
+		} `json:"status"`
+		Outputs map[string]json.RawMessage `json:"outputs"`
+	}
+	if json.Unmarshal(body, &entries) != nil {
+		return "", nil, false
+	}
+	entry, ok := entries[ref.ID]
+	if !ok || !entry.Status.Completed {
+		return "", nil, false
+	}
+	if entry.Status.Status == "success" {
+		return Completed, entry.Outputs[ref.SaveNode], true
+	}
+	if entry.Status.Status == "error" {
+		return Failed, nil, true
+	}
+	return "", nil, false
 }
 
 // Cancel returns whether the backend dispatched a targeted cancellation. A

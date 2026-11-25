@@ -40,7 +40,7 @@ func (p *permittedTools) newMusicServiceControlPolicy(ctx context.Context, actio
 		return nil, toolInputError("music_service_action_invalid")
 	}
 	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)
-	if authority == nil && !p.privileged() {
+	if authority == nil && ((!p.privileged() && !p.workspaceExecutionAllowed()) || action == "stop" && !p.privileged()) {
 		return nil, toolInputError("music_service_control_requires_owner")
 	}
 	// A lifecycle operation has the same evidence requirements as a bounded
@@ -59,7 +59,7 @@ func (p *permittedTools) newMusicServiceControlPolicy(ctx context.Context, actio
 }
 
 func (p *musicServiceControlPolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
-	if p.base.admin == nil && !p.base.p.privileged() {
+	if p.base.admin == nil && ((!p.base.p.privileged() && !p.base.p.workspaceExecutionAllowed()) || p.action == "stop" && !p.base.p.privileged()) {
 		return errors.New("music_service_owner_authorization_changed")
 	}
 	return p.base.checkBoundCall(ctx, j, cap, musicServiceControlCapability, p.arguments)
@@ -90,11 +90,18 @@ func (p *musicServiceControlPolicy) Service(ctx context.Context, j pluginhost.Jo
 		result = json.RawMessage(value)
 	case "status":
 		state := m.windowsMusicStatus()
-		configured := m.localMusicPluginConfigured(ctx)
-		if runtime.GOOS == "windows" {
-			configured = configured && m.windowsMusicRegistered()
+		status := map[string]any{
+			"platform": runtime.GOOS, "configured": m.localMusicPluginConfigured(ctx),
+			"running": state.Running, "busy": state.Busy, "stopping": state.Stopping,
+			"coverage": "owned_supervisor_only", "model_ready_verified": false,
 		}
-		result, _ = json.Marshal(map[string]any{"platform": runtime.GOOS, "configured": configured, "running": state.Running, "busy": state.Busy, "stopping": state.Stopping, "coverage": "owned_supervisor_only", "model_ready_verified": false})
+		if runtime.GOOS == "windows" {
+			if _, _, err := m.windowsMusicLaunchConfig(); err != nil {
+				status["configured"] = false
+				status["registration_error"] = err.Error()
+			}
+		}
+		result, _ = json.Marshal(status)
 	case "stop":
 		if runtime.GOOS != "windows" {
 			return nil, toolInputError("managed_local_music_stop_not_applicable")
@@ -133,9 +140,42 @@ func (p *musicServiceControlPolicy) Validate(ctx context.Context, j pluginhost.J
 }
 
 func (p *permittedTools) controlMusicService(ctx context.Context, action string) (string, error) {
+	if action == "start" && runtime.GOOS == "windows" {
+		if _, err := p.startMusicServiceHost(ctx); err != nil {
+			return "", err
+		}
+	}
 	policy, err := p.newMusicServiceControlPolicy(ctx, action)
 	if err != nil {
 		return "", err
+	}
+	if action == "start" && runtime.GOOS == "windows" {
+		// The Windows supervisor is already bound to the installed music package
+		// by startWindowsMusic. Starting it through the plugin callback can lose
+		// the host result and strand an otherwise valid local launch.
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		base := policy.base
+		ready := func(probeCtx context.Context) (yueHealth, int, error) {
+			body, _, status, err := localMusicHTTP(probeCtx, "GET", base.endpoint+"/health", nil, "", base.token, accountDirectory(p.manager.native.Account()))
+			var health yueHealth
+			if err == nil && status == 200 && json.Unmarshal(body, &health) != nil {
+				err = yueError("yue_response_limit")
+			}
+			return health, status, err
+		}
+		if err := waitWindowsMusicReady(ctx, func(checkCtx context.Context) error {
+			if base.admin != nil {
+				return base.admin.valid(checkCtx, p.manager)
+			}
+			if !p.privileged() && !p.workspaceExecutionAllowed() {
+				return toolInputError("music_service_start_requires_owner")
+			}
+			return checkCtx.Err()
+		}, func() bool { return p.manager.windowsMusicStatus().Running }, ready, time.Second); err != nil {
+			return "", err
+		}
+		return `{"state":"ready","backend":"windows-native","ready":true}`, nil
 	}
 	c, ready, err := p.manager.installedPluginRuntime()
 	if err != nil || !ready {
@@ -157,29 +197,6 @@ func (p *permittedTools) controlMusicService(ctx context.Context, action string)
 	}
 	if err = policy.Check(ctx, call.Job, pluginhost.Capability{}); err != nil {
 		return "", err
-	}
-	if action == "start" && runtime.GOOS == "windows" {
-		// Launch is asynchronous. Check the authenticated account endpoint outside
-		// the plugin call so its stdio session is available for other operations.
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		base := policy.base
-		ready := func(probeCtx context.Context) (yueHealth, int, error) {
-			body, _, status, err := localMusicHTTP(probeCtx, "GET", base.endpoint+"/health", nil, "", base.token, accountDirectory(p.manager.native.Account()))
-			var health yueHealth
-			if err == nil && status == 200 && json.Unmarshal(body, &health) != nil {
-				err = yueError("yue_response_limit")
-			}
-			return health, status, err
-		}
-		if err := waitWindowsMusicReady(ctx, func(checkCtx context.Context) error {
-			return policy.Check(checkCtx, call.Job, pluginhost.Capability{})
-		}, func() bool {
-			return p.manager.windowsMusicStatus().Running
-		}, ready, time.Second); err != nil {
-			return "", err
-		}
-		return `{"state":"ready","backend":"windows-native","ready":true}`, nil
 	}
 	return string(call.Job.Result), nil
 }

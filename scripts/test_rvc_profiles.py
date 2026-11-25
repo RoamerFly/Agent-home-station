@@ -22,6 +22,18 @@ class ProfileTests(unittest.TestCase):
             (library/'manifests/private-mom.json').write_text(json.dumps({'configuration':str(root/'other.config')}))
             with self.assertRaises((ValueError,FileNotFoundError)):rvc_profiles.resolve(None,'default',body,private)
 
+    def test_registered_library_can_live_in_tool_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); private=root/'account'; private.mkdir()
+            library=root/'tool/models/private-voices'; (library/'manifests').mkdir(parents=True)
+            config=library/'voice.json'; config.write_text('{}')
+            (library/'manifests/private-whale.json').write_text(json.dumps({'configuration':str(config)}))
+            (private/'voice-library-root').write_text(str(library),encoding='utf-8')
+            self.assertEqual(rvc_profiles.resolve(None,'default',{'voice_profile_id':'private-whale'},private),str(config))
+            (library/'manifests/private-whale.json').write_text(json.dumps({'configuration':str(root/'outside.json')}))
+            with self.assertRaises((ValueError,FileNotFoundError)):
+                rvc_profiles.resolve(None,'default',{'voice_profile_id':'private-whale'},private)
+
     def test_selected_profile_is_registered_and_frozen_in_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

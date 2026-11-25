@@ -11,6 +11,39 @@ import (
 )
 
 func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, bool) {
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && strings.HasPrefix(asset, "comfy-") {
+		if j, index, allowed := t.comfyMediaAllowed(t.trace, asset); allowed {
+			return j.media(index), true
+		}
+	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
+		if j, allowed := t.yueMediaAllowed(t.trace, asset); allowed {
+			return j.media(), true
+		}
+	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
+		if j, allowed := t.rvcMediaAllowed(t.trace, asset); allowed {
+			return j.media(), true
+		}
+	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
+		if j, allowed := t.externalHTTPMediaAllowed(t.trace, asset); allowed {
+			return j.media(), true
+		}
+	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
+		if j, allowed := t.externalTaskMediaAllowed(t.trace, asset); allowed {
+			return j.media(), true
+		}
+	}
+	if asset, ok := strings.CutPrefix(id, "reply-"); ok && artifactID(asset, "speech-") {
+		p, file, err := t.speechProduct(asset)
+		if err != nil {
+			return companion.GeneratedMedia{}, false
+		}
+		file.Close()
+		return p.media(), t.speechProductAllowed(t.trace, p)
+	}
 	if asset, ok := strings.CutPrefix(id, "reply-"); ok && stationDocumentReplyID(asset) {
 		r, err := t.readDocumentReply(asset)
 		if err != nil {
@@ -60,6 +93,45 @@ func (t *stationAttachmentTools) prepareReply(ctx context.Context, raw json.RawM
 }
 
 func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.Input, kind, asset string) (string, error) {
+	if strings.HasPrefix(asset, "comfy-") {
+		return t.stageComfy(ctx, in, kind, asset)
+	}
+	if strings.HasPrefix(asset, "yue-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageYuE(ctx, in, asset)
+	}
+	if strings.HasPrefix(asset, "rvc-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageRVC(ctx, in, asset)
+	}
+	if strings.HasPrefix(asset, "external-task-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageExternalTask(ctx, in, asset)
+	}
+	if strings.HasPrefix(asset, "external-mcp-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageExternalMCP(ctx, in, asset)
+	}
+	if strings.HasPrefix(asset, "external-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageExternalHTTP(ctx, in, asset)
+	}
+	if artifactID(asset, "speech-") {
+		if kind != "file" {
+			return "", wechatapp.ErrAttachmentDenied
+		}
+		return t.stageSpeech(ctx, in, asset)
+	}
 	if stationDocumentReplyID(asset) {
 		if kind != "file" {
 			return "", wechatapp.ErrAttachmentDenied
@@ -98,6 +170,29 @@ func (t *stationAttachmentTools) stageReply(ctx context.Context, in companion.In
 }
 
 func (t *stationAttachmentTools) canSubmitMedia(ctx context.Context, in companion.Input, kind, asset string) bool {
+	if strings.HasPrefix(asset, "comfy-") {
+		j, index, allowed := t.comfyMediaAllowed(in, asset)
+		return allowed && j.Products[index].Kind == kind
+	}
+	if strings.HasPrefix(asset, "yue-") {
+		_, allowed := t.yueMediaAllowed(in, asset)
+		return kind == "file" && allowed
+	}
+	if strings.HasPrefix(asset, "rvc-") {
+		_, allowed := t.rvcMediaAllowed(in, asset)
+		return kind == "file" && allowed
+	}
+	if artifactID(asset, "speech-") {
+		p, file, err := t.speechProduct(asset)
+		if err != nil || kind != "file" {
+			if file != nil {
+				file.Close()
+			}
+			return false
+		}
+		file.Close()
+		return t.speechProductAllowed(in, p)
+	}
 	if !stationDocumentReplyID(asset) {
 		return true
 	}

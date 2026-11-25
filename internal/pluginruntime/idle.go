@@ -50,7 +50,7 @@ func (c *Controller) idleLoop() {
 			continue
 		}
 		if delay == 0 {
-			c.reapIdle(context.Background())
+			c.reapIdle(c.idleCtx)
 			recheckingDue = true
 			continue
 		}
@@ -61,7 +61,7 @@ func (c *Controller) idleLoop() {
 			// A start, dispatch or policy change recomputes the lease below.
 			recheckingDue = false
 		case <-c.clock.After(delay):
-			c.reapIdle(context.Background())
+			c.reapIdle(c.idleCtx)
 			recheckingDue = true
 		}
 	}

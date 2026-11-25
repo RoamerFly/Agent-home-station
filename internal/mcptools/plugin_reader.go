@@ -16,6 +16,14 @@ type publicPluginMediaOrigin struct{ origin, destination string }
 // binary through MCP. Only its location/type is returned; download and content
 // validation happen separately under the original task authorization.
 func ReadPublicPluginShareSource(ctx context.Context, raw string, maxBytes int64, timeout time.Duration) ([]byte, string, string, error) {
+	// Kuaishou public share pages can return a shell or an interstitial to the
+	// generic tool user-agent. Reuse the existing read-only Kuaishou request
+	// policy so the plugin receives the same public page that the native media
+	// reader accepts; this does not add cookies or authenticated state.
+	u, _ := url.Parse(raw)
+	if kuaishouPhotoID(raw) != "" || u != nil && u.Hostname() == "v.kuaishou.com" {
+		ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
+	}
 	return ReadPublicPluginPage(context.WithValue(ctx, publicPluginMediaProbeKey{}, true), raw, maxBytes, timeout)
 }
 
@@ -26,6 +34,13 @@ func GetPublicPluginMedia(ctx context.Context, raw, source string, maxBytes int6
 	ctx, err := publicPluginMediaContext(ctx, raw, source)
 	if err != nil {
 		return nil, "", err
+	}
+	// Kuaishou's CDN playback endpoints require the same credential-free
+	// browser profile as its public share page. The plugin returns only a
+	// source-verified locator, so derive this transport hint from the pinned
+	// public host rather than accepting a caller-supplied header or cookie.
+	if u, parseErr := url.Parse(raw); parseErr == nil && kuaishouMediaHost(u.Hostname()) {
+		ctx = context.WithValue(ctx, kuaishouRequestKey{}, true)
 	}
 	return GetPublicMedia(ctx, raw, maxBytes)
 }

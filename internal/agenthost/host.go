@@ -109,7 +109,11 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 				devices = append(devices, path)
 			}
 		}
-		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true, "gpu_devices_available": devices, "gpu_mounted": h.Config.Isolation != nil && h.Config.Isolation.GPU, "gpu_instruction": "GPU is available to sandbox commands via gpu=true on server_exec/server_process. Use the registered CUDA runtime. cuda=False without that mount or in a CPU-only torch environment does not describe the host hardware."}, nil
+		readOnly := []string{}
+		if h.Config.Isolation != nil {
+			readOnly = append(readOnly, h.Config.Isolation.ReadOnly...)
+		}
+		return map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "roots": h.Config.Roots, "read_only_roots": readOnly, "mode": h.Config.Mode, "windows_hidden_executor": h.Config.Windows != nil, "command_identity": "system-isolated workspace process; no host fallback", "isolation_required": true, "gpu_devices_available": devices, "gpu_mounted": h.Config.Isolation != nil && h.Config.Isolation.GPU, "gpu_instruction": "GPU is available to sandbox commands via gpu=true on server_exec/server_process. Use the registered CUDA runtime. cuda=False without that mount or in a CPU-only torch environment does not describe the host hardware."}, nil
 	}
 	if runtime.GOOS != "windows" && len(in.Path) >= 3 && in.Path[1] == ':' {
 		normalized, e := WindowsLocalPath(in.Path)
@@ -188,6 +192,9 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 		if len(in.Content) > 64000 {
 			return nil, errors.New("单次写入不能超过64KB")
 		}
+		if err := root.MkdirAll(filepath.Dir(rel), 0700); err != nil {
+			return nil, errors.New("无法在授权目录内创建父目录")
+		}
 		// Only create new files: overwriting existing files needs an explicit flag
 		// in a future API, rather than silently destroying user data.
 		f, err := root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -196,7 +203,7 @@ func (h Host) Call(ctx context.Context, tool string, raw json.RawMessage) (any, 
 				return nil, errors.New("文件已存在，未覆盖；先server_read再用server_edit按sha256修改")
 			}
 			if errors.Is(err, os.ErrNotExist) {
-				return nil, errors.New("父目录不存在；先检查路径或使用server_exec创建所需目录")
+				return nil, errors.New("父目录在创建文件前已不可用，请检查路径后重试")
 			}
 			return nil, errors.New("文件创建失败；请检查目录权限与磁盘空间，未覆盖已有文件")
 		}

@@ -43,3 +43,55 @@ func TestCardBodyDescriptionNeverReleasesURLOrInstructions(t *testing.T) {
 		t.Fatal("malformed card treated as video")
 	}
 }
+
+func TestPublicShareURLKeepsWeChatArticleIdentity(t *testing.T) {
+	got := PublicShareURL("https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=xyz&t=private&scene=2#part")
+	if got != "https://mp.weixin.qq.com/s?__biz=abc&idx=1&mid=123&sn=xyz" {
+		t.Fatal(got)
+	}
+}
+
+func TestForwardedConversationRetainsNativeProjection(t *testing.T) {
+	subtype := 19
+	message := linuxnative.Message{
+		Type:           49,
+		AppMessageType: &subtype,
+		Body:           "[Chat History] 测试聊天记录\n甲: 第一条测试文字\n乙: 第二条测试文字",
+	}
+	description := CardDescription(message)
+	if text, coverage := historyMessageText(message); text != description || coverage != "forwarded_content" {
+		t.Fatalf("history = %q, %q", text, coverage)
+	}
+	if !strings.Contains(description, "微信合并转发") || !strings.HasSuffix(description, message.Body) {
+		t.Fatal(description)
+	}
+	if _, ok := PublisherCardDescription(message); ok {
+		t.Fatal("forwarded conversation became publisher card copy")
+	}
+	message.Body = "[Chat History unavailable]"
+	if description := CardDescription(message); !strings.Contains(description, "正文暂不可用") {
+		t.Fatal(description)
+	}
+}
+
+func TestHistoryKeepsNativeCardMetadataAndDiscardsMiniProgramLocator(t *testing.T) {
+	subtype := 33
+	fileNotice := 74
+	for _, tc := range []struct {
+		message  linuxnative.Message
+		expected string
+		coverage string
+	}{
+		{linuxnative.Message{Type: 42, Body: "显示名称：合成测试"}, "显示名称", "card_metadata_only"},
+		{linuxnative.Message{Type: 48, Body: "地点：合成公园"}, "合成公园", "card_metadata_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &subtype, Link: &linuxnative.LinkCard{Title: "合成小程序", URL: "https://example.org/PRIVATE"}}, "合成小程序", "card_metadata_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &subtype}, "微信小程序卡片", "card_type_only"},
+		{linuxnative.Message{Type: 49, AppMessageType: &fileNotice, Link: &linuxnative.LinkCard{Title: "示例.pdf"}}, "示例.pdf", "notice_only"},
+		{linuxnative.Message{Type: 10000, Body: "合成系统提示"}, "合成系统提示", "notice_only"},
+	} {
+		text, coverage := historyMessageText(tc.message)
+		if !strings.Contains(text, tc.expected) || strings.Contains(text, "PRIVATE") || coverage != tc.coverage {
+			t.Errorf("kind %d history = %q, %q", tc.message.Type, text, coverage)
+		}
+	}
+}

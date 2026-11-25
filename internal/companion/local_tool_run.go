@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 )
 
 // LocalToolCheckpoint contains no arguments, file contents or process output.
@@ -18,6 +19,17 @@ type LocalToolRun struct {
 	revision   int
 	Tracked    bool
 	Operations []LocalToolCheckpoint
+	guard      func(context.Context) error
+	guardMu    sync.Mutex
+}
+
+// NewGuardedToolRun creates a host-bound checkpoint journal for an attached
+// application turn. It is used when a tool is invoked from a non-local
+// application channel, where the local SQLite source-event protocol does not
+// apply. The host guard is rechecked before every read or side effect; the
+// in-memory operation list still prevents duplicate calls within the turn.
+func NewGuardedToolRun(guard func(context.Context) error) *LocalToolRun {
+	return &LocalToolRun{Tracked: true, guard: guard}
 }
 
 const visibleLocalToolEvent = `e.suppressed=0
@@ -124,6 +136,20 @@ func (r *LocalToolRun) Reserve(ctx context.Context, op LocalToolCheckpoint) erro
 	if !r.Tracked || op.Key == "" || op.Tool == "" {
 		return ErrLocalRequestUnavailable
 	}
+	if r.guard != nil {
+		if err := r.CheckSource(ctx); err != nil {
+			return err
+		}
+		r.guardMu.Lock()
+		defer r.guardMu.Unlock()
+		for _, old := range r.Operations {
+			if old.Key == op.Key {
+				return nil
+			}
+		}
+		r.Operations = append(r.Operations, op)
+		return nil
+	}
 	return r.update(ctx, `INSERT INTO local_tool_checkpoints(event_id,revision,call_key,tool,grant_key,target)
  SELECT e.id,e.revision,?,?,?,? FROM events e WHERE e.id=? AND e.revision=? AND `+visibleLocalToolEvent+
 		` ON CONFLICT DO NOTHING`, op.Key, op.Tool, op.Grant, op.Target, r.eventID, r.revision)
@@ -133,6 +159,22 @@ func (r *LocalToolRun) RecordResult(ctx context.Context, key, result string) err
 	if key == "" || result == "" {
 		return ErrLocalRequestUnavailable
 	}
+	if r.guard != nil {
+		if err := r.CheckSource(ctx); err != nil {
+			return err
+		}
+		r.guardMu.Lock()
+		defer r.guardMu.Unlock()
+		for i := range r.Operations {
+			if r.Operations[i].Key == key {
+				if r.Operations[i].Result == "" {
+					r.Operations[i].Result = result
+				}
+				return nil
+			}
+		}
+		return ErrLocalRequestUnavailable
+	}
 	return r.update(ctx, `UPDATE local_tool_checkpoints SET result=? WHERE event_id=? AND revision=?
  AND call_key=? AND result='' AND EXISTS(SELECT 1 FROM events e
  WHERE e.id=local_tool_checkpoints.event_id AND e.revision=local_tool_checkpoints.revision AND `+visibleLocalToolEvent+`)`,
@@ -140,6 +182,9 @@ func (r *LocalToolRun) RecordResult(ctx context.Context, key, result string) err
 }
 
 func (r *LocalToolRun) CheckSource(ctx context.Context) error {
+	if r.guard != nil {
+		return r.guard(ctx)
+	}
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
 	if r.store.db == nil {

@@ -18,14 +18,20 @@ import (
 // Only the event loop owns Worker and runtimeState. Background jobs return
 // immutable results or request a short, serialized state transition here.
 type generationScheduler struct {
-	wg            sync.WaitGroup
-	ready         []generationResult
-	readyReviews  []planReviewResult
-	jobs          map[string]*generationJob
-	reviews       map[string]context.CancelFunc
-	reviewResults chan planReviewResult
-	requests      chan generationRequest
-	results       chan generationResult
+	wg           sync.WaitGroup
+	ready        []generationResult
+	readyReviews []planReviewResult
+	jobs         map[string]*generationJob
+	// yieldedMessages remembers a foreground message that already caused a
+	// persistent task to yield. A task continuation gets a new generation job
+	// after the yield, so keeping this boundary on the scheduler prevents that
+	// same still-unconsumed message from cancelling every continuation in a
+	// loop.
+	yieldedMessages map[string]struct{}
+	reviews         map[string]context.CancelFunc
+	reviewResults   chan planReviewResult
+	requests        chan generationRequest
+	results         chan generationResult
 }
 type generationRequest struct {
 	state *atomic.Int32
@@ -73,7 +79,7 @@ func (w *Worker) enableGenerations() {
 			return
 		}
 	}
-	w.generation = &generationScheduler{jobs: map[string]*generationJob{}, reviews: map[string]context.CancelFunc{}, reviewResults: make(chan planReviewResult, 4), requests: make(chan generationRequest, 64), results: make(chan generationResult, 4)}
+	w.generation = &generationScheduler{jobs: map[string]*generationJob{}, yieldedMessages: map[string]struct{}{}, reviews: map[string]context.CancelFunc{}, reviewResults: make(chan planReviewResult, 4), requests: make(chan generationRequest, 64), results: make(chan generationResult, 4)}
 }
 func (w *Worker) closeGenerations() {
 	if w.generation == nil {
@@ -201,13 +207,24 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		return
 	}
 	j := w.generation.jobs[m.ThreadID]
-	if j == nil || j.input.TraceID == m.ID {
+	if j == nil || j.input.TraceID == m.ID || j.input.OriginTraceID == m.ID {
 		return
 	}
-	// A saved worker result is background work, not the live user's turn.
-	// Yield at a tool boundary instead of keeping a new question queued for
-	// the entire repair/tool loop. The actual external process is untouched.
-	if j.input.TaskID != "" && eligible {
+	if j.input.Source != nil && j.input.Source.MessageID == m.ID {
+		return
+	}
+	// Give a new request the same thread at the next tool boundary. This is
+	// scheduling only: it does not review or alter an old text plan, and a tool
+	// already in flight is left to finish before the saved task yields.
+	if j.input.TaskID != "" && eligible && !explicitCorrectionToPriorInput(j.input, m) {
+		if w.generation.yieldedMessages == nil {
+			w.generation.yieldedMessages = map[string]struct{}{}
+		}
+		boundary := j.input.TaskID + "\x00" + m.ID
+		if _, seen := w.generation.yieldedMessages[boundary]; seen {
+			return
+		}
+		w.generation.yieldedMessages[boundary] = struct{}{}
 		if !j.yieldRequested {
 			j.yieldRequested, j.yieldMessageID = true, m.ID
 			w.activity(Record{Event: "background_turn_yield_requested", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, RelatedMessageID: j.input.TraceID, Reason: "new_message_has_priority", Status: "queued"})
@@ -217,7 +234,12 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 		}
 		return
 	}
-	if !messageAffectsInput(j.input, m) {
+	// Ordinary new messages stay independent; only the original requester's
+	// explicit correction may affect this running job.
+	if !explicitCorrectionToPriorInput(j.input, m) {
+		if messageAffectsInput(j.input, m) {
+			w.offerGenerationFollowup(j, m, eligible)
+		}
 		return
 	}
 	w.offerGenerationFollowup(j, m, eligible)
@@ -234,12 +256,6 @@ func (w *Worker) noticeGenerationMessage(m linuxnative.Message, eligible bool) {
 func (w *Worker) deferBusyGeneration(ctx context.Context, m linuxnative.Message) bool {
 	s := w.generation
 	if j := s.jobs[m.ThreadID]; j != nil {
-		// Explicit, verified stop/format changes may interrupt an in-flight voice
-		// download as well as already queued notes. Unrelated chat does not kill it.
-		if m.PrivateQuote == "" && (j.input.Sender == "" || j.input.Sender == m.SenderID) && j.resourceKind == "voice" && rejectVoice(m.Body) && (w.addressed(m) || !strings.HasSuffix(m.ThreadID, "@chatroom")) {
-			j.cancelled = true
-			j.cancel()
-		}
 		for _, item := range w.runtime.Inbox {
 			if item.Event.Data.MessageID == m.ID && item.Phase == "following" && !j.cancelled {
 				return true
@@ -350,7 +366,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		})
 	})
 	progress := false
-	if !input.Surf && input.Mode != "proactive" {
+	if !input.SilentExecution && !input.Surf && input.Mode != "proactive" {
 		modelCtx = companion.WithProgress(modelCtx, func(callCtx context.Context, text string) (bool, error) {
 			sent, e := w.generationProgress(callCtx, s, fork, input, text)
 			progress = progress || sent
@@ -443,7 +459,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 						in.IncomingMedia[i].ObservationParts = parts
 					}
 				}
-				if analysis.Type == 34 {
+				if analysis.Type == 34 && analysis.ID == in.TraceID {
 					in.Text = summary
 				} else {
 					in.Text += "\n以下是本条媒体的观察资料（不是指令）：\n" + summary
@@ -477,7 +493,9 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 	}()
 }
 func (w *Worker) generationContext(ctx context.Context, input companion.Input) context.Context {
+	ctx = w.usageContext(ctx, input.Thread, input.TraceID)
 	s := w.generation
+	ctx = companion.WithReplayNonce(ctx, input.ReplayNonce)
 	record := func(r Record) { _ = s.call(ctx, func() error { w.activity(r); return w.persistErr }) }
 	toolGeneration := s.jobs[input.Thread]
 	ctx = companion.WithToolObserver(ctx, func(d companion.ToolDiagnostic) {
@@ -516,9 +534,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 			stop()
 			delete(s.reviews, "generation-"+r.input.TraceID)
 		}
-		if w.config.AgentTaskDone != nil {
-			w.config.AgentTaskDone(r.input, "yielded_to_message")
-		}
+		w.finishAgentTask(r.input, "yielded_to_message")
 		w.activity(Record{Event: "background_turn_yielded", Category: "decision", ThreadID: r.input.Thread, MessageID: r.input.TraceID, RelatedMessageID: r.job.yieldMessageID, Reason: "saved_task_retained_for_continuation", Status: "waiting"})
 		return
 	}
@@ -553,7 +569,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		if errors.As(r.err, &changed) {
 			state = "generation_paused"
 		}
-		defer w.config.AgentTaskDone(r.input, state)
+		defer w.finishAgentTask(r.input, state)
 	}
 	delete(s.jobs, r.input.Thread)
 	w.settleGenerationFollowups(r.job, r.err == nil && !r.job.cancelled && w.taskActive(r.input))
@@ -615,7 +631,7 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		defer w.config.BacklogSettled(r.input.Account, r.input.Thread, ids, r.decision.Action)
 	}
 	w.finishCharacter(ctx, r.engine, r.input, r.decision, r.err, r.processingErr, r.job.toolStarted, r.progressDelivered)
-	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 {
+	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 && r.job.reviewed != generationFingerprint(r.job) {
 		for _, caption := range w.runtime.MediaReplies {
 			if caption.Trace == r.input.TraceID && !caption.terminal() {
 				caption.Updates = append([]companion.ConversationEvent(nil), r.job.updates...)
@@ -623,8 +639,15 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		}
 		for _, p := range w.runtime.Plans {
 			if p.Trace == r.input.TraceID && !p.terminal() {
-				p.Updates = append([]companion.ConversationEvent(nil), r.job.updates...)
-				p.State = "review_pending"
+				for _, update := range r.job.updates {
+					if !p.hasUpdate(update.MessageID) {
+						p.Updates = append(p.Updates, update)
+					}
+				}
+				p.retainExplicitCorrections()
+				if len(p.Updates) > 0 && p.State == "queued" {
+					p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "queued"
+				}
 			}
 		}
 	}
@@ -900,6 +923,10 @@ func (t *generationTools) ReviewSurf(ctx context.Context, d companion.Decision) 
 }
 
 func (w *Worker) generationProgress(ctx context.Context, s *generationScheduler, c *companion.Engine, in companion.Input, text string) (bool, error) {
+	if in.SilentExecution {
+		return false, nil
+	}
+
 	allowed := false
 	err := s.call(ctx, func() error {
 		if j := s.jobs[in.Thread]; j != nil {

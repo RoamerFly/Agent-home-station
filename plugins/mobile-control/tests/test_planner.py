@@ -107,7 +107,7 @@ class PlannerTests(unittest.TestCase):
         context = {"account":"a", "thread":"t", "requester":"u", "purpose":"p", "request_key":"k"}
         requests = [
             {"jsonrpc":"2.0", "id":"init", "method":"initialize", "params":{"_meta":{}}},
-            {"jsonrpc":"2.0", "id":"call", "method":"tools/call", "params":{"name":"device.plan", "arguments":arguments(), "_meta":{"wechat/context":context}}},
+            {"jsonrpc":"2.0", "id":"call", "method":"tools/call", "params":{"name":"device.plan", "arguments":arguments(), "_meta":{"station/call_id":"a" * 64}}},
             {"jsonrpc":"2.0", "id":"mobile-model-1", "result":{"text":"普通页面"}},
             {"jsonrpc":"2.0", "id":"mobile-model-2", "result":{"text":call({"action":"wait", "summary":"等待"})}},
         ]

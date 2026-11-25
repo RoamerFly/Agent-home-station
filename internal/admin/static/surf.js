@@ -1,6 +1,6 @@
 (() => {
  'use strict';const $=s=>document.querySelector(s),api=(...a)=>window.WechatAdmin.api(...a);
- const state={items:[],pending:null,ready:false,busy:false,dirty:false,timer:null,selected:new Set(),allowed:new Set(),directory:new Map(),targetBusy:false,version:0,saving:false,settings:null};
+ const state={items:[],pending:null,ready:false,busy:false,dirty:false,timer:null,selected:new Set(),allowed:new Set(),directory:new Map(),targetBusy:false,version:0,saving:false,settings:null,reminders:[],reminderBusy:false};
  const kinds={surf:'自主冲浪',chat_tool:'聊天需求',manual_tool:'手动测试'};
  const statuses={running:'执行中',succeeded:'成功',failed:'失败',accepted:'微信已接受',not_shared:'仅浏览，未分享',silent:'选择安静',reply:'准备分享',processing:'处理中',blocked:'被权限或预算阻止',waiting:'等待核对'};
  const surfReasons={surf_sources_unavailable:'所有本轮来源均不可用，未取得候选，并非角色不想分享',surf_no_novel_candidates:'本轮候选近期已浏览或分享过，等待新内容',surf_no_verified_source:'没有取得已核实内容，本轮不分享',surf_duplicate_source:'近期分享过相同来源，不重复发送',surf_duplicate_topic:'近期分享过相近主题，不重复推送',surf_candidate_not_selected:'没有选定具体候选，不分享',surf_candidate_not_verified:'候选尚未完成读取或媒体准备，不分享',model_chose_silence:'角色决定只浏览或收藏，不分享',autonomous_surf:'按随机计划开始浏览',tool_succeeded:'已取得实际结果',tool_started:'正在执行'};
@@ -11,7 +11,182 @@
  const {element: node} = window.WechatControls;
  function toolDetails(x){const stage={connection_or_headers:'连接或等待响应头',response_body:'读取响应正文',http_status:'目标HTTP状态',decode:'解析返回内容',retry_wait:'补试等待'};return [x.tool_cache_hit?'使用已验证的公开目录缓存':'',x.tool_requests?'HTTP请求 '+x.tool_requests+' 次':'',x.tool_retries?'只读补试 '+x.tool_retries+' 次':'',x.tool_http_status?(x.tool_http_status>=400?'最近异常 HTTP ':'HTTP ')+x.tool_http_status:'',x.tool_stage?stage[x.tool_stage]||x.tool_stage:'',x.tool_code||''].filter(Boolean).join(' / ')}
  function render(){const box=$('#surf-list'),pos=box.scrollTop;box.replaceChildren();const origin=$('#surf-origin').value,status=$('#surf-status').value,query=$('#surf-search').value.trim().toLowerCase();const consolidated=[],calls=new Map();for(const x of state.items){if(x.call_id){if(calls.has(x.call_id)){consolidated[calls.get(x.call_id)]=x;continue}calls.set(x.call_id,consolidated.length)}consolidated.push(x)}const items=consolidated.filter(x=>(origin==='all'||x.origin===origin)&&(status==='all'||x.status===status)&&(!query||[x.source,x.tool,x.query,x.target_url,x.reason,x.content,toolDetails(x)].join(' ').toLowerCase().includes(query))).slice().reverse();$('#surf-count').textContent=items.length+' 条活动';if(!items.length)node(box,'p','暂无匹配的上网活动。','empty');for(const item of items){const row=node(box,'article',undefined,'surf-activity');node(row,'time',time(item.time));const flow=node(row,'div',undefined,'surf-flow');node(flow,'strong',kinds[item.origin]||'自主分享');node(flow,'span',names[item.event==='surf_source'?item.event:(item.tool||item.event)]||item.tool||item.event);if(item.event==='surf_source'&&item.content)node(flow,'span',item.content);if(item.query)node(flow,'span',item.query,'surf-query');const target=window.WechatRounds.activityTarget(item);if(target){const a=node(flow,target.kind==='service'?'span':'a',target.label);if(target.href){a.href=target.href;a.target='_blank';a.rel='noopener noreferrer'}else a.title=target.detail}node(flow,'span',item.status==='silent'&&surfReasons[item.reason]?surfReasons[item.reason]:statuses[item.status]||item.status,'surf-status '+(item.status==='failed'?'error':''));const details=node(row,'details');node(details,'summary','详情');node(details,'p',[item.source,item.reason==='quiet_hours'?'进入Agent安静时段，停止自主浏览':(surfReasons[item.reason]||item.reason),toolDetails(item),item.duration_ms?item.duration_ms+' ms':'',item.bytes?Math.round(item.bytes/1024)+' KiB':'',item.media_count?'暂存 '+item.media_count+' 个附件':'',item.content].filter(Boolean).join(' / '));}box.scrollTop=pos}
- function dirty(){state.dirty=true;state.version++;$('#surf-save-state').textContent='有未保存的冲浪设置。'}
+ function reminderStatus(t, tasks){
+  let status = t.state;
+  let current = t;
+  if (status === 'completed' && t.reminder?.follow_up_task_id && !t.reminder.server_id) {
+   current = tasks.get(t.reminder.follow_up_task_id) || t;
+   status = current === t ? 'handed_off' : current.state;
+  }
+  const due = new Date(current.reminder?.due_at || current.next || t.reminder?.due_at || t.next);
+  const overdue = Number.isFinite(due.getTime()) && due.getTime() <= Date.now();
+  const labels = {waiting:overdue?'已逾期 · 待完成':'待完成',pending:overdue?'已逾期 · 待完成':'待完成',running:'执行中',needs_review:'等待主人决定',handed_off:'已进入执行回合 · 待完成',completed:'已完成',expired:'已过期',cancelled:'已取消',failed:'失败',stopped:'已停止'};
+  return {label:labels[status] || status || '状态未知', completed:status === 'completed'};
+ }
+ function renderReminders() {
+  const box = $('#reminder-list');
+  box.replaceChildren();
+  const all = state.reminders.slice();
+  const tasks = new Map(all.map(item => [item.id, item]));
+  const children = new Set(all.filter(item => item.reminder?.follow_up_task_id).map(item => item.reminder.follow_up_task_id));
+  const items = all.filter(item => !children.has(item.id)).sort((a,b) => new Date(b.updated || 0) - new Date(a.updated || 0));
+  $('#reminder-state').textContent = items.length ? '共 ' + items.length + ' 条提醒任务' : '暂无提醒任务';
+  if (!items.length) {
+   node(box, 'p', '还没有保存的提醒任务。', 'empty');
+   return;
+  }
+  for (const item of items) {
+   const card = node(box, 'article', undefined, 'reminder-card');
+   const head = node(card, 'div', undefined, 'reminder-card-head');
+   node(head, 'strong', item.title || '提醒任务');
+   const status = reminderStatus(item, tasks);
+   node(head, 'small', status.label, status.completed ? 'reminder-completed' : '');
+   node(card, 'p', '类型：' + (item.reminder ? item.reminder.kind === 'execute' ? '执行提醒' : '消息提醒' : item.reminder_due ? '到期执行任务' : '定时持续任务'), 'hint');
+   const due = item.reminder?.due_at || item.next;
+   if (due) node(card, 'p', '到期：' + time(due));
+   const followUp = item.reminder?.follow_up_task_id && tasks.get(item.reminder.follow_up_task_id);
+   if (followUp && ['waiting','pending'].includes(followUp.state) && followUp.next) node(card, 'p', '下次检查：' + time(followUp.next));
+   if (item.reminder?.result_group) {
+    node(card, 'p', '发送到：' + window.WechatNames.display(item.reminder.result_group), 'hint');
+   }
+   node(card, 'p', item.requested_text || item.checkpoint || '未记录提醒内容');
+   if (item.last_result) node(card, 'p', item.last_result, 'hint');
+   if (followUp?.checkpoint) node(card, 'p', followUp.checkpoint, 'hint');
+   const actions = node(card, 'div', undefined, 'inline-actions');
+   const target = followUp || item;
+   const terminal = ['completed','cancelled','stopped'].includes(target.state);
+   const unsettled = !!(target.pending_operations?.length || target.delivery && target.delivery.state !== 'accepted');
+   const toolActive = !!(target.plugin_job || target.process_id || target.device_task);
+   const canEdit = ['waiting','pending','needs_review','expired'].includes(target.state) && !unsettled && !target.delivery && !target.plugin_job && !target.process_id && !target.reminder?.job_id && !target.reminder?.follow_up_task_id;
+   const edit = node(actions, 'button', '修改时间', 'secondary');
+   edit.type = 'button';edit.disabled = !canEdit;
+   if (canEdit) edit.addEventListener('click', () => editReminder(card, target, edit, target.reminder?.due_at || target.next));
+   else edit.title = terminal ? '已结束任务不能改期' : '当前执行或投递阶段不能改期';
+   const cancel = node(actions, 'button', '取消任务', 'secondary');
+   cancel.type = 'button';cancel.disabled = terminal || target.state === 'running' && !target.plugin_job;
+   if (!cancel.disabled) cancel.addEventListener('click', () => changeReminder(target.id, 'cancel', cancel));
+   else cancel.title = terminal ? '任务已经结束' : '执行中请等待本轮结束';
+   const complete = node(actions, 'button', '设为完成', 'secondary');
+   complete.type = 'button';complete.disabled = terminal || target.state === 'running' || toolActive || unsettled;
+   if (!complete.disabled) complete.addEventListener('click', () => changeReminder(target.id, 'complete', complete));
+   else complete.title = terminal ? '任务已经结束' : '仍有执行或发送结果需要核对';
+   const ended = task => ['completed','cancelled','stopped','expired'].includes(task.state) && !task.pending_operations?.length && (!task.delivery || task.delivery.state === 'accepted');
+   if (ended(item) && ended(target)) {
+    const remove = node(actions, 'button', '删除历史', 'secondary');
+    remove.type = 'button';
+    remove.addEventListener('click', async () => {
+     if (await window.WechatDialogs.confirmAction({title:'删除历史提醒',message:'删除这条已结束的提醒任务及其已结束的续办记录？',confirmText:'删除历史',danger:true})) await changeReminder(item.id, 'delete', remove);
+    });
+   }
+   if (target.state === 'needs_review' && !target.reminder_due) {
+    const resume = node(actions, 'button', '处理提醒', 'primary');
+    resume.type = 'button';
+    resume.addEventListener('click', () => changeReminder(target.id, 'resume', resume));
+   }
+   if (item.reminder_due || ['pending','running'].includes(item.state)) {
+    const open = node(actions, 'button', '查看执行回合', 'secondary');
+    open.type = 'button';
+    open.addEventListener('click', () => window.WechatAdmin.nav('logs'));
+   }
+  }
+ }
+ function editReminder(card, item, edit, due) {
+  const form = node(card, 'form', undefined, 'reminder-editor');
+  const fields = new Map();
+  function field(name, labelText, options = {}) {
+   const label = node(form, 'label', labelText);
+   const input = node(label, options.tag || 'input');
+   if (options.type) input.type = options.type;
+   if (options.max) input.maxLength = options.max;
+   input.required = options.required || false;
+   input.value = options.value || '';
+   const error = node(form, 'p', '', 'hint');
+   error.id = 'reminder-' + item.id + '-' + name + '-error';
+   error.hidden = true;
+   input.setAttribute('aria-describedby', error.id);
+   fields.set(name, {input, error, initial: input.value});
+   return input;
+  }
+  const date = new Date(due);
+  const localDue = Number.isFinite(date.getTime()) ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16) : '';
+  const timeInput = field('run_at', '到期时间（本机时区）', {type:'datetime-local', value:localDue, required:true});
+  if (item.reminder) {
+   field('title', '标题', {value:item.title, max:120, required:true});
+   field('text', '提醒内容', {tag:'textarea', value:item.requested_text || (item.reminder.text || '').replace(/^提醒你：/, ''), max:650, required:true});
+   if (item.reminder.kind === 'execute' && item.owner_requested) {
+    const group = item.reminder.result_group;
+    field('delivery_group', '投递群名（留空发回原会话）', {value:group ? window.WechatNames.display(group) : '', max:128});
+   }
+  }
+  const status = node(form, 'p', '', 'hint');
+  status.setAttribute('role', 'status');
+  const actions = node(form, 'div', undefined, 'inline-actions');
+  const save = node(actions, 'button', '保存修改', 'primary');
+  save.type = 'submit';
+   save.dataset.inlineSave = '';
+  const cancel = node(actions, 'button', '取消', 'secondary');
+  cancel.type = 'button';
+  function closeEditor() {
+   form.remove();
+   edit.disabled = false;
+   edit.focus();
+  }
+  cancel.addEventListener('click', closeEditor);
+  edit.disabled = true;
+  timeInput.focus();
+  form.addEventListener('submit', async event => {
+   event.preventDefault();
+   const payload = {action:'update'};
+   if (item.reminder) payload.expected_updated = item.updated;
+   for (const [name, {input, initial, error}] of fields) {
+    error.hidden = true;
+    input.removeAttribute('aria-invalid');
+    if (input.value !== initial) payload[name] = name === 'run_at' ? new Date(input.value).toISOString() : input.value;
+   }
+   if (![...fields.keys()].some(name => name in payload)) {
+    status.textContent = '没有改动要保存。';
+    return;
+   }
+   save.disabled = true;
+   cancel.disabled = true;
+   status.textContent = '正在保存…';
+   try {
+    await api('/api/agent/tasks/' + encodeURIComponent(item.id), {method:'POST', json:payload});
+    closeEditor();
+    await refreshReminders();
+   } catch (err) {
+    const name = (err.message.match(/参数 \$\.([a-z_]+)/) || [])[1];
+    const entry = fields.get(name);
+    if (entry) {
+     entry.error.textContent = err.message;
+     entry.error.hidden = false;
+     entry.input.setAttribute('aria-invalid', 'true');
+     entry.input.focus();
+    }
+    status.textContent = err.message;
+    save.disabled = false;
+    cancel.disabled = false;
+   }
+  });
+ }
+ async function changeReminder(id,action,button){button.disabled=true;$('#reminder-state').textContent='正在保存…';try{await api('/api/agent/tasks/'+encodeURIComponent(id),{method:'POST',json:{action}});await refreshReminders(true)}catch(e){$('#reminder-state').textContent='操作失败：'+e.message;button.disabled=false}}
+ async function refreshReminders(force=false) {
+  if (state.reminderBusy) {if(force)state.reminderRefreshPending=true;return}
+  if ($('#reminder-list form') || !window.WechatAdmin?.isAuthenticated()) return;
+  state.reminderBusy = true;
+  try {
+   const data = await api('/api/agent');
+   if ($('#reminder-list form')) return;
+   state.reminders = data.reminders || (data.tasks || []).filter(x => x.reminder || x.reminder_due || (x.owner_requested && x.next && !x.plugin_job && !x.delivery));
+   renderReminders();
+  } catch (err) {
+   $('#reminder-state').textContent = '读取失败：' + err.message;
+  } finally {
+   state.reminderBusy = false;
+   if(state.reminderRefreshPending){state.reminderRefreshPending=false;void refreshReminders()}
+  }
+ }
+ function selectSurfTab(name){const reminders=name==='reminders';$('#surf').classList.toggle('reminder-tab-active',reminders);$('#surf-pane').hidden=reminders;$('#reminder-pane').hidden=!reminders;for(const [id,selected] of [['surf-tab',!reminders],['reminder-tab',reminders]]){$('#'+id).classList.toggle('active',selected);$('#'+id).setAttribute('aria-selected',String(selected));$('#'+id).tabIndex=selected?0:-1}if(reminders)refreshReminders()} function dirty(){state.dirty=true;state.version++;$('#surf-save-state').textContent='有未保存的自主活动设置。'}
  function renderTargets(){const box=$('#surf-targets'),query=$('#surf-target-search').value.trim().toLowerCase();box.replaceChildren();const ids=new Set([...state.allowed,...state.selected]);let matches=0;
   for(const [kind,title] of [['group','群聊'],['friend','好友私信'],['filehelper','文件传输助手'],['revoked','已失去回复授权的目标']]){
    const rows=[...ids].map(id=>({id,name:state.directory.get(id)?.name||(id==='filehelper'?'文件传输助手':id),kind:!state.allowed.has(id)?'revoked':id==='filehelper'?'filehelper':id.endsWith('@chatroom')?'group':'friend'})).filter(x=>x.kind===kind&&(!query||[x.name,x.id].join(' ').toLowerCase().includes(query)));if(!rows.length)continue;
@@ -23,9 +198,58 @@
   if(!matches)node(box,'p',query?'没有匹配的目标。':'暂无已授权会话，请先在回复规则中添加。','empty');
  }
  async function refreshTargets(){if(state.targetBusy||!window.WechatAdmin?.isAuthenticated())return;state.targetBusy=true;$('#surf-target-refresh').disabled=true;try{const data=await api('/api/companion/targets');state.directory=new Map((data.items||[]).map(x=>[x.id,x]));state.allowed=new Set((data.items||[]).map(x=>x.id));renderTargets();$('#surf-target-state').textContent='已选择 '+state.selected.size+' 个分享目标；每次浏览最多向其中一个目标分享。'}catch(e){$('#surf-target-state').textContent='目标名称读取失败：'+e.message+'；保留已有选择。'}finally{state.targetBusy=false;$('#surf-target-refresh').disabled=false}}
- function settingsToForm(s){$('#surf-enabled').checked=!!s.enabled;$('#surf-force-share').checked=!!s.force_share;$('#surf-topics').value=(s.topics||[]).join('\n');state.selected=new Set(s.threads||[]);state.settings=s;fillDiscovery(s.discovery);renderTargets()}
- async function refresh(){if(state.busy||!window.WechatAdmin?.isAuthenticated())return;state.busy=true;try{const r=await api('/api/surf');$('#surf-schedule').textContent=(r.settings.enabled?(r.quiet_now?'安静时段，自主浏览暂停（不占次数）':'自主浏览已开启'):'自主浏览未开启')+' · 今日已安排 '+(r.sessions||0)+' 次'+(r.settings.enabled&&!r.quiet_now&&r.next&&!r.next.startsWith('0001')?' · 最早可安排 '+time(r.next):'');$('#surf-share-state').textContent=(r.share_permission?'未选择目标时只浏览记录；分享须在发送前仍获授权。':'主动分享权限未开启：只浏览记录，不向会话分享。')+' 安静时段 '+r.quiet_start+'–'+r.quiet_end+'（'+r.timezone+'），与 Agent 设置同步。';const previousAllowed=JSON.stringify([...state.allowed]);state.allowed=new Set(r.allowed_threads||[]);if(!state.ready||!state.dirty&&!state.saving&&JSON.stringify(r.settings)!==JSON.stringify(state.settings))settingsToForm(r.settings);else if(previousAllowed!==JSON.stringify([...state.allowed]))renderTargets();if(!state.ready){state.items=r.items||[];state.ready=true;render()}else{const items=r.items||[];if(JSON.stringify(items)!==JSON.stringify(state.items)){state.pending=items;$('#surf-new').hidden=false}}$('#surf-error').textContent=''}catch(e){$('#surf-error').textContent='读取失败：'+e.message}finally{state.busy=false}}
- async function save(){if(state.saving)return;const button=$('#surf-save'),version=state.version;const topics=$('#surf-topics').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),threads=[...state.selected];button.disabled=true;state.saving=true;try{if(!topics.length)throw new Error('至少填写一个兴趣主题');if(threads.length>30)throw new Error('最多选择30个分享目标');if(threads.some(id=>!state.allowed.has(id)))throw new Error('请取消已失去回复授权的目标，或先恢复授权');const saved=await api('/api/surf',{method:'POST',json:{...state.settings,enabled:$('#surf-enabled').checked,force_share:$('#surf-force-share').checked,topics,threads,discovery:readDiscovery()}});if(version===state.version){state.dirty=false;state.settings=saved;$('#surf-save-state').textContent='已保存；每次在设定区间内随机安排，安静时段暂停且不占次数。'}else $('#surf-save-state').textContent='上一份设置已保存，后续修改尚未保存。';await refresh()}catch(e){$('#surf-save-state').textContent='保存失败：'+e.message}finally{button.disabled=false;state.saving=false}}
+ function settingsToForm(s){
+  if(!s||typeof s!=='object')throw new Error('自主活动设置尚未读取，请刷新后重试');
+  $('#surf-enabled').checked=s.enabled===true;
+  $('#surf-force-share').checked=!!s.force_share;
+  $('#surf-max-sessions').value=s.max_sessions_per_day||4;
+  $('#surf-topics').value=(s.topics||[]).join('\n');
+  state.selected=new Set(s.threads||[]);
+  state.settings=s;
+  fillDiscovery(s.discovery);
+  window.WechatProactive?.load(s);
+  $('#surf-settings-fields').disabled=false;
+  $('#surf-save').disabled=false;
+  renderTargets();
+ }
+ async function refresh(){
+  if(state.busy||!window.WechatAdmin?.isAuthenticated())return;
+  state.busy=true;
+  try{
+   const r=await api('/api/surf'),enabled=r.settings?.enabled===true;
+   $('#surf-schedule').textContent=(enabled?(r.quiet_now?'安静时段，自主活动暂停':'自主发言与冲浪已开启'):'自主发言与冲浪未开启')+' · 今日冲浪已安排 '+(r.sessions||0)+' / '+r.settings.max_sessions_per_day+' 次'+(enabled&&!r.quiet_now&&r.next&&!r.next.startsWith('0001')?' · 最早可安排 '+time(r.next):'');
+   $('#surf-share-state').textContent=(enabled?(r.share_permission?'未选择分享目标时只浏览记录；分享须在发送前仍获授权。':'主动分享暂不可用：只浏览记录，不向会话分享。'):'自主活动关闭，现有记录仍可查看。')+' 安静时段 '+r.quiet_start+'–'+r.quiet_end+'（'+r.timezone+'），与 Agent 设置同步。';
+   const previousAllowed=JSON.stringify([...state.allowed]);
+   state.allowed=new Set(r.allowed_threads||[]);
+   if(!state.settings||!state.dirty&&!state.saving&&JSON.stringify(r.settings)!==JSON.stringify(state.settings))settingsToForm(r.settings);
+   else if(previousAllowed!==JSON.stringify([...state.allowed]))renderTargets();
+   if(!state.ready){state.items=r.items||[];state.ready=true;render()}
+   else{const items=r.items||[];if(JSON.stringify(items)!==JSON.stringify(state.items)){state.pending=items;$('#surf-new').hidden=false}}
+   $('#surf-error').textContent='';
+  }catch(e){$('#surf-error').textContent='读取失败：'+e.message}
+  finally{state.busy=false}
+ }
+ async function save(){
+  if(state.saving||!state.settings)return;
+  const button=$('#surf-save'),version=state.version;
+  const topics=$('#surf-topics').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),threads=[...state.selected],maxSessions=Number($('#surf-max-sessions').value);
+  button.disabled=true;state.saving=true;
+  try{
+   if(!Number.isInteger(maxSessions)||maxSessions<1||maxSessions>24)throw new Error('每天最多冲浪次数应为1至24');
+   if(!topics.length)throw new Error('至少填写一个兴趣主题');
+   if(threads.length>30)throw new Error('最多选择30个分享目标');
+   if(threads.some(id=>!state.allowed.has(id)))throw new Error('请取消已失去回复授权的分享目标，或先恢复授权');
+   const proactive=window.WechatProactive?.settings?.();
+   if(!proactive)throw new Error('主动发言目标尚未读取，请刷新后重试');
+   if(proactive.proactive_threads.some(id=>!state.allowed.has(id)))throw new Error('请取消已失去回复授权的发言目标，或先恢复授权');
+   const saved=await api('/api/surf',{method:'POST',json:{...state.settings,...proactive,enabled:$('#surf-enabled').checked,force_share:$('#surf-force-share').checked,max_sessions_per_day:maxSessions,topics,threads,discovery:readDiscovery()}});
+   state.settings=saved;
+   if(version===state.version){state.dirty=false;settingsToForm(saved);$('#surf-save-state').textContent='自主活动设置已保存；关闭时不会安排新活动。'}
+   else $('#surf-save-state').textContent='上一份设置已保存，后续修改尚未保存。';
+   await refresh();await window.WechatProactive?.refresh?.();
+  }catch(e){$('#surf-save-state').textContent='保存失败：'+e.message}
+  finally{button.disabled=!state.settings;state.saving=false}
+ }
  const weightNames={recommendations:'推荐流',community:'社区热门',subscriptions:'订阅更新',related:'关联漫游',search:'搜索核实'};
  const formatNames={text:'文字',voice:'音乐',video:'视频',image:'图片'};
  let discoveryConfig=null,historyBusy=false;
@@ -70,12 +294,14 @@
   finally{historyBusy=false;$('#surf-history-refresh').disabled=false}
  }
 
- refresh=window.WechatRefresh.join(refresh);
+ refresh=window.WechatRefresh.join(refresh);refreshReminders=window.WechatRefresh.join(refreshReminders);
  refreshTargets=window.WechatRefresh.join(refreshTargets);
  refreshHistory=window.WechatRefresh.join(refreshHistory);
  window.WechatRefresh.bind($('#surf-history-refresh'),refreshHistory);$('#surf-history-panel').addEventListener('toggle',()=>{if($('#surf-history-panel').open)refreshHistory()});['surf-rss-sources'].forEach(id=>$('#'+id).addEventListener('input',dirty));
- $('#surf-save').addEventListener('click',save);window.WechatRefresh.bind($('#surf-refresh'),async()=>{await refresh();if(state.pending){state.items=state.pending;state.pending=null;$('#surf-new').hidden=true;render()}});['surf-origin','surf-status'].forEach(id=>$('#'+id).addEventListener('change',render));$('#surf-search').addEventListener('input',render);['surf-enabled','surf-force-share','surf-topics'].forEach(id=>$('#'+id).addEventListener('input',dirty));$('#surf-target-search').addEventListener('input',renderTargets);window.WechatRefresh.bind($('#surf-target-refresh'),refreshTargets);
- window.addEventListener('wechat-admin:navigate',event=>{if(state.timer){clearInterval(state.timer);state.timer=null}if(event.detail?.section==='surf'){refresh();refreshTargets();state.timer=setInterval(refresh,5000)}});
+ $('#surf-tab').addEventListener('click',()=>selectSurfTab('surf'));$('#reminder-tab').addEventListener('click',()=>selectSurfTab('reminders'));window.WechatRefresh.bind($('#reminder-refresh'),refreshReminders);const reminderNav=document.querySelector('[data-reminder-tab="true"]');if(reminderNav)reminderNav.addEventListener('click',()=>setTimeout(()=>selectSurfTab('reminders'),0));
+ $('#surf-save').addEventListener('click',save);window.WechatRefresh.bind($('#surf-refresh'),async()=>{await refresh();if(state.pending){state.items=state.pending;state.pending=null;$('#surf-new').hidden=true;render()}});['surf-origin','surf-status'].forEach(id=>$('#'+id).addEventListener('change',render));$('#surf-search').addEventListener('input',render);['surf-enabled','surf-force-share','surf-max-sessions','surf-topics'].forEach(id=>$('#'+id).addEventListener('input',dirty));$('#surf-target-search').addEventListener('input',renderTargets);window.WechatRefresh.bind($('#surf-target-refresh'),refreshTargets);
+ window.addEventListener('wechat-admin:navigate',event=>{if(state.timer){clearInterval(state.timer);state.timer=null}if(event.detail?.section==='surf'){refresh();refreshTargets();refreshReminders();state.timer=setInterval(()=>{refresh();if(!$('#reminder-pane').hidden)refreshReminders()},5000)}});
  window.addEventListener('wechat-admin:config-changed',()=>{if($('#surf').classList.contains('active-page')){refresh();refreshTargets()}});
- window.addEventListener('wechat-admin:logout',()=>{if(state.timer)clearInterval(state.timer);state.timer=null;state.items=[];state.pending=null;state.ready=false;state.dirty=false;state.selected.clear();state.allowed.clear();state.directory.clear();state.settings=null;discoveryConfig=null;$('#surf-history-list').replaceChildren();state.version++;$('#surf-list').replaceChildren();$('#surf-targets').replaceChildren();$('#surf-topics').value='';$('#surf-target-search').value='';$('#surf-target-state').textContent='';$('#surf-new').hidden=true});
+ window.addEventListener('wechat-admin:logout',()=>{if(state.timer)clearInterval(state.timer);state.timer=null;state.items=[];state.reminders=[];state.pending=null;state.ready=false;state.dirty=false;state.selected.clear();state.allowed.clear();state.directory.clear();state.settings=null;discoveryConfig=null;$('#surf-settings-fields').disabled=true;$('#surf-save').disabled=true;$('#surf-enabled').checked=false;$('#surf-save-state').textContent='';$('#surf-schedule').textContent='正在读取…';$('#surf-history-list').replaceChildren();state.version++;$('#surf-list').replaceChildren();$('#surf-targets').replaceChildren();$('#surf-topics').value='';$('#surf-target-search').value='';$('#surf-target-state').textContent='';$('#surf-new').hidden=true});
+ window.WechatSurf={markDirty:dirty,isDirty:()=>state.dirty};
 })();

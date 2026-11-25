@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"wechat-bot/internal/billing"
@@ -87,6 +86,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	defer stop()
 	tools := h.tools(store, in)
 	tools.run = run
+	defer tools.closeExternalMCP()
 	if err := tools.restoreMemoryEvidence(ctx); err != nil {
 		return fail(409, "原请求的跨来源资料或授权已变化，未调用模型")
 	}
@@ -107,9 +107,13 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 		defer client.CloseIdleConnections()
 	}
 	c := localConversationConfig(settings.Persona)
-	prompt := "你是大肥鱼，正在 Agent-home-station 软件中与本机主人交谈。按本轮工具目录和主人的授权使用本地记忆、家目录、已授权的项目工具和已连接的应用。生成本机成品后，把工具实际返回的 artifact_id 告诉主人，界面会显示下载入口。软件界面展示已写入本地聊天记录的气泡，不代表微信发送或主人已经读过。不要声称已使用未提供的应用或执行能力。"
+	if settings.DirectMediaInput {
+		tools.directMedia, _ = model.(*deepseek.Client)
+	}
+	c.TaskReasoning = settings.TaskReasoning
+	prompt := "你是大肥鱼，正在工作站与主人交谈。按需使用本轮工具、记忆、家目录和已连接应用。本机成品回复实际 artifact_id，供界面下载；微信投递另查回执。"
 	if tools.memoryLinked {
-		prompt += "本轮由主人明确关联了一条跨来源回复；未预载原查询正文。需要原来源时，先调用app_memory的linked_sources查看来源目录，再主动search/read；旧引用不能复用。"
+		prompt += "需要关联的跨来源原文时，用 app_memory 的 linked_sources、search、read 查询。"
 	}
 	engine, err := companion.New(c, store, model, prompt)
 	if err != nil {
@@ -135,7 +139,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	}
 	var usageErr error
 	ctx = deepseek.WithUsageObserver(deepseek.WithPurpose(ctx, purpose), func(u deepseek.Usage) {
-		dir := filepath.Join(h.home.dataDir, "local-billing")
+		dir := stationBillingDir(h.home.dataDir)
 		err := os.MkdirAll(dir, 0700)
 		var ledger *billing.Store
 		if err == nil {

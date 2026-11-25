@@ -70,7 +70,7 @@ func TestPartialGenerationPropagatesPauseToTaskLifecycle(t *testing.T) {
 			records := []Record{}
 			w.config.Record = func(r Record) { records = append(records, r) }
 			reports, finished := 0, ""
-			w.config.AgentTaskDone = func(_ companion.Input, state string) { finished = state }
+			w.config.AgentTaskDone = func(_ companion.Input, state string) error { finished = state; return nil }
 			if background {
 				w.enableGenerations()
 				defer w.closeGenerations()

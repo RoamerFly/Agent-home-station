@@ -128,6 +128,9 @@ func snapshot(ctx context.Context, source, destination string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("package links forbidden")
 		}
+		if entry.IsDir() && entry.Name() == "__pycache__" {
+			return fs.SkipDir
+		}
 		target := filepath.Join(destination, filepath.FromSlash(name))
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0700)
@@ -160,6 +163,19 @@ func snapshot(ctx context.Context, source, destination string) error {
 	})
 }
 func (s *Store) Prepare(ctx context.Context, source string) (Prepared, error) {
+	return s.prepareSource(ctx, source, "")
+}
+
+// PrepareCatalog snapshots only the pinned manifest's executable package files.
+// Models, outputs and project assets beside the package remain at their registered
+// paths and are never copied into the private package database.
+func (s *Store) PrepareCatalog(ctx context.Context, source, digest string) (Prepared, error) {
+	if len(digest) != 64 {
+		return Prepared{}, errors.New("catalog digest required")
+	}
+	return s.prepareSource(ctx, source, digest)
+}
+func (s *Store) prepareSource(ctx context.Context, source, catalogDigest string) (Prepared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result Prepared
@@ -185,7 +201,12 @@ func (s *Store) Prepare(ctx context.Context, source string) (Prepared, error) {
 	}
 	// stage is an absolute, newly created child of this store, never caller input.
 	defer os.RemoveAll(stage)
-	if err = snapshot(ctx, source, stage); err != nil {
+	if catalogDigest != "" {
+		err = snapshotCatalog(ctx, source, stage, catalogDigest)
+	} else {
+		err = snapshot(ctx, source, stage)
+	}
+	if err != nil {
 		return result, err
 	}
 	return s.prepareStage(ctx, stage)

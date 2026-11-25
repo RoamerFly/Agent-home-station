@@ -87,7 +87,7 @@ class AudioObservationTests(unittest.TestCase):
         context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
         incoming = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"_meta": {"wechat/configuration": {"values": CONFIG}}}},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.listen", "arguments": {"audio": AUDIO, "prompt": "概述"}, "_meta": {"wechat/context": context}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "media.listen", "arguments": {"audio": AUDIO, "prompt": "概述"}, "_meta": {"station/call_id": "a" * 64}}},
             {"jsonrpc": "2.0", "id": "media-model-1", "result": REPLY},
         ]
         output = io.StringIO()

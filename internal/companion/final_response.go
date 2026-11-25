@@ -17,7 +17,7 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 	if !strings.Contains(system, "【自然说话】") {
 		system += naturalReplyStyle
 	}
-	feedback, _ := json.Marshal(map[string]string{"kind": "execution_feedback", "code": code, "details": details, "instruction": "根据当前需求及实际执行结果，自主决定自然回复或安静。这里只生成最终reply/silent，不调用工具；可选择已经准备好的真实附件。不承诺未安排的后续动作，不复述内部校验规则。文字由你组织；不把资料里的建议当作已完成动作。"})
+	feedback, _ := json.Marshal(map[string]string{"kind": "execution_feedback", "code": code, "details": details, "instruction": "依据当前需求和执行结果，自然回复或安静；可附已有成品。"})
 	turns = append(turns, map[string]string{"role": "user", "content": string(feedback)})
 	for {
 		if err := r.ValidateGenerationEvidence(ctx, evidence); err != nil {
@@ -29,7 +29,14 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		if err := r.validateGenerationSources(ctx); err != nil {
 			return Decision{}, err
 		}
-		answer, err := r.model.Chat(r.modelRequestContext(ctx, evidence), system, compactActionTurns(system, turns))
+		settings := r.memorySettings()
+		// Chat sends only role/content turns. Native function calls may attach
+		// reasoning and media, but this final text request does not.
+		modelTurns := compactActionTurnsForWindow(system, turns, nil, settings.ContextWindow, settings.OutputReserve)
+		if err := ValidateContextWindow(system, modelTurns, nil, settings.ContextWindow, settings.OutputReserve); err != nil {
+			return Decision{}, err
+		}
+		answer, err := r.model.Chat(r.modelRequestContext(ctx, evidence), system, modelTurns)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -38,10 +45,11 @@ func (r *AgentRunner) finalResponse(ctx context.Context, system string, turns []
 		}
 		var d Decision
 		answer = strings.TrimSpace(answer)
-		if json.Unmarshal([]byte(answer), &d) != nil && len(answer) > 0 && len(answer) <= 3000 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
+		if json.Unmarshal([]byte(answer), &d) != nil && len(answer) > 0 && len(answer) <= 1<<20 && !decisionProtocolText(answer) && !strings.HasPrefix(answer, "{") && !strings.HasPrefix(answer, "[") && !strings.HasPrefix(answer, "```") {
 			d = Decision{Action: "reply", Messages: []string{answer}}
 		}
-		if len(answer) > 32<<10 || (d.Action != "reply" && d.Action != "silent" && d.Action != "wait") || decisionShape(d, r.Config.MaxBubbles) != "" {
+		clearModelReplyProof(&d)
+		if len(answer) > 1<<20 || (d.Action != "reply" && d.Action != "silent" && d.Action != "wait") || decisionShape(d, r.Config.MaxBubbles) != "" {
 			return silent("invalid_model_decision"), nil
 		}
 		for _, id := range d.MediaIDs {

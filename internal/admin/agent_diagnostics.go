@@ -9,7 +9,7 @@ import (
 )
 
 func diagnosticsTool() mcptools.Tool {
-	return agentTool("agent_diagnostics", "Trusted owner only: read structured operational diagnostics of THIS account, without host-service directory access or credentials. Default current conversation; thread_id may select another authorized conversation with cross-conversation access. Filter by message_id for audio/video/tool failures. Returns original time, event, status and provider HTTP/code; paginate with next_offset. No raw prompts, keys, error bodies or log files. No WeChat send. Input {thread_id?:string,message_id?:string,offset?:integer,limit?:integer}.", `{"type":"object","properties":{"thread_id":{"type":"string"},"message_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
+	return agentTool("agent_diagnostics", "Read structured operational diagnostics for this conversation, without credentials or raw prompts. Filter by message_id and paginate with next_offset. Does not send a WeChat message. Input {thread_id?:string,message_id?:string,offset?:integer,limit?:integer}.", `{"type":"object","properties":{"thread_id":{"type":"string"},"message_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)
 }
 
 func diagnosticCode(value string) string {
@@ -34,8 +34,8 @@ func (p *permittedTools) callDiagnostics(raw json.RawMessage) (string, error) {
 	if json.Unmarshal(raw, &in) != nil || in.Offset < 0 || in.Limit < 0 {
 		return "", toolInputError("invalid diagnostic query")
 	}
-	if !p.privileged() {
-		return "", toolInputError("只有当前账号可信管理员可读取运行诊断")
+	if !p.workspaceExecutionAllowed() {
+		return "", toolInputError("当前会话未启用运行诊断")
 	}
 	if in.Thread == "" {
 		in.Thread = p.trace.Thread

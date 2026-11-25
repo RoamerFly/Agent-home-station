@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,29 @@ func TestLocalComfyInfoLoadsPinnedPrivateDeployment(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(data, "station-comfyui", localComfyFishHash("dafeiyu"))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Info must not create a service scratch directory: %v", err)
+	}
+}
+
+func TestLocalComfyOwnerWorkflowAndCustomNodesDirectory(t *testing.T) {
+	data, home, registration := writeLocalComfyFixture(t)
+	base := filepath.Join(data, "resources", "comfyui")
+	registration.Workflows = filepath.Join(base, "workflows")
+	registration.CustomNodes = filepath.Join(base, "custom_nodes")
+	for _, path := range []string{registration.Workflows, registration.CustomNodes} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := registration.validate(data, home); err != nil {
+		t.Fatalf("managed workflow registration rejected: %v", err)
+	}
+	args := strings.Join(localComfyArguments(registration, filepath.Join(registration.Runtime, registration.Entry), filepath.Join(registration.Runtime, registration.Frontend), filepath.Join(data, "private")), " ")
+	if strings.Contains(args, "--disable-all-custom-nodes") || !strings.Contains(args, "--base-directory "+base) {
+		t.Fatalf("custom nodes not enabled under managed base: %s", args)
+	}
+	registration.CustomNodes = filepath.Join(data, "other-custom-nodes")
+	if err := registration.validate(data, home); err == nil {
+		t.Fatal("unexpected custom node directory accepted")
 	}
 }
 

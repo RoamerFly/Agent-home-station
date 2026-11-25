@@ -12,6 +12,7 @@ import (
 
 	"wechat-bot/internal/billing"
 	"wechat-bot/internal/deepseek"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
@@ -128,6 +129,9 @@ func TestVisualIndependentRuntimeRecoversOnceAndRechecksOrigin(t *testing.T) {
 			Billing:    ledger,
 			Transport: func(_ context.Context, _ string, _ map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
 				paidCalls++
+				if paidCalls == 1 {
+					return nil, &mcptools.WebError{Code: "plugin_route_http_rejected", Status: 503}
+				}
 				if !bytes.Contains(body, []byte("data:image/png;base64,")) || bytes.Contains(body, []byte("$media_ref")) {
 					t.Fatal("host did not resolve the verified image")
 				}
@@ -144,11 +148,31 @@ func TestVisualIndependentRuntimeRecoversOnceAndRechecksOrigin(t *testing.T) {
 	}
 	controller = start()
 	recovered := newPolicy()
-	if got, err := recovered.Observe(ctx); err != nil || got != "synthetic pixels" || session.calls != 1 || paidCalls != 1 || ledger.Totals().Requests != 1 {
+	if got, err := recovered.Observe(ctx); err != nil || got != "synthetic pixels" || session.calls != 1 || paidCalls != 2 || ledger.Totals().Requests != 2 {
 		t.Fatalf("recovery replayed a paid call or lost the result: %q %v %d %d %d", got, err, session.calls, paidCalls, ledger.Totals().Requests)
 	}
 	authorized = false
 	if err := recovered.CheckCompleted(ctx); err == nil || err.Error() != "source_revoked" {
 		t.Fatalf("revoked source remained readable: %v", err)
+	}
+}
+
+func TestVisualTransportRetryClassification(t *testing.T) {
+	for _, tt := range []struct {
+		code   string
+		status int
+		want   bool
+	}{
+		{"plugin_route_network_failed", 0, true}, {"plugin_route_response_failed", 0, true},
+		{"plugin_route_http_rejected", 429, true}, {"plugin_route_http_rejected", 503, true},
+		{"plugin_route_http_rejected", 401, false}, {"plugin_route_http_rejected", 400, false},
+		{"plugin_route_response_invalid", 0, false},
+	} {
+		if got := retryableVisualTransport(&mcptools.WebError{Code: tt.code, Status: tt.status}); got != tt.want {
+			t.Fatalf("%+v: %v", tt, got)
+		}
+	}
+	if retryableVisualTransport(context.Canceled) {
+		t.Fatal("cancel must not retry")
 	}
 }

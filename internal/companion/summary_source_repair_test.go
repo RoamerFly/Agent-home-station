@@ -26,7 +26,7 @@ func (m *summarySourceRepairModel) Chat(context.Context, string, []map[string]st
 	return string(b), nil
 }
 
-func TestCompressionRepairsSourceIDsOnceAndPreservesOriginalOnFailure(t *testing.T) {
+func TestCompressionRepairsSourceIDsAndPreservesOnlyVerifiedClaims(t *testing.T) {
 	for _, bad := range []bool{false, true} {
 		c := enabledConfig()
 		c.Permissions.Remember = true
@@ -60,8 +60,17 @@ func TestCompressionRepairsSourceIDsOnceAndPreservesOriginalOnFailure(t *testing
 			t.Fatal("original messages removed")
 		}
 		if bad {
-			if changed || !errors.Is(err, ErrSummarySourceInvalid) || after.Summary != "" || after.CompressedCount != 0 {
-				t.Fatal(changed, err, after.CompressedCount)
+			var summary contextSummary
+			json.Unmarshal([]byte(after.Summary), &summary)
+			if err != nil || !changed || after.CompressedCount == 0 {
+				t.Fatal(changed, err, after.CompressedCount, summary.Topics)
+			}
+			for _, topic := range summary.Topics {
+				for _, source := range topic.SourceEventIDs {
+					if source == "invented-unseen-source" {
+						t.Fatal("fallback retained an invented source")
+					}
+				}
 			}
 		} else {
 			var summary contextSummary

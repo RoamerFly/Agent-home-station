@@ -159,3 +159,25 @@ func TestLocalModelStoreRejectsStoredZeroAndRevisionOverflow(t *testing.T) {
 		t.Fatalf("revision overflow error=%v", err)
 	}
 }
+
+func TestLocalModelStoreUsesSharedPersonaDocument(t *testing.T) {
+	dir := t.TempDir()
+	store := newLocalModelStore(dir)
+	store.personaPath = filepath.Join(dir, "PERSONA.md")
+	record := localModelRecord{LocalModelSettings: defaultLocalModelSettings(), APIKey: "local-test-key-000000000000000000"}
+	record.Revision, record.KeyConfigured = 1, true
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.personaPath, []byte("# 蓝色大肥鱼\n\n共用角色文件"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, settings, err := store.ClientSnapshot()
+	if err != nil || !strings.Contains(settings.Persona, "共用角色文件") {
+		t.Fatalf("shared persona not loaded: %q, %v", settings.Persona, err)
+	}
+}

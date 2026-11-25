@@ -55,6 +55,13 @@ func TestCacheIncomingObservationKeepsOriginalAndNeverResurrectsForgottenTurn(t 
 
 	stale := *ref
 	stale.Revision++
+	if err := s.CacheIncomingObservation(in.Channel, stale, "duplicate parser output"); err != nil {
+		t.Fatalf("metadata-only revision rejected: %v", err)
+	}
+	if current, ok := s.SourceForInput(in); !ok || current.Revision != ref.Revision {
+		t.Fatalf("parser changed the source revision: %#v", current)
+	}
+	stale.BodyHash = sourceHash("different original")
 	if err := s.CacheIncomingObservation(in.Channel, stale, "stale replacement"); !errors.Is(err, ErrMemoryConflict) {
 		t.Fatalf("stale source result = %v, want memory conflict", err)
 	}

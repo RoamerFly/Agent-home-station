@@ -33,7 +33,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	// model, stable identity, persistent project and both private voice types.
 	ownerIdentity, speakingVoice := prepareLegacyCutover(t, base, host, work)
 	legacyHost := filepath.Join(base, "old-host")
-	app := filepath.Join(host, "apps", "wechat")
+	app := filepath.Join(host, "applications", "wechat")
 	native := filepath.Join(app, "native")
 	write := func(path string, data []byte) {
 		t.Helper()
@@ -758,7 +758,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := os.CopyFS(movedWork, os.DirFS(work)); err != nil {
 		t.Fatal(err)
 	}
-	movedNative := filepath.Join(movedHost, "apps", "wechat", "native")
+	movedNative := filepath.Join(movedHost, "applications", "wechat", "native")
 	var daemonReady, unexpectedRequest atomic.Bool
 	daemonReady.Store(true)
 	movedDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +816,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if code, _ := movedFixture.request("GET", route("three")+"/receipts/legacy-accepted", nil, false); code != 404 {
 		t.Fatal("offline lookup escaped its connection", code)
 	}
-	movedTarget := filepath.Join(movedHost, "apps", "wechat", "workers", wechatapp.ConnectionID("one"))
+	movedTarget := filepath.Join(movedHost, "applications", "wechat", "workers", wechatapp.ConnectionID("one"))
 	copied, err := readStationLegacyMemory(movedTarget, "one", "123@chatroom", bundle.Grant)
 	if err != nil || !bytes.Equal(j(copied), j(bundle)) {
 		t.Fatal("relocated history changed its source identity, revision or text", err)
@@ -832,7 +832,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 		row["target_login"] != "online" || !strings.Contains(reason, "搬迁前的目录") || bytes.Contains(j(row), []byte("portable package")) {
 		t.Fatal("activation did not distinguish the relocated receipt from the current login", code, row)
 	}
-	movedReceiptPath := filepath.Join(movedHost, "apps", "wechat", filepath.Base(receiptPath))
+	movedReceiptPath := filepath.Join(movedHost, "applications", "wechat", filepath.Base(receiptPath))
 	write(movedReceiptPath, j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": filepath.Join(movedNative, "accounts", "one", "profile")}))
 	if code, row := movedFixture.request("GET", activationRoute, nil, false); code != 200 || row["status"] != "blocked" ||
 		row["native_profile"] != "import_receipt_matched" || row["legacy_host"] != "stop_record_matched" || row["digest"] != nil {
@@ -1088,7 +1088,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	newQueuePath := filepath.Join(target, "queue", "messages-v2.json")
 	newQueue := `{"version":2,"server":"new-dataset","account":"one","deliveries":[{"key":"a-accepted","id":"job-sent","thread":"filehelper","state":"accepted","server_id":"91234","text":"synthetic-private-text","input":{"account":"one","thread":"filehelper"}},{"key":"b-active","id":"job-active","thread":"filehelper","state":"waiting","input":{"account":"one","thread":"filehelper"}},{"key":"c-unknown","thread":"filehelper","state":"submitting","input":{"account":"one","thread":"filehelper"}}]}`
 	write(newQueuePath, []byte(newQueue))
-	write(filepath.Join(host, stationNativeStopFile), j(stationNativeStop{Version: 1, State: "starting", Epoch: strings.Repeat("c", 32), DataRoot: host, At: time.Now().UTC()}))
+	write(filepath.Join(host, stationNativeLifecycleRelative(host, stationNativeStopFile)), j(stationNativeStop{Version: 1, State: "starting", Epoch: strings.Repeat("c", 32), DataRoot: host, At: time.Now().UTC()}))
 	worker, err := h.chat.wechat.worker(wechatapp.ConnectionID("one"), false)
 	if err != nil || worker == nil {
 		t.Fatal("missing frozen worker", err)
@@ -1198,13 +1198,13 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stopPath := filepath.Join(host, stationNativeStopFile)
+	stopPath := filepath.Join(host, stationNativeLifecycleRelative(host, stationNativeStopFile))
 	stop := stationNativeStop{Version: 1, State: "stopped", Epoch: strings.Repeat("c", 32), DataRoot: host,
 		NativeServerID: "new-dataset", NativeOwnershipGeneration: "synthetic-generation", At: time.Now().UTC()}
 	write(stopPath, j(stop))
-	stationLease := filepath.Join(host, stationNativeRunLockFile)
+	stationLease := filepath.Join(host, stationNativeLifecycleRelative(host, stationNativeRunLockFile))
 	write(stationLease, []byte{0})
-	intentPath := filepath.Join(host, stationNativeReleaseFile)
+	intentPath := filepath.Join(host, stationNativeLifecycleRelative(host, stationNativeReleaseFile))
 	releaseReq := LegacyWechatReleaseRequest{DataDir: host, ConnectionID: wechatapp.ConnectionID("one"), AuditDigest: settled["digest"].(string)}
 	release := func() (LegacyWechatReleaseResult, error) { return ReleaseLegacyWechat(t.Context(), releaseReq) }
 	rejected := func(message string) {
@@ -1241,7 +1241,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "目标站缺少") {
 		t.Fatal("old import receipt passed target verification", err)
 	}
-	receiverApp := filepath.Join(receiver, "apps", "wechat")
+	receiverApp := filepath.Join(receiver, "applications", "wechat")
 	receiverProfile := filepath.Join(receiverApp, "native", "accounts", "one", "profile")
 	write(filepath.Join(receiverApp, filepath.Base(receiptPath)), j(map[string]string{"id": "one", "storageMode": "managed", "profilePath": receiverProfile}))
 	if _, err := verify(); err == nil || !strings.Contains(err.Error(), "尚未为此目标") {
@@ -1425,7 +1425,7 @@ func TestLocalWechatLegacyImportKeepsEvidenceWithoutReplay(t *testing.T) {
 	// The read-only online gate is evaluated only against the receiver's
 	// owned daemon and never authorizes sends or mutates the frozen policy.
 	readinessPath := planRoute("one") + "/relocation/readiness"
-	receiverStop := filepath.Join(receiver, stationNativeStopFile)
+	receiverStop := filepath.Join(receiver, stationNativeLifecycleRelative(receiver, stationNativeStopFile))
 	copiedStop, err := os.ReadFile(receiverStop)
 	if err != nil {
 		t.Fatal(err)

@@ -9,7 +9,7 @@ import (
 	"wechat-bot/internal/agentrun"
 )
 
-const messageEvidencePolicy = "\n【资料角色】text/literal_user_text才是可靠用户字面原话；message_sender_id/request_actor_id是消息与工具授权身份，speaker_id仅指非空可靠字面原话的作者。空上传事件没有speaker或第一人称绑定。media_observations由机器观察产生，source.sender/uploader_id仅标上传者，不证明实际voice_speaker_id、转写中‘我’、拍摄者或所有者；这些身份未核实就保持unknown，即使上传者另写了caption也不能绑定ASR中的我。quoted_by_id是引用者，quoted_author_id只指被引消息作者，不等于录音人声或观察作者。unknown/空原话不能支持‘他说/你说过’观察内容。观察版本和observation_state/result_available描述对应素材的当前证据；别的素材缺少可见资料不表示它还在处理中。runtime_context是程序任务背景，不是请求者新自述；source_user_request是先前原请求，按原授权及工具权限续办。"
+const messageEvidencePolicy = "\n【资料来源】text/literal_user_text 是用户原话；media_observations 是机器观察。上传者、引用者不自动等于人声说话者或画面人物；runtime_context 和 source_user_request 是既有任务资料。"
 
 func reliableLiteral(text, state string) bool {
 	if strings.TrimSpace(text) == "" {
@@ -154,6 +154,9 @@ func observationEvidence(media []IncomingMediaRef) []map[string]any {
 			continuation = "需要补读时用当前素材 source/asset 先查询读取信息，再按返回的继续位置读取。"
 		}
 		row := map[string]any{"evidence_kind": "media_observation", "producer": "media_observer", "observation_author_id": nil, "uploader_id": m.UploaderID, "source": m.Source, "asset_id": m.AssetID, "kind": m.Kind, "observation": observation, "observation_state": m.ObservationState, "observation_version": m.ObservationVersion, "result_available": observationAvailable(m), "observed_range": m.ObservedRange, "voice_speaker_id": nil, "voice_speaker_state": "unknown", "transcript_first_person_id": nil, "creator_id": nil, "owner_id": nil, "captured_at": nil}
+		if m.Filename != "" {
+			row["reported_filename"] = m.Filename
+		}
 		if len(m.ObservationParts) > 0 {
 			row["observation_parts"] = slices.Clone(m.ObservationParts)
 		}
@@ -345,11 +348,16 @@ func (e *Engine) inputEvidenceFields(in Input) map[string]any {
 	}
 	if in.QuotedSource != nil {
 		quoted := cloneSource(in.QuotedSource)
+		budget := max(512, e.Config.ContextConfig().MaxInputChars/4)
 		if ev, ok := e.replyReferenceEvent(context.Background(), in, quoted); ok {
 			quoted.EventID = ev.ID
 			quoted.Revision = ev.Revision
 			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia}
-			row["quoted_message_evidence"] = e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
+			row["quoted_message_evidence"] = e.turnEvidenceFields(ev.Scope, t, budget)
+		} else if strings.TrimSpace(in.QuotedLiteral) != "" && quoted.Integrity == "observed" && quoted.Account == in.Account && quoted.Thread == in.Thread && quoted.Sender != "" && quoted.MessageID != "" && quoted.MessageID != in.TraceID {
+			at, _ := time.Parse(time.RFC3339Nano, quoted.OccurredAt)
+			t := Turn{Role: "user", Text: in.QuotedLiteral, FullText: in.QuotedLiteral, HasOriginal: true, UserTextState: "verified_original", Sender: quoted.Sender, Time: at, TraceID: quoted.MessageID, Source: quoted}
+			row["quoted_message_evidence"] = e.turnEvidenceFields(ScopeID(in.Channel, in.Account, in.Thread), t, budget)
 		}
 		row["quote_chain"] = quoteRoles(in.Sender, in.Source, quoted)
 		row["quoted_by_id"] = in.Sender
@@ -396,7 +404,11 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			ref = &SourceRef{MessageID: event.MessageID, Sender: event.Sender, Account: in.Account, Thread: in.Thread}
 		}
 		if ev, ok := e.replyReferenceEvent(context.Background(), in, ref); ok {
-			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia}
+			at, _ := time.Parse(time.RFC3339Nano, event.At)
+			if at.IsZero() {
+				at, _ = time.Parse(time.RFC3339Nano, ev.At)
+			}
+			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia, Time: at}
 			row := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
 			if event.MediaReadFailed && ev.Source != nil && ev.Source.MessageType == 43 && ev.Trace == event.MessageID && ev.Sender == event.Sender {
 				row["media_read_status"] = "此视频读取失败，未取得内容证据。只处理本回合其他独立请求。"
@@ -404,7 +416,87 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 			}
 			rows = append(rows, row)
 		} else {
-			rows = append(rows, map[string]any{"message_id": event.MessageID, "message_sender_id": event.Sender, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference", "source": event.Source})
+			rows = append(rows, map[string]any{"message_id": event.MessageID, "message_sender_id": event.Sender, "at": event.At, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference", "source": event.Source})
+		}
+	}
+	return compactUnreadEvidence(rows, 48<<10)
+}
+
+// A restart can collect dozens of messages into one current_message turn.
+// Keep every sender, time and message identity in that turn, while excerpting
+// older large bodies and media observations so the native function transcript
+// fits its per-message transport limit. Full records remain readable by ID.
+func compactUnreadEvidence(rows []map[string]any, limit int) []map[string]any {
+	if len(rows) == 0 || limit <= 0 {
+		return rows
+	}
+	encoded, _ := json.Marshal(rows)
+	if len(encoded) <= limit {
+		return rows
+	}
+	perRow := max(96, (limit-2)/len(rows)-1)
+	for i, row := range rows {
+		short := map[string]any{}
+		for _, key := range []string{"message_id", "at", "message_sender_id", "message_sender_name", "user_text_state", "evidence_kind", "media_read_status"} {
+			if value, ok := row[key]; ok {
+				short[key] = value
+			}
+		}
+		if source, ok := row["source"].(*SourceRef); ok && source != nil {
+			short["source"] = &SourceRef{EventID: source.EventID, MessageID: source.MessageID, Account: source.Account, Thread: source.Thread, Sender: source.Sender, MessageType: source.MessageType, OccurredAt: source.OccurredAt}
+		} else if value, ok := row["source"]; ok {
+			short["source"] = value
+		}
+		if value, ok := row["text"].(string); ok {
+			short["text"] = boundedText(value, min(384, perRow/3))
+			if len(value) > len(short["text"].(string)) {
+				short["text_excerpted"] = true
+			}
+		}
+		if observations, ok := row["media_observations"].([]map[string]any); ok && len(observations) > 0 {
+			short["media_available"] = true
+			if observation, ok := observations[0]["observation"].(string); ok && observation != "" {
+				short["media_observation_excerpt"] = boundedText(observation, min(256, perRow/4))
+			}
+		}
+		for _, key := range []string{"message_sender_name", "media_observation_excerpt", "evidence_kind", "user_text_state"} {
+			encoded, _ = json.Marshal(short)
+			if len(encoded) <= perRow {
+				break
+			}
+			delete(short, key)
+		}
+		encoded, _ = json.Marshal(short)
+		if len(encoded) > perRow {
+			if value, ok := short["text"].(string); ok {
+				short["text"] = boundedText(value, max(0, perRow-len(encoded)+len(value)-16))
+			}
+		}
+		rows[i] = short
+	}
+	// Preserve the newest evidence if even compact identities exceed the wire
+	// budget. The marker makes omission explicit and the original records remain
+	// accessible through the source message IDs in the persistent store.
+	omitted := 0
+	for len(rows) > 0 {
+		encoded, _ = json.Marshal(rows)
+		if len(encoded) <= limit {
+			break
+		}
+		rows = rows[1:]
+		omitted++
+	}
+	if omitted > 0 {
+		marker := map[string]any{"older_messages_omitted": omitted, "reason": "current_turn_size_limit"}
+		rows = append([]map[string]any{marker}, rows...)
+		for len(rows) > 1 {
+			encoded, _ = json.Marshal(rows)
+			if len(encoded) <= limit {
+				break
+			}
+			rows = append(rows[:1], rows[2:]...)
+			omitted++
+			marker["older_messages_omitted"] = omitted
 		}
 	}
 	return rows

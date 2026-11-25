@@ -85,6 +85,9 @@ def _read_package(directory, descriptor="plugin.json"):
         root = Path(current)
         if _reparse(root) or any(_reparse(root / child) for child in directories + files):
             raise StageError("plugin_links_forbidden")
+        # Interpreter caches are generated beside source files during local
+        # verification; only manifest-indexed source enters the catalog.
+        directories[:] = [child for child in directories if child != "__pycache__"]
         for filename in files:
             path = root / filename
             if not _regular(path):
@@ -129,7 +132,7 @@ def _same_file(left, right):
     return _digest(left) == _digest(right)
 
 
-def _existing_matches(source, output, packages):
+def _existing_matches(source, output, packages, descriptor):
     if _reparse(output) or not output.is_dir():
         return False
     expected = set()
@@ -140,6 +143,10 @@ def _existing_matches(source, output, packages):
         root = Path(current)
         if _reparse(root) or any(_reparse(root / child) for child in directories + files):
             return False
+        # A built WeChat package has a separate native inventory. Its
+        # builder verifies it independently; this check owns source only.
+        if descriptor == "app.json" and root == output / "wechat" / "runtime" and "windows-x64" in directories:
+            directories.remove("windows-x64")
         for filename in files:
             path = root / filename
             if not _regular(path):
@@ -257,7 +264,7 @@ def _update_existing(source, output, packages, descriptor="plugin.json"):
         raise StageError("output_requires_existing_catalog")
     try:
         old = _catalog(output, descriptor)  # Validate every old member before planning any write.
-        if _existing_matches(source, output, packages):
+        if _existing_matches(source, output, packages, descriptor):
             return {
                 "packages": sorted(packages),
                 "files": sum(len(items) for items in packages.values()),
@@ -347,7 +354,7 @@ def stage(source, output, update_existing=False, descriptor="plugin.json", selec
         if any(output.iterdir()):
             if update_existing:
                 return _update_existing(source, output, packages, descriptor)
-            if not _existing_matches(source, output, packages):
+            if not _existing_matches(source, output, packages, descriptor):
                 raise StageError("output_requires_fresh_directory")
             return {"packages": sorted(packages), "files": sum(len(items) for items in packages.values()), "idempotent": True}
     output.mkdir(parents=True, exist_ok=True)

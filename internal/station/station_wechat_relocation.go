@@ -65,12 +65,15 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		return out, errors.New("无法打开目标站数据目录")
 	}
 	defer root.Close()
-	unlock, err := lockReleaseRoot(root, dir, stationNativeRunLockFile)
+	stationRunLock := stationNativeLifecycleRelative(dir, stationNativeRunLockFile)
+	stationRelease := stationNativeLifecycleRelative(dir, stationNativeReleaseFile)
+	stationStop := stationNativeLifecycleRelative(dir, stationNativeStopFile)
+	unlock, err := lockReleaseRoot(root, dir, stationRunLock)
 	if err != nil {
 		return out, errors.New("目标站仍在使用，或停机锁不可用")
 	}
 	defer unlock()
-	if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
+	if _, err := root.Lstat(stationRelease); !errors.Is(err, os.ErrNotExist) {
 		return out, errors.New("目标站带有封存记录，无法作为接收站")
 	}
 	workerRoot := filepath.Join(stationApplicationsRelative(dir), wechatapp.ID, "workers")
@@ -88,7 +91,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		!targetHost.activationBound(*proof, req.ConnectionID, archive.Plan, proof.TargetDataset) || legacyImportOverlap(dir, proof.OldRoot) {
 		return out, errors.New("目标站缺少原连接一致的冻结记录和交接资料")
 	}
-	stopRaw, err := readLegacyImportFile(root, stationNativeStopFile, 16<<10)
+	stopRaw, err := readLegacyImportFile(root, stationStop, 16<<10)
 	var stop stationNativeStop
 	if err != nil || json.Unmarshal(stopRaw, &stop) != nil || stop.Version != 1 || stop.State != "stopped" ||
 		!sameCutoverPath(stop.DataRoot, stop.DataRoot) || sameCutoverPath(stop.DataRoot, dir) ||
@@ -96,7 +99,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		source != "" && !sameCutoverPath(stop.DataRoot, source) {
 		return out, errors.New("目标站须保留源站正常停机记录，并在不同目录准备")
 	}
-	owner, err := fishidentity.New(dir).Read()
+	owner, err := fishidentity.New(stationAuthorityDir(dir)).Read()
 	if err != nil || !fishidentity.ValidFishID(owner.FishID) || owner.LocalOwner == nil || !fishidentity.ValidLocalOwner(*owner.LocalOwner) {
 		return out, errors.New("目标站缺少可核对的鱼身份和本机主人")
 	}
@@ -144,7 +147,7 @@ func CheckLegacyWechatRelocation(ctx context.Context, req LegacyWechatRelocation
 		if sourceStop != want.SourceStop {
 			return errors.New("源站停机记录与目标副本不一致")
 		}
-		sourceOwner, err := fishidentity.New(source).Read()
+		sourceOwner, err := fishidentity.New(stationAuthorityDir(source)).Read()
 		if err != nil || sourceOwner.FishID != want.FishID || sourceOwner.LocalOwner == nil || sourceOwner.LocalOwner.ID != want.OwnerID {
 			return errors.New("源站和目标站的本机主人或鱼身份不一致")
 		}

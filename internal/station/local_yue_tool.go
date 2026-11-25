@@ -244,20 +244,12 @@ func (e localYuEInvocation) submitYuE(ctx context.Context, job pluginhost.Job, a
 			request.ReferenceBasename, _ = comfyui.ReferenceWAVName(ref)
 			request.ReferenceSHA256 = args.Reference.SHA256
 		}
-		info, err := client.YuERequiredNodeSchemas(ctx)
-		if err != nil {
-			return err
-		}
 		preparationStage = pluginhost.JobFailureValidation
-		recipe, err := (stationyue.Compiler{WorkflowDir: deploy.WorkflowRoot, PinnedTemplateSHA256: deploy.Pins, ObjectInfo: info}).Compile(request)
+		prepared, submission, err := preparePublicYuE(ctx, client, deploy, request, ref)
 		if err != nil {
 			return err
 		}
-		prepared, err := comfyui.PrepareFLAC(recipe.Graph, recipe.EffectiveSHA256, ref)
-		if err != nil {
-			return err
-		}
-		receipt, err := json.Marshal(localYuESubmission{Effective: recipe.Effective, SourceSHA256: recipe.SourceSHA256, GraphSHA256: recipe.EffectiveSHA256})
+		receipt, err := json.Marshal(submission)
 		if err != nil {
 			return err
 		}
@@ -296,6 +288,24 @@ func (e localYuEInvocation) submitYuE(ctx context.Context, job pluginhost.Job, a
 		}
 	}
 	return job
+}
+
+// preparePublicYuE only compiles the workstation's music request. Message
+// provenance, application grants and delivery belong to the caller.
+func preparePublicYuE(ctx context.Context, client localComfyAudioClient, deploy localYuEDeployment, request stationyue.Request, ref comfyui.JobRef) (comfyui.Prepared, localYuESubmission, error) {
+	info, err := client.YuERequiredNodeSchemas(ctx)
+	if err != nil {
+		return comfyui.Prepared{}, localYuESubmission{}, err
+	}
+	recipe, err := (stationyue.Compiler{WorkflowDir: deploy.WorkflowRoot, PinnedTemplateSHA256: deploy.Pins, ObjectInfo: info}).Compile(request)
+	if err != nil {
+		return comfyui.Prepared{}, localYuESubmission{}, err
+	}
+	prepared, err := comfyui.PrepareFLAC(recipe.Graph, recipe.EffectiveSHA256, ref)
+	if err != nil {
+		return comfyui.Prepared{}, localYuESubmission{}, err
+	}
+	return prepared, localYuESubmission{Effective: recipe.Effective, SourceSHA256: recipe.SourceSHA256, GraphSHA256: recipe.EffectiveSHA256}, nil
 }
 
 func (e localYuEInvocation) dispatchYuE(ctx context.Context, client localComfyAudioClient, args localYuEJobInput, basename string, ref comfyui.JobRef, prepared comfyui.Prepared, reference []byte) error {

@@ -22,7 +22,7 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 		return err
 	}
 	job, err := store.GetLocalTaskFollowup(ctx, in, id)
-	if err != nil || job.State != "generating" || job.RequestID != in.TraceID || in.Source == nil || job.Source.EventID != in.Source.EventID || job.Source.Revision != in.Source.Revision || job.Source.BodyHash != in.Source.BodyHash {
+	if err != nil || job.State != "generating" || job.RequestID != in.TraceID || in.Source == nil || job.Source.EventID != in.Source.EventID || job.Source.BodyHash != in.Source.BodyHash {
 		return errors.New("原任务已停止或来源已变化")
 	}
 	grant, err := (&localWorkspaceAccess{home: h.home, fishID: in.Account, ownerID: in.Sender}).resolve()
@@ -39,8 +39,7 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 		}
 		tools := h.tools(store, in)
 		tools.run = run
-		project, err := tools.projectFollowupJob(ctx, job.ResultTool, job.JobID)
-		if err != nil || project.CancelRequested || project.State == "cancelled" {
+		if err := tools.checkFollowupTarget(ctx, job.ResultTool, job.JobID); err != nil {
 			return errors.New("原项目任务已停止或授权已变化")
 		}
 	}
@@ -48,8 +47,8 @@ func (h *localChatService) checkLocalTaskContinuation(ctx context.Context, store
 }
 
 func localFollowupTool() mcptools.Tool {
-	return mcptools.NewTool(localFollowupToolName, "为本轮已经提交的本机长任务安排结果续办。schedule使用process_id，或同时提供原job_id和对应查询工具result_tool（RVC、ComfyUI、YuE）。宿主核对原任务和成品后续写本机聊天；登记只表示开始等待。status/cancel用续办id，list按游标查看。cancel只停止续办；停止原任务使用对应工具。结果未知时仅核对原任务。需要自动回看时请实际登记。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["schedule","status","cancel","list"]},"process_id":{"type":"string"},"job_id":{"type":"string"},"result_tool":{"type":"string","enum":["project_rvc_job","project_comfy_job","project_yue_job"]},"id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
+	return mcptools.NewTool(localFollowupToolName, "为已提交的长任务安排自动续办。schedule 填 process_id，或原 job_id 与 result_tool；外部任务的 task_id 作为 job_id。status/cancel 使用续办 id，list 分页查看。停止原任务请用对应工具。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["schedule","status","cancel","list"]},"process_id":{"type":"string"},"job_id":{"type":"string"},"result_tool":{"type":"string","enum":["project_rvc_job","project_comfy_job","project_yue_job","station_external_task"]},"id":{"type":"string"},"after":{"type":"string"},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
 type localFollowupInput struct {
@@ -100,8 +99,7 @@ func (t *localToolSet) callFollowup(ctx context.Context, raw json.RawMessage) (s
 			}
 			value, err = t.store.ScheduleLocalTaskFollowup(ctx, in, *source, args.ProcessID, grant.Revision, time.Now().UTC())
 		case args.ProcessID == "" && args.JobID != "" && args.ResultTool != "":
-			project, proofErr := t.projectFollowupJob(ctx, args.ResultTool, args.JobID)
-			if proofErr != nil || project.CancelRequested || project.State == "cancelled" {
+			if err := t.checkFollowupTarget(ctx, args.ResultTool, args.JobID); err != nil {
 				return "", errors.New("该项目任务已停止或不属于本轮已核验的启动操作")
 			}
 			value, err = t.store.ScheduleLocalToolFollowup(ctx, in, *source, args.ResultTool, args.JobID, grant.Revision, time.Now().UTC())
@@ -223,16 +221,35 @@ type localTaskFollowupWorker struct {
 	currentDone chan struct{}
 }
 
-func (w *localTaskFollowupWorker) interrupt() <-chan struct{} {
+func (h *localChatService) tryForegroundTurn(ctx context.Context) bool {
+	w := h.followups
 	if w == nil {
-		return nil
+		return ctx.Err() == nil && h.turn.TryLock()
 	}
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for waitCtx.Err() == nil {
+		acquired, done := w.foregroundTurn()
+		if done == nil {
+			return acquired
+		}
+		select {
+		case <-done:
+		case <-waitCtx.Done():
+			return false
+		}
+	}
+	return false
+}
+
+func (w *localTaskFollowupWorker) foregroundTurn() (bool, <-chan struct{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.cancel != nil {
 		w.cancel()
+		return false, w.currentDone
 	}
-	return w.currentDone
+	return w.service.turn.TryLock(), nil
 }
 
 func (w *localTaskFollowupWorker) notify() {
@@ -276,20 +293,7 @@ func (h *localChatService) startLocalTaskFollowups() {
 
 func (w *localTaskFollowupWorker) tick(ctx context.Context) {
 	h := w.service
-	if ctx.Err() != nil || h.stopping.Load() || !h.turn.TryLock() {
-		return
-	}
-	defer func() {
-		h.turn.Unlock()
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		if w.currentDone != nil {
-			close(w.currentDone)
-			w.currentDone = nil
-		}
-	}()
-	identity, err := h.home.identity.Read()
-	if err != nil || identity.LocalOwner == nil {
+	if ctx.Err() != nil || h.stopping.Load() {
 		return
 	}
 	store, in, err := h.conversation()
@@ -297,20 +301,37 @@ func (w *localTaskFollowupWorker) tick(ctx context.Context) {
 		return
 	}
 	jobs, err := store.DueLocalTaskFollowups(ctx, in, time.Now().UTC(), 1)
-	if err != nil {
+	if err != nil || len(jobs) == 0 {
 		return
 	}
-	for _, job := range jobs {
-		if ctx.Err() != nil || h.stopping.Load() {
-			return
-		}
-		w.advance(ctx, store, in, job)
+	job := jobs[0]
+	// An idle scan can run alongside chat. Publish the cancellation handle
+	// under the same lock used for chat admission before starting due work.
+	w.mu.Lock()
+	if ctx.Err() != nil || h.stopping.Load() || !h.turn.TryLock() {
+		w.mu.Unlock()
+		return
 	}
+	continuation, cancel := context.WithCancel(ctx)
+	w.current, w.cancel, w.currentDone = job.ID, cancel, make(chan struct{})
+	w.mu.Unlock()
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		h.turn.Unlock()
+		close(w.currentDone)
+		w.current, w.cancel, w.currentDone = "", nil, nil
+	}()
+	w.advance(continuation, store, in, job)
 }
 
 func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.Store, in companion.Input, job companion.LocalTaskFollowup) {
 	h := w.service
 	update := func(state, reason string, next time.Time) {
+		if ctx.Err() != nil {
+			return
+		}
 		_, _ = store.UpdateLocalTaskFollowup(context.WithoutCancel(ctx), in, job.ID, job.Revision, state, next, reason)
 	}
 	prior, err := store.LocalConversationRequest(ctx, in, job.RequestID)
@@ -346,20 +367,14 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 		update("cancelled", "authorization_changed", time.Now().UTC())
 		return
 	}
-	continuation, cancel := context.WithCancel(ctx)
-	w.mu.Lock()
-	w.current, w.cancel = job.ID, cancel
-	w.currentDone = make(chan struct{})
-	w.mu.Unlock()
-	defer func() { cancel(); w.mu.Lock(); w.current, w.cancel = "", nil; w.mu.Unlock() }()
-	// Close the race between a cancellation and registration of the active
-	// slot. A cancelled status query must not advance to model generation.
-	current, err := store.GetLocalTaskFollowup(continuation, in, job.ID)
+	// Scan results can change before admission. A cancelled status query
+	// must not advance to model generation.
+	current, err := store.GetLocalTaskFollowup(ctx, in, job.ID)
 	if err != nil || current.Revision != job.Revision {
 		return
 	}
-	result, outcome, reason, delay := tools.readLocalFollowupResult(continuation, grant, job)
-	if continuation.Err() != nil {
+	result, outcome, reason, delay := tools.readLocalFollowupResult(ctx, grant, job)
+	if ctx.Err() != nil {
 		return
 	}
 	if outcome != "ready" {
@@ -370,12 +385,12 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 		return
 	}
 	if job.State == "waiting" {
-		job, err = store.UpdateLocalTaskFollowup(continuation, in, job.ID, job.Revision, "ready", time.Now().UTC(), "task_result_available")
+		job, err = store.UpdateLocalTaskFollowup(ctx, in, job.ID, job.Revision, "ready", time.Now().UTC(), "task_result_available")
 		if err != nil {
 			return
 		}
 	}
-	job, err = store.UpdateLocalTaskFollowup(continuation, in, job.ID, job.Revision, "generating", time.Now().UTC().Add(3*time.Minute), "reading_task_result")
+	job, err = store.UpdateLocalTaskFollowup(ctx, in, job.ID, job.Revision, "generating", time.Now().UTC().Add(3*time.Minute), "reading_task_result")
 	if err != nil {
 		return
 	}
@@ -384,7 +399,7 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 	in.BackgroundResult, in.HistoryObserved, in.TaskID, in.OriginTraceID = true, true, job.ID, job.RequestID
 	in.Text = "这是原本机任务的新结果，原请求见 source_user_request。依据实际结果续办或说明待核对事项。不要重提、重启或恢复原执行；没有新内容时可安静。"
 	in.RecoveryToolResults = []companion.RecoveryToolResult{result}
-	_, err = h.generateLocalTurn(continuation, store, in, run, job.ID)
+	_, err = h.generateLocalTurn(ctx, store, in, run, job.ID)
 	state, reason := "completed", "result_reviewed"
 	if err != nil {
 		state, reason = "failed", "result_review_failed"
@@ -400,6 +415,9 @@ func (w *localTaskFollowupWorker) advance(ctx context.Context, store *companion.
 
 func (t *localToolSet) readLocalFollowupResult(ctx context.Context, grant localWorkspaceGrant, job companion.LocalTaskFollowup) (result companion.RecoveryToolResult, state, reason string, delay time.Duration) {
 	result.CallKey, result.ReadOnly = job.ID, true
+	if job.ResultTool == localExternalTaskCall {
+		return t.readExternalTaskFollowup(ctx, job, result)
+	}
 	if job.JobID != "" {
 		query, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()

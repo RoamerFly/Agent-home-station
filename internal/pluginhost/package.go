@@ -29,6 +29,7 @@ type Package struct {
 	Name          string            `json:"name"`
 	Version       string            `json:"version"`
 	HostProtocol  int               `json:"host_protocol"`
+	CallMetadata string            `json:"call_metadata,omitempty"`
 	Status        string            `json:"status"`
 	Platforms     []string          `json:"platforms"`
 	Runtime       Runtime           `json:"runtime"`
@@ -229,6 +230,9 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 	if p.SchemaVersion != 1 || p.HostProtocol != Protocol || !identifier.MatchString(p.ID) || strings.TrimSpace(p.Name) == "" || p.Version == "" {
 		return p, errors.New("unsupported package identity or protocol")
 	}
+	if p.CallMetadata != "" && p.CallMetadata != "opaque-v1" {
+		return p, errors.New("unsupported package call metadata")
+	}
 	switch p.Status {
 	case "template", "migration-pending", "ready":
 	default:
@@ -279,6 +283,9 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 		}
 	}
 	found := map[string]bool{}
+	// The desktop checks the separate Windows native inventory before launch.
+	// Keep its binaries out of the source checkout and source descriptor.
+	wechatRuntime := filepath.Join(dir, "runtime", "windows-x64")
 	err = filepath.WalkDir(dir, func(full string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return e
@@ -287,6 +294,14 @@ func VerifyDescriptor(dir, descriptor string) (Package, error) {
 			return errors.New("package links forbidden")
 		}
 		if d.IsDir() {
+			if descriptor == "app.json" && p.ID == "wechat" && full == wechatRuntime {
+				return filepath.SkipDir
+			}
+			// Python may compile an adjacent cache while a developer verifies a
+			// source package. Cache bytes are never package members or snapshots.
+			if d.Name() == "__pycache__" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, e := d.Info()

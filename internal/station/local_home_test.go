@@ -193,7 +193,7 @@ func TestLocalHomeCredentialBoundaryAndNoWeChatRoutes(t *testing.T) {
 	// ancestor of the host's private credential directory.
 	id := "fish-" + strings.Repeat("a", 48)
 	root := filepath.Join(base, "evil-root")
-	dataDir := filepath.Join(root, "fish_home", id, "home", "host-secrets")
+	dataDir := filepath.Join(root, "home", "host-secrets")
 	h := localHomeService{root: root, dataDir: dataDir}
 	if _, err := h.directory(fishidentity.Record{FishID: id, LocalOwner: &fishidentity.LocalOwner{}}); err == nil {
 		t.Fatal("home grant could contain host credentials")
@@ -210,5 +210,37 @@ func TestLocalHomeRuntimeIsAuthenticatedAndIdentifiesOnlyThisStation(t *testing.
 	code, got := f.request("GET", "/api/local/runtime", nil, true)
 	if code != http.StatusOK || got["kind"] != "local-station" || int(got["pid"].(float64)) != os.Getpid() || got["data_directory"] != f.dir {
 		t.Fatalf("runtime identity: %d %#v", code, got)
+	}
+}
+
+func TestSingleHomeMigrationPreservesFiles(t *testing.T) {
+	base := t.TempDir()
+	h := &localHomeService{root: filepath.Join(base, "workspace"), dataDir: filepath.Join(base, "data"), identity: fishidentity.New(filepath.Join(base, "identity"))}
+	if err := os.MkdirAll(filepath.Join(base, "identity"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	record, err := h.identity.InitializeLocal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(h.root, "fish_home", record.FishID, "home")
+	if err := os.MkdirAll(old, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "note.txt"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.migrateSingleHome(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.migrateSingleHome(); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(h.root, "home", "note.txt"))
+	if err != nil || string(content) != "keep" {
+		t.Fatalf("lost file: %q %v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "fish_home")); !os.IsNotExist(err) {
+		t.Fatal("old empty containers retained")
 	}
 }

@@ -39,7 +39,7 @@ func decisionShape(d Decision, _ int) string {
 			return "decision_reply_empty"
 		}
 		for _, s := range d.Messages {
-			if strings.TrimSpace(s) == "" || len(s) > 3000 || !utf8.ValidString(s) {
+			if strings.TrimSpace(s) == "" || len(s) > 1<<20 || !utf8.ValidString(s) {
 				return "decision_message_invalid"
 			}
 		}

@@ -1,17 +1,21 @@
 package station
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/hostfile"
+	"wechat-bot/internal/stationauth"
 	"wechat-bot/internal/stationhost"
 	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
@@ -102,11 +106,30 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	}
 	var fenceErr error
 	if entry, ok := registry.Lookup(wechatapp.ID); ok && entry.Registration == "station-native" {
-		if _, err := root.Lstat(stationNativeReleaseFile); !errors.Is(err, os.ErrNotExist) {
+		if _, err := root.Lstat(stationNativeLifecycleRelative(dir, stationNativeReleaseFile)); !errors.Is(err, os.ErrNotExist) {
 			fenceErr = errors.New("微信原生启动已禁用或无法核对解除交接记录")
 		}
 	}
 	if err = errors.Join(fenceErr, root.Close()); err != nil {
+		return nil, err
+	}
+	if err := migrateLegacyAuthority(dir); err != nil {
+		return nil, err
+	}
+	if err := migrateLegacyToolRegistrations(dir); err != nil {
+		return nil, err
+	}
+	// Structured station homes keep the identity and local-owner authority
+	// under main_setting/authority.  The top-level data root can already exist
+	// when an application package creates applications/wechat/native first, so
+	// prepare the authority path before the registry attempts to create its
+	// sidecar lock.  Without this, LockFileEx reports a missing parent as the
+	// generic registry-busy error and the station cannot start on a fresh home.
+	authorityRoot, err := workspacefs.EnsurePath(stationAuthorityDir(dir))
+	if err != nil {
+		return nil, errors.New("本机身份配置目录不可用")
+	}
+	if err := authorityRoot.Close(); err != nil {
 		return nil, err
 	}
 	if err = migrateLegacyAppPersona(dir); err != nil {
@@ -120,12 +143,23 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 		}
 	}
 	mux := http.NewServeMux()
+	stationauth.RegisterPassword(mux, auth, AuthorityRoot(dir))
 	home := &localHomeService{identity: fishidentity.New(stationAuthorityDir(dir)), root: workspaceRoot, dataDir: dir, chatAvailable: true, windows: runner,
 		toolPackages: toolPackagesDirectory, appCatalog: applicationPackagesDirectory}
+	if err := home.migrateSingleHome(); err != nil {
+		return nil, err
+	}
 	home.registerHomeRoutes(auth, mux)
 	chat := newLocalChatService(home)
 	chat.windows = runner
 	home.projectTools = chat.projectTools
+	if record, e := home.identity.Read(); e == nil && record.LocalOwner != nil && record.LocalOwner.HomeAccess && home.toolPackages != "" {
+		if host, e := chat.projectTools.forFish(record.FishID); e == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			chat.projectTools.refreshDirectoryTools(ctx, host, discoverToolPackages(chat.projectTools.options.CatalogDirectory))
+			cancel()
+		}
+	}
 	mux.HandleFunc("POST /api/logout", auth.Protect(func(w http.ResponseWriter, r *http.Request) {
 		auth.Logout(w, r)
 		chat.projectTools.obs.stop()
@@ -151,6 +185,93 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	return &LocalHomeHandler{Handler: stationhost.New(mux, auth, registry, dir, chat, apps...), chat: chat, home: home}, nil
 }
 
+// migrateLegacyAuthority moves installation records that were written at the
+// data root before the structured main_setting/authority layout existed. The
+// move is performed only when the canonical destination is absent, preserving
+// a partial migration for inspection instead of overwriting newer authority.
+func migrateLegacyAuthority(dataDir string) error {
+	if !structuredDataRoot(dataDir) || stationMainDir(dataDir) == dataDir {
+		return nil
+	}
+	canonical := stationAuthorityDir(dataDir)
+	release, err := hostfile.Lock(filepath.Join(dataDir, ".legacy-authority-migration.lock"))
+	if err != nil {
+		return errors.New("旧身份配置迁移暂不可用")
+	}
+	defer release()
+	root, err := workspacefs.EnsurePath(canonical)
+	if err != nil {
+		return err
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	for _, name := range []string{"fish-identity.json", "local-model.json", legacySettingsReceiptFile, "tool-grants.json"} {
+		source := filepath.Join(dataDir, name)
+		destination := filepath.Join(canonical, name)
+		info, statErr := os.Lstat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("旧身份配置文件不可迁移")
+		}
+		if _, destErr := os.Lstat(destination); destErr == nil {
+			continue
+		} else if !errors.Is(destErr, os.ErrNotExist) {
+			return destErr
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateLegacyToolRegistrations publishes registrations written at the old
+// data root into the structured public-tools index. Tool binaries and private
+// resources remain in their existing managed locations and are not copied.
+func migrateLegacyToolRegistrations(dataDir string) error {
+	if !structuredDataRoot(dataDir) {
+		return nil
+	}
+	registrationDir := filepath.Join(stationPublicToolsDir(dataDir), "registrations")
+	registrationRoot, err := workspacefs.EnsurePath(registrationDir)
+	if err != nil {
+		return err
+	}
+	if err := registrationRoot.Close(); err != nil {
+		return err
+	}
+	for _, name := range []string{
+		localTTSRegistrationFile,
+		localRVCRegistrationFile,
+		localYuERegistrationFile,
+		localAudioCppRegistrationFile,
+		localComfyRegistrationFile,
+		"station-obs-preview.json",
+	} {
+		source := filepath.Join(dataDir, name)
+		destination := filepath.Join(registrationDir, name)
+		info, statErr := os.Lstat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("旧工具登记文件不可迁移")
+		}
+		if _, destErr := os.Lstat(destination); destErr == nil {
+			continue
+		} else if !errors.Is(destErr, os.ErrNotExist) {
+			return destErr
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RegisterLegacyHomeRoutes retains the home settings in the existing management
 // session for old installations. The standalone station has its own session.
 func RegisterLegacyHomeRoutes(auth *websession.Store, mux *http.ServeMux, identity *fishidentity.Registry, root, dataDir string) {
@@ -171,7 +292,7 @@ func (h *localHomeService) directory(record fishidentity.Record) (string, error)
 	}
 	// The home is a sibling of the legacy account-private subtree, never its
 	// parent. No account or WeChat requester is part of this grant's identity.
-	home := filepath.Join(h.root, "fish_home", record.FishID, "home")
+	home := filepath.Join(h.root, "home")
 	rel, err := filepath.Rel(home, h.dataDir)
 	// A workspace on a different Windows volume cannot contain the private
 	// settings directory; filepath.Rel quite correctly cannot represent it.
@@ -182,6 +303,63 @@ func (h *localHomeService) directory(record fishidentity.Record) (string, error)
 		return "", errors.New("家目录不能包含宿主私有配置")
 	}
 	return home, nil
+}
+
+// Keep the durable identity, but do not encode it in a single resident's path.
+// Rename only a complete old home; conflicting destinations retain both trees.
+func (h *localHomeService) migrateSingleHome() error {
+	record, err := h.identity.Read()
+	if err != nil || record.LocalOwner == nil {
+		return err
+	}
+	oldCatalog := filepath.Join(stationPublicToolsDir(h.dataDir), record.FishID)
+	newCatalog := filepath.Join(stationPublicToolsDir(h.dataDir), "catalog")
+	if _, err := os.Lstat(oldCatalog); err == nil {
+		if _, err := os.Lstat(newCatalog); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("新旧工具登记目录同时存在，请先合并")
+		}
+		check, err := workspacefs.EnsurePath(oldCatalog)
+		if err != nil {
+			return err
+		}
+		if err := check.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(oldCatalog, newCatalog); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	destination, err := h.directory(record)
+	if err != nil {
+		return err
+	}
+	old := filepath.Join(h.root, "fish_home", record.FishID, "home")
+	if _, err := os.Lstat(old); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return errors.New("新旧家目录同时存在，请先合并内容")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Validate all existing ancestors before moving a private workspace.
+	check, err := workspacefs.EnsurePath(old)
+	if err != nil {
+		return err
+	}
+	if err := check.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(old, destination); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Dir(old)) // Empty containers only; never recursive.
+	_ = os.Remove(filepath.Dir(filepath.Dir(old)))
+	return nil
 }
 
 func (h *localHomeService) ensureDirectory(record fishidentity.Record) error {
@@ -258,6 +436,11 @@ func (h *localHomeService) update(w http.ResponseWriter, r *http.Request) {
 		if err = h.ensureDirectory(record); err != nil {
 			websession.Fail(w, http.StatusServiceUnavailable, err.Error())
 			return
+		}
+	}
+	if in.Action == "initialize" && h.projectTools != nil && h.toolPackages != "" {
+		if host, err := h.projectTools.forFish(record.FishID); err == nil {
+			h.projectTools.refreshDirectoryTools(r.Context(), host, discoverToolPackages(h.toolPackages))
 		}
 	}
 	// Report the latest revision if another owner page changed the grant while

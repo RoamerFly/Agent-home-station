@@ -102,3 +102,22 @@ func TestLegacySummaryRemainsAvailableWithoutReopeningCompressedMessages(t *test
 		t.Fatal("unknown summary structure accepted")
 	}
 }
+
+func TestHostBoundSummarySurvivesProvenanceGrowthWithoutSendingSources(t *testing.T) {
+	s := contextSummary{
+		Version: 1, People: []summaryPerson{}, Topics: []summaryTopic{{SourceEventIDs: []string{"event-1"}, Text: "继续完成歌曲", State: "active"}},
+		Media: []summaryMedia{}, PendingTasks: []summaryTask{}, Preferences: []string{}, Corrections: []string{},
+		Sources: []SourceRef{{EventID: "event-1", MessageID: strings.Repeat("source", 3000)}},
+	}
+	raw, _ := json.Marshal(s)
+	if _, err := parseContextSummary(string(raw), false); err == nil {
+		t.Fatal("fixture did not exceed the ordinary summary limit")
+	}
+	got := budgetSummary(string(raw), 6000)
+	if !strings.Contains(got, "继续完成歌曲") || strings.Contains(got, "source") || strings.Contains(got, "event-1") {
+		t.Fatalf("compressed facts were lost or provenance leaked to model: %s", got)
+	}
+	if len(got) > 6000 {
+		t.Fatal("model-facing summary exceeded budget")
+	}
+}

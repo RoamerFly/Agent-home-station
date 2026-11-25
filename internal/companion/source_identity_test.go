@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,6 +26,64 @@ func TestSourceInstancePersistsAcrossRestart(t *testing.T) {
 	defer s.Close()
 	if id != s.SourceInstanceID() {
 		t.Fatal("source namespace changed")
+	}
+}
+
+func TestConcurrentStoreOpenSharesSourceInstanceWithoutWALContention(t *testing.T) {
+	dir := t.TempDir()
+	initial, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer group.Done()
+			errs <- initial.initializeSourceInstance()
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer initial.Close()
+	if initial.SourceInstanceID() == "" {
+		t.Fatal("source instance was cleared during concurrent initialization")
+	}
+}
+
+func TestConcurrentStoreOpenOnIndependentDatabasesSerializesWALSetup(t *testing.T) {
+	const workers = 8
+	dirs := make([]string, workers)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for _, dir := range dirs {
+		go func(dir string) {
+			defer group.Done()
+			store, err := NewStore(dir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			errs <- store.Close()
+		}(dir)
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -71,18 +130,101 @@ func TestLegacyRowIDDoesNotQuarantineFreshNativeDataset(t *testing.T) {
 		})
 	}
 }
-func TestSourceCollisionPreservesBothEventsAndIsIdempotent(t *testing.T) {
+func TestReusedNativeRowIDWithDifferentOccurrenceKeepsBothSenders(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	in.TraceID = "reused-native-row"
+	in.Sender = "old-sender"
+	in.Text = "old video"
+	in.MessageTime = now.Add(-17 * 24 * time.Hour).Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, OccurredAt: in.MessageTime, MessageType: 43}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	old, ok := s.SourceForInput(in)
+	if !ok {
+		t.Fatal("old source unavailable")
+	}
+	in.Sender = "new-sender"
+	in.Text = "new share"
+	in.MessageTime = now.Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "new-server", OccurredAt: in.MessageTime, MessageType: 49}
+	for i := 0; i < 2; i++ {
+		if err := s.Observe(in, c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, ok := s.SourceForInput(in)
+	if !ok || fresh.Integrity == "conflicted" || fresh.EventID == old.EventID {
+		t.Fatal("distinct native message was lost", fresh)
+	}
+	var count, conflicts int
+	if err := s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("expected two retained events", count, err)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM source_conflicts WHERE event_id IN (SELECT id FROM events WHERE trace=?)", in.TraceID).Scan(&conflicts); err != nil || conflicts != 0 {
+		t.Fatal("distinct native events were quarantined", conflicts, err)
+	}
+}
+func TestReusedNativeRowIDWithDifferentPlatformIDsKeepsSameSenderEvents(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	in.TraceID = "same-sender-reused-row"
+	in.Sender = "one-sender"
+	in.Text = "older message"
+	in.MessageTime = now.Add(-time.Hour).Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "platform-old", OccurredAt: in.MessageTime}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	old, ok := s.SourceForInput(in)
+	if !ok {
+		t.Fatal("old platform source missing")
+	}
+	in.Text = "new message"
+	in.MessageTime = now.Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "platform-new", OccurredAt: in.MessageTime}
+	for i := 0; i < 2; i++ {
+		if err := s.Observe(in, c, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, ok := s.SourceForInput(in)
+	if !ok || fresh.EventID == old.EventID || fresh.ServerID != "platform-new" {
+		t.Fatal("new platform source was replaced by old row", fresh)
+	}
+	ambiguous := in
+	ambiguous.Source = nil
+	if _, ok := s.SourceForInput(ambiguous); ok {
+		t.Fatal("local row without platform identity selected one of two messages")
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("separate platform IDs were merged or duplicated", count, err)
+	}
+}
+func TestDistinctSourceMessagePrefersPlatformIDOverTimestamp(t *testing.T) {
+	a := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-01T00:00:00Z"}
+	b := &SourceRef{InstanceID: "same", MessageID: "row", ServerID: "platform-1", OccurredAt: "2026-11-02T00:00:00Z"}
+	if distinctSourceMessage(a, b) {
+		t.Fatal("same platform ID must retain conflict protection")
+	}
+	b.ServerID = "platform-2"
+	if !distinctSourceMessage(a, b) {
+		t.Fatal("different platform IDs must remain separate")
+	}
+}
+func TestSourceVersionUpdateReusesLogicalMessageAndIsIdempotent(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()
 	in.MessageTime = now.Add(-time.Hour).UTC().Format(time.RFC3339)
-	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: "local-57", ServerID: "old-server", OccurredAt: in.MessageTime}
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: "local-57", ServerID: "platform-server", OccurredAt: in.MessageTime}
 	in.TraceID = "local-57"
 	in.Text = "old observation"
 	if e := s.Observe(in, c, now); e != nil {
 		t.Fatal(e)
 	}
 	in.MessageTime = now.UTC().Format(time.RFC3339)
-	in.Source.ServerID = "new-server"
 	in.Source.OccurredAt = in.MessageTime
 	in.Text = "new observation"
 	if e := s.Observe(in, c, now); e != nil {
@@ -93,14 +235,14 @@ func TestSourceCollisionPreservesBothEventsAndIsIdempotent(t *testing.T) {
 	}
 	var n int
 	s.db.QueryRow("SELECT count(*) FROM events WHERE trace=?", in.TraceID).Scan(&n)
-	if n != 2 {
-		t.Fatal("source overwritten or replay appended", n)
+	if n != 1 {
+		t.Fatal("version update appended a duplicate logical message", n)
 	}
-	if got := s.Context(in, c, now); len(got.Messages) != 0 {
-		t.Fatal("conflicted source in context", got.Messages)
+	if got := s.Context(in, c, now); len(got.Messages) != 1 || got.Messages[0].FullText != "new observation" {
+		t.Fatal("updated source missing from context", got.Messages)
 	}
 	audit, e := AuditSources(context.Background(), filepath.Dir(s.path))
-	if e != nil || len(audit) != 2 {
+	if e != nil || len(audit) != 0 {
 		t.Fatal(audit, e)
 	}
 }
@@ -274,7 +416,7 @@ func TestSourceForInputDoesNotResolveForgottenOrSuppressedEvents(t *testing.T) {
 		})
 	}
 }
-func TestSourceReceivedAtIsFirstObservationAndTimeMustAgree(t *testing.T) {
+func TestSourceReceivedAtIsFirstObservationAndOccurrenceTimeMayRefresh(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	now := time.Now()
 	in.TraceID = "clock-source"
@@ -289,8 +431,8 @@ func TestSourceReceivedAtIsFirstObservationAndTimeMustAgree(t *testing.T) {
 		t.Fatal("first observed time came from input", got)
 	}
 	in.Source.OccurredAt = now.Format(time.RFC3339)
-	if err := s.Observe(in, c, now); err == nil {
-		t.Fatal("contradictory occurrence time accepted")
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal("refreshed occurrence time rejected", err)
 	}
 }
 

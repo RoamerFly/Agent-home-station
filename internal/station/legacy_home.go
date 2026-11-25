@@ -89,7 +89,7 @@ func loadLegacyHome(ctx context.Context, dataDir, workspaceRoot, sourceDir, targ
 		return legacyHomeReceipt{}, errors.New("请先初始化本机主人和鱼身份")
 	}
 	file.Close()
-	record, err := fishidentity.New(dataDir).Read()
+	record, err := fishidentity.New(stationAuthorityDir(dataDir)).Read()
 	if err != nil || record.LocalOwner == nil || !record.LocalOwner.HomeAccess {
 		return legacyHomeReceipt{}, errors.New("请先为本机主人开启家目录权限")
 	}
@@ -241,7 +241,7 @@ func ImportLegacyHome(ctx context.Context, dataDir, workspaceRoot, sourceDir, ta
 		return LegacyHomePlan{}, errLegacyHomeChanged
 	}
 	defer source.Close()
-	registry := fishidentity.New(dataDir)
+	registry := fishidentity.New(stationAuthorityDir(dataDir))
 	var parent *os.Root
 	parentPath, targetName := filepath.Dir(receipt.Target), filepath.Base(receipt.Target)
 	err = registry.GuardHome(receipt.FishID, receipt.OwnerID, receipt.Revision, func(record fishidentity.Record) error {

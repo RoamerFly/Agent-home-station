@@ -22,12 +22,18 @@ func (p *permittedTools) yueTools() []mcptools.Tool {
 		return nil
 	}
 	perms := p.manager.Config().Companion.Permissions
-	if !perms.SendVoice && !perms.SendFile {
-		return nil
-	}
 	tools, err := p.manager.musicToolCatalog(context.Background())
 	if err != nil {
 		return nil
+	}
+	if !perms.SendVoice && !perms.SendFile {
+		readOnly := make([]mcptools.Tool, 0, 2)
+		for _, tool := range tools {
+			if tool.Name == "music_local_status" || tool.Name == "music_service_status" {
+				readOnly = append(readOnly, tool)
+			}
+		}
+		return readOnly
 	}
 	return tools
 }
@@ -155,7 +161,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 		in.Kind = p.musicDeliveryKind(in.Kind)
 		if in.Duration == 0 {
-			in.Duration = 60
+			in.Duration = 120
 		}
 		if in.Duration < 10 || in.Duration > 600 {
 			return "", toolInputError("歌曲时长须为10至600秒")
@@ -277,6 +283,15 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
 		health := p.probeYuE(ctx)
+		if health.State == "bridge_unavailable" {
+			started, err := p.recoverMusicDependency(ctx)
+			if err != nil {
+				return "", err
+			}
+			if started {
+				health = p.probeYuE(ctx)
+			}
+		}
 
 		if health.Ready && health.BridgeVersion < 4 && in.SingingVoice != "character" && health.SingingVoiceProfile != "" {
 			return "", yueError("yue_bridge_upgrade_required")
@@ -345,6 +360,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 			task := agentTask{ParentID: p.trace.TaskID, MusicSpec: spec, ID: taskID, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: map[bool]string{true: "参考翻唱 · ", false: "原创歌曲 · "}[in.Mode == "cover"] + in.Title, MusicTitle: in.Title, RequestedText: companion.UserRequestText(p.trace.Text), Checkpoint: "歌曲任务已提交，等待真实结果；不重新生成", State: "waiting", Next: time.Now().Add(20 * time.Second), MusicDeadline: time.Now().Add(30 * time.Minute), MusicJob: id, MusicKind: in.Kind, OriginTrace: p.trace.TraceID, QuoteServerID: p.trace.QuoteServerID}
 			task.OwnerRequested = p.privileged()
 			task.Constraints = p.taskConstraints("music", "", spec.VoiceProfile, spec.Reference)
+			p.inheritTaskDelivery(&task)
 			if len(task.Title) > 200 {
 				task.Title = "原创歌曲生成"
 			}
@@ -393,6 +409,11 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		}
 	}
 	p.manager.agent.mu.Unlock()
+	if !authorized && p.trace.TaskID != "" {
+		if task, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok && task.MusicJob == in.ID && task.Sender == p.trace.Sender && task.State != "cancelled" && p.manager.validateTaskSource(task) == nil {
+			authorized = true
+		}
+	}
 	// Administrator-adopted completed jobs have a verified scoped task rather
 	// than a model-created operation. The persisted account AND room still bind
 	// access; a job ID by itself never grants another conversation access.
@@ -468,7 +489,10 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 	}
 	in.Kind = p.musicDeliveryKind(in.Kind)
 	if !p.musicKindPermitted(in.Kind) {
-		return "", toolInputError("发送格式未授权")
+		status["delivery_blocked"] = true
+		status["delivery_requirement"] = "恢复所选语音或文件发送权限后，再从原 job_id 读取音频交付"
+		data, _ = json.Marshal(status)
+		return string(data), nil
 	}
 	audio, typ, e := p.yueRequest(ctx, "GET", "/jobs/"+in.ID+"/audio", nil, "")
 	if e != nil {
@@ -533,7 +557,7 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 
 // Requested song completion is a reply continuation, not an unsolicited greeting.
 // Poll read-only state before invoking the model; never resubmit generation.
-func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Input, error) {
+func (m *Manager) claimMusicTask(task agentTask, now time.Time, deliveryAllowed bool) (*companion.Input, error) {
 	previousResult := task.LastResult
 	p := &permittedTools{manager: m, trace: *taskResultInput(task, &companion.Input{Channel: "wechat", Account: task.Account, Thread: task.Thread, Sender: task.Sender, TraceID: task.OriginTrace, TaskID: task.ID})}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -547,7 +571,36 @@ func (m *Manager) claimMusicTask(task agentTask, now time.Time) (*companion.Inpu
 	if err == nil && json.Unmarshal(data, &status) != nil {
 		err = errors.New("歌曲状态响应无效")
 	}
-	if !task.MusicDeadline.IsZero() && !now.Before(task.MusicDeadline) {
+	if !deliveryAllowed {
+		// Sending permission controls delivery, not the read-only status of an
+		// already submitted job. Poll active jobs; terminal jobs wait for access.
+		task.State = "waiting"
+		task.MusicDeliveryBlocked = true
+		task.MusicStatusTerminal = err == nil && (status.State == "completed" || status.State == "failed" || status.State == "needs_review")
+		task.Next = now.Add(time.Minute)
+		switch {
+		case err != nil:
+			description, code := safeToolFailure(err)
+			if description == "" {
+				description, code = "音乐作业状态暂不可读", "yue_status_unavailable"
+			}
+			task.LastResult = description + "；等待恢复语音或文件发送权限后交付原任务"
+			if task.LastResult != previousResult {
+				m.record(bot.Record{Event: "music_status_unavailable", Category: "error", ThreadID: task.Thread, MessageID: task.OriginTrace, Tool: "music_local_status", ToolCode: code, Content: description, Status: "waiting", Origin: "agent"})
+			}
+		case status.State == "completed":
+			task.LastResult = "原音乐作业已完成且仍可查询；等待恢复语音或文件发送权限后读取成品并交付"
+		case status.State == "failed" || status.State == "needs_review":
+			task.LastResult = "原音乐作业状态为" + status.State + "，仍可查询；等待恢复语音或文件发送权限后处理原 job_id"
+		default:
+			task.LastResult = "原音乐作业状态为" + status.State + "，仍可查询；等待恢复语音或文件发送权限后交付"
+		}
+		_, err = m.agent.updateSnapshot(task)
+		return nil, err
+	}
+	task.MusicDeliveryBlocked = false
+	task.MusicStatusTerminal = false
+	if status.State != "completed" && status.State != "failed" && status.State != "needs_review" && !task.MusicDeadline.IsZero() && !now.Before(task.MusicDeadline) {
 		err = nil
 		status.State = "deadline_exceeded"
 	}

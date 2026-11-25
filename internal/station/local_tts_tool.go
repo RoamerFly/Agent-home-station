@@ -6,10 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
@@ -112,10 +111,31 @@ func (t *localToolSet) localTTSTools(ctx context.Context) []mcptools.Tool {
 		}
 		info, infoErr := t.projectTools.tts.Info(ctx, grant.FishID)
 		if infoErr == nil && len(info.Voices) != 0 && name != "" {
-			tools = append(tools, mcptools.Tool{Name: name, Description: cap.Description, InputSchema: cap.InputSchema})
+			tool := mcptools.Tool{Name: name, Description: cap.Description, InputSchema: cap.InputSchema}
+			if info.DefaultVoiceID != "" {
+				switch name {
+				case localTTSVoicesTool:
+					tool.Description = "列出本机说话声线及当前默认声线编号。"
+				case localTTSStartTool:
+					tool = localTTSWithDefault(tool)
+				}
+			}
+			tools = append(tools, tool)
 		}
 	}
 	return tools
+}
+
+func localTTSWithDefault(tool mcptools.Tool) mcptools.Tool {
+	var schema map[string]json.RawMessage
+	var required []string
+	if json.Unmarshal(tool.InputSchema, &schema) != nil || json.Unmarshal(schema["required"], &required) != nil {
+		return tool
+	}
+	schema["required"], _ = json.Marshal(slices.DeleteFunc(required, func(field string) bool { return field == "voice_id" }))
+	tool.InputSchema, _ = json.Marshal(schema)
+	tool.Description = "用已登记的本机声线合成文本。省略 voice_id 时选用当前默认声线。核验后登记为可下载音频。"
+	return tool
 }
 
 func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -149,37 +169,19 @@ func (t *localToolSet) callLocalTTS(ctx context.Context, name string, raw json.R
 		if err := strictLocalMemoryDecode(raw, &struct{}{}); err != nil {
 			return "", errors.New("声线列表不需要参数")
 		}
-		return localProcessJSON(map[string]any{"voices": info.Voices})
+		view := map[string]any{"voices": info.Voices}
+		if info.DefaultVoiceID != "" {
+			view["default_voice_id"] = info.DefaultVoiceID
+		}
+		return localProcessJSON(view)
 	}
 	var request localTTSRequest
 	if len(raw) > 80<<10 || strictLocalMemoryDecode(raw, &request) != nil {
-		return "", mcptools.ArgumentError("$", "请提供声线编号和要合成的正文")
+		return "", mcptools.ArgumentError("$", "请提供有效的语音合成参数")
 	}
-	if !utf8.ValidString(request.Text) || strings.TrimSpace(request.Text) == "" || strings.ContainsRune(request.Text, 0) {
-		return "", mcptools.ArgumentError("$.text", "需要有效的非空正文")
-	}
-	if len(request.Text) > localTTSTextLimit {
-		return "", mcptools.ArgumentError("$.text", "单次合成最多 12000 UTF-8 字节，可以分段合成")
-	}
-	if request.Language != "" && !localTTSLanguageAllowed(request.Language) {
-		return "", mcptools.ArgumentError("$.text_language", "语言模式不受支持，可查看工具声明或留空使用声线登记值")
-	}
-	var selected localTTSVoice
-	for _, voice := range info.Voices {
-		if voice.ID == request.VoiceID {
-			selected = voice
-			break
-		}
-	}
-	if selected.Version == "" {
-		return "", mcptools.ArgumentError("$.voice_id", "指定声线未登记或已撤权，请查看可用声线列表")
-	}
-	if request.Speed == nil {
-		normal := 1.0
-		request.Speed = &normal
-	}
-	if *request.Speed < selected.SpeedMin || *request.Speed > selected.SpeedMax {
-		return "", mcptools.ArgumentError("$.speed", "语速超出该声线支持范围，请查看声线列表中的上下限")
+	request, selected, err := preparePublicSpeechRequest(info, request)
+	if err != nil {
+		return "", err
 	}
 	source, ok := t.store.SourceForInput(companion.Input{Channel: "local", Account: grant.FishID, Thread: grant.OwnerID, Sender: grant.OwnerID, TraceID: t.traceID})
 	if !ok {

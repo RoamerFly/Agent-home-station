@@ -143,7 +143,7 @@ func (t *stationAttachmentTools) observeVideo(ctx context.Context, raw json.RawM
 		if backend.localAudio {
 			out["asr_backend"] = "local"
 		}
-		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, false, backend.audio, out)
+		err = stationObserveAudio(ctx, path, dir, in.AudioStart, in.AudioLength, meta.Seconds, stationVideoAudio, backend.audio, out)
 	}
 	if checkErr := backend.check(ctx); checkErr != nil {
 		return "", checkErr
@@ -192,7 +192,7 @@ func (t *stationAttachmentTools) bindConnectionVideo(ctx context.Context, in sta
 	contextFor := func(args json.RawMessage) pluginhost.Invocation {
 		key := localCheckpointKey(t.trace.TraceID, t.trace.Sender, record.ID, record.SHA256, epoch, installed.Digest, installed.Revision, config.Revision, in.Mode, in.AudioStart, in.AudioLength, string(args))
 		return pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: purpose, RequestKey: "station-media-" + key,
-			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID, OriginSourceSender: source.Sender, RequestThread: t.trace.Thread}
+			SourceVersions: map[string]int{"native:" + record.ID: 1}, EvidenceEpoch: epoch, Authorization: record.ID}
 	}
 	check := mediaobserve.BindSource(host.store, installed, config.Revision, checkSource)
 	bound := stationVideoBackend{check: check, localAudio: localAudio}
@@ -288,23 +288,32 @@ func stationObserveFrames(ctx context.Context, path, dir string, in stationVideo
 	return nil
 }
 
-func stationObserveAudio(ctx context.Context, path, dir string, start, requestedLength, duration float64, voice bool, transcribe func(context.Context, []byte) (string, error), out map[string]any) error {
+type stationAudioSource string
+
+const (
+	stationVideoAudio stationAudioSource = "video"
+	stationVoiceAudio stationAudioSource = "voice"
+	stationFileAudio  stationAudioSource = "audio"
+)
+
+func stationObserveAudio(ctx context.Context, path, dir string, start, requestedLength, duration float64, source stationAudioSource, transcribe func(context.Context, []byte) (string, error), out map[string]any) error {
 	const maxPCMPageSeconds = 240 // 16 kHz mono PCM16 fits the 8 MiB WAV envelope.
 	requestedEnd := min(duration, start+requestedLength)
 	out["start_seconds"], out["requested_duration_seconds"] = start, requestedLength
-	extract, endState := mediadecode.ExtractAudioRange, "end_of_video"
-	if voice {
-		extract, endState = mediadecode.ExtractVoiceAudioRange, "end_of_voice"
-		out["voice_duration_seconds"] = duration
-	} else {
-		out["video_duration_seconds"] = duration
+	extract := mediadecode.ExtractAudioRange
+	switch source {
+	case stationVoiceAudio:
+		extract = mediadecode.ExtractVoiceAudioRange
+	case stationFileAudio:
+		extract = mediadecode.ExtractAudioFileRange
 	}
+	out[string(source)+"_duration_seconds"] = duration
 	finish := func(state string, next float64, terminal bool) {
 		out["transcription_state"], out["next_start_seconds"] = state, next
 		out["requested_range_complete"], out["audio_complete"] = terminal || next+.001 >= requestedEnd, terminal || next+.001 >= duration
 	}
 	if start >= duration {
-		finish(endState, duration, true)
+		finish("end_of_"+string(source), duration, true)
 		return nil
 	}
 	length := min(requestedEnd-start, maxPCMPageSeconds)
@@ -320,14 +329,17 @@ func stationObserveAudio(ctx context.Context, path, dir string, start, requested
 		finish("no_audio_in_range", start+length, false)
 		return nil
 	case err != nil:
-		if voice {
+		if source == stationVoiceAudio {
 			return observationFailure("incoming_voice_decode_failed", "已取得微信语音的可播放版本，但未能解码所选音频。")
+		}
+		if source == stationFileAudio {
+			return observationFailure("incoming_audio_file_decode_failed", "已取得音频文件原件，但未能解码所选音轨。")
 		}
 		return stationMediaFailure(err, "提取音轨")
 	}
 	text, err := transcribe(ctx, wav)
 	if err != nil && !mediaspec.IsNoSpeech(err) {
-		if voice {
+		if source != stationVideoAudio {
 			return err
 		}
 		return stationMediaFailure(err, "转写音轨")

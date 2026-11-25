@@ -235,6 +235,12 @@ func (s *Store) AutoLogin(w http.ResponseWriter, r *http.Request) bool {
 	s.sessions[id] = Session{CSRF: csrf, expires: now.Add(lifetime)}
 	s.mu.Unlock()
 	s.cookie(w, r, id, int(lifetime/time.Second))
+	// The desktop host may need to perform a local, owner-scoped follow-up
+	// request after an explicit station handoff.  Expose the one-time session
+	// CSRF value in a response header; browser pages still cannot read it from
+	// a normal top-level navigation, and the protected API continues to require
+	// the same-origin header on every mutation.
+	w.Header().Set("X-CSRF-Token", csrf)
 	return true
 }
 

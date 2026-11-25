@@ -91,6 +91,31 @@ func fixtureEvent(cursor, id, thread, direction, origin string) linuxnative.Even
 	e.Data.Origin = origin
 	return e
 }
+
+func TestPassiveNoticesAreRecordedWithoutModelOrReply(t *testing.T) {
+	fileNotice := 74
+	for _, tc := range []struct {
+		name    string
+		message linuxnative.Message
+	}{
+		{"system", linuxnative.Message{ID: "notice-system", AccountID: "test", ThreadID: "room@chatroom", Direction: "system", Type: 10000, Body: "synthetic recall notice", CreatedAt: time.Now().UTC().Format(time.RFC3339)}},
+		{"file notification", linuxnative.Message{ID: "notice-file", AccountID: "test", ThreadID: "room@chatroom", SenderID: "member", Direction: "incoming", Type: 49, AppMessageType: &fileNotice, CreatedAt: time.Now().UTC().Format(time.RFC3339)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &fakeSource{messages: map[string]linuxnative.Message{tc.message.ID: tc.message}}
+			model, sender := &fakeModel{}, &fakeSender{}
+			worker := newTestWorker(t, source, model, sender)
+			var records []Record
+			worker.config.Record = func(record Record) { records = append(records, record) }
+			worker.handle(t.Context(), fixtureEvent("1", tc.message.ID, tc.message.ThreadID, tc.message.Direction, "wechat"))
+			if source.reads != 1 || model.calls != 0 || sender.calls != 0 || len(records) != 2 ||
+				records[0].Event != "message_received" || records[1].Event != "passive_notice_handled" ||
+				records[1].Reason != "notice_only" || records[1].Status != "processed" {
+				t.Fatalf("notice was not handled as a passive input: reads=%d model=%d send=%d records=%+v", source.reads, model.calls, sender.calls, records)
+			}
+		})
+	}
+}
 func newTestWorker(t *testing.T, s *fakeSource, m *fakeModel, sender *fakeSender) *Worker {
 	t.Helper()
 	w, err := New(Config{StateDir: t.TempDir(), AllowedThreads: []string{"filehelper", "room@chatroom", "friend"}, PollInterval: time.Millisecond}, s, m, sender)

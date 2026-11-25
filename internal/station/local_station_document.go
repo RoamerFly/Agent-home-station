@@ -32,7 +32,7 @@ func (h *localHomeService) stationDocumentToolRelease(ctx context.Context, opera
 	if err != nil || identity.LocalOwner == nil {
 		return "", false
 	}
-	if _, err := os.Stat(filepath.Join(stationPublicToolsDir(h.dataDir), identity.FishID)); err != nil {
+	if _, err := os.Stat(filepath.Join(stationPublicToolsDir(h.dataDir), "catalog")); err != nil {
 		return "", false
 	}
 	host, err := h.projectTools.forFish(identity.FishID)
@@ -155,7 +155,7 @@ func (h *localHomeService) runStationDocument(ctx context.Context, in stationDoc
 		return nil
 	}
 	options := s.options
-	if in.extension == ".docx" && export == nil {
+	if export == nil && (in.extension == ".docx" || in.extension == ".xlsx") {
 		options.DocumentRuntimeRoot = ""
 	}
 	controller, input, output, cleanup, err := openScopedProjectRuntime(ctx, filepath.Join(h.dataDir, "project-tool-tasks"),
@@ -274,9 +274,12 @@ func (p stationDocumentPolicy) CallMetadata(ctx context.Context, job pluginhost.
 		return nil, err
 	}
 	mimeType := localDOCXMIME
-	if p.in.extension == ".pdf" {
+	switch p.in.extension {
+	case ".xlsx":
+		mimeType = localXLSXMIME
+	case ".pdf":
 		mimeType = "application/pdf"
-	} else if p.in.extension == ".png" || p.in.extension == ".jpg" {
+	case ".png", ".jpg":
 		// The host assigned this MIME only after DecodeConfig verified the
 		// original bytes. Never trust a user-provided extension here.
 		mimeType = p.in.record.MIME
@@ -364,14 +367,15 @@ func (p stationDocumentPolicy) Validate(ctx context.Context, job pluginhost.Job,
 
 func stationDocumentResult(in stationDocumentInput, evidence json.RawMessage) (map[string]any, error) {
 	var result struct {
-		Kind      string `json:"kind"`
-		SHA256    string `json:"sha256"`
-		Bytes     int64  `json:"bytes"`
-		Text      string `json:"text"`
-		Total     *int   `json:"text_total_characters"`
-		Offset    *int   `json:"text_offset"`
-		Pages     []int  `json:"pages"`
-		PageCount int    `json:"page_count"`
+		Kind          string `json:"kind"`
+		SHA256        string `json:"sha256"`
+		Bytes         int64  `json:"bytes"`
+		Text          string `json:"text"`
+		FormulaValues string `json:"formula_values"`
+		Total         *int   `json:"text_total_characters"`
+		Offset        *int   `json:"text_offset"`
+		Pages         []int  `json:"pages"`
+		PageCount     int    `json:"page_count"`
 	}
 	mismatch := errors.New("文档检查结果的格式、来源或读取范围不匹配")
 	if json.Unmarshal(evidence, &result) != nil || result.Kind != strings.TrimPrefix(in.extension, ".") {
@@ -389,6 +393,12 @@ func stationDocumentResult(in stationDocumentInput, evidence json.RawMessage) (m
 			return nil, mismatch
 		}
 		total = *result.Total
+		if result.Kind == "xlsx" {
+			if result.FormulaValues != "stored_cache_only_not_recalculated" {
+				return nil, mismatch
+			}
+			view["formula_values"] = result.FormulaValues
+		}
 	} else {
 		if !slices.Equal(result.Pages, []int{in.page}) || result.PageCount < in.page {
 			return nil, mismatch

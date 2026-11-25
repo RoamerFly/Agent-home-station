@@ -4,6 +4,7 @@ package stationhost
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -41,8 +42,20 @@ func New(mux *http.ServeMux, owner *websession.Store, registry apphost.Registry,
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		websession.Respond(w, http.StatusOK, map[string]any{"ok": true, "mode": "local", "wechat_required": false})
 	})
-	mux.HandleFunc("POST /api/login", owner.Login)
-	mux.HandleFunc("GET /api/session", owner.Protect(owner.Status))
+	mux.HandleFunc("GET /api/session", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := owner.Lookup(r); !ok {
+			peer, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil || net.ParseIP(peer) == nil || !net.ParseIP(peer).IsLoopback() || !owner.AutoLogin(w, r) {
+				websession.Fail(w, http.StatusForbidden, "仅允许本机访问工作站")
+				return
+			}
+			// The new cookie is on the response, not the current request.
+			csrf := w.Header().Get("X-CSRF-Token")
+			websession.Respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": csrf})
+			return
+		}
+		owner.Status(w, r)
+	})
 	// The inherited desktop stop pipe is separate from this identity check.
 	mux.HandleFunc("GET /api/local/runtime", owner.Protect(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

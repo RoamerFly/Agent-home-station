@@ -92,6 +92,14 @@ func TestWechatAttachmentAdapter(t *testing.T) {
 			t.Fatalf("pluginless receive: %q %v downloads=%d", result, err, native.downloads)
 		}
 	})
+	t.Run("previously sent file can be reread by another member", func(t *testing.T) {
+		_, p, native := forwardFixture(t)
+		native.message = linuxnative.Message{ID: "pluginless-file", AccountID: p.trace.Account, ThreadID: p.trace.Thread, ServerID: "45", SenderID: "bot", Type: 49, Direction: "outgoing", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>synthetic</cdnattachurl></appattach></appmsg></msg>`}
+		result, err := p.readWechatAttachment(t.Context(), json.RawMessage(`{"message_id":"pluginless-file"}`))
+		if err != nil || native.downloads != 1 || result == "" {
+			t.Fatalf("pluginless receive: %q %v downloads=%d", result, err, native.downloads)
+		}
+	})
 	t.Run("bound host cannot switch declared source", func(t *testing.T) {
 		_, p, native := forwardFixture(t)
 		native.message = linuxnative.Message{ID: "bound-source", AccountID: p.trace.Account, ThreadID: p.trace.Thread, SenderID: p.trace.Sender, Type: 49, Direction: "incoming", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Body: `<msg><appmsg><type>6</type><title>notes.txt</title><appattach><cdnattachurl>synthetic</cdnattachurl></appattach></appmsg></msg>`}

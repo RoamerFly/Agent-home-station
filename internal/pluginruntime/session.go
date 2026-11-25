@@ -3,6 +3,9 @@ package pluginruntime
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,9 +33,15 @@ type session struct {
 	maxFrame int
 	pack     pluginhost.Package
 	grant    pluginhost.Grant
+	callSalt [32]byte
 }
 
 func startSession(cmd *exec.Cmd, cleanup func(), p pluginhost.Package, g pluginhost.Grant, maxFrame int) (*session, error) {
+	var callSalt [32]byte
+	if _, err := rand.Read(callSalt[:]); err != nil {
+		cleanup()
+		return nil, errors.New("plugin call identity unavailable")
+	}
 	if maxFrame == 0 {
 		maxFrame = 8 << 20
 	}
@@ -65,7 +74,7 @@ func startSession(cmd *exec.Cmd, cleanup func(), p pluginhost.Package, g pluginh
 		return nil, errors.New("plugin sandbox process start failed")
 	}
 	_ = childOut.Close()
-	s := &session{cmd: cmd, in: in, out: out, reader: bufio.NewReaderSize(out, 32<<10), gate: make(chan struct{}, 1), done: make(chan struct{}), maxFrame: maxFrame, pack: p, grant: g}
+	s := &session{cmd: cmd, in: in, out: out, reader: bufio.NewReaderSize(out, 32<<10), gate: make(chan struct{}, 1), done: make(chan struct{}), maxFrame: maxFrame, pack: p, grant: g, callSalt: callSalt}
 	go func() { _ = cmd.Wait(); s.dead.Store(true); cleanup(); close(s.done) }()
 	return s, nil
 }
@@ -128,7 +137,15 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 	if err != nil {
 		return nil, err
 	}
-	meta := map[string]any{"wechat/context": rawCopy(c)}
+	meta := map[string]any{}
+	bound, err := json.Marshal(c)
+	if err != nil {
+		return nil, errors.New("plugin call identity invalid")
+	}
+	hash := sha256.New()
+	_, _ = hash.Write(s.callSalt[:])
+	_, _ = hash.Write(bound)
+	meta["station/call_id"] = hex.EncodeToString(hash.Sum(nil))
 	metadataBytes := 0
 	for key, raw := range metadata {
 		if !safeCallMetadataKey(key) || len(raw) == 0 || !json.Valid(raw) {
@@ -138,14 +155,14 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 		if metadataBytes > maxHostMetadataBytes {
 			return nil, errors.New("plugin call metadata exceeds limit")
 		}
-		// The context is host-authenticated and cannot be replaced by a policy.
-		if key == "wechat/context" {
-			return nil, errors.New("plugin call metadata cannot replace context")
+		// The call identity is host-authenticated and cannot be replaced by a policy.
+		if key == "station/call_id" || key == "wechat/context" {
+			return nil, errors.New("plugin call metadata cannot replace identity")
 		}
 		meta[key] = json.RawMessage(append([]byte(nil), raw...))
 	}
-	// Host evidence is outside arguments; a plugin cannot override it with an
-	// argument named account/thread. It still has no direct WeChat credentials.
+	// Application provenance remains in the host-side job and policy. The tool
+	// receives only an opaque identity for replay-sensitive internal operations.
 	return s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": json.RawMessage(append([]byte(nil), args...)), "_meta": meta}, true)
 }
 

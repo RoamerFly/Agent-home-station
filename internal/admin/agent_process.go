@@ -54,6 +54,12 @@ func (p *permittedTools) mediateWorkspaceProcess(ctx context.Context, raw json.R
 		return "", &RuntimeFailure{Code: "execution_scope_unavailable", Stage: "scope", Message: "程序未启动：当前请求的执行范围不可用", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前账号、会话及global授权后再调用server_status"}
 	}
 	cfg.Isolation.GPU = in.GPU
+	// The caller's current workspace is the natural working directory for a
+	// newly written script. Requiring the model to repeat that path caused
+	// otherwise valid group commands to fail admission before they ran.
+	if in.Action == "start" && in.Path == "" && len(cfg.Roots) > 0 {
+		in.Path = cfg.Roots[0]
+	}
 	if !p.workspaceExecutionAllowed() || cfg.Mode != "full" {
 		return "", &RuntimeFailure{Code: "execution_permission_denied", Stage: "authorization", Message: "后台程序执行未授权", NotStarted: true, EffectiveScope: scope, Continuation: "核对当前真实请求者和执行权限；不得重用其他账号或会话的授权"}
 	}
@@ -217,7 +223,7 @@ func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.In
 		a.mu.Lock()
 		parent, ok := a.data.Tasks[task.ParentID]
 		child, current := a.data.Tasks[task.ID]
-		if current && child.Updated.Equal(task.Updated) && ok && parent.Account == task.Account && parent.Thread == task.Thread && parent.Sender == task.Sender {
+		if current && child.Updated.Equal(task.Updated) && ok && parent.Account == task.Account && parent.Sender == task.Sender {
 			oldParent := copyTask(parent)
 			result, _ := json.Marshal(process)
 			parent.Actions = append(append([]taskAction{}, parent.Actions...), taskAction{Tool: "background_process_result", State: process.State, At: now, Result: logText(string(result), 2200)})
@@ -242,10 +248,19 @@ func (m *Manager) claimProcessTask(task agentTask, now time.Time) (*companion.In
 			}
 			return nil, err
 		}
-		if _, retired := a.archived[task.ParentID]; retired && current {
+		if retiredParent, retired := a.archived[task.ParentID]; retired && current && retiredParent.Account == task.Account && retiredParent.Sender == task.Sender {
+			// A parent can have been archived by an older runtime before its
+			// cross-thread child completed. Preserve the result in the archived
+			// record instead of silently discarding it; the history view and a
+			// later recovery can still see the durable action.
+			result, _ := json.Marshal(process)
+			retiredParent.Actions = append(append([]taskAction{}, retiredParent.Actions...), taskAction{Tool: "background_process_result", State: process.State, At: now, Result: logText(string(result), 2200)})
+			retiredParent.LastResult = "程序结果已并入已归档父任务，结果保留在执行记录中"
+			retiredParent.Updated = now
+			a.archived[task.ParentID] = retiredParent
 			child.State = "completed"
 			child.WorkCompleted = true
-			child.LastResult = "父任务已结束，程序结果保留，不再单独续办原请求"
+			child.LastResult = "父任务已结束，程序结果已保留在父任务执行记录中"
 			a.data.Tasks[child.ID] = child
 			err := a.persist()
 			a.mu.Unlock()

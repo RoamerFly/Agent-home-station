@@ -73,39 +73,6 @@
 </symbol>
 </defs>
 </svg>
-<main class="login-shell" id="login-view">
-<section aria-labelledby="login-title" class="login-card">
-<div class="login-brand">
-<img class="login-avatar" src="/assets/whale-girl-cutout.png" alt="蓝色大肥鱼鲸鱼娘" width="84" height="84">
-<div>
-<p class="eyebrow">管理控制台</p>
-<h1 id="login-title">
-<span>Agent-home-station</span>
-</h1>
-</div>
-</div>
-<p class="muted">管理模型、大肥鱼、应用与长期记忆。</p>
-<div aria-label="界面主题" class="theme-control login-theme" role="group">
-<button aria-pressed="false" data-theme-value="light" type="button">
-<svg aria-hidden="true" class="ui-icon">
-<use href="#icon-sun">
-</use>
-</svg>浅色</button>
-<button aria-pressed="true" data-theme-value="dark" type="button">
-<svg aria-hidden="true" class="ui-icon">
-<use href="#icon-moon">
-</use>
-</svg>深色</button>
-</div>
-<form id="login-form" novalidate="">
-<label for="login-password">管理密码</label>
-<input aria-describedby="login-error" autocomplete="current-password" id="login-password" name="password" required="" type="password">
-<p class="form-error" id="login-error" role="alert"></p>
-<button class="primary wide" type="submit">进入控制台</button>
-</form>
-<p class="login-note">默认密码：admin。可在设置 → 系统中修改。</p>
-</section>
-</main>
 <div class="app-shell" hidden="" id="app-view">
 <aside class="sidebar">
 <div class="sidebar-brand">
@@ -160,7 +127,6 @@
 </nav>
 <div class="sidebar-bottom">
 <button type="button" class="sidebar-refresh" id="sidebar-refresh" aria-label="刷新当前页面" title="刷新当前页面"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.3 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.3 3A7.5 7.5 0 0 0 18.7 16"/></svg><span>刷新</span></button>
-<button class="quiet" id="logout">退出登录</button>
 </div>
 </aside>
 <button aria-label="关闭导航" class="drawer-scrim" hidden="" id="drawer-scrim">
@@ -218,7 +184,8 @@
 </nav>
 <nav class="context-nav" aria-label="页内导航" data-nav-group="logs" hidden>
 <button class="nav-link subnav-link" data-section="logs" type="button">执行回合</button>
-<button class="nav-link subnav-link" data-section="surf" type="button">网上冲浪</button>
+<button class="nav-link subnav-link" data-section="surf" type="button">自主发言与冲浪</button>
+<button class="nav-link subnav-link" data-reminder-tab="true" data-section="surf" type="button">提醒任务</button>
 </nav>
 <nav class="context-nav" aria-label="页内导航" data-nav-group="companion" hidden>
 <button class="nav-link subnav-link" data-section="companion" type="button">人设与表达</button>
@@ -587,7 +554,11 @@
 <label class="switch-row" for="thinking-enabled"><span>开启思考模式</span><input id="thinking-enabled" type="checkbox" name="thinking_enabled"><span aria-hidden="true" class="switch"></span></label>
 <label for="reasoning-effort">思考强度</label>
 <select id="reasoning-effort" name="reasoning_effort"><option value="low">低 · 更省 Token</option><option value="high">高</option><option value="max">最高</option></select>
-<p class="hint">聊天与工具执行使用相同设置。</p>
+<p class="hint">以上是日常模型设置；任务可使用下面的临时策略。</p>
+<label class="switch-row" for="direct-image-input"><span>DeepSeek 直接理解图片与文档（关闭后恢复原处理链）</span><input id="direct-image-input" type="checkbox"><span aria-hidden="true" class="switch"></span></label>
+<label for="task-reasoning">任务思考策略</label>
+<select id="task-reasoning"><option value="auto">由 Agent 按需决定</option><option value="inherit">始终沿用日常设置</option><option value="off">本轮任务关闭思考</option><option value="low">本轮任务低强度</option><option value="high">本轮任务高强度</option><option value="max">本轮任务最高强度</option></select>
+<p class="hint">适用于新执行回合。临时调整只作用于当前回合，结束后恢复；人工指定优先于 Agent。</p>
 
 </div><div>
 <label for="max-tokens">单次输出上限（包含思考与回复）</label>
@@ -689,28 +660,14 @@
 <section aria-labelledby="companion-title" class="page" id="companion">
 <div class="section-heading page-actions">
 <h2 class="sr-only" id="companion-title">角色</h2>
-<button class="primary" id="save-companion">保存角色</button>
+<button class="primary" id="save-companion">保存角色文档</button>
 </div>
 <div class="companion-grid">
 <article class="panel">
-<h3 id="companion-name-heading">deepseek蓝色大肥鱼</h3>
-<label for="companion-name">名字</label>
-<input id="companion-name" maxlength="96">
-<label for="companion-persona">人物与行为</label>
-<textarea id="companion-persona" maxlength="8000" rows="8">
-</textarea>
-<label for="companion-style">说话方式</label>
-<textarea id="companion-style" maxlength="4000" rows="3">
-</textarea>
-<details class="role-details">
-<summary>外观与相处方式</summary>
-<label for="companion-appearance">外观</label>
-<textarea id="companion-appearance" maxlength="4000" rows="3">
-</textarea>
-<label for="companion-relationship">相处方式</label>
-<textarea id="companion-relationship" maxlength="4000" rows="3">
-</textarea>
-</details>
+<h3 id="companion-name-heading">蓝色大肥鱼</h3>
+<p class="hint" id="persona-document-path"></p>
+<label for="companion-persona-document">角色设定 · Markdown</label>
+<textarea id="companion-persona-document" maxlength="32000" rows="24" spellcheck="false"></textarea>
 </article>
 <aside>
 <details class="panel">
@@ -1210,6 +1167,10 @@
 <h3 class="sr-only">视频号授权读取</h3>
 <div class="inline-actions">
 <button class="secondary" data-channels-plugin="share-reader" type="button">打开分享内容读取工具</button>
+<div class="inline-actions channels-login-actions" aria-label="分享解析网页登录">
+<button class="secondary" data-channels-login="yuanbao" type="button">网页登录元宝</button>
+<button class="secondary" data-channels-login="assistant" type="button">网页登录视频号助手</button>
+</div>
 <p class="hint" id="channels-plugin-state" role="status">正在读取工具状态…</p>
 </div>
 <p class="hint">分享读取服务、连接和权限统一在工具中心管理。请在对应工具详情中查看当前授权。</p>
@@ -1231,15 +1192,11 @@
 </pre>
 </details>
 <article class="panel" id="permissions-panel">
-<h3>群聊与主动行为</h3>
+<h3>群聊与媒体</h3>
 <label for="group-collection-seconds">群消息收集窗口（秒）</label>
 <input id="group-collection-seconds" type="number" min="0" step="0.001" required aria-describedby="group-collection-hint">
 <p id="group-collection-hint" class="hint">从第一条消息开始计时。0 秒立即处理；重新上线时，每个会话的未读消息一起处理。</p>
-<label class="switch-row">
-<span>主动问候</span>
-<input id="perm-proactive" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
+<p class="hint">主动发言与网上冲浪统一在<a data-section-link="surf" href="#surf">自主发言与冲浪</a>中设置。</p>
 <label class="switch-row">
 <span>自主发送图片</span>
 <input id="perm-send-image" type="checkbox">
@@ -1285,9 +1242,11 @@
 </label>
 </div>
 <div>
+<p id="agent-owner-names" class="hint">正在读取主人与可信用户名称…</p>
+<details><summary>管理底层账号标识</summary>
 <label for="agent-owner-ids">可信微信用户 ID</label>
 <textarea id="agent-owner-ids" placeholder="每行一个真实 wxid；昵称不能作为身份依据" rows="3">
-</textarea>
+</textarea></details>
 </div>
 <div>
 <label class="switch-row">
@@ -1313,6 +1272,11 @@
 <label for="agent-host-roots">工作区基准目录（按账号和会话自动派生）</label>
 <textarea id="agent-host-roots" readonly="" placeholder="由当前账号与会话派生" rows="3">
 </textarea>
+</div>
+<div>
+<label for="agent-external-read-only">给主人开放的外部只读目录</label>
+<textarea id="agent-external-read-only" placeholder="每行一个绝对路径，例如 F:\AI_Comfyui模型库" rows="3"></textarea>
+<p class="hint">大肥鱼可查看模型和工作流文件；新文档仍写入自己的工作区。</p>
 </div>
 <div>
 <label for="agent-plugin-idle">工具空闲保留（分钟）</label>
@@ -1353,16 +1317,39 @@
 <input id="quiet-end" type="time">
 </div>
 </div>
-<p class="hint">约束主动问候和自主冲浪；开始与结束相同表示不设安静时段。</p>
+<p class="hint">约束主动发言和网上冲浪；开始与结束相同表示不设安静时段。</p>
 </details>
-<details aria-labelledby="proactive-title" class="panel proactive-settings disclosure" id="proactive-panel">
-<summary>自主续聊</summary>
-<div class="section-heading">
-<h3 class="sr-only" id="proactive-title">主动问候</h3>
-<button class="primary" id="save-proactive" type="button">保存续聊设置</button>
+</section>
+<section aria-labelledby="page-title" class="page" id="surf">
+<nav aria-label="活动类型" class="surf-tabs" role="tablist">
+<button aria-controls="surf-pane" aria-selected="true" class="active" id="surf-tab" role="tab" type="button">自主发言与冲浪</button>
+<button aria-controls="reminder-pane" aria-selected="false" id="reminder-tab" role="tab" type="button" tabindex="-1">提醒任务</button>
+</nav>
+<section aria-labelledby="reminder-tab" class="panel reminder-pane" id="reminder-pane" role="tabpanel" hidden>
+<div class="section-heading"><div><h2>提醒任务</h2><p class="hint">未到期提醒会在这里保留；到期后进入执行回合。工作站离线导致过期的提醒需要主人手动处理。</p></div><button class="secondary" id="reminder-refresh" type="button">刷新提醒</button></div>
+<p aria-live="polite" class="hint" id="reminder-state" role="status">正在读取提醒任务…</p>
+<div aria-live="polite" class="reminder-list" id="reminder-list"></div>
+</section>
+<div id="surf-pane">
+<div class="surf-summary">
+<span id="surf-schedule">正在读取…</span>
+<button class="secondary" id="surf-refresh" type="button">刷新活动</button>
 </div>
+<p class="hint">主动发言的评估和投递记录在<a data-section-link="logs" href="#logs">执行回合</a>中查看；下方保留冲浪浏览轨迹与收藏。</p>
+<details class="panel surf-settings">
+<summary>自主发言与网上冲浪设置</summary>
+<fieldset disabled id="surf-settings-fields">
+<legend class="sr-only">自主发言与网上冲浪设置项</legend>
+<label class="switch-row">
+<span>启用自主发言与网上冲浪</span>
+<input id="surf-enabled" type="checkbox">
+<span aria-hidden="true" class="switch"></span>
+</label>
+<p class="hint">默认关闭。开启后，大肥鱼可在已选目标自主评估是否发言，并按兴趣探索内容；群聊收到消息后的自主接话仍由该群的回复规则决定。</p>
+<details aria-labelledby="proactive-title" class="proactive-settings disclosure" id="proactive-panel">
+<summary>主动发言目标</summary>
+<h3 class="sr-only" id="proactive-title">主动发言目标</h3>
 <p class="hint">结合最近话题与关系记忆自主评估，可接话、使用工具探索或安静。模型可安排下次评估；默认评估间隔带随机变化，不要求群里先冷场，不设每日硬额度。</p>
-<div class="field-grid"></div>
 <div class="inline-actions">
 <label for="proactive-search">查找目标</label>
 <input id="proactive-search" maxlength="128" placeholder="名称、备注或 ID" type="search">
@@ -1372,25 +1359,19 @@
 <div id="proactive-targets"></div>
 <p class="hint">只显示已授权回复的群聊和好友；可在<a data-section-link="rules" href="#rules">回复规则</a>添加。主动行为遵守目标授权和安静时段。</p>
 </details>
-</section>
-<section aria-labelledby="page-title" class="page" id="surf">
-<div class="surf-summary">
-<span id="surf-schedule">正在读取…</span>
-<button class="secondary" id="surf-refresh" type="button">刷新活动</button>
-</div>
-<details class="panel surf-settings">
-<summary>自主冲浪设置</summary>
-<label class="switch-row">
-<span>启用 AI 自主网上冲浪</span>
-<input id="surf-enabled" type="checkbox">
-<span aria-hidden="true" class="switch"></span>
-</label>
+<h3 class="surf-config-heading">网上冲浪内容与分享</h3>
 <label class="switch-row">
 <span>强制分享已核实内容</span>
 <input aria-describedby="surf-force-hint" id="surf-force-share" type="checkbox">
 <span aria-hidden="true" class="switch"></span>
 </label>
 <p class="hint" id="surf-force-hint">开启后不只浏览或收藏；无合适内容、工具失败、权限或去重受限时仍会停止并记录原因。保存后生效，默认关闭。</p>
+<div class="field-grid">
+<div>
+<label for="surf-max-sessions">每天最多冲浪次数</label>
+<input id="surf-max-sessions" type="number" min="1" max="24" step="1" inputmode="numeric">
+</div>
+</div>
 <div class="field-grid">
 <div>
 <label for="surf-topics">兴趣主题（每行一项）</label>
@@ -1421,8 +1402,9 @@
 </div>
 <p class="hint" id="surf-share-state"></p>
 <p class="hint">安静时段不启动、不扣次数。此前已启动的浏览仍计次数，包括失败或选择不分享；重启不重置预算。</p>
-<button class="primary" id="surf-save" type="button">保存冲浪设置</button>
+<button class="primary" disabled id="surf-save" type="button">保存自主活动设置</button>
 <span aria-live="polite" class="hint" id="surf-save-state"></span>
+</fieldset>
 </details>
 <details class="panel surf-history-panel" id="surf-history-panel">
 <summary>浏览轨迹与收藏</summary>
@@ -1467,12 +1449,13 @@
 <p aria-live="polite" class="form-error" id="surf-error"></p>
 <div aria-label="真实上网活动" class="surf-list" id="surf-list"></div>
 </article>
+</div>
 </section>
 <section aria-labelledby="logs-title" class="page" id="logs">
 <div aria-label="已载入执行概况" class="round-metrics">
 <div>
 <strong id="round-pending">—</strong>
-<span>待处理</span>
+<span>待完成</span>
 </div>
 <div>
 <strong id="round-active">—</strong>
@@ -1491,7 +1474,7 @@
 <label class="sr-only" for="log-status">回合状态</label>
 <select id="log-status">
 <option value="all">全部状态</option>
-<option value="pending">待处理</option>
+<option value="pending">待完成</option>
 <option value="active">进行中</option>
 <option value="done">已完成</option>
 </select>
@@ -1537,20 +1520,6 @@
 <div class="round-reading-workspace"><div aria-label="执行回合，最近更新在前；点击回合在弹窗查看完整内容" class="log-list" id="log-list" tabindex="0"></div></div></article>
 </section>
 <section aria-label="后台设置" class="page" id="settings">
-<article class="panel" id="admin-password-panel">
-<h3>管理密码</h3>
-<form id="admin-password-form">
-<label for="admin-current-password">当前密码</label>
-<input autocomplete="current-password" id="admin-current-password" maxlength="128" required="" type="password">
-<label for="admin-new-password">新密码</label>
-<input autocomplete="new-password" id="admin-new-password" maxlength="128" minlength="5" required="" type="password">
-<label for="admin-confirm-password">确认新密码</label>
-<input autocomplete="new-password" id="admin-confirm-password" maxlength="128" minlength="5" required="" type="password">
-<p class="hint">初始密码为 admin。修改后保存在本机，所有管理会话会退出；微信登录不受影响。</p>
-<button class="primary" id="admin-password-save" type="submit">保存密码并重新登录</button>
-<p class="form-error" id="admin-password-state" role="status"></p>
-</form>
-</article>
 <details class="panel" id="storage-panel">
 <summary>存储与归档</summary>
 <div class="inline-actions">

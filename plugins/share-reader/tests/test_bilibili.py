@@ -138,7 +138,7 @@ class BilibiliTests(unittest.TestCase):
         context = {k: "synthetic" for k in ["account", "thread", "requester", "purpose", "request_key"]}
         api = "https://api.bilibili.com/x/player/playurl?bvid=" + BV + "&cid=101&qn=32&fnval=0&fourk=0"
         frames = [{"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                  {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "share.resolve_public", "arguments": {"url": PAGE}, "_meta": {"wechat/context": context}}},
+                  {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "share.resolve_public", "arguments": {"url": PAGE}, "_meta": {"station/call_id": "a" * 64}}},
                   {"jsonrpc": "2.0", "id": "share-read-1", "result": response(html(metadata()), PAGE)},
                   {"jsonrpc": "2.0", "id": "share-read-2", "result": response(json.dumps(playback()), api, "application/json")}]
         output = io.StringIO()

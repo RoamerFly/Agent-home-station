@@ -14,6 +14,11 @@ import (
 // application transcript remains replay-safe; only actual executed calls have
 // matching tool results. Failed/unexecuted decisions stay ordinary text.
 func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
+	var err error
+	c, err = c.taskReasoningClient(ctx)
+	if err != nil {
+		return "", err
+	}
 	messages := []map[string]any{{"role": "system", "content": system}}
 	total := len(system)
 	for i := 0; i < len(turns); i++ {
@@ -59,6 +64,10 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 	if total > 256<<10 || len(messages) > 120 {
 		return "", errors.New("tool transcript exceeds input bound")
 	}
+	messages, err = c.appendSessionImages(ctx, messages)
+	if err != nil {
+		return "", err
+	}
 	catalog := []any{}
 	for _, t := range tools {
 		catalog = append(catalog, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.InputSchema}})
@@ -77,7 +86,11 @@ func (c *Client) ChatFunctions(ctx context.Context, system string, turns []map[s
 		}
 	}
 	data, _ := json.Marshal(body)
-	return c.request(ctx, data)
+	answer, err := c.request(ctx, data)
+	if err == nil {
+		consumeSessionMedia(ctx)
+	}
+	return answer, err
 }
 
 func functionNameAllowed(s string) bool { return s != "" && !strings.ContainsAny(s, " \r\n") }

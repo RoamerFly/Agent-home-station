@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
 )
@@ -69,10 +70,11 @@ type Config struct {
 	AuthorizeMediaSubmit    func(context.Context, companion.Input, string, string) bool
 	PrepareMediaSource      func(context.Context, companion.Input, string, string) (string, error)
 	AgentTask               func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone           func(companion.Input, string)
+	AgentTaskDone           func(companion.Input, string) error
 	AgentTaskRetry          func(companion.Input, time.Duration, string)
 	AgentTaskDelivery       func(companion.Input, TaskDelivery) error
 	AgentTaskActive         func(companion.Input) bool
+	AgentTaskReplyReady     func(companion.Input, companion.Decision) bool
 	Draining                func() bool
 	MediaSeedAllowed        func(MediaSeed) bool
 	MediaSeedKnown          func(MediaSeed) bool
@@ -86,12 +88,14 @@ type Config struct {
 	// ScopedAnalyzer handles only the inbound media types selected by the host.
 	ScopedAnalyzer ScopedMediaAnalyzer
 	StateDir       string
+	ClosedRounds   []RoundIdentity
 	AllowedThreads []string
 	Prefix         string
 	PollInterval   time.Duration
 	MaxAge         time.Duration
 	Log            func(string)
 	Record         func(Record)
+	Usage          func(string, string, deepseek.Usage)
 	GroupRules     map[string]GroupRule
 	Channel        string
 }
@@ -109,6 +113,18 @@ func (w *Worker) authorizedMessage(message linuxnative.Message) bool {
 	})
 }
 
+func (w *Worker) replayNonce(messageID string) string {
+	if w.runtime == nil || messageID == "" {
+		return ""
+	}
+	for _, item := range w.runtime.Inbox {
+		if item.Event.Data.MessageID == messageID {
+			return item.ReplayNonce
+		}
+	}
+	return ""
+}
+
 var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 
 type MediaObservationEvidence = companion.MediaObservationEvidence
@@ -118,17 +134,19 @@ type GroupRule struct {
 	ForceReplyWhenMentioned bool
 }
 type Worker struct {
-	generation       *generationScheduler
-	mediaPreparation *mediaPreparation
-	runtime          *runtimeState
-	persistErr       error
-	recovering       bool
-	config           Config
-	source           Source
-	model            Model
-	sender           sending.Engine
-	allowed          map[string]bool
-	lastMaintenance  time.Time
+	generation        *generationScheduler
+	mediaPreparation  *mediaPreparation
+	runtime           *runtimeState
+	replayRequests    chan replayRequest
+	manualCompletions chan manualCompletionRequest
+	persistErr        error
+	recovering        bool
+	config            Config
+	source            Source
+	model             Model
+	sender            sending.Engine
+	allowed           map[string]bool
+	lastMaintenance   time.Time
 }
 
 func New(config Config, source Source, model Model, sender sending.Engine) (*Worker, error) {
@@ -163,7 +181,7 @@ func New(config Config, source Source, model Model, sender sending.Engine) (*Wor
 	if config.Log == nil {
 		config.Log = func(string) {}
 	}
-	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed}, nil
+	return &Worker{config: config, source: source, model: model, sender: sender, allowed: allowed, replayRequests: make(chan replayRequest, 4), manualCompletions: make(chan manualCompletionRequest, 4)}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -282,6 +300,20 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
 		return
 	}
+	if message.Direction == "outgoing" {
+		w.reconcilePausedOutgoing(ctx, message)
+	}
+	if message.IsPassiveNotice() {
+		// A notice has no participant request to answer, but it is still an
+		// incoming message that the application must account for. Keep its
+		// content out of the model and record only the native notice kind.
+		w.recordIncoming(message)
+		w.activity(Record{Event: "passive_notice_handled", Category: "system", ThreadID: message.ThreadID,
+			MessageID: message.ID, MessageTime: message.CreatedAt, Content: messageSummary(message),
+			Origin: "wechat", Status: "processed", Reason: "notice_only"})
+		w.queuePhase(message.ID, "skipped")
+		return
+	}
 	if !w.authorizedMessage(message) {
 		w.queuePhase(message.ID, "skipped")
 		return
@@ -290,6 +322,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	// must not interrupt a previous review before it has had a model decision
 	// and completed its already queued delivery.
 	if w.ownerModelReview(message.ID) && w.pendingConversationThread(message.ThreadID) {
+		if message.PrivateQuote == "" && w.hasExplicitCorrectionTarget(message) {
+			// Register a self-correction before an older queued send advances.
+			// This message remains in the inbox for its own normal turn.
+			w.noticeConversationMessage(message, true)
+		}
 		w.queuePhase(message.ID, "received")
 		return
 	}
@@ -317,12 +354,24 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.IsQuotedText() {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
+	analysisMessage, quotedMedia := quotedAnalysisMessage(message)
 	working := quotedPlainBody(message)
-	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
-	preferredShare := w.preferredGroupShare(message)
+	cardLabel, _ := message.CardContext()
+	if cardLabel != "" {
+		working.Type, working.Body = 1, cardLabel
+		if !strings.HasSuffix(message.ThreadID, "@chatroom") {
+			working.Body = w.config.Prefix + working.Body
+		}
+	}
+	groupFile := strings.HasSuffix(message.ThreadID, "@chatroom") && (message.FileAttachmentName() != "" || len(message.Attachments) > 0)
+	isMedia := cardLabel == "" && (groupFile || analysisMessage.Type == 34 || analysisMessage.Type == 3 || analysisMessage.Type == 47 || analysisMessage.Type == 43 || analysisMessage.Type == 49 && !analysisMessage.IsQuotedText())
+	if quotedMedia && !w.observationAllowed(analysisMessage) {
+		isMedia = false
+	}
+	preferredShare := w.preferredGroupShare(analysisMessage)
 	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
-	canAnalyze := isMedia && w.mediaAnalyzer(ctx, message) != nil
-	if isMedia && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
+	canAnalyze := isMedia && w.mediaAnalyzer(ctx, analysisMessage) != nil
+	if isMedia && !message.IsQuotedText() && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
 		if message.Type == 47 {
@@ -390,25 +439,31 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		processingReason = "direct_question_review"
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
-	readMedia := isMedia && w.readMediaBeforeDecision(message)
-	if canAnalyze && !onDemandAttachment && w.config.Options != nil {
-		if !w.observationAllowed(message) {
+	requiredGroupFile := groupFile && !onDemandAttachment
+	readMedia := requiredGroupFile || isMedia && !onDemandAttachment && w.readMediaBeforeDecision(analysisMessage)
+	if (canAnalyze && !onDemandAttachment || requiredGroupFile) && w.config.Options != nil {
+		if !requiredGroupFile && !w.observationAllowed(analysisMessage) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
 		}
+		// Generation sessions perform the observation inside startGeneration so
+		// the same attachment is not downloaded twice.  The direct model path has
+		// no later observation stage, so it must pre-read here. Group files that
+		// require observation still report a durable read failure if it is unavailable.
 		if w.generation == nil && readMedia {
 			analysisCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), message)
+			analysisCtx = companion.WithReplayNonce(analysisCtx, w.replayNonce(message.ID))
+			summary, observationEvidence, analysisErr := w.readRequiredMediaWithEvidence(w.modelContext(analysisCtx, message.ThreadID, message.ID), analysisMessage)
 			mediaObservationEvidence = observationEvidence
 			mediaObservationState = "observed"
 			cancel()
 			if analysisErr != nil {
 				mediaObservationState = "incomplete"
-				if ctx.Err() != nil {
-					return
-				}
 				if strings.HasSuffix(message.ThreadID, "@chatroom") {
 					w.stopUnreadableTurn(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, TraceID: message.ID}, analysisErr)
+					return
+				}
+				if ctx.Err() != nil {
 					return
 				}
 				summary = failedObservation(analysisErr)
@@ -430,7 +485,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		if (w.config.GroupRules[message.ThreadID].Mode == "social" || legacyPreferredShare) && !w.addressed(message) {
 			mode = "social"
 		}
-		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
+		input := companion.Input{ReplayNonce: w.replayNonce(message.ID), Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
 		original := ""
 		if message.Type == 1 {
 			original = message.Body
@@ -468,6 +523,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 				if mediaObservationState == "observed" {
 					input.IncomingMedia[i].ObservedRange = mediaObservationEvidence.ObservedRange
 					input.IncomingMedia[i].ObservationExcerpt = mediaObservationEvidence.Excerpt
+					input.IncomingMedia[i].ObservationParts = append([]companion.ObservationPart(nil), mediaObservationEvidence.Parts...)
 				}
 			}
 		}
@@ -483,8 +539,8 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment {
-				copy := message
+			if input.GroupShareSummary || readMedia && canAnalyze || requiredGroupFile && mediaObservationState == "pending" {
+				copy := analysisMessage
 				analysis = &copy
 			}
 			w.startGeneration(ctx, character, input, analysis)
@@ -515,7 +571,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.config.Log("model_output_invalid")
 		return
 	}
-	if len(text) > 4096 {
+	if len(text) > 1<<20 {
 		w.config.Log("model_reply_text_too_long")
 		w.activity(Record{Event: "model_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "model_reply_text_too_long", Status: "failed"})
 		return
@@ -534,7 +590,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		w.activity(Record{Event: "send_failed", Category: "error", ThreadID: message.ThreadID, MessageID: message.ID, Content: text, Origin: "bot", Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err)})
 		if errors.Is(err, sending.ErrOutcomeUnknown) {
-			w.config.Log("reply_outcome_unknown_not_retried")
+			w.queuePhase(message.ID, "delivery_waiting")
+			w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Content: text, Reason: sending.FailureReason(err), Status: "waiting", SendID: sending.IntentID(err), Origin: "bot"})
+			w.config.Log("reply_outcome_unknown_queued_for_reconciliation")
 		} else {
 			w.config.Log("reply_failed_not_retried")
 		}
@@ -548,7 +606,7 @@ func (w *Worker) prompt(message linuxnative.Message, now time.Time) (string, boo
 	return w.promptWithSharePreference(message, now, false)
 }
 func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time.Time, preferredShare bool) (string, bool) {
-	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 4096 {
+	if !w.allowed[message.ThreadID] || message.Type != 1 || !utf8.ValidString(message.Body) || len(message.Body) > 1<<20 {
 		return "", false
 	}
 	if !w.messageInTime(message, now) {
@@ -642,7 +700,7 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 	})
 	toolStarted := false
 	progressDelivered := false
-	if !input.Surf && input.Mode != "proactive" {
+	if !input.SilentExecution && !input.Surf && input.Mode != "proactive" {
 		handler := w.toolProgress(character, input)
 		modelCtx = companion.WithProgress(modelCtx, func(ctx context.Context, text string) (bool, error) {
 			toolStarted = true
@@ -666,6 +724,11 @@ func (w *Worker) respondCharacter(ctx context.Context, character *companion.Engi
 }
 
 func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engine, input companion.Input, decision companion.Decision, err, processingErr error, toolStarted, progressDelivered bool) {
+	if err == nil && input.SilentExecution && w.config.AgentTaskReplyReady != nil && !w.config.AgentTaskReplyReady(input, decision) {
+		w.activity(Record{Event: "task_execution_waiting", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "waiting", Reason: "silent_execution_pending", Origin: "agent"})
+		return
+	}
+
 	ctx = companion.WithDecisionGenerationEvidence(ctx, decision)
 	var changed *companion.GenerationEvidenceChangedError
 	if errors.As(err, &changed) {
@@ -860,7 +923,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Origin: "bot", Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err)})
 			if errors.Is(err, sending.ErrOutcomeUnknown) {
-				w.config.Log("reply_outcome_unknown_not_retried")
+				w.queuePhase(input.TraceID, "delivery_waiting")
+				w.activity(Record{Event: "delivery_waiting", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Content: text, Reason: sending.FailureReason(err), Status: "waiting", SendID: sending.IntentID(err), Origin: "bot"})
+				w.config.Log("reply_outcome_unknown_queued_for_reconciliation")
 			} else {
 				w.config.Log("reply_failed_not_retried")
 			}
@@ -900,7 +965,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			return
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		_, err := image.SendImage(sendCtx, input.Thread, decision.ImageID)
+		status, err := image.SendImage(sendCtx, input.Thread, decision.ImageID)
 		cancel()
 		if err != nil {
 			w.config.Log("image_send_failed_or_unknown_not_retried")
@@ -909,6 +974,11 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 				status = "unknown"
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[图片] " + decision.ImageID, Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err), Origin: "bot"})
+			return
+		}
+		if !mediaStatusConfirmed(status, "image") {
+			w.config.Log("image_send_receipt_unconfirmed")
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[图片] " + decision.ImageID, Status: "unknown", Reason: "media_receipt_unconfirmed", SendID: status.ID, Origin: "bot"})
 			return
 		}
 		if err := character.Accepted(input, "[发送了一张管理员授权的图片] "+decision.ImageID); err != nil {
@@ -961,7 +1031,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			sendTimeout = 12 * time.Minute
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-		_, err := sender.SendMedia(sendCtx, input.Thread, media.Kind, sourceID)
+		status, err := sender.SendMedia(sendCtx, input.Thread, media.Kind, sourceID)
 		cancel()
 		if err != nil {
 			w.config.Log("generated_media_send_failed_or_unknown_not_retried")
@@ -970,6 +1040,11 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 				status = "unknown"
 			}
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[" + media.Kind + "] " + media.Title, Status: status, Reason: sending.FailureReason(err), SendID: sending.IntentID(err), Origin: "bot"})
+			return
+		}
+		if !mediaStatusConfirmed(status, media.Kind) {
+			w.config.Log("generated_media_send_receipt_unconfirmed")
+			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: input.Thread, MessageID: input.TraceID, Content: "[" + media.Kind + "] " + media.Title, Status: "unknown", Reason: "media_receipt_unconfirmed", SendID: status.ID, Origin: "bot"})
 			return
 		}
 		if err = character.Accepted(input, "[发送了 "+media.Kind+" 媒体]"); err != nil {

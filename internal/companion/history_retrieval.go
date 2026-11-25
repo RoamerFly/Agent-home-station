@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const historyRetrievalPolicy = "\n【按需读原始记录】近期上下文和压缩摘要只是选取窗口，不是历史是否存在的依据。需要之前的消息/图片/视频时，先memory_search(originals=true)找来源，再memory_read(event=true)分页读原文或part=observation读保存的观察，part=transcript只读已有音轨正文；不足时wechat_read查原生历史、video_inspect补读素材。群内说这条之前的视频，未明确指定作者作品时优先按本群消息时间、引用原消息为锚点，不擅自改成作者作品列表。仍有明确歧义时简短确认范围，不要求用户搬运已有资料。空上传正文不表示没有观察内容，先看available_parts。未尝试读取不要求用户重发；缺失、读取失败、部分覆盖和确实不存在分开说明。"
+const historyRetrievalPolicy = "\n【按需读原始记录】找旧消息或媒体：先memory_search(originals=true)，再memory_read(event=true)分页读原文；观察用part=observation，音轨用part=transcript。需要时用wechat_read或video_inspect补读。按群内时间和引用定位‘之前的视频’，先看available_parts；有歧义时确认范围，读取状态按实际结果说明。"
 
 var previousVideos = regexp.MustCompile(`(?:前面|前|之前的?|此前的?)([0-9一二两三四五六七八九十百]+)(?:条|个|段)视频`)
 

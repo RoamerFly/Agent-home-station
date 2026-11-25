@@ -17,7 +17,7 @@ import (
 )
 
 const LegacySystemPrompt = "你是微信群中的 AI 助手。用简洁、清楚的中文回答当前问题，尽量控制在500字以内。你只能生成回复文字，不能声称执行了外部操作。"
-const DefaultSystemPrompt = "你是微信群中的 AI 伙伴。用简短自然的中文回应当前话题，优先遵循配置的角色与会话权限。只有程序明确提供的能力才可使用；对联网、生成媒体和外部操作，必须以真实返回结果为依据，不能编造已经完成。"
+const DefaultSystemPrompt = "你是微信群中的 AI 伙伴。按角色设定自然回应，使用本轮可用工具完成请求，并依据实际结果说明进展。"
 
 type Config struct {
 	BaseURL, KeyFile, Model string
@@ -91,10 +91,10 @@ func normalizeConfig(config Config) (Config, error) {
 		config.SystemPrompt = DefaultSystemPrompt
 	}
 	if config.MaxTokens == 0 {
-		config.MaxTokens = 768
+		config.MaxTokens = 8192
 	}
 	if config.ToolMaxTokens == 0 {
-		config.ToolMaxTokens = config.MaxTokens
+		config.ToolMaxTokens = 16384
 	}
 	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 393216 {
 		return Config{}, errors.New("invalid tool output limit")
@@ -132,14 +132,14 @@ func newConfiguredClient(config Config, key string) (*Client, error) {
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
 	enabled := config.ThinkingEnabled != nil && *config.ThinkingEnabled
 	return &Client{thinkingConfigured: config.ThinkingEnabled != nil, thinkingEnabled: enabled, reasoningEffort: config.ReasoningEffort, endpoint: u.String(), key: key, model: config.Model, systemPrompt: config.SystemPrompt, maxTokens: config.MaxTokens, toolMaxTokens: config.ToolMaxTokens, compatible: config.Compatible, onUsage: config.OnUsage, http: &http.Client{
-		Timeout:       90 * time.Second,
+		Timeout:       5 * time.Minute,
 		Transport:     &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 2},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") },
 	}}, nil
 }
 
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
-	if strings.TrimSpace(prompt) == "" || len(prompt) > 4096 || !utf8.ValidString(prompt) {
+	if strings.TrimSpace(prompt) == "" || len(prompt) > 1<<20 || !utf8.ValidString(prompt) {
 		return "", errors.New("invalid model input")
 	}
 	return c.Chat(ctx, c.systemPrompt, []map[string]string{{"role": "user", "content": prompt}})
@@ -148,7 +148,22 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 // Chat accepts only text user/assistant turns. The caller supplies a separate
 // trusted system policy; historical group messages cannot become system roles.
 func (c *Client) Chat(ctx context.Context, system string, messages []map[string]string) (string, error) {
-	return c.chat(ctx, system, messages, false)
+	var err error
+	c, err = c.taskReasoningClient(ctx)
+	if err != nil {
+		return "", err
+	}
+	answer, callErr := c.chat(ctx, system, messages, false)
+	if d, ok := ErrorDiagnostics(callErr); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil && c.maxTokens < 393216 {
+		retry := *c
+		retry.maxTokens = min(393216, max(c.maxTokens*2, 16384))
+		answer, retryErr := retry.chat(ctx, system, messages, false)
+		if retryErr == nil {
+			return answer, nil
+		}
+		return answer, retryErr
+	}
+	return answer, callErr
 }
 
 // ChatCompression has its own output budget; a short conversational reply
@@ -158,7 +173,7 @@ func (c *Client) ChatCompression(ctx context.Context, system string, messages []
 		ctx = WithPurpose(ctx, "compression")
 	}
 	copy := *c
-	copy.maxTokens = 4096
+	copy.maxTokens = 16384
 	structured := true
 	answer, err := copy.chat(ctx, system, messages, structured)
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_invalid_parameters" && c.compatible {
@@ -167,7 +182,7 @@ func (c *Client) ChatCompression(ctx context.Context, system string, messages []
 		answer, err = copy.chat(ctx, system, messages, structured)
 	}
 	if d, ok := ErrorDiagnostics(err); ok && d.Code == "model_output_token_limit" && ctx.Err() == nil {
-		copy.maxTokens = 8192
+		copy.maxTokens = 32768
 		answer, retryErr := copy.chat(ctx, system, messages, structured)
 		var failure *RequestError
 		if errors.As(retryErr, &failure) {
@@ -185,7 +200,7 @@ func (c *Client) chat(ctx context.Context, system string, messages []map[string]
 }
 
 func (c *Client) chatWithGrounding(ctx context.Context, system string, messages []map[string]string, structured bool, grounding *GroundingOptions) (string, error) {
-	messageLimit, totalLimit := 96<<10, 192<<10
+	messageLimit, totalLimit := 1<<20, 4<<20
 	if grounding != nil {
 		// Structured evidence is one message, unlike paginated tool history.
 		// This is a transport guard, not a claim about any model's token window.
@@ -314,10 +329,7 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, f
 	}
 	limit := c.responseLimitBytes
 	if limit == 0 {
-		limit = 256 << 10
-		if c.thinkingEnabled {
-			limit = 16 << 20
-		}
+		limit = 16 << 20
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
@@ -345,6 +357,9 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, f
 		} `json:"choices"`
 	}
 	if json.Unmarshal(data, &result) != nil || len(result.Choices) != 1 {
+		if failure := http200ErrorFailure(data); failure != nil {
+			return "", failure
+		}
 		return "", requestFailure("model_invalid_response", "decode", 200, false)
 	}
 	choice := result.Choices[0]
@@ -410,5 +425,38 @@ func safeFinishReason(reason string) string {
 		return reason
 	default:
 		return "unknown"
+	}
+}
+
+// http200ErrorFailure handles gateways that encode an upstream timeout or
+// transient failure in a JSON error envelope while still returning HTTP 200.
+// The provider body is never copied into the returned diagnostic.
+func http200ErrorFailure(data []byte) *RequestError {
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Code    string `json:"code"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return nil
+	}
+	code := strings.ToLower(strings.TrimSpace(envelope.Error.Code + " " + envelope.Error.Type + " " + envelope.Error.Message + " " + envelope.Code + " " + envelope.Type + " " + envelope.Message))
+	if code == "" {
+		return nil
+	}
+	switch {
+	case strings.Contains(code, "timeout"), strings.Contains(code, "timed out"), strings.Contains(code, "deadline"):
+		return requestFailure("model_upstream_timeout", "decode", http.StatusOK, true)
+	case strings.Contains(code, "rate_limit"), strings.Contains(code, "rate limit"), strings.Contains(code, "too many requests"):
+		return requestFailure("model_rate_limited", "decode", http.StatusOK, true)
+	case strings.Contains(code, "service unavailable"), strings.Contains(code, "temporarily unavailable"):
+		return requestFailure("model_service_unavailable", "decode", http.StatusOK, true)
+	default:
+		return nil
 	}
 }

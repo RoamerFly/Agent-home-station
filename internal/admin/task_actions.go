@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"wechat-bot/internal/mcptools"
 )
 
 type taskAction struct {
@@ -11,11 +13,12 @@ type taskAction struct {
 	Arguments string    `json:"arguments"`
 	Result    string    `json:"result"`
 	State     string    `json:"state"`
+	ErrorCode string    `json:"error_code,omitempty"`
 	At        time.Time `json:"at"`
 }
 
 func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, result string, err error) {
-	if p.trace.TaskID == "" || !p.privileged() || !(strings.HasPrefix(name, "server_") || name == "agent_task" || name == "wechat_send_text" || name == "wechat_operation_status") || name == "server_read" || name == "server_list" || name == "server_search" || name == "server_status" {
+	if p.trace.TaskID == "" || !p.privileged() || !recordsTaskAction(name) {
 		return
 	}
 	a := p.manager.agent
@@ -36,9 +39,11 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 	} else if code, ok := out["exit_code"].(float64); ok && code != 0 {
 		state = "failed"
 	}
+	code := ""
 	if err != nil {
 		state = "failed"
-		result = err.Error()
+		result = mcptools.FailureDescription(err)
+		_, code = safeToolFailure(err)
 	}
 	if name == "agent_task" && err == nil {
 		var saved struct {
@@ -49,7 +54,7 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 			result = string(compact)
 		}
 	}
-	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, At: time.Now().UTC()}
+	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, ErrorCode: code, At: time.Now().UTC()}
 	if name == "wechat_operation_status" {
 		if err != nil {
 			return
@@ -100,5 +105,17 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 	a.data.Tasks[t.ID] = t
 	if e := a.persist(); e != nil {
 		p.manager.log("task_action_evidence_save_failed")
+	}
+}
+
+func recordsTaskAction(name string) bool {
+	switch name {
+	case "server_read", "server_list", "server_search", "server_status":
+		return false
+	case "agent_task", "agent_reminder", "music_local_start", "music_local_resume", "music_rvc_start",
+		"wechat_send_text", "wechat_send_media", "wechat_forward_file", "wechat_operation_status":
+		return true
+	default:
+		return strings.HasPrefix(name, "server_")
 	}
 }

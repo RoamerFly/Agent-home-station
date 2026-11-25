@@ -19,7 +19,7 @@ import (
 func TestStationWechatOwnerRecallFromDelivery(t *testing.T) {
 	base := t.TempDir()
 	host, home := filepath.Join(base, "host"), filepath.Join(base, "home")
-	nativeDir := filepath.Join(host, "apps", "wechat", "native")
+	nativeDir := filepath.Join(host, "applications", "wechat", "native")
 	if err := os.MkdirAll(nativeDir, 0700); err != nil {
 		t.Fatal(err)
 	}

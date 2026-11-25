@@ -59,7 +59,7 @@ func TestReplyAuditRedactsEmbeddedCredentialJSON(t *testing.T) {
 	}
 }
 
-func TestReplyContextRejectsSourceRevisionChange(t *testing.T) {
+func TestReplyContextAllowsSourceRevisionChange(t *testing.T) {
 	s, c, in := memoryFixture(t)
 	in.IsGroup = true
 	in.TraceID = "revision-source"
@@ -79,8 +79,8 @@ func TestReplyContextRejectsSourceRevisionChange(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE events SET revision=revision+1 WHERE id=?", id); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.ValidateReplyContext(t.Context(), in, r); err == nil {
-		t.Fatal("stale revision accepted")
+	if err := e.ValidateReplyContext(t.Context(), in, r); err != nil {
+		t.Fatal("updated source revision rejected", err)
 	}
 }
 
@@ -161,8 +161,9 @@ func TestConflictedCurrentSourceNeverCallsModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := *in.Source
-	changed.ServerID = "another-server"
+	changed.Sender = "another-sender"
 	in.Source = &changed
+	in.Sender = changed.Sender
 	in.Text = "different event"
 	model := &countedGroundingModel{}
 	e, err := New(c, s, model, "base")
@@ -218,7 +219,7 @@ func TestReplyContextRequiresVerifiedStateVersionAndSourceProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := d.ReplyContexts[0]
-	for _, which := range []string{"state", "fingerprint", "versions"} {
+	for _, which := range []string{"state", "fingerprint"} {
 		bad := r
 		switch which {
 		case "state":

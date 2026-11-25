@@ -10,6 +10,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -87,7 +88,7 @@ func (a stationAttachmentAccess) confirmObservationSource(ctx context.Context, s
 	}
 	if ref := a.ref; ref != nil && ref.EventID != "" {
 		in := companion.Input{Channel: "wechat", Account: source.Account, Thread: source.Thread, Sender: source.Sender, TraceID: source.Message, MessageTime: source.Occurred, Source: ref}
-		if current, ok := a.store.SourceForInput(in); !ok || current.Revision != ref.Revision || current.BodyHash != ref.BodyHash {
+		if current, ok := a.store.SourceForInput(in); !ok || current.BodyHash != ref.BodyHash {
 			return wechatapp.ErrAttachmentDenied
 		}
 	}
@@ -109,6 +110,16 @@ func readStationAttachmentRecord(root *os.Root) (stationAttachmentRecord, error)
 	return record, nil
 }
 
+func (record stationAttachmentRecord) matchesSource(source wechatapp.AttachmentSource) bool {
+	if record.ID != source.AssetID() || !record.Source.Grant.Equal(source.Grant) {
+		return false
+	}
+	// JSON can restore the same grant instant with a different time location.
+	// Keep the existing asset ID and compare every other source field exactly.
+	record.Source.Grant = source.Grant
+	return record.Source == source
+}
+
 func (a stationAttachmentAccess) open(ctx context.Context, source wechatapp.AttachmentSource) (stationAttachmentRecord, *os.File, error) {
 	if !a.Allowed(ctx, source.Thread) {
 		return stationAttachmentRecord{}, nil, wechatapp.ErrAttachmentDenied
@@ -119,7 +130,7 @@ func (a stationAttachmentAccess) open(ctx context.Context, source wechatapp.Atta
 	}
 	defer root.Close()
 	record, err := readStationAttachmentRecord(root)
-	if err != nil || record.Source != source {
+	if err != nil || !record.matchesSource(source) {
 		return stationAttachmentRecord{}, nil, errors.New("station_attachment_source_mismatch")
 	}
 	file, err := workspacefs.OpenRegular(root, "original")
@@ -237,29 +248,37 @@ func (a stationAttachmentAccess) DownloadAttachment(ctx context.Context, thread,
 }
 
 type stationAttachmentTools struct {
-	crossHost          *stationWechat
-	crossConnection    string
-	cross              *stationWechatCrossTurn
-	native             *linuxnative.Sender
-	store              *companion.Store
-	dir                string
-	grants             map[string]time.Time
-	replies            map[string]time.Time
-	reads              map[string]time.Time
-	readCursors        wechatapp.HistoryCursors
-	legacyReadCursors  map[string]stationLegacyReadCursor
-	blocked            func() bool
-	trace              companion.Input
-	prepared           map[string]companion.GeneratedMedia
-	work               *stationWorkAccess
-	fetchVideo         stationVideoFetch
-	shareHost          func() (*stationShareHost, error)
-	documents          stationDocumentTools
-	stationImageVision bool
-	stationVideoVision bool
-	stationLocalAudio  bool
-	localASR           stationLocalASR
-	localVision        stationLocalVision
+	crossHost           *stationWechat
+	crossConnection     string
+	cross               *stationWechatCrossTurn
+	native              *linuxnative.Sender
+	store               *companion.Store
+	dir                 string
+	grants              map[string]time.Time
+	replies             map[string]time.Time
+	reads               map[string]time.Time
+	readCursors         wechatapp.HistoryCursors
+	legacyReadCursors   map[string]stationLegacyReadCursor
+	blocked             func() bool
+	trace               companion.Input
+	prepared            map[string]companion.GeneratedMedia
+	work                *stationWorkAccess
+	fetchVideo          stationVideoFetch
+	shareHost           func() (*stationShareHost, error)
+	documents           stationDocumentTools
+	stationImageVision  bool
+	stationVideoVision  bool
+	stationLocalAudio   bool
+	localASR            stationLocalASR
+	localVision         stationLocalVision
+	shareProgress       func(string, string, string)
+	projects            *localProjectTools
+	projectOwnerAllowed func(companion.Input) bool
+	speechMu            *sync.Mutex
+	yueMu               *sync.Mutex
+	comfyMu             *sync.Mutex
+	rvcMu               *sync.Mutex
+	externalMu          *sync.Mutex
 }
 
 func (t *stationAttachmentTools) AutonomousActions() bool {
@@ -316,11 +335,28 @@ func (t *stationAttachmentTools) List(ctx context.Context) ([]mcptools.Tool, err
 			tools = append(tools, stationWechatForwardTool())
 		}
 	}
+	if t.agentTaskToolAccess(t.trace) {
+		tools = append(tools, stationAgentTaskTools()...)
+	}
 	if t.scopeAllowed(t.trace, t.reads) {
-		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool())
+		tools = append(tools, wechatapp.StationCatalogTool(), wechatapp.StationMessageTool(), stationWechatTaskStatusToolSpec())
 		if t.legacyMemoryAvailable(ctx) {
 			tools = append(tools, wechatapp.StationLegacyMemoryTool())
 		}
+	}
+	if tool, ok := t.publicSpeechTool(ctx); ok {
+		tools = append(tools, tool)
+	}
+	if tool, ok := t.publicSpeechVoicesTool(ctx); ok {
+		tools = append(tools, tool)
+	}
+	tools = append(tools, t.publicComfyTools(ctx)...)
+	tools = append(tools, t.publicYuETools(ctx)...)
+	tools = append(tools, t.publicRVCTools(ctx)...)
+	tools = append(tools, t.publicExternalCatalogTools(ctx)...)
+	tools = append(tools, t.publicAudioCppTools(ctx)...)
+	if tool, ok := t.publicAudioPrepareTool(ctx); ok {
+		tools = append(tools, tool)
 	}
 	if !t.allowed() {
 		return tools, nil
@@ -371,7 +407,7 @@ func stationVideoRef(ref *companion.SourceRef) bool {
 }
 
 func stationVoiceRef(ref *companion.SourceRef) bool {
-	return ref != nil && ref.MessageType == 34
+	return ref != nil && (ref.MessageType == 34 || ref.MessageType == 49)
 }
 
 func stationImageRef(ref *companion.SourceRef) bool {
@@ -421,11 +457,65 @@ func (t *stationAttachmentTools) Call(ctx context.Context, name string, raw json
 	if name == "wechat_message_read" {
 		return t.readMessage(ctx, raw)
 	}
+	if name == stationWechatTaskStatusTool {
+		return t.callTaskStatus(ctx, raw)
+	}
+	if name == "agent_task" || name == "agent_tasks" {
+		return t.callAgentTaskTool(ctx, name, raw)
+	}
 	if name == "wechat_read_legacy" {
 		return t.readLegacyMemory(ctx, raw)
 	}
 	if name == "wechat_work_reply" {
 		return t.workReply(ctx, raw)
+	}
+	if name == localTTSStartTool {
+		return t.callPublicSpeech(ctx, raw)
+	}
+	if name == localTTSVoicesTool {
+		return t.callPublicSpeechVoices(ctx, raw)
+	}
+	if name == localComfyListTool {
+		return t.callPublicComfyWorkflows(ctx, raw)
+	}
+	if name == localComfyStartTool {
+		return t.callPublicComfyRun(ctx, raw)
+	}
+	if name == localComfyJobTool {
+		return t.callPublicComfyJob(ctx, raw)
+	}
+	if name == localYuEStartTool {
+		return t.callPublicYuEGenerate(ctx, raw)
+	}
+	if name == localYuEJobTool {
+		return t.callPublicYuEJob(ctx, raw)
+	}
+	if name == localRVCVoicesTool {
+		return t.callPublicRVCVoices(ctx, raw)
+	}
+	if name == localRVCStartTool {
+		return t.callPublicRVCConvert(ctx, raw)
+	}
+	if name == localRVCJobTool {
+		return t.callPublicRVCJob(ctx, raw)
+	}
+	if name == localExternalHTTPCall {
+		return t.callPublicExternalHTTP(ctx, raw)
+	}
+	if name == localExternalTaskCall {
+		return t.callPublicExternalTask(ctx, raw)
+	}
+	if name == localExternalMCPList || name == localExternalMCPCall {
+		return t.callPublicExternalMCP(ctx, name, raw)
+	}
+	if name == localAudioCppModelsTool || name == localAudioCppSynthesizeTool || name == localAudioCppTranscribeTool {
+		return t.callPublicAudioCpp(ctx, name, raw)
+	}
+	if name == localAudioToolName {
+		return t.callPublicAudioPrepare(ctx, raw)
+	}
+	if name == localExternalHTTPList || name == localExternalTaskList || name == localExternalMCPServers {
+		return t.callPublicExternalCatalog(ctx, name, raw)
 	}
 	if name == "wechat_attachment_reply_prepare" {
 		return t.prepareReply(ctx, raw)

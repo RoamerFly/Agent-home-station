@@ -137,3 +137,77 @@ func writeLocalRVCControlFixture(t *testing.T, executable string) {
 		t.Fatal(err)
 	}
 }
+
+func TestLocalRVCSharedMusicManifestChecksEveryOptionalFile(t *testing.T) {
+	root := t.TempDir()
+	writeLocalRVCControlFixture(t, root)
+	control := filepath.Join(root, "runtimes", "windows-station-rvc")
+	path := filepath.Join(control, "runtime-manifest.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	files := manifest["files"].(map[string]any)
+	for _, name := range localMusicControlFiles {
+		content := []byte("synthetic:" + name)
+		target := filepath.Join(control, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(content)
+		files[name] = hex.EncodeToString(sum[:])
+	}
+	raw, _ = json.Marshal(manifest)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(control, "managed_music_service.py"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err == nil {
+		t.Fatal("changed music supervisor accepted")
+	}
+}
+
+func TestStationMediaRuntimeUsesReleaseEnvironment(t *testing.T) {
+	release := t.TempDir()
+	env := filepath.Join(release, "env")
+	if err := os.Mkdir(env, 0700); err != nil {
+		t.Fatal(err)
+	}
+	service := filepath.Join(release, "data", "main_setting", "runtime")
+	if got := stationPackageRuntimeRoot(service); got != env {
+		t.Fatalf("media runtime = %s, want %s", got, env)
+	}
+}
+
+func TestRVCSharedRuntimeStillVerifiesControlCode(t *testing.T) {
+	root := t.TempDir()
+	writeLocalRVCControlFixture(t, root)
+	control := filepath.Join(root, "runtimes", "windows-station-rvc")
+	if err := os.Mkdir(filepath.Join(control, "workflows"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(control, "__pycache__"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(control, "rvc_voice.py"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localRVCControlManifest(control); err == nil {
+		t.Fatal("changed control code accepted")
+	}
+}

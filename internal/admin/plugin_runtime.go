@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -19,6 +20,15 @@ func runtimeDeploymentOptions() (pluginruntime.Options, error) {
 	var options pluginruntime.Options
 	raw := os.Getenv("WECHAT_PLUGIN_RUNTIME_CONFIG")
 	if raw == "" {
+		// The desktop host normally injects this JSON. Keep the executable
+		// portable when the legacy admin is launched directly: the runtime is
+		// still accepted only from the package's env directory, never from a
+		// caller-supplied path.
+		if runtime.GOOS == "windows" {
+			if executable, err := os.Executable(); err == nil {
+				options = portableRuntimeOptions(executable)
+			}
+		}
 		return options, nil
 	}
 	d := json.NewDecoder(bytes.NewBufferString(raw))
@@ -27,6 +37,23 @@ func runtimeDeploymentOptions() (pluginruntime.Options, error) {
 		return options, errors.New("plugin runtime deployment configuration invalid")
 	}
 	return options, nil
+}
+
+func portableRuntimeOptions(executable string) pluginruntime.Options {
+	var options pluginruntime.Options
+	packageRuntime := filepath.Dir(filepath.Dir(executable))
+	if filepath.Base(filepath.Dir(executable)) != "windows-x64" {
+		return options
+	}
+	pythonRoot := filepath.Join(packageRuntime, "windows-python-cli")
+	helperRoot := filepath.Join(packageRuntime, "windows-agent-host")
+	options.Python = filepath.Join(pythonRoot, "python.exe")
+	options.Pythonw = filepath.Join(pythonRoot, "pythonw.exe")
+	options.WindowsHelper = filepath.Join(helperRoot, "windows_plugin_host.pyw")
+	options.RuntimeRoots = []string{helperRoot, pythonRoot}
+	options.DocumentRuntimeRoot = filepath.Join(packageRuntime, "document-workshop")
+	options.CatalogDirectory = filepath.Join(filepath.Dir(packageRuntime), "publictools")
+	return options
 }
 
 func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, error) {
@@ -112,14 +139,19 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 		}
 		var input struct {
 			Action         string `json:"action"`
+			IdleOnly       bool   `json:"idle_only"`
 			Revision       int    `json:"revision"`
 			TimeoutSeconds *int   `json:"timeout_seconds"`
 		}
 		if !decode(w, r, &input) {
 			return
 		}
-		if input.Action != "start" && input.Action != "stop" && input.Action != "enable_on_demand" {
+		if input.Action != "start" && input.Action != "stop" && input.Action != "enable_on_demand" && input.Action != "stop_session" && input.Action != "restart" {
 			fail(w, 400, "请选择按需启用、启动或停止")
+			return
+		}
+		if _, shared := s.manager.sharedStationVision(); shared && id != mobileDevicePluginID && !legacyWechatPackageUpgrade(id) && input.Action != "stop" && input.Action != "stop_session" {
+			fail(w, http.StatusConflict, "公共工具启动与配置请在工作站的项目工具页维护。")
 			return
 		}
 		seconds := 30
@@ -145,6 +177,10 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 			defer cancel()
 		}
+		stopSession := h.StopSession
+		if input.IdleOnly {
+			stopSession = h.StopIdleSession
+		}
 		switch input.Action {
 		case "enable_on_demand":
 			err = h.EnableOnDemand(ctx, id, input.Revision)
@@ -152,6 +188,13 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			err = h.Start(ctx, id, input.Revision)
 		case "stop":
 			err = h.Stop(ctx, id, input.Revision)
+		case "stop_session":
+			err = stopSession(ctx, id, input.Revision)
+		case "restart":
+			err = stopSession(ctx, id, input.Revision)
+			if err == nil {
+				err = h.Start(ctx, id, input.Revision)
+			}
 		}
 		if err != nil {
 			var dependency *pluginruntime.DependencyError

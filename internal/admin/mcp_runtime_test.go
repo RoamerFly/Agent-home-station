@@ -187,19 +187,25 @@ func TestLiveAdminRegisteredMCPRuntimeIsolationAndRevocation(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("project-local Windows LPAC runtime test")
 	}
-	python, err := filepath.Abs("../../dist/windows-native/runtimes/windows-python-cli/python.exe")
+	if os.Getenv("WECHAT_PLUGIN_RUNTIME_CONFIG") == "" {
+		python, err := filepath.Abs("../../dist/windows-native/runtimes/windows-python-cli/python.exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		helper, err := filepath.Abs("../../scripts/windows_plugin_host.pyw")
+		if err != nil {
+			t.Fatal(err)
+		}
+		options, _ := json.Marshal(pluginruntime.Options{Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}})
+		t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", string(options))
+	}
+	deployment, err := runtimeDeploymentOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(python); err != nil {
+	if _, err = os.Stat(deployment.Python); err != nil {
 		t.Fatal("project-local Python required", err)
 	}
-	helper, err := filepath.Abs("../../scripts/windows_plugin_host.pyw")
-	if err != nil {
-		t.Fatal(err)
-	}
-	options, _ := json.Marshal(pluginruntime.Options{Python: python, Pythonw: filepath.Join(filepath.Dir(python), "pythonw.exe"), WindowsHelper: helper, RuntimeRoots: []string{filepath.Dir(python)}})
-	t.Setenv("WECHAT_PLUGIN_RUNTIME_CONFIG", string(options))
 	t.Setenv("WECHAT_MCP_ADMIN_SECRET", "synthetic ambient secret")
 	for _, change := range []string{"disabled", "configuration", "json", "runtime-closed", "manager-closed"} {
 		t.Run(change, func(t *testing.T) {
@@ -243,8 +249,26 @@ func TestLiveAdminRegisteredMCPRuntimeIsolationAndRevocation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.EqualFold(directories[0], directories[1]) || !pathWithin(base, directories[0]) || !pathWithin(base, directories[1]) || directories[0] == base {
-				t.Fatal("scope directory not isolated", directories)
+			// Windows may report an extended-length working directory even
+			// though the store opened the same directory using an ordinary path.
+			// Compare the physical directories and their allocated parent.
+			parent, err := os.Stat(filepath.Join(base, "mcp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var scopes [2]os.FileInfo
+			for i, directory := range directories {
+				actualParent, err := os.Stat(filepath.Dir(directory))
+				if err != nil || !os.SameFile(parent, actualParent) {
+					t.Fatalf("scope directory escaped the allocated parent: %v", err)
+				}
+				scopes[i], err = os.Stat(directory)
+				if err != nil || !scopes[i].IsDir() {
+					t.Fatalf("scope did not have a directory: %v", err)
+				}
+			}
+			if os.SameFile(scopes[0], scopes[1]) {
+				t.Fatal("two request scopes shared the same physical directory")
 			}
 			var idle mcptools.StdioProcess
 			var idleDone chan error

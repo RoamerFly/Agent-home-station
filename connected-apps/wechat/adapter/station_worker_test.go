@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
@@ -120,8 +121,16 @@ func TestWorkerQueuePreservesScopedAdmission(t *testing.T) {
 	}
 	character, config := run.queueConfig("one", queue, func() error { return nil })
 	if !slices.Equal(config.AllowedThreads, []string{room}) || config.GroupRules[room].Mode != "social" ||
-		!character.Permissions.ObserveGroups || !character.Permissions.SendFile || config.Options.RandomDelay {
+		!character.Permissions.ObserveGroups || !character.Permissions.SendFile || !config.Options.RandomDelay ||
+		!config.Options.AcknowledgeTools || !config.Options.ReadImages || !config.Options.ReadVideos {
 		t.Fatalf("WeChat defaults or scoped policy changed: %+v", character.Permissions)
+	}
+	explicit := bot.DefaultOptions()
+	explicit.RandomDelay, explicit.ReadVideos, explicit.AcknowledgeTools = false, false, false
+	queue.Behavior = &explicit
+	_, configured := run.queueConfig("one", queue, func() error { return nil })
+	if configured.Options == nil || configured.Options.RandomDelay || configured.Options.ReadVideos || configured.Options.AcknowledgeTools {
+		t.Fatalf("explicit station behavior was not preserved: %+v", configured.Options)
 	}
 	msg := linuxnative.Message{ThreadID: room, AccountID: "one", Direction: "incoming", CreatedAt: now.Format(time.RFC3339Nano), Type: 49}
 	file := msg

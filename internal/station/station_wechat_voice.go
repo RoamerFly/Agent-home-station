@@ -15,6 +15,7 @@ import (
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/localasr"
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
@@ -191,12 +192,20 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 		defer cancel()
 	}
 	access, err := t.attachmentAccess(t.trace, in.Message, t.allowed)
-	if err != nil || access.ref.MessageType != 34 {
+	if err != nil || !stationVoiceRef(access.ref) {
 		return nil, wechatapp.ErrAttachmentDenied
 	}
 	source, err := access.source(ctx, access.thread, access.message)
-	if err != nil || source.Kind != "voice" {
+	if err != nil || source.Kind != "voice" && source.Kind != "file" {
 		return nil, wechatapp.ErrAttachmentDenied
+	}
+	kind, name, probe := stationVoiceAudio, "original.voice", mediadecode.ProbeVoiceDuration
+	if source.Kind == "file" {
+		format := mediadecode.AudioFileFormat(source.Filename)
+		if format == "" {
+			return nil, mcptools.ArgumentError("$.message_id", "请提供微信语音或 MP3、WAV、FLAC 音频文件的原消息编号")
+		}
+		kind, name, probe = stationFileAudio, "original."+format, mediadecode.ProbeAudioFileDuration
 	}
 	epoch, err := t.store.RecallEpoch(ctx)
 	if err != nil {
@@ -216,35 +225,41 @@ func (t *stationAttachmentTools) transcribeVoice(ctx context.Context, in station
 	if err := check(ctx); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp(t.dir, "verified-voice-")
+	dir, err := os.MkdirTemp(t.dir, "verified-audio-")
 	if err != nil {
 		return nil, observationFailure("media_staging_failed", "无法创建当前连接的私有解码目录。")
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "original.voice")
+	path := filepath.Join(dir, name)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		return nil, observationFailure("media_staging_failed", "无法暂存微信语音。")
+		return nil, observationFailure("media_staging_failed", "无法暂存已授权的微信音频。")
 	}
-	rendered, transferErr := wechatapp.StreamAttachment(ctx, t.native, source, true, stationAttachmentLimit, file,
+	rendered, transferErr := wechatapp.StreamAttachment(ctx, t.native, source, kind == stationVoiceAudio, stationAttachmentLimit, file,
 		func() bool { return access.Allowed(ctx, source.Thread) })
 	closeErr := file.Close()
 	if err := check(ctx); err != nil {
 		return nil, err
 	}
 	if transferErr != nil || closeErr != nil {
+		if kind == stationFileAudio {
+			return nil, observationFailure("incoming_file_download_failed", "无法取得经核验的音频附件原件。")
+		}
 		return nil, observationFailure("incoming_voice_playable_unavailable", "微信原生服务未能提供经核验的可播放版本。")
 	}
-	duration, err := mediadecode.ProbeVoiceDuration(ctx, path)
+	duration, err := probe(ctx, path)
 	if err != nil {
+		if kind == stationFileAudio {
+			return nil, observationFailure("incoming_audio_file_decode_failed", "音频附件原件与声明的音频格式不匹配，或本机 FFmpeg 无法解码。")
+		}
 		return nil, observationFailure("incoming_voice_decode_failed", "可播放版本无法解码。请核对原生语音转换和本机 FFmpeg。")
 	}
 	out := map[string]any{"message_id": source.Message, "sender_id": source.Sender, "occurred_at": source.Occurred, "sha256": rendered.SHA256,
 		"source_variant": rendered.Variant, "asr_backend": "local", "untrusted_external_content": true}
-	err = stationObserveAudio(ctx, path, dir, in.Start, in.Duration, duration, true, func(ctx context.Context, wav []byte) (string, error) {
+	err = stationObserveAudio(ctx, path, dir, in.Start, in.Duration, duration, kind, func(ctx context.Context, wav []byte) (string, error) {
 		text, err := transcribe(ctx, wav)
 		if err != nil && !mediaspec.IsNoSpeech(err) {
-			return "", observationFailure("incoming_voice_local_asr_failed", "语音已解码，但本机语音识别未完成。请核对已登记的本机识别资源。")
+			return "", observationFailure("incoming_voice_local_asr_failed", "音频已解码，但本机语音识别未完成。请核对已登记的本机识别资源。")
 		}
 		return text, err
 	}, out)
@@ -271,7 +286,7 @@ func (t *stationAttachmentTools) bindConnectionVoice(ctx context.Context, source
 	if err != nil || backend != "local" || host.localASR.transcribe == nil {
 		return nil, nil, observationFailure("incoming_voice_local_asr_unavailable", "请为当前微信连接选择本机识别，并启用站点的本地媒体识别工具。")
 	}
-	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat voice", RequestKey: "station-voice-" + source.AssetID(), Authorization: source.AssetID(), OriginSourceSender: source.Sender, RequestThread: t.trace.Thread, EvidenceEpoch: epoch}
+	invocation := pluginhost.Invocation{Account: source.Account, Thread: source.Thread, Requester: t.trace.Sender, Purpose: "transcribe authorized WeChat audio", RequestKey: "station-voice-" + source.AssetID(), Authorization: source.AssetID(), EvidenceEpoch: epoch}
 	grant := pluginhost.Grant{Account: source.Account, Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 	if pluginhost.Authorize(installed.Package, grant, invocation, []string{"artifact.read", "model.invoke"}) != nil {
 		return nil, nil, observationFailure("media_plugin_permissions_changed", "当前微信连接缺少媒体处理或模型调用授权。")

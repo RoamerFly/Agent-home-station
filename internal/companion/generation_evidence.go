@@ -3,7 +3,6 @@ package companion
 import (
 	"context"
 	"errors"
-	"time"
 
 	"wechat-bot/internal/deepseek"
 )
@@ -174,47 +173,19 @@ func generationPartialError(err error, completed []string) error {
 	return &copy
 }
 
-func sameGenerationTime(a, b string) bool {
-	if a == "" {
-		return true
-	}
-	left, le := time.Parse(time.RFC3339Nano, a)
-	right, re := time.Parse(time.RFC3339Nano, b)
-	return le == nil && re == nil && left.Equal(right)
-}
-
-// Resolving an ID is not permission to upgrade a queued request to a newer
-// source version. A genuinely new inbound revision has already passed Observe
-// and is checked against its actual literal body; runtime/queued inputs retain
-// their previously bound hash instead of treating a wrapper as human speech.
+// Resolving an ID is bound to the immutable message identity and conversation
+// scope. Native transports may refresh timestamps, server ids, body projections
+// and revisions while the same message is being re-read.
 func validateResolvedGenerationSource(in Input, known, resolved *SourceRef) error {
 	if resolved == nil {
 		return generationEvidenceChanged()
 	}
 	if known != nil {
-		for _, pair := range [][2]string{{known.InstanceID, resolved.InstanceID}, {known.EventID, resolved.EventID}, {known.MessageID, resolved.MessageID}, {known.ServerID, resolved.ServerID}, {known.Account, resolved.Account}, {known.Thread, resolved.Thread}, {known.Sender, resolved.Sender}} {
+		for _, pair := range [][2]string{{known.InstanceID, resolved.InstanceID}, {known.EventID, resolved.EventID}, {known.MessageID, resolved.MessageID}, {known.Account, resolved.Account}, {known.Thread, resolved.Thread}, {known.Sender, resolved.Sender}} {
 			if pair[0] != "" && pair[0] != pair[1] {
 				return generationEvidenceChanged()
 			}
 		}
-		if known.Revision > 0 && known.Revision != resolved.Revision || !sameGenerationTime(known.OccurredAt, resolved.OccurredAt) {
-			return generationEvidenceChanged()
-		}
-	}
-	expectedHash := ""
-	if derivedObservationInput(in) {
-		if known != nil {
-			expectedHash = known.BodyHash
-		}
-	} else {
-		body := UserRequestText(in.Text)
-		if in.OriginalText != nil {
-			body = *in.OriginalText
-		}
-		expectedHash = sourceHash(body)
-	}
-	if expectedHash != "" && expectedHash != resolved.BodyHash {
-		return generationEvidenceChanged()
 	}
 	return nil
 }
@@ -226,13 +197,13 @@ func (e *Engine) validateGenerationInputSource(ctx context.Context, in Input) er
 	}
 	scope := ScopeID(in.Channel, in.Account, in.Thread)
 	event, err := e.Store.ReadEvent(ctx, []string{scope}, source.EventID)
-	if err != nil || event.Source == nil || event.Scope != scope || event.Role != "user" || event.Sender != in.Sender || source.Account != "" && source.Account != in.Account || source.Thread != "" && source.Thread != in.Thread || event.ID != source.EventID || source.Revision != event.Revision || source.BodyHash != event.Hash {
+	if err != nil || event.Source == nil || event.Scope != scope || event.Role != "user" || event.Sender != in.Sender || source.Account != "" && source.Account != in.Account || source.Thread != "" && source.Thread != in.Thread || event.ID != source.EventID {
 		return generationEvidenceChanged()
 	}
 	if err := validateResolvedGenerationSource(in, source, event.Source); err != nil {
 		return err
 	}
-	if source.MessageID != "" && source.MessageID != event.Trace || !sameGenerationTime(source.OccurredAt, event.At) {
+	if source.MessageID != "" && source.MessageID != event.Trace {
 		return generationEvidenceChanged()
 	}
 	return nil

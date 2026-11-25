@@ -10,22 +10,32 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 )
 
+// Source instance creation is a one-row write performed during every store
+// open. Serializing it avoids concurrent WAL upgrades fighting over the same
+// SQLite writer when multiple managers reload one memory directory.
+var sourceInstanceMu sync.Mutex
+
 func (s *Store) initializeSourceInstance() error {
+	sourceInstanceMu.Lock()
+	defer sourceInstanceMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	var id string
-	err := s.db.QueryRow("SELECT value FROM meta WHERE key='source_instance'").Scan(&id)
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='source_instance'").Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		var b [24]byte
 		if _, err = rand.Read(b[:]); err != nil {
 			return err
 		}
 		id = hex.EncodeToString(b[:])
-		if _, err = s.db.Exec("INSERT OR IGNORE INTO meta(key,value) VALUES('source_instance',?)", id); err != nil {
+		if _, err = s.db.ExecContext(ctx, "INSERT OR IGNORE INTO meta(key,value) VALUES('source_instance',?)", id); err != nil {
 			return err
 		}
-		if err = s.db.QueryRow("SELECT value FROM meta WHERE key='source_instance'").Scan(&id); err != nil {
+		if err = s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='source_instance'").Scan(&id); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -105,6 +115,19 @@ func sameSourceInstance(a, b *SourceRef) bool {
 	}
 	return instance(a) == instance(b)
 }
+
+// A native client can reuse a local row ID while the durable memory store
+// keeps the same instance ID. Distinct platform IDs or occurrence times prove
+// these are separate messages; missing metadata remains conservative.
+func distinctSourceMessage(a, b *SourceRef) bool {
+	if a == nil || b == nil || !sameSourceInstance(a, b) {
+		return false
+	}
+	if a.ServerID != "" && b.ServerID != "" {
+		return a.ServerID != b.ServerID
+	}
+	return a.OccurredAt != "" && b.OccurredAt != "" && a.OccurredAt != b.OccurredAt
+}
 func legacyConflictSource(in Input, body string, now time.Time, instance string) *SourceRef {
 	return &SourceRef{InstanceID: instance, MessageID: in.TraceID, Account: in.Account, Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime, ReceivedAt: memoryTime(now), BodyHash: sourceHash(body), Revision: 1, Integrity: "conflicted"}
 }
@@ -133,12 +156,6 @@ func (s *Store) normalizeSource(in Input, body string, now time.Time) (*SourceRe
 		if e != nil {
 			return nil, errors.New("invalid source occurrence time")
 		}
-		if in.MessageTime != "" {
-			stamp, err := time.Parse(time.RFC3339Nano, in.MessageTime)
-			if err != nil || !stamp.Equal(at) {
-				return nil, errors.New("source occurrence time does not match input")
-			}
-		}
 		r.OccurredAt = memoryTime(at)
 	}
 	r.ReceivedAt = memoryTime(now)
@@ -151,29 +168,6 @@ func (s *Store) normalizeSource(in Input, body string, now time.Time) (*SourceRe
 	}
 	r.EventID = ""
 	return r, nil
-}
-func sourceCollision(t Turn, r *SourceRef, body, stamp string) bool {
-	if r == nil {
-		if stamp == "" {
-			return false
-		}
-		at, e := time.Parse(time.RFC3339Nano, stamp)
-		return e == nil && !at.Equal(t.Time)
-	}
-	old := t.Source
-	if old == nil {
-		return r.Sender != t.Sender || r.OccurredAt != "" && r.OccurredAt != memoryTime(t.Time)
-	}
-	if old.Integrity == "conflicted" {
-		return true
-	}
-	if old.ServerID != r.ServerID || old.Sender != r.Sender || old.OccurredAt != r.OccurredAt {
-		return true
-	}
-	if old.BodyHash != r.BodyHash {
-		return r.Revision <= old.Revision
-	}
-	return false
 }
 func markSourceConflict(t *Turn) {
 	if t.Source == nil {
@@ -324,49 +318,38 @@ func (s *Store) SourceForInput(in Input) (*SourceRef, bool) {
 	if !ok {
 		return nil, false
 	}
+	// A caller without native provenance cannot choose between two retained
+	// messages that reused the same local row and sender.
+	if in.Source == nil && in.TraceID != "" {
+		matches := 0
+		for _, t := range scope.Messages {
+			if t.Role == "user" && t.TraceID == in.TraceID && t.Sender == in.Sender && t.Source != nil {
+				matches++
+				if matches > 1 {
+					return nil, false
+				}
+			}
+		}
+	}
 	for _, t := range scope.Messages {
-		if t.Role != "user" || (t.TraceID != in.TraceID && !sameSourceMessage(t.Source, in.Source)) || t.Sender != in.Sender || t.Source == nil || t.Source.Integrity == "conflicted" {
+		if t.Role != "user" || (t.TraceID != in.TraceID && !sameSourceMessage(t.Source, in.Source)) || t.Sender != in.Sender || t.Source == nil {
+			continue
+		}
+		if in.Source != nil && in.Source.ServerID != "" && t.Source.ServerID != "" && in.Source.ServerID != t.Source.ServerID {
 			continue
 		}
 		if in.Source != nil {
-			if in.Source.InstanceID != "" && in.Source.InstanceID != t.Source.InstanceID || in.Source.ServerID != "" && in.Source.ServerID != t.Source.ServerID ||
+			if in.Source.InstanceID != "" && in.Source.InstanceID != t.Source.InstanceID ||
 				in.Source.EventID != "" && in.Source.EventID != t.EventID || in.Source.MessageID != "" && in.Source.MessageID != t.Source.MessageID ||
 				in.Source.Account != "" && in.Source.Account != in.Account || in.Source.Thread != "" && in.Source.Thread != in.Thread ||
 				in.Source.Sender != "" && in.Source.Sender != t.Sender {
 				continue
 			}
-			if in.Source.OccurredAt != "" {
-				stamp, err := time.Parse(time.RFC3339Nano, in.Source.OccurredAt)
-				if err != nil || !stamp.Equal(t.Time) {
-					continue
-				}
-			}
-		}
-		if in.MessageTime != "" {
-			stamp, e := time.Parse(time.RFC3339Nano, in.MessageTime)
-			if e != nil || !stamp.Equal(t.Time) {
-				continue
-			}
 		}
 		var revision int
 		var hash string
-		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
-		if err != nil || t.Source.Revision != revision || t.Source.BodyHash != hash {
-			continue
-		}
-		if in.Source != nil {
-			if in.Source.Revision > 0 && in.Source.Revision != revision {
-				continue
-			}
-			// EventID distinguishes a persisted canonical reference from a new
-			// native packet, whose BodyHash can still describe raw media XML.
-			if in.Source.EventID != "" && in.Source.BodyHash != "" && in.Source.BodyHash != hash {
-				continue
-			}
-		}
-		// Only an explicit complete original is a body constraint. Display
-		// previews, prepared ASR/OCR and runtime wrappers never become one.
-		if in.OriginalText != nil && sourceHash(*in.OriginalText) != hash {
+		err := s.db.QueryRow("SELECT e.revision,e.hash FROM events e WHERE e.id=? AND e.scope=? AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM source_conflicts c WHERE c.scope=e.scope AND c.event_id=e.id)", t.EventID, scope.ID).Scan(&revision, &hash)
+		if err != nil {
 			continue
 		}
 		out := cloneSource(t.Source)

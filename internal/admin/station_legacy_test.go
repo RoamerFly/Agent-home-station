@@ -55,3 +55,28 @@ func TestPrepareStationLegacyDataCopiesMemoryAndMapsPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPrepareStationLegacyDataBootstrapsWithoutPreviousInstallation(t *testing.T) {
+	root := t.TempDir()
+	legacy := filepath.Join(root, "legacy")
+	model := filepath.Join(root, "authority", "local-model.json")
+	worker := filepath.Join(root, "workers", "legacy")
+	if err := PrepareStationLegacyData(legacy, model, worker); err != nil {
+		t.Fatal(err)
+	}
+	if config, err := loadConfig(legacy); err != nil || config.Enabled || config.APIKey != "" {
+		t.Fatalf("fresh console must use disabled defaults, error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "config.json")); !os.IsNotExist(err) {
+		t.Fatal("bootstrap must leave later migration possible")
+	}
+	if err := os.MkdirAll(filepath.Dir(model), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(model, []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareStationLegacyData(legacy, model, worker); err == nil {
+		t.Fatal("corrupt existing input must remain an error")
+	}
+}

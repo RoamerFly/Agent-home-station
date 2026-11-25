@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +41,20 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, p.documentTools()...)
 	tools = append(tools, p.memoryTools()...)
 	tools = append(tools, p.voiceTools()...)
-	if p.privileged() {
-		tools = append(tools, diagnosticsTool())
-		tools = append(tools, agentTool("music_service_start", "Start the installed local managed YuE/RVC service on demand, owner only. No arbitrary unit, command or endpoint. Nonblocking: check music_service_status until ready, then resume original work. Does not create songs, alter voice defaults or send WeChat. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
+	if p.workspaceExecutionAllowed() {
+		tools = append(tools, diagnosticsTool(), agentTool("station_tool_enable", "Enable an external Station package already installed and approved on this workstation. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`))
+	}
+	if p.workspaceExecutionAllowed() {
+		tools = append(tools, agentTool("station_comfy", "使用 ComfyUI：workflows 查看工作流及参数，models 选模型，author 登记工作流，run 提交，job 查成品，attach 暂存为微信附件。图像输入先 upload(source_message_id 或 source_path)；工作目录文件加 fish_home=true，随后使用返回的 filename。生图优先 qwen21-text-to-image-hq，视频优先 MiniMax H3 工作流。模型清单、文件名和本地路径仅向账号管理员披露；普通成员可正常创作。attach 后仍须发送附件。", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","upload","run","job","attach"]},"source_message_id":{"type":"string"},"source_path":{"type":"string"},"fish_home":{"type":"boolean"},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
+	}
+	if p.privileged() || p.workspaceExecutionAllowed() {
+		tools = append(tools, agentTool("music_service_start", "启动本机 YuE/RVC 受管服务；查询 music_service_status 就绪后续办原任务。", `{"type":"object","properties":{},"additionalProperties":false}`))
+		tools = append(tools,
+			agentTool("station_tool_status", "Read the public Station project-tool catalog or one tool's lifecycle state. Returns sanitized status, readiness and revision without paths or credentials. Input {tool_id?:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`),
+			agentTool("station_tool_start", "Start one enabled public Station project tool and wait for its host health check. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Does not create a media task or send WeChat. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+			agentTool("station_tool_stop", "Stop one public Station project tool while retaining its enabled intent. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+			agentTool("station_tool_restart", "Restart one enabled public Station project tool and wait for its host health check. Available to authorized members; stop/restart require an idle service for non-owners; tool_id is discovered from station_tool_status. Input {tool_id:string}.", `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`),
+		)
 	}
 	projectTools := p.projectPluginTools(context.Background())
 	tools = append(tools, projectTools...)
@@ -50,8 +62,8 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	for _, tool := range projectTools {
 		projectWriteVisible = projectWriteVisible || tool.Name == "project_create"
 	}
-	if p.privileged() && p.workspaceExecutionAllowed() && (c.Host.Mode == "files" || c.Host.Mode == "full") && projectWriteVisible {
-		tools = append(tools, agentTool("project_checkout_plugin", "Create or reopen an editable, digest-pinned source working copy of an installed plugin in THIS conversation's private tool-sources directory. Trusted owner with project write permission only. Copies only verified declared package files and plugin.json; never copies configuration, secrets, package-store state or mutable installed files. Same digest reopens without overwriting edits; a new installed digest creates a separate versioned directory. Input {plugin_id:string}.", `{"type":"object","properties":{"plugin_id":{"type":"string"}},"required":["plugin_id"],"additionalProperties":false}`))
+	if p.workspaceExecutionAllowed() && (c.Host.Mode == "files" || c.Host.Mode == "full") && projectWriteVisible {
+		tools = append(tools, agentTool("project_checkout_plugin", "Create or reopen an editable source copy of an installed plugin in the fish's conversation workspace. Copies verified package files only and preserves existing edits. Input {plugin_id:string}.", `{"type":"object","properties":{"plugin_id":{"type":"string"}},"required":["plugin_id"],"additionalProperties":false}`))
 	}
 	for _, tool := range p.projectTools() {
 		if tool.Name == "project_create" && (!p.workspaceExecutionAllowed() || (c.Host.Mode != "files" && c.Host.Mode != "full")) {
@@ -61,15 +73,15 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 			tools = append(tools, tool)
 		}
 	}
-	tools = append(tools, agentTool("agent_clock", "Read current server time, UTC, timezone and Unix seconds before scheduling. Use agent_reminder for harmless user reminders (available to ordinary members). agent_task persists other work/checkpoints on disk. Do not sleep in a shell for reminders. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
+	tools = append(tools, agentTool("agent_clock", "Read current local time and timezone before scheduling. Create reminders only for an explicit future time; immediate work continues in its current task. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "Read persistent tasks and checkpoints in this conversation; includes interrupted work and prepared results. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`), agentTool("agent_task", "Persist a goal/checkpoint or update its state. Supply stable key for a NEW task, id for an existing task. state=pending|waiting schedules reevaluation after delay_seconds (nonnegative), not guaranteed delivery; real disk path and due_at are returned. source_thread_id and source_message_ids are accepted only after a successful read of those exact messages in this turn; retain their original chronological order for later requests such as ‘第二条再展开’. For an owner group request, a verified cross-conversation source defaults delivery to the requesting owner's private chat; delivery_thread_id may only name an already authorized recipient. target_task_id may cancel one of the same owner's tasks across conversations. Trusted owner requests continue under original authorization (rechecked at execution), without proactive-greeting permission. state=completed|cancelled|needs_review ends scheduling. Input {id?:string,key?:string,title?:string,checkpoint:string,state:string,delay_seconds?:integer,source_thread_id?:string,source_message_ids?:string[],delivery_thread_id?:string,target_task_id?:string}.", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。来源默认为当前消息；续办先前消息时传已读取的 origin_message_id。跨会话主人任务传真实 source IDs 和 delivery_thread_id；target_task_id 用于取消旧任务。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
 	}
-	tools = append(tools, agentTool("agent_owner_report", "Privately report a technical diagnostic to the real owner of THIS account, even when the request originated in a group. Does not post in the group or grant extra privileges. Use once per new result, not repeated reminders. Input {text:string}.", `{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}`))
+	tools = append(tools, agentTool("agent_owner_report", "将新的技术诊断私聊报告给账号主人；同一事实只报一次。", `{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}`))
 
 	return tools
 }
@@ -95,7 +107,7 @@ func agentToolName(name string) bool {
 	if name == "agent_reminder" {
 		return true
 	}
-	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
+	return strings.HasPrefix(name, "voice_library_") || strings.HasPrefix(name, "artifact_") || strings.HasPrefix(name, "document_") || name == "music_service_start" || strings.HasPrefix(name, "station_tool_") || name == "station_comfy" || strings.HasPrefix(name, "project_") || name == "agent_diagnostics" || name == "agent_global_search" || strings.HasPrefix(name, "workspace_") || strings.HasPrefix(name, "server_") || wechatapp.ToolName(name) || name == "agent_task" || name == "agent_tasks" || name == "agent_clock"
 }
 func (p *permittedTools) callAgent(ctx context.Context, name string, args json.RawMessage) (result string, callErr error) {
 	defer func() {
@@ -139,6 +151,12 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	}
 	if name == "music_service_start" {
 		return p.controlMusicService(ctx, "start")
+	}
+	if strings.HasPrefix(name, "station_tool_") {
+		return p.callStationTool(ctx, strings.TrimPrefix(name, "station_tool_"), args)
+	}
+	if name == "station_comfy" {
+		return p.callStationComfy(ctx, args)
 	}
 	if name == "project_checkout_plugin" {
 		return p.checkoutPluginSource(ctx, args)
@@ -229,7 +247,41 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 	case "wechat_operation_status":
 		return p.callWechatOperation(ctx, args)
 	case "agent_tasks":
-		tasks := m.agent.active(p.trace.Account, p.trace.Thread)
+		var in struct {
+			Status string `json:"status"`
+			Query  string `json:"query"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if json.Unmarshal(args, &in) != nil || !contains([]string{"", "active", "history"}, in.Status) || in.Offset < 0 || in.Limit < 0 {
+			return "", toolInputError("任务列表分页参数无效")
+		}
+		thread := p.trace.Thread
+		if p.privileged() && m.agent.config().CrossConversation {
+			thread = ""
+		}
+		if in.Status == "history" {
+			requested := in.Limit
+			if requested == 0 {
+				requested = 20
+			}
+			limit := min(requested, 100)
+			query := strings.ToLower(strings.TrimSpace(in.Query))
+			matches := []map[string]any{}
+			for _, task := range m.agent.list(p.trace.Account, thread) {
+				if task.State == "pending" || task.State == "waiting" || task.State == "running" || task.State == "waiting_delivery" || query != "" && !strings.Contains(strings.ToLower(task.Title), query) {
+					continue
+				}
+				if task.Reminder != nil && task.Sender != p.trace.Sender && !p.privileged() {
+					continue
+				}
+				matches = append(matches, map[string]any{"id": task.ID, "title": task.Title, "state": task.State, "origin_message_id": task.OriginTrace, "thread_id": task.Thread, "updated": task.Updated, "result": logText(task.LastResult, 240)})
+			}
+			start := min(in.Offset, len(matches))
+			end := start + min(limit, len(matches)-start)
+			return encode(map[string]any{"items": matches[start:end], "total": len(matches), "next_offset": end, "has_more": end < len(matches), "requested_limit": requested, "effective_limit": limit}, nil)
+		}
+		tasks := m.agent.active(p.trace.Account, thread)
 		visible := tasks[:0]
 		for _, task := range tasks {
 			if task.Reminder == nil || task.Sender == p.trace.Sender {
@@ -253,6 +305,23 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				tasks[i].MusicSpec.Lyrics = ""
 			}
 		}
+		if in.Status == "active" || in.Query != "" || in.Offset != 0 || in.Limit != 0 {
+			query := strings.ToLower(strings.TrimSpace(in.Query))
+			matches := make([]agentTask, 0, len(tasks))
+			for _, task := range tasks {
+				if query == "" || strings.Contains(strings.ToLower(task.Title), query) {
+					matches = append(matches, task)
+				}
+			}
+			requested := in.Limit
+			if requested == 0 {
+				requested = 20
+			}
+			limit := min(requested, 100)
+			start := min(in.Offset, len(matches))
+			end := start + min(limit, len(matches)-start)
+			return encode(map[string]any{"items": matches[start:end], "total": len(matches), "next_offset": end, "has_more": end < len(matches), "requested_limit": requested, "effective_limit": limit}, nil)
+		}
 		return encode(tasks, nil)
 	case "agent_task":
 		var in struct {
@@ -265,6 +334,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			SourceMessageIDs []string `json:"source_message_ids"`
 			DeliveryThread   string   `json:"delivery_thread_id"`
 			TargetTaskID     string   `json:"target_task_id"`
+			OriginMessageID  string   `json:"origin_message_id"`
 			DelaySeconds     int      `json:"delay_seconds"`
 		}
 		if json.Unmarshal(args, &in) != nil || len(in.Checkpoint) > 6000 || len(in.Title) > 200 || !contains([]string{"pending", "waiting", "completed", "cancelled", "needs_review"}, in.State) {
@@ -276,6 +346,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		origin := p.trace.OriginTraceID
 		if origin == "" {
 			origin = p.trace.TraceID
+		}
+		if in.OriginMessageID != "" && (in.ID != "" || in.TargetTaskID != "" || p.trace.TaskID != "") {
+			return "", toolInputError("origin_message_id只用于新建独立任务")
 		}
 		if in.TargetTaskID != "" {
 			if in.ID != "" || in.State != "cancelled" || !p.privileged() || !p.manager.agent.config().CrossConversation {
@@ -306,10 +379,33 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			sourceThread = p.trace.Thread
 		}
 		if !p.trustedTaskSource(sourceThread) {
-			return "", toolInputError("任务来源必须是本轮已成功读取的会话，不能由模型自行指定")
+			return "", mcptools.ArgumentError("$.source_thread_id", "省略则使用当前会话；其他来源会话须先通过wechat_read读取")
 		}
 		if !p.trustedTaskSourceMessages(sourceThread, in.SourceMessageIDs) {
-			return "", toolInputError("任务消息来源必须来自本轮成功读取的原消息，不能由模型自行填写")
+			return "", mcptools.ArgumentError("$.source_message_ids", "当前请求会自动绑定原消息。需要引用其他消息时，使用wechat_read返回的原消息ID")
+		}
+		var selectedOriginText, selectedOriginServerID string
+		if in.OriginMessageID != "" {
+			if sourceThread != p.trace.Thread || !p.trustedTaskSourceMessages(sourceThread, []string{in.OriginMessageID}) {
+				return "", mcptools.ArgumentError("$.origin_message_id", "先在当前会话读取真实原请求，再使用返回的消息ID")
+			}
+			message, err := m.native.Message(ctx, in.OriginMessageID)
+			if err != nil || message.ID != in.OriginMessageID || message.AccountID != p.trace.Account || message.ThreadID != sourceThread || message.Direction != "incoming" || message.SenderID != p.trace.Sender && !p.privileged() {
+				return "", mcptools.ArgumentError("$.origin_message_id", "原请求的会话或发言者与当前任务不符")
+			}
+			origin, selectedOriginServerID = message.ID, message.ServerID
+			if message.Type == 1 || message.IsQuotedText() {
+				selectedOriginText = logText(message.Body, 2000)
+			}
+			if !contains(in.SourceMessageIDs, origin) {
+				if len(in.SourceMessageIDs) >= 50 {
+					return "", mcptools.ArgumentError("$.source_message_ids", "原请求ID需要加入来源列表；请将显式来源消息缩减至49条后重试")
+				}
+				in.SourceMessageIDs = append([]string{origin}, in.SourceMessageIDs...)
+			}
+		}
+		if len(in.SourceMessageIDs) == 0 && sourceThread == p.trace.Thread && p.trace.Source != nil && p.trace.Source.MessageID != "" {
+			in.SourceMessageIDs = []string{p.trace.Source.MessageID}
 		}
 		deliveryThread := in.DeliveryThread
 		if deliveryThread == "" {
@@ -322,9 +418,21 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			return "", toolInputError("任务投递目标未获授权")
 		}
 		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged(), ID: in.ID, Account: p.trace.Account, Thread: deliveryThread, RequestThread: p.trace.Thread, SourceThread: sourceThread, SourceMessageIDs: append([]string(nil), in.SourceMessageIDs...), DeliveryThread: deliveryThread, Sender: p.trace.Sender, Title: in.Title}
+		if sourceThread == p.trace.Thread && p.trace.OriginalText != nil && !p.trace.BackgroundResult {
+			t.RequestedText = *p.trace.OriginalText
+		}
+		if in.OriginMessageID != "" {
+			t.RequestedText = selectedOriginText
+			t.QuoteServerID = selectedOriginServerID
+		}
 		t.Constraints = p.taskConstraints("agent_task", "", "", "")
 		t.Constraints.Thread = sourceThread
 		t.Constraints.DeliveryThread = deliveryThread
+		if in.OriginMessageID != "" && origin != p.trace.TraceID {
+			// A later chat reply cannot attest the earlier request's source proof.
+			// Preserve its verified ID and literal, then re-read on continuation.
+			t.Constraints.Source, t.Constraints.ReplyContext = nil, nil
+		}
 		if sourceThread != p.trace.Thread {
 			// Cross-session reads prove that a conversation was read, but do not
 			// manufacture a user-event stamp or a group quote for a private task.
@@ -341,8 +449,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			found := false
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
-					if old.Sender != p.trace.Sender {
-						return "", toolInputError("只能调整本人发起的任务")
+					if old.Sender != p.trace.Sender && !strings.HasSuffix(p.trace.Thread, "@chatroom") {
+						return "", toolInputError("任务会话与当前发言者不一致")
 					}
 					t = old
 					found = true
@@ -354,9 +462,22 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			}
 		} else {
 			if in.Key == "" || len(in.Key) > 128 || in.Title == "" {
-				return "", toolInputError("新任务需要key和title")
+				return "", toolInputError("新任务请同时传key和title；续办现有任务请传agent_tasks返回的id")
 			}
-			t.ID = agentID(p.trace.Account, deliveryThread, p.trace.TraceID, in.Key)
+			// The key is the model's stable task handle. The title and source
+			// messages identify its input, so two requests that happen to reuse
+			// the same key cannot silently inherit one another's music job.
+			t.ID = agentID(p.trace.Account, sourceThread, deliveryThread, origin, in.Key, in.Title, strings.Join(in.SourceMessageIDs, "\x00"))
+			legacyID := agentID(p.trace.Account, deliveryThread, origin, in.Key)
+			if old, ok := m.agent.lookupTask(legacyID, p.trace.Account, deliveryThread); ok &&
+				old.OriginTrace == origin && old.Sender == p.trace.Sender && old.Title == in.Title && taskSourceThread(old) == sourceThread &&
+				(old.RequestThread == "" || old.RequestThread == p.trace.Thread) &&
+				(slices.Equal(old.SourceMessageIDs, in.SourceMessageIDs) || len(old.SourceMessageIDs) == 0 && len(in.SourceMessageIDs) <= 1) &&
+				(old.RequestedText == "" || t.RequestedText == "" || old.RequestedText == t.RequestedText) {
+				// Preserve existing task IDs across the ID schema upgrade, but only
+				// when the persisted source and input still match.
+				t.ID = legacyID
+			}
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
 				return encode(old, nil)
 			}
@@ -397,10 +518,14 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if in.Title != "" {
 			t.Title = in.Title
 		}
-		if err := m.agent.task(t); err != nil {
+		t, err := m.agent.saveTask(t)
+		if err != nil {
 			return "", err
 		}
 		m.record(bot.Record{Event: "agent_task_saved", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: t.Title, Status: t.State, Reason: "persistent_checkpoint_saved", Origin: "agent"})
+		if t.OriginTrace != "" && t.OriginTrace != p.trace.TraceID && t.Thread == p.trace.Thread {
+			m.record(bot.Record{Event: "task_followup_attached", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, RelatedMessageID: t.OriginTrace, Status: t.State, Origin: "agent"})
+		}
 		requirements := "proactive permission, selected target, quiet hours and daily budget; pending is not delivery"
 		if t.OwnerRequested {
 			requirements = "continuation of an authenticated owner request; current owner and conversation authorization rechecked; pending is not delivery"

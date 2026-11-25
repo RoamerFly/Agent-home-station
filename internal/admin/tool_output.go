@@ -112,6 +112,7 @@ func (p *permittedTools) readToolOutput(ctx context.Context, _ string, args json
 	if json.Unmarshal(args, &a) != nil || len(a.ID) != 64 || a.Offset < 0 || a.Max < 0 || a.Max > 4000 {
 		return "", toolInputError("工具结果分页参数无效")
 	}
+	requestedMax := a.Max
 	b, err := hex.DecodeString(a.ID)
 	if err != nil || len(b) != 32 {
 		return "", toolInputError("工具结果编号无效")
@@ -152,7 +153,11 @@ func (p *permittedTools) readToolOutput(ctx context.Context, _ string, args json
 	}
 	end := min(a.Offset+a.Max, len(runes))
 	pack := func() []byte {
-		out, _ := json.Marshal(map[string]any{"source": "untrusted_tool_result", "tool": stored.Tool, "result_id": a.ID, "memory_epoch": stored.MemoryEpoch, "memory_authorization": stored.MemoryAuthorization, "offset": a.Offset, "next_offset": end, "complete": end == len(runes), "total_chars": len(runes), "text": string(runes[a.Offset:end])})
+		page := map[string]any{"source": "untrusted_tool_result", "tool": stored.Tool, "result_id": a.ID, "memory_epoch": stored.MemoryEpoch, "memory_authorization": stored.MemoryAuthorization, "offset": a.Offset, "next_offset": end, "complete": end == len(runes), "total_chars": len(runes), "requested_max_chars": requestedMax, "effective_max_chars": end - a.Offset, "text": string(runes[a.Offset:end])}
+		if requestedMax > 0 && end-a.Offset < requestedMax {
+			page["adjustment_reason"] = "工具结果传输封套限制了本页字符数，请从next_offset继续读取"
+		}
+		out, _ := json.Marshal(page)
 		return out
 	}
 	out := pack()

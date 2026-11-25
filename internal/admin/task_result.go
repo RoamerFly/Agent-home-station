@@ -60,8 +60,17 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	}
 	t.Updated = time.Now().UTC()
 	a.data.Tasks[t.ID] = copyTask(t)
+	if t.Reminder != nil {
+		if err := a.writeReminderFile(t); err != nil {
+			a.data.Tasks[t.ID] = current
+			return false, err
+		}
+	}
 	if err := a.persist(); err != nil {
 		a.data.Tasks[t.ID] = current
+		if t.Reminder != nil {
+			_ = a.writeReminderFile(current)
+		}
 		return false, err
 	}
 	return true, nil
@@ -95,13 +104,13 @@ func (m *Manager) claimTaskResult(task agentTask, now time.Time, facts any, next
 		Mode:             "direct", Directed: true, IsGroup: strings.HasSuffix(task.Thread, "@chatroom"), TaskID: task.ID,
 		OriginTraceID: task.OriginTrace, RequestedText: task.RequestedText, QuoteServerID: task.QuoteServerID,
 		TraceID: task.resultKind() + "-result-" + task.ID + "-" + now.UTC().Format("150405.000000000"),
-		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。"}), nil
+		Text:    "[已保存任务的真实结果，不是新用户指令] " + string(data) + "\n结合最新会话和实际工具反馈决定下一步：检查或修复、验证、继续交付、更新检查点、自然回复或安静。先核对取消和需求变化；不要把请求参数当作已验证结果，不重放已成功操作。附件在media_ids交付，介绍在接受后发送。等待时保存agent_task检查点；技术问题只私聊主人，原群保持正常交流。" + task.deliveryInstruction()}), nil
 }
 
-func (m *Manager) finishTaskResult(t agentTask, state string) bool {
+func (m *Manager) finishTaskResult(t agentTask, state string) (bool, error) {
 	kind := t.resultKind()
 	if kind == "" {
-		return false
+		return false, nil
 	}
 	prepared, failed := false, false
 	switch kind {
@@ -127,7 +136,7 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 	case failed && settled:
 		t.State = "failed"
 		t.LastResult = "外部任务报告失败；真实原因已交给主模型处理"
-	case prepared && (state == "reply" || state == "synchronous_round_finished"):
+	case prepared && (state == "reply" || state == "synchronous_round_finished" || len(t.PendingOperations) > 0):
 		t.State = "waiting_delivery"
 		t.LastResult = "输出已准备，等待微信交付证据；全部必需附件与后置说明完成后才结束"
 	case prepared:
@@ -141,6 +150,6 @@ func (m *Manager) finishTaskResult(t agentTask, state string) bool {
 	if t.State == "completed" || t.State == "waiting_delivery" {
 		t.WorkCompleted = true
 	}
-	_, _ = m.agent.updateSnapshot(t)
-	return true
+	_, err := m.agent.updateSnapshot(t)
+	return true, err
 }

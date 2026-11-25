@@ -44,9 +44,10 @@ func (s *Store) CanImportUnboundNative(ctx context.Context, in Input) (bool, err
 }
 
 // ReconcileLegacySource is for trusted adapters which have just resolved an
-// actual native message. It repairs only a historical automatic collision
-// between a current, exact identity and an unknown legacy dataset. It never
-// clears forgetting, manual quarantine, or conflicts within the current dataset.
+// actual native message. It repairs a historical automatic collision with an
+// unknown legacy dataset or one older local-row reuse proven distinct by native
+// sender, time and platform identity. It never clears forgetting, manual
+// quarantine, or a same-time collision within the current dataset.
 func (s *Store) ReconcileLegacySource(ctx context.Context, in Input) (*SourceRef, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,6 +61,8 @@ func (s *Store) ReconcileLegacySource(ctx context.Context, in Input) (*SourceRef
 	id := ScopeID(in.Channel, in.Account, in.Thread)
 	sc := copyScope(s.data.Scopes[id])
 	position, legacy := -1, false
+	historicalBound := ""
+	var historicalTurn *Turn
 	for i, turn := range sc.Messages {
 		if turn.Role != "user" || turn.TraceID != in.TraceID {
 			continue
@@ -74,12 +77,22 @@ func (s *Store) ReconcileLegacySource(ctx context.Context, in Input) (*SourceRef
 		if ref.InstanceID != in.Source.InstanceID {
 			continue
 		}
+		if turn.Sender != in.Sender && turn.Time.Before(at) && ref.ServerID != in.Source.ServerID &&
+			ref.MessageID == in.TraceID && ref.Account == in.Account && ref.Thread == in.Thread &&
+			ref.OccurredAt == memoryTime(turn.Time) && ref.Integrity == "conflicted" {
+			if historicalBound != "" {
+				return nil, false, nil
+			}
+			historicalBound = turn.EventID
+			historicalTurn = &sc.Messages[i]
+			continue
+		}
 		if turn.Sender != in.Sender || !turn.Time.Equal(at) || ref.ServerID != in.Source.ServerID || ref.Account != in.Account || ref.Thread != in.Thread || ref.MessageID != in.TraceID || position >= 0 {
 			return nil, false, nil
 		}
 		position = i
 	}
-	if position < 0 || !legacy {
+	if position < 0 || legacy && historicalBound != "" || !legacy && historicalBound == "" {
 		return nil, false, nil
 	}
 	turn := sc.Messages[position]
@@ -124,6 +137,28 @@ func (s *Store) ReconcileLegacySource(ctx context.Context, in Input) (*SourceRef
 	}
 	if count == 0 || !automatic {
 		return nil, false, nil
+	}
+	if historicalBound != "" {
+		var total, automaticCount int
+		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*),COALESCE(SUM(CASE WHEN reason='source_identity_conflict' THEN 1 ELSE 0 END),0) FROM source_conflicts WHERE scope=? AND event_id=?", id, historicalBound).Scan(&total, &automaticCount); err != nil {
+			return nil, false, err
+		}
+		if total != 1 || automaticCount != 1 {
+			return nil, false, nil
+		}
+		var olderSender, olderAt, olderHash string
+		var olderRevision int
+		var olderRaw []byte
+		if err = tx.QueryRowContext(ctx, "SELECT sender,at,hash,revision,payload FROM events WHERE id=? AND scope=?", historicalBound, id).Scan(&olderSender, &olderAt, &olderHash, &olderRevision, &olderRaw); err != nil {
+			return nil, false, err
+		}
+		var olderPersisted Turn
+		if json.Unmarshal(olderRaw, &olderPersisted) != nil || historicalTurn == nil ||
+			olderSender != historicalTurn.Sender || olderAt != memoryTime(historicalTurn.Time) ||
+			olderRevision != historicalTurn.Source.Revision || olderHash != historicalTurn.Source.BodyHash ||
+			olderPersisted.Source == nil || !sameSourceMessage(olderPersisted.Source, historicalTurn.Source) {
+			return nil, false, errors.New("source_reconciliation_snapshot_changed")
+		}
 	}
 	var persisted Turn
 	if json.Unmarshal(raw, &persisted) != nil || persisted.Source == nil || !sameSourceMessage(persisted.Source, turn.Source) || persisted.Source.BodyHash != hash || persisted.Source.ServerID != in.Source.ServerID || persisted.Sender != in.Sender || !persisted.Time.Equal(at) {

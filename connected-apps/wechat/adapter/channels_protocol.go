@@ -243,14 +243,14 @@ func channelUint64(raw json.RawMessage, required bool) (string, error) {
 }
 
 func (route ChannelsRoute) ValidateResult(raw json.RawMessage) ([]byte, linuxnative.ChannelsSource, error) {
-	fail := func() ([]byte, linuxnative.ChannelsSource, error) {
-		return nil, linuxnative.ChannelsSource{}, errors.New("share_result_binding_failed")
+	fail := func(code string) ([]byte, linuxnative.ChannelsSource, error) {
+		return nil, linuxnative.ChannelsSource{}, errors.New(code)
 	}
 	if route.Phase != "complete" || route.Resolved == nil {
-		return fail()
+		return fail("share_result_route_incomplete")
 	}
 	if _, err := strictjson.Decode(raw); err != nil {
-		return fail()
+		return fail("share_result_schema_invalid")
 	}
 	var result struct {
 		OK         *bool    `json:"ok"`
@@ -269,11 +269,14 @@ func (route ChannelsRoute) ValidateResult(raw json.RawMessage) ([]byte, linuxnat
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil {
-		return fail()
+		return fail("share_result_schema_invalid")
 	}
 	p := route.Resolved
-	if result.OK == nil || !*result.OK || result.Platform != "channels" || result.Source != route.Share || result.Object != p.ObjectID || result.Title != p.Title || result.Author != p.Author || len(result.Locators) != 1 || result.Locators[0] != p.MediaURL || result.Key != p.DecodeKey || result.Coverage != "media_locator_only" || result.Observed == nil || *result.Observed || result.Downloaded == nil || *result.Downloaded || result.Untrusted == nil || !*result.Untrusted {
-		return fail()
+	if result.OK == nil || !*result.OK || result.Platform != "channels" || result.Source != route.Share || result.Object != p.ObjectID {
+		return fail("share_result_source_mismatch")
+	}
+	if result.Title != p.Title || result.Author != p.Author || len(result.Locators) != 1 || result.Locators[0] != p.MediaURL || result.Key != p.DecodeKey || result.Coverage != "media_locator_only" || result.Observed == nil || *result.Observed || result.Downloaded == nil || *result.Downloaded || result.Untrusted == nil || !*result.Untrusted {
+		return fail("share_result_media_mismatch")
 	}
 	checkpoint, _ := json.Marshal(map[string]any{"ok": true, "platform": "channels", "source_url": route.Share, "object_id": p.ObjectID, "title": p.Title, "author": p.Author, "coverage": "media_locator_only", "video_observed": false, "media_downloaded": false, "untrusted_external_content": true})
 	return checkpoint, *p, nil

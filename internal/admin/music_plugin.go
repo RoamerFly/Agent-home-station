@@ -78,7 +78,9 @@ func (m *Manager) musicPluginConfigured(ctx context.Context) bool {
 	}
 	i, err := s.Installed(ctx, "music")
 	inv := pluginhost.Invocation{Account: s.Account(), Thread: "host", Requester: "administrator", Purpose: "inspect music readiness", RequestKey: "host-readiness"}
-	if err != nil || !i.Enabled || i.Removed || pluginhost.Authorize(i.Package, pluginhost.Grant{Account: s.Account(), Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, inv, []string{"model.invoke"}) != nil || s.CheckConfiguration(ctx, "music") != nil {
+	// An installed 0.5.2 snapshot may still declare the retired cloud entry.
+	// Only the current catalog generation can advertise music capabilities.
+	if err != nil || i.Package.Version != "0.5.4" || !i.Enabled || i.Removed || pluginhost.Authorize(i.Package, pluginhost.Grant{Account: s.Account(), Plugin: i.Package.ID, Version: i.Package.Version, Permissions: i.Permissions}, inv, []string{"model.invoke"}) != nil || s.CheckConfiguration(ctx, "music") != nil {
 		return false
 	}
 	var endpoint, model string
@@ -240,16 +242,16 @@ func (p *musicPluginPolicy) Check(ctx context.Context, j pluginhost.Job, cap plu
 	if err != nil || current != p.invocation.EvidenceEpoch {
 		return errors.New("music_plugin_evidence_changed")
 	}
-	for id, revision := range p.invocation.SourceVersions {
+	for id := range p.invocation.SourceVersions {
 		ev, e := p.p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.invocation.Account, p.invocation.Thread)}, id)
-		if e != nil || ev.Revision != revision {
+		if e != nil {
 			return errors.New("music_plugin_source_changed")
 		}
 		if source := p.p.trace.Source; source != nil && source.EventID == id && (ev.Role != "user" || ev.Sender != p.p.trace.Sender) {
 			return errors.New("music_plugin_source_actor_changed")
 		}
 	}
-	if source := p.p.trace.Source; source != nil && (source.Integrity == "conflicted" || source.Integrity == "quarantined" || source.Account != "" && source.Account != p.invocation.Account || source.Thread != "" && source.Thread != p.invocation.Thread || source.Sender != "" && source.Sender != p.p.trace.Sender) {
+	if source := p.p.trace.Source; source != nil && (source.Account != "" && source.Account != p.invocation.Account || source.Thread != "" && source.Thread != p.invocation.Thread || source.Sender != "" && source.Sender != p.p.trace.Sender) {
 		return errors.New("music_plugin_source_changed")
 	}
 	cfg, err := p.store.Configuration(ctx, "music")
@@ -311,7 +313,9 @@ func (p *musicPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 		reply, err := p.post(ctx, endpoint, headers, body, limit, timeout)
 		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
 		usage.Model, usage.Purpose = p.model, "plugin_music_generation"
-		if p.p.manager.billing == nil || p.p.manager.billing.Record(billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		model := billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
+		p.p.manager.recordModelUsageDetail(p.p.trace.Thread, p.p.trace.TraceID, j.Tool, j.ID, model, usage)
+		if p.p.manager.billing == nil || p.p.manager.billing.Record(model, usage) != nil {
 			return nil, errors.New("music_usage_record_failed")
 		}
 		if err != nil {

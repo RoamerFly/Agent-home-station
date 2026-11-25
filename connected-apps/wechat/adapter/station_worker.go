@@ -182,8 +182,14 @@ func WaitWorkerLogin(ctx context.Context, native *linuxnative.Sender) error {
 type WorkerQueue struct {
 	ProtectQuote      func(context.Context, linuxnative.Message) bool
 	SurfTask          func(time.Time) (*bot.SurfTask, error)
+	SurfAllowed       func(string) bool
 	Record            func(bot.Record)
+	Log               func(string)
 	StateDir          string
+	MaxAge            time.Duration
+	PollInterval      time.Duration
+	Prefix            string
+	Behavior          *bot.Options
 	Groups            GroupPolicy
 	AllowMediaReplies bool
 	Memory            *companion.Store
@@ -191,6 +197,24 @@ type WorkerQueue struct {
 	Persona           string
 	Tools             companion.ToolAccess
 	MediaObserver     WorkerMediaObserver
+	Analyzer          interface {
+		Analyze(context.Context, linuxnative.Message) (string, error)
+	}
+
+	ObservationFailed   func(companion.Input, string) error
+	MediaRepairRequired func(companion.Input, string, string) error
+	BacklogSettled      func(string, string, []string, string)
+	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
+	AgentTaskDone       func(companion.Input, string) error
+	AgentTaskRetry      func(companion.Input, time.Duration, string)
+	AgentTaskDelivery   func(companion.Input, bot.TaskDelivery) error
+	AgentTaskActive     func(companion.Input) bool
+	Draining            func() bool
+	MediaSeeds          func() []bot.MediaSeed
+	MediaSeedKnown      func(bot.MediaSeed) bool
+	MediaSeedAllowed    func(bot.MediaSeed) bool
+	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
+	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
 
 	ReadGroupShare       func(context.Context, companion.Input, linuxnative.Message) (string, companion.MediaObservationEvidence, error)
 	DeliveryCancelled    func(companion.Input) (bool, error)
@@ -273,9 +297,42 @@ func (r *WorkerRun) queueConfig(account string, queue WorkerQueue, checkActivati
 		}
 	}
 	options := bot.DefaultOptions()
-	options.AcknowledgeTools, options.ReadImages, options.ReadVideos, options.RandomDelay = false, false, false, false
-	config.Options, config.Prefix = &options, "/ai "
+	if queue.Behavior != nil {
+		options = *queue.Behavior
+		if options.Validate() != nil {
+			options = bot.DefaultOptions()
+		}
+	}
+	config.Options = &options
+	config.Prefix = queue.Prefix
+	if config.Prefix == "" {
+		config.Prefix = "/ai "
+	}
+	config.PollInterval = queue.PollInterval
+	config.MaxAge = queue.MaxAge
+	config.ObservationFailed = queue.ObservationFailed
+	config.MediaRepairRequired = queue.MediaRepairRequired
+	config.BacklogSettled = queue.BacklogSettled
+	config.AgentTask = queue.AgentTask
+	config.AgentTaskDone = queue.AgentTaskDone
+	config.AgentTaskRetry = queue.AgentTaskRetry
+	config.AgentTaskDelivery = queue.AgentTaskDelivery
+	config.AgentTaskActive = queue.AgentTaskActive
+	config.Draining = queue.Draining
+	config.MediaSeeds = queue.MediaSeeds
+	config.MediaSeedKnown = queue.MediaSeedKnown
+	config.MediaSeedAllowed = queue.MediaSeedAllowed
+	config.MediaSeedSettled = queue.MediaSeedSettled
+	config.MediaSeedReceipt = queue.MediaSeedReceipt
+	config.SurfAllowed = queue.SurfAllowed
+	config.Analyzer = queue.Analyzer
+	if config.Analyzer == nil {
+		config.Analyzer = queue.MediaObserver
+	}
 	config.Log = func(event string) {
+		if queue.Log != nil {
+			queue.Log(event)
+		}
 		if event == "bot_started_history_skipped" || event == "bot_resumed_saved_cursor" {
 			r.state.Store("running")
 		}

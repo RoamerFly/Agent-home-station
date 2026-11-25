@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"wechat-bot/internal/mcptools"
 )
@@ -81,6 +82,37 @@ func TestAudioRequestCanSearchAndDownloadAfterEmptyCacheWithoutUserURL(t *testin
 		t.Fatal("last page misreported as cache miss")
 	}
 }
+
+type savedPageModel struct{ step int }
+
+func (*savedPageModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("expected native tools")
+}
+func (m *savedPageModel) ChatFunctions(context.Context, string, []map[string]string, []mcptools.Tool) (string, error) {
+	m.step++
+	if m.step == 1 {
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"web_media_download"}}`, nil
+	}
+	if m.step == 2 {
+		return `{"action":"tool","tool":"web_media_download","arguments":{"kind":"file","url":"https://www.bilibili.com/video/BV1xx411c7mD/","audio_only":true}}`, nil
+	}
+	return `{"action":"reply","messages":["已检查保存的公开页面。"]}`, nil
+}
+
+func TestSavedPublicPageCanBeRetriedWithoutNewSearch(t *testing.T) {
+	tools := &cacheMissMusicTools{}
+	engine, err := NewPreview(enabledConfig(), &savedPageModel{}, "base persona")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Tools, engine.MaxToolCalls = tools, 4
+	if _, err = engine.Respond(t.Context(), Input{Mode: "direct", Preview: true, Text: "继续上次保存的音频任务"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tools.calls, []string{"web_media_download"}) {
+		t.Fatalf("saved page was blocked or needlessly searched: %v", tools.calls)
+	}
+}
 func (p *pagedCatalog) Call(context.Context, string, json.RawMessage) (string, error) {
 	p.calls++
 	return "real fixture execution", nil
@@ -94,7 +126,7 @@ type catalogModel struct {
 func (*catalogModel) Chat(context.Context, string, []map[string]string) (string, error) {
 	panic("native functions required")
 }
-func (m *catalogModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+func (m *catalogModel) ChatFunctions(_ context.Context, _ string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
 	m.step++
 	has := func(name string) bool {
 		for _, t := range tools {
@@ -111,10 +143,14 @@ func (m *catalogModel) ChatFunctions(_ context.Context, _ string, _ []map[string
 		if !has("catalog_06") || has("catalog_11") {
 			m.t.Fatal("first discovery page leaked other schemas")
 		}
+		last := turns[len(turns)-1]["content"]
+		if !strings.Contains(last, "next_native_function_catalog") || strings.Contains(last, "input_schema") {
+			m.t.Fatal("discovery duplicated native schemas in its result", last)
+		}
 		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":7,"limit":7}}`, nil
 	case 3:
-		if !has("catalog_11") {
-			m.t.Fatal("later tool schema remained hidden")
+		if !has("catalog_11") || has("catalog_06") {
+			m.t.Fatal("later page missing or old schemas kept across pages")
 		}
 		return `{"action":"tool","tool":"catalog_11","arguments":{}}`, nil
 	default:
@@ -129,6 +165,63 @@ func TestNativeToolDiscoveryContinuesBeyondFirstEightMatches(t *testing.T) {
 	e.MaxToolCalls = 6
 	if _, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "核对工具目录", Preview: true}); err != nil || tools.calls != 1 {
 		t.Fatal(err, tools.calls)
+	}
+}
+
+type largePageReplayModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*largePageReplayModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("native functions required")
+}
+
+func (m *largePageReplayModel) ChatFunctions(_ context.Context, _ string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
+	const firstPage = `{"action":"tool","tool":"discover_tools","arguments":{"query":"tool_","limit":140}}`
+	m.step++
+	switch m.step {
+	case 1:
+		return firstPage, nil
+	case 2:
+		var feedback struct{ Result string }
+		if err := json.Unmarshal([]byte(turns[len(turns)-1]["content"]), &feedback); err != nil || len(feedback.Result) <= 1500 {
+			m.t.Fatalf("discovery fixture must exceed the web result cache limit: size=%d err=%v", len(feedback.Result), err)
+		}
+		return firstPage, nil
+	case 3:
+		if !strings.Contains(turns[len(turns)-1]["content"], `"status":"blocked"`) {
+			m.t.Fatal("same large page was executed again while its tools were active")
+		}
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"tool_","offset":140,"limit":140}}`, nil
+	case 4:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "tool_149" }) {
+			m.t.Fatal("second discovery page did not expose its tools")
+		}
+		return firstPage, nil
+	case 5:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "tool_139" }) {
+			m.t.Fatal("returning to the first discovery page did not re-expose its tools")
+		}
+		return `{"action":"tool","tool":"tool_139","arguments":{}}`, nil
+	default:
+		if !strings.Contains(turns[len(turns)-1]["content"], `"status":"succeeded"`) {
+			m.t.Fatal("execution did not resume after discovery of the earlier page")
+		}
+		return `{"action":"reply","messages":["已核对"]}`, nil
+	}
+}
+
+func TestNativeToolDiscoveryBlocksRepeatedLargePageAndContinues(t *testing.T) {
+	model := &largePageReplayModel{t: t}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools, e.MaxToolCalls = largeDiscoveryTools{}, 6
+	decision, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "核对工具目录", Preview: true})
+	if err != nil || decision.Action != "reply" || model.step != 6 {
+		t.Fatalf("decision=%+v err=%v steps=%d", decision, err, model.step)
 	}
 }
 

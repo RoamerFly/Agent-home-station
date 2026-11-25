@@ -72,8 +72,8 @@ class Wire:
                     result = {}
                 elif method == "tools/call" and initialized:
                     params = request.get("params")
-                    context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
-                    if not all(isinstance(context.get(k), str) and context[k] for k in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id") if isinstance(params, dict) else None
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     if params.get("name") == "speech.synthesize_named":
                         result = named_voice.synthesize(params.get("arguments"), configuration, lambda value: self.host("wechat/local_speech", value))

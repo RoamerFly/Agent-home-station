@@ -8,9 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +72,51 @@ func referenceTranscriptionFixture(t *testing.T) (*webFixture, *permittedTools, 
 		t.Fatal(err)
 	}
 	return f, access, asset, wav, policy
+}
+
+func TestCachedRecordingTranscriptionUsesAuthorizedStationAudio(t *testing.T) {
+	_, access, asset, wav, _ := referenceTranscriptionFixture(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			http.SetCookie(w, &http.Cookie{Name: "station", Value: "synthetic-session"})
+			w.Write([]byte(`{"authenticated":true,"csrf":"fixture-csrf"}`))
+		case stationASRPath:
+			if r.Method == http.MethodGet {
+				w.Write([]byte(`{"ready":true,"version":"audio-cpp-fixture"}`))
+				return
+			}
+			var body struct {
+				Version string `json:"version"`
+				Audio   []byte `json:"audio"`
+			}
+			if r.Header.Get("X-CSRF-Token") != "fixture-csrf" || json.NewDecoder(r.Body).Decode(&body) != nil ||
+				body.Version != "audio-cpp-fixture" || !bytes.Equal(body.Audio, wav) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			requests.Add(1)
+			w.Write([]byte(`{"status":"transcribed","text":"合成测试转写"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	passwordFile := filepath.Join(t.TempDir(), "station-password")
+	if err := os.WriteFile(passwordFile, []byte("fixture-password"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_STATION_URL", server.URL)
+	t.Setenv("AGENT_STATION_ADMIN_PASSWORD_FILE", passwordFile)
+	text, route, check, err := access.transcribeReference(t.Context(), asset, wav, 1, 2)
+	if err != nil || route != "station_local_asr" || text != "合成测试转写" || requests.Load() != 1 || check(t.Context()) != nil {
+		t.Fatal("station transcription not bound to source", text, route, err)
+	}
+	asset.Scope = "another-conversation"
+	if _, _, _, err := access.transcribeReference(t.Context(), asset, wav, 1, 2); err == nil || requests.Load() != 1 {
+		t.Fatal("out-of-scope audio reached station", err)
+	}
 }
 
 func referenceTranscriptResult(p *mediaTranscriptionPolicy) json.RawMessage {

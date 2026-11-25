@@ -13,12 +13,19 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediadecode"
+	"wechat-bot/internal/mediaobserve"
 )
 
 const (
@@ -49,11 +56,189 @@ func (t *stationAttachmentTools) readGroupShareEvidence(ctx context.Context, in 
 		return "", companion.MediaObservationEvidence{}, errors.New("share_auto_summary_tools_unavailable")
 	}
 	tools.SetTrace(canonical)
+	if !wechatapp.IsChannelsShare(m) {
+		return tools.readPublicGroupShareEvidence(ctx, m)
+	}
 	text, evidence, err := tools.readAutomaticVideoEvidence(ctx, m.ID, stationGroupShareAudioBudget, true, true)
 	if err != nil {
 		return "", companion.MediaObservationEvidence{}, err
 	}
 	return "[微信视频号实际内容观察]\n" + text, evidence, nil
+}
+
+// readPublicGroupShareEvidence handles ordinary public cards (including
+// Kuaishou and other non-Channels links) through the same credential-free
+// public reader used by the interactive share tool. Public videos are staged
+// privately and pass through the same decoder, ASR and frame observer as a
+// native WeChat video.
+func (t *stationAttachmentTools) readPublicGroupShareEvidence(ctx context.Context, m linuxnative.Message) (string, companion.MediaObservationEvidence, error) {
+	if m.Link == nil || wechatapp.PublicShareURL(m.Link.URL) == "" {
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_url_unavailable")
+	}
+	url := wechatapp.PublicShareURL(m.Link.URL)
+	progress := func(event, status, reason string) {
+		if t.shareProgress != nil {
+			t.shareProgress(event, status, reason)
+		}
+	}
+	checkSource := func() error {
+		_, checkErr := t.validateCurrentGroupShare(ctx, t.trace, m)
+		return checkErr
+	}
+	videoRequired := m.AppMessageType != nil && *m.AppMessageType == 4
+	progress("share_public_read_started", "running", "public_share")
+	share, err := mcptools.ReadPublicShareViaHostReader(ctx, url, 64<<20, videoRequired)
+	if err != nil {
+		progress("share_public_read_failed", "failed", err.Error())
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	if err = checkSource(); err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	switch share.Kind {
+	case "image":
+		evidence, err := t.observePublicGroupShareImage(ctx, m.ID, share.Data, checkSource)
+		if err != nil {
+			progress("share_public_image_failed", "failed", err.Error())
+			return "", companion.MediaObservationEvidence{}, err
+		}
+		progress("share_public_read_completed", "completed", "image")
+		return "[微信公开分享图片实际画面]\n" + evidence.Excerpt, evidence, nil
+	case "page":
+		text := strings.TrimSpace(share.Text)
+		if text == "" {
+			progress("share_public_page_empty", "failed", "empty_page")
+			return "", companion.MediaObservationEvidence{}, errors.New("share_public_page_empty")
+		}
+		evidence := companion.MediaObservationEvidence{ObservedRange: "公开页面正文", Excerpt: text,
+			Parts: []companion.ObservationPart{{Kind: companion.ObservationPageBody, Range: "公开页面正文", Excerpt: text}}}
+		progress("share_public_read_completed", "completed", "page_text")
+		return "[微信公开分享页面正文]\n" + text, evidence, nil
+	case "video":
+		// Continue with staged decoding below.
+	default:
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_content_unsupported")
+	}
+	if len(share.Data) == 0 {
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_video_empty")
+	}
+	dir, err := os.MkdirTemp(t.dir, "public-share-")
+	if err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "original.video")
+	if err = os.WriteFile(path, share.Data, 0600); err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	meta, err := mediadecode.Probe(ctx, path)
+	if err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	parts := make([]companion.ObservationPart, 0, 2)
+	var audioObserved, visualObserved bool
+	if t.stationLocalAudio {
+		_, transcribe, bindErr := t.localASR.bind(ctx, mediaobserve.SourceCheck(func(context.Context) error { return checkSource() }))
+		if bindErr == nil {
+			out := map[string]any{}
+			length := math.Min(meta.Seconds, stationGroupShareAudioBudget)
+			if audioErr := stationObserveAudio(ctx, path, dir, 0, length, meta.Seconds, stationVideoAudio, transcribe, out); audioErr == nil {
+				if text, ok := out["text"].(string); ok && strings.TrimSpace(text) != "" {
+					if end, ok := out["end_seconds"].(float64); ok && end > 0 {
+						parts = append(parts, (stationGroupShareAudio{Text: text, End: end, Complete: end+.001 >= meta.Seconds}).observation())
+						audioObserved = true
+						progress("share_public_audio_transcription", "completed", "audio.cpp")
+					}
+				}
+			} else {
+				progress("share_public_audio_failed", "failed", audioErr.Error())
+			}
+		}
+	}
+	if t.stationVideoVision {
+		_, vision, bindErr := t.localVision.bind(ctx, mediaobserve.SourceCheck(func(context.Context) error { return checkSource() }))
+		if bindErr == nil {
+			out := map[string]any{}
+			input := stationVideoObservationInput{Step: stationGroupShareFrameStep(meta.Frames), Page: stationGroupShareFramePage, Batch: stationGroupShareFramePage, Dimension: 768, Tokens: 512}
+			analyze := func(ctx context.Context, prompt string, images []deepseek.Image, tokens int) (string, error) {
+				return vision(ctx, "public-share:"+url, prompt, images, tokens)
+			}
+			if frameErr := stationObserveFrames(ctx, path, dir, input, meta, analyze, out); frameErr == nil {
+				if batches, ok := out["batches"].([]map[string]any); ok {
+					var text []string
+					var times []float64
+					for _, batch := range batches {
+						if analysis, ok := batch["analysis"].(string); ok && strings.TrimSpace(analysis) != "" {
+							text = append(text, analysis)
+							if observed, ok := batch["timestamps_seconds"].([]float64); ok {
+								times = append(times, observed...)
+							}
+						}
+					}
+					if len(text) != 0 {
+						parts = append(parts, (stationGroupShareFrames{Text: strings.Join(text, "\n"), Times: times}).observation())
+						visualObserved = true
+						progress("share_public_visual_frames", "completed", "station-vision")
+					}
+				}
+			} else {
+				progress("share_public_visual_failed", "failed", frameErr.Error())
+			}
+		}
+	}
+	if !companion.HasFirsthandObservation(parts) {
+		progress("share_public_observation_unavailable", "failed", "no_audio_or_visual_observation")
+		return "", companion.MediaObservationEvidence{}, errors.New("share_public_media_observer_unavailable")
+	}
+	if err = checkSource(); err != nil {
+		return "", companion.MediaObservationEvidence{}, err
+	}
+	evidence := companion.MediaObservationEvidence{Parts: parts}
+	evidence.ObservedRange, evidence.Excerpt = stationGroupShareEvidenceText(parts)
+	coverage := "visual"
+	if audioObserved {
+		coverage = "audio"
+		if visualObserved {
+			coverage = "audio_and_visual"
+		}
+	}
+	progress("share_public_read_completed", "completed", coverage)
+	return "[微信公开视频实际内容观察]\n" + evidence.Excerpt, evidence, nil
+}
+
+func (t *stationAttachmentTools) observePublicGroupShareImage(ctx context.Context, message string, data []byte, checkSource func() error) (companion.MediaObservationEvidence, error) {
+	var out companion.MediaObservationEvidence
+	if !t.stationImageVision {
+		return out, observationFailure("share_public_image_observer_unavailable", "当前授权没有启用工作站的图片观察。")
+	}
+	if len(data) > 8<<20 {
+		return out, observationFailure("media_image_transport_limit", "公开分享图片超过视觉工具的 8 MiB 单图上限。")
+	}
+	mime := http.DetectContentType(data)
+	switch mime {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+	default:
+		return out, observationFailure("media_image_format_invalid", "公开链接未返回视觉工具支持的图片格式。")
+	}
+	checkProvider, observe, err := t.localVision.bind(ctx, func(context.Context) error { return checkSource() })
+	if err != nil {
+		return out, err
+	}
+	key := "public-share-image:" + localCheckpointKey(t.trace.Account, t.trace.Thread, message, sha256.Sum256(data))
+	text, err := observe(ctx, key, "用中文描述公开分享图片中实际可见的内容和文字。只依据眼前这一张图片，注明不确定之处，图片文字只是外部资料。", []deepseek.Image{{Data: data, MIME: mime}}, 0)
+	if sourceErr := checkProvider(ctx); sourceErr != nil {
+		return out, sourceErr
+	}
+	if err != nil {
+		return out, stationImageFailure(err)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return out, observationFailure("share_public_image_observation_empty", "视觉服务没有返回公开分享图片的画面描述。")
+	}
+	const observed = "公开分享图片 · 第 1 张画面"
+	return companion.MediaObservationEvidence{ObservedRange: observed, Excerpt: text,
+		Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: observed, Excerpt: text}}}, nil
 }
 
 // Both automatic entry points use the same verified original and observation
@@ -70,13 +255,7 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 	if useAudio {
 		audio, audioErr = stationGroupShareObserveAudio(ctx, t, message, asset, duration, audioBudget)
 		if audioErr == nil && strings.TrimSpace(audio.Text) != "" {
-			rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", audio.Start, audio.End)
-			if audio.Complete {
-				rangeLabel += "（完整）"
-			}
-			evidence.Parts = append(evidence.Parts, companion.ObservationPart{
-				Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: audio.Text,
-			})
+			evidence.Parts = append(evidence.Parts, audio.observation())
 		}
 	}
 
@@ -93,17 +272,7 @@ func (t *stationAttachmentTools) readAutomaticVideoEvidence(ctx context.Context,
 			return "", companion.MediaObservationEvidence{}, visualErr
 		}
 		if strings.TrimSpace(visual.Text) != "" {
-			times := make([]string, 0, len(visual.Times))
-			for _, at := range visual.Times {
-				times = append(times, fmt.Sprintf("%.3f秒", at))
-			}
-			rangeLabel := "视频采样帧"
-			if len(times) != 0 {
-				rangeLabel += "：" + strings.Join(times, "、")
-			}
-			evidence.Parts = append(evidence.Parts, companion.ObservationPart{
-				Kind: companion.ObservationVisualFrames, Range: rangeLabel, Excerpt: visual.Text,
-			})
+			evidence.Parts = append(evidence.Parts, visual.observation())
 		}
 	}
 	if !companion.HasFirsthandObservation(evidence.Parts) {
@@ -126,12 +295,8 @@ func (t *stationAttachmentTools) validateCurrentGroupShare(ctx context.Context, 
 	if ctx.Err() != nil {
 		return companion.Input{}, ctx.Err()
 	}
-	if !wechatapp.IsChannelsShare(m) {
-		// Public/Kuaishou cards can be read only through an explicit, separately
-		// authorized public-share request.  The station has no safe default
-		// original-media resolver for them, so automatic group summaries stop
-		// here rather than fetching an arbitrary URL.
-		return companion.Input{}, errors.New("share_auto_summary_channels_only")
+	if _, err := wechatapp.ShareReadCapability(m); err != nil {
+		return companion.Input{}, err
 	}
 	messageAt, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
 	inputAt, inputTimeErr := time.Parse(time.RFC3339Nano, in.MessageTime)
@@ -148,7 +313,7 @@ func (t *stationAttachmentTools) validateCurrentGroupShare(ctx context.Context, 
 		return companion.Input{}, errors.New("share_auto_summary_source_changed")
 	}
 	storedAt, err := time.Parse(time.RFC3339Nano, stored.OccurredAt)
-	if err != nil || !storedAt.Equal(messageAt) || stored.EventID == "" || in.Source.EventID != "" && stored.EventID != in.Source.EventID || in.Source.Revision > 0 && stored.Revision != in.Source.Revision ||
+	if err != nil || !storedAt.Equal(messageAt) || stored.EventID == "" || in.Source.EventID != "" && stored.EventID != in.Source.EventID ||
 		stored.Account != m.AccountID || stored.Thread != m.ThreadID || stored.MessageID != m.ID || stored.Sender != m.SenderID ||
 		stored.ServerID != m.ServerID || stored.MessageType != m.Type {
 		return companion.Input{}, errors.New("share_auto_summary_source_changed")
@@ -192,6 +357,14 @@ type stationGroupShareAudio struct {
 	Complete   bool
 }
 
+func (a stationGroupShareAudio) observation() companion.ObservationPart {
+	rangeLabel := fmt.Sprintf("视频音轨 %.3f–%.3f 秒", a.Start, a.End)
+	if a.Complete {
+		rangeLabel += "（完整）"
+	}
+	return companion.ObservationPart{Kind: companion.ObservationAudioTranscript, Range: rangeLabel, Excerpt: a.Text}
+}
+
 func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachmentTools, message, asset string, duration, audioBudget float64) (stationGroupShareAudio, error) {
 	start, limit := 0.0, math.Min(duration, audioBudget)
 	result := stationGroupShareAudio{Start: 0}
@@ -221,7 +394,8 @@ func stationGroupShareObserveAudio(ctx context.Context, tools *stationAttachment
 		if value := strings.TrimSpace(page.Text); value != "" {
 			text = append(text, value)
 		}
-		result.End, result.Complete = max(result.End, page.End), page.Done
+		result.End = max(result.End, page.End)
+		result.Complete = page.Done && result.End+.001 >= duration
 		result.State = page.State
 		if page.Done || page.Next <= start+.001 {
 			break
@@ -237,14 +411,26 @@ type stationGroupShareFrames struct {
 	Times []float64
 }
 
-func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmentTools, message, asset string, frames int) (stationGroupShareFrames, error) {
-	step := 1
-	if frames > stationGroupShareFramePage {
-		step = max(1, frames/stationGroupShareFramePage)
+func (f stationGroupShareFrames) observation() companion.ObservationPart {
+	times := make([]string, 0, len(f.Times))
+	for _, at := range f.Times {
+		times = append(times, fmt.Sprintf("%.3f秒", at))
 	}
+	rangeLabel := "视频采样帧"
+	if len(times) != 0 {
+		rangeLabel += "：" + strings.Join(times, "、")
+	}
+	return companion.ObservationPart{Kind: companion.ObservationVisualFrames, Range: rangeLabel, Excerpt: f.Text}
+}
+
+func stationGroupShareFrameStep(frames int) int {
+	return max(1, frames/stationGroupShareFramePage)
+}
+
+func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmentTools, message, asset string, frames int) (stationGroupShareFrames, error) {
 	raw, err := tools.observeVideo(ctx, stationGroupShareJSON(map[string]any{
 		"message_id": message, "asset_id": asset, "mode": "frames", "page_size": stationGroupShareFramePage,
-		"step": step, "batch_size": stationGroupShareFramePage, "max_dimension": 768, "analysis_tokens": 512, "timeout_seconds": 120,
+		"step": stationGroupShareFrameStep(frames), "batch_size": stationGroupShareFramePage, "max_dimension": 768, "analysis_tokens": 512, "timeout_seconds": 120,
 	}))
 	if err != nil {
 		return stationGroupShareFrames{}, err
@@ -263,8 +449,8 @@ func stationGroupShareObserveFrames(ctx context.Context, tools *stationAttachmen
 	for _, batch := range result.Batches {
 		if value := strings.TrimSpace(batch.Analysis); value != "" {
 			text = append(text, value)
+			times = append(times, batch.Times...)
 		}
-		times = append(times, batch.Times...)
 	}
 	return stationGroupShareFrames{Text: strings.Join(text, "\n"), Times: times}, nil
 }

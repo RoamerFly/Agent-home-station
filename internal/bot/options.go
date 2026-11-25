@@ -4,6 +4,7 @@ import "errors"
 
 // Options are owner-controlled; model decisions cannot change delivery policy.
 type Options struct {
+	DirectImageInput  bool `json:"direct_image_input"`
 	AcknowledgeTools  bool `json:"acknowledge_tools"`
 	ReadImages        bool `json:"read_images"`
 	ReadVideos        bool `json:"read_videos"`

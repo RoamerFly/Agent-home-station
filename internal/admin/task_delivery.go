@@ -9,7 +9,43 @@ import (
 
 // The delivery worker owns these checkpoints. Never schedule a fresh
 // generation to find out whether the original side effect succeeded.
+func clearEmptyTaskDelivery(t *agentTask) {
+	// A silent tool retry can checkpoint a plan before it has any messages.
+	// That is not a submitted delivery; retain every non-empty/uncertain receipt.
+	if isZeroCountTaskDelivery(t) && !t.WorkCompleted {
+		t.Delivery = nil
+	}
+}
+
+// clearZeroCountTaskDelivery is reserved for duplicate process watchers. A
+// watcher has already been proven redundant by origin identity, so an empty
+// delivery placeholder cannot represent a receipt that still needs recovery.
+func clearZeroCountTaskDelivery(t *agentTask) {
+	if isZeroCountTaskDelivery(t) {
+		t.Delivery = nil
+	}
+}
+
+// A process watcher can finish its real work before the reply path creates a
+// delivery plan. Older snapshots may still contain the empty waiting_delivery
+// placeholder. It carries no receipt or pending operation and must not keep a
+// completed watcher active across restart or a later claim pass.
+func settleCompletedProcessPlaceholder(t *agentTask) bool {
+	if t.Title != "后台程序" || t.ProcessID == "" || t.State != "waiting_delivery" || !t.WorkCompleted || !isZeroCountTaskDelivery(t) {
+		return false
+	}
+	t.Delivery = nil
+	t.State = "completed"
+	return true
+}
+
+func isZeroCountTaskDelivery(t *agentTask) bool {
+	d := t.Delivery
+	return d != nil && d.State == "waiting_delivery" && d.Expected == 0 && d.Accepted == 0 && d.TextExpected == 0 && d.TextAccepted == 0 && d.TotalParts == 0 && d.AcceptedParts == 0 && d.PendingJob == "" && d.FailureReason == "" && len(t.PendingOperations) == 0
+}
+
 func settleFromDelivery(t *agentTask, roundReplied bool) bool {
+	clearEmptyTaskDelivery(t)
 	if t.Delivery != nil {
 		switch t.Delivery.State {
 		case "failed", "partial_failed":
@@ -20,10 +56,11 @@ func settleFromDelivery(t *agentTask, roundReplied bool) bool {
 			return true
 		case "accepted":
 			if len(t.PendingOperations) == 0 {
-				if t.WorkCompleted || roundReplied {
+				if t.WorkCompleted {
 					t.State, t.WorkCompleted, t.LastResult = "completed", true, "原投递已由微信接受"
 				} else {
-					t.State, t.LastResult = "needs_review", "原投递已由微信接受；没有其余工作完成的记录，已停止续办"
+					t.State, t.LastResult = "waiting", "文字已发送，原任务仍待完成"
+					t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 				}
 				return true
 			}
@@ -54,38 +91,47 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		}
 		task.Delivery = &delivery
 		wasRunning := task.State == "running"
-		previousState := task.State
 		if !wasRunning {
 			task.State = "waiting_delivery"
 		}
-		task.LastResult = fmt.Sprintf("微信已接受附件 %d/%d", delivery.Accepted, delivery.Expected)
+		if delivery.TotalParts > 0 {
+			task.LastResult = fmt.Sprintf("微信服务端已接受语音分段 %d/%d", delivery.AcceptedParts, delivery.TotalParts)
+		} else {
+			task.LastResult = fmt.Sprintf("微信服务端已接受内容 %d/%d", delivery.Accepted, delivery.Expected)
+		}
 		if delivery.TextExpected > 0 {
 			task.LastResult += fmt.Sprintf("；文字 %d/%d", delivery.TextAccepted, delivery.TextExpected)
 		}
 		if delivery.TotalParts > 0 {
-			task.LastResult += fmt.Sprintf("；语音分段 %d/%d", delivery.AcceptedParts, delivery.TotalParts)
+			// The leading status already names the server-side voice receipt.
 		}
 		switch delivery.State {
 		case "accepted":
 			if !wasRunning {
-				if task.WorkCompleted || previousState == "waiting_delivery" || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly {
+				// A receipt-only checkpoint has no remaining work after its sole
+				// delivery is accepted. A saved goal or checkpoint still needs the
+				// Agent to finish the underlying request.
+				receiptOnly := task.Goal == "" && task.Checkpoint == "" && len(task.Actions) == 0 &&
+					len(task.PendingOperations) == 0 && task.Reminder == nil && task.NotificationText == "" && task.DeliveryJob == ""
+				if task.WorkCompleted || task.resultKind() != "" || task.RecoveryMessageID != "" || task.ReportOnly || receiptOnly {
 					task.State = "completed"
 					task.WorkCompleted = true
 				} else {
-					task.State = previousState
+					task.State = "waiting"
+					task.Next = time.Now().Add(bot.DeliveryRetryBackoff(task.Runs))
 				}
 			}
 			if delivery.CaptionOmitted {
-				task.LastResult += "；所需附件已完成交付，说明文字由模型选择省略"
+				task.LastResult += "；所需媒体已获微信服务端回执，客户端显示/播放尚未核实；说明文字由模型选择省略"
 			} else {
-				task.LastResult += "；所需附件与介绍已完成交付"
+				task.LastResult += "；所需媒体与介绍已获微信服务端回执，客户端显示/播放尚未核实"
 			}
 		case "failed", "partial_failed":
 			task.State = "failed"
 			if delivery.Expected > 0 && delivery.Accepted == delivery.Expected {
-				task.LastResult += "；附件已全部接受，后续文字说明未完成；不会重复发送附件"
+				task.LastResult += "；媒体已全部获微信服务端回执，后续文字说明未完成；不会重复发送媒体"
 			} else {
-				task.LastResult += "；交付中断，请查看失败项，已接受内容不重复发送"
+				task.LastResult += "；媒体投递中断，请查看失败项，已获回执内容不重复发送"
 			}
 		case "needs_review":
 			task.State = "needs_review"

@@ -566,6 +566,8 @@ def dispatch(request: dict) -> dict:
 
 
 def main() -> int:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     result = dispatch(json.load(sys.stdin))
     sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
     return 0

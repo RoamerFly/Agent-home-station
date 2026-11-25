@@ -47,7 +47,7 @@ func newLocalProcessTools(access *localWorkspaceAccess, dataDir string, cfg *age
 	if err != nil {
 		return nil, err
 	}
-	jobs, err := agenthost.OpenJobs(filepath.Join(dataDir, "local-processes"))
+	jobs, err := agenthost.OpenJobs(stationProcessesDir(dataDir))
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (t *localProcessTools) BeginShutdown() {
 }
 
 func (t *localProcessTools) List(context.Context) ([]mcptools.Tool, error) {
-	return []mcptools.Tool{mcptools.NewTool("server_windows_process", "Run, inspect, read or cancel a persistent Windows LPAC process in Dafeiyu's own home. Start accepts only an absolute executable argv and never falls back to the host shell. request_key is durable: reuse it only to query the same process.", `{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","read","cancel"]},"id":{"type":"string"},"path":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"request_key":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}`)}, nil
+	return []mcptools.Tool{mcptools.NewTool("server_windows_process", "在大肥鱼家目录启动、查看、读取或取消持久 Windows 进程。start 用可执行文件绝对路径 argv；同一 request_key 关联原进程。", `{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","read","cancel"]},"id":{"type":"string"},"path":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"minItems":1},"request_key":{"type":"string","minLength":1,"maxLength":128},"timeout_seconds":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}`)}, nil
 }
 
 func (t *localProcessTools) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {

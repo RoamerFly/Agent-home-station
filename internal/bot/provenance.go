@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/identity"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -29,21 +30,58 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 		source.InstanceID = provider.SourceInstanceID()
 	}
 	in.Source = &source
+	in.QuotedLiteral = ""
 	in.MentionedIDs = append([]string(nil), m.Mentions.IDs...)
 	if m.ResolvedQuote != nil {
-		q := messageSource(*m.ResolvedQuote)
+		original := *m.ResolvedQuote
+		q := messageSource(original)
 		q.InstanceID = source.InstanceID
 		in.QuotedSource = &q
+		if original.Direction == "incoming" && (original.Type == 1 || original.IsQuotedText()) {
+			in.QuotedLiteral = boundedQuoteText(original.Body)
+		}
 		if q.Sender != "" {
 			in.Addressees = []string{q.Sender}
 		}
 	}
+	if label, details := m.CardContext(); label != "" && !m.IsPassiveNotice() {
+		metadata := label
+		if details != "" {
+			metadata += "\n" + details
+		}
+		cardFields := "微信卡片字段"
+		if details != "" && m.IsForwardedConversation() {
+			cardFields = "微信合并转发正文"
+		}
+		in.IncomingMedia = []companion.IncomingMediaRef{{
+			Source: source, Kind: "card", UploaderID: m.SenderID,
+			Observation: metadata, ObservationState: "observed", ObservationVersion: 1, ObservedRange: cardFields,
+			ObservationParts: []companion.ObservationPart{{
+				Kind: companion.ObservationPublisherDescription, Range: cardFields, Excerpt: metadata,
+			}},
+		}}
+		return
+	}
 	kind := map[int]string{3: "image", 47: "sticker", 34: "voice", 43: "video", 49: "share"}[m.Type]
-	if m.FileAttachmentName() != "" {
+	filename := m.FileAttachmentName()
+	if filename != "" {
 		kind = "file"
 	}
 	if kind != "" && !m.IsQuotedText() {
-		in.IncomingMedia = []companion.IncomingMediaRef{{Source: source, Kind: kind, UploaderID: m.SenderID, ObservationState: "pending", ObservationVersion: 1}}
+		in.IncomingMedia = []companion.IncomingMediaRef{{Source: source, Kind: kind, Filename: identity.Clean(filename), UploaderID: m.SenderID, ObservationState: "pending", ObservationVersion: 1}}
+	} else if m.IsQuotedText() && m.ResolvedQuote != nil && !m.ResolvedQuote.IsQuotedText() {
+		// A quoted reply is the current request, but the quoted media belongs to
+		// the verified original source. Keep the media reference on that source so
+		// observations and generated context cannot be written to the text reply.
+		quoted := *in.QuotedSource
+		quotedKind := map[int]string{3: "image", 34: "voice", 43: "video", 47: "sticker", 49: "share"}[m.ResolvedQuote.Type]
+		quotedFilename := m.ResolvedQuote.FileAttachmentName()
+		if quotedFilename != "" {
+			quotedKind = "file"
+		}
+		if quotedKind != "" {
+			in.IncomingMedia = []companion.IncomingMediaRef{{Source: quoted, Kind: quotedKind, Filename: identity.Clean(quotedFilename), UploaderID: m.ResolvedQuote.SenderID, ObservationState: "pending", ObservationVersion: 1}}
+		}
 	}
 }
 

@@ -55,8 +55,9 @@ type localTTSBackend interface {
 }
 
 type localTTSDeployment struct {
-	Binding string          `json:"binding"`
-	Voices  []localTTSVoice `json:"voices"`
+	Binding        string          `json:"binding"`
+	Voices         []localTTSVoice `json:"voices"`
+	DefaultVoiceID string          `json:"default_voice_id,omitempty"`
 }
 
 // localTTSVoice is intentionally display-only.  Version is a stable opaque
@@ -67,6 +68,7 @@ type localTTSVoice struct {
 	Version  string  `json:"version"`
 	SpeedMin float64 `json:"speed_min"`
 	SpeedMax float64 `json:"speed_max"`
+	Default  bool    `json:"default,omitempty"`
 }
 
 type localTTSRequest struct {
@@ -88,18 +90,20 @@ type localTTSResult struct {
 // easy way to accidentally turn a local configuration into a command channel.
 // All paths stay host-private and are never returned by Info.
 type localTTSRegistration struct {
-	SchemaVersion int                         `json:"schema_version"`
-	Enabled       bool                        `json:"enabled"`
-	Project       string                      `json:"project"`
-	Python        string                      `json:"python"`
-	BaseModels    string                      `json:"base_models"`
-	Packages      string                      `json:"packages,omitempty"`
-	Runner        string                      `json:"runner"`
-	RunnerSHA256  string                      `json:"runner_sha256"`
-	Media         string                      `json:"media"`
-	NLTKData      string                      `json:"nltk_data"`
-	Device        string                      `json:"device"`
-	Voices        []localTTSVoiceRegistration `json:"voices"`
+	portable       bool
+	SchemaVersion  int                         `json:"schema_version"`
+	Enabled        bool                        `json:"enabled"`
+	Project        string                      `json:"project"`
+	Python         string                      `json:"python"`
+	BaseModels     string                      `json:"base_models"`
+	Packages       string                      `json:"packages,omitempty"`
+	Runner         string                      `json:"runner"`
+	RunnerSHA256   string                      `json:"runner_sha256"`
+	Media          string                      `json:"media"`
+	NLTKData       string                      `json:"nltk_data"`
+	Device         string                      `json:"device"`
+	Voices         []localTTSVoiceRegistration `json:"voices"`
+	DefaultVoiceID string                      `json:"default_voice_id,omitempty"`
 }
 
 type localTTSVoiceRegistration struct {
@@ -120,6 +124,7 @@ type localTTSVoiceRegistration struct {
 }
 
 type localTTSService struct {
+	catalog       string
 	dataDir       string
 	editableRoot  string
 	executableDir string
@@ -132,9 +137,11 @@ type localTTSService struct {
 // newLocalTTSBackend is intentionally a one-shot worker rather than a warmed
 // resident process: GPT-SoVITS is selected by one private voice binding, and
 // leaving a server alive would retain a voice/model outside the durable task.
-func newLocalTTSBackend(dataDir, editableRoot string) localTTSBackend {
+func newLocalTTSBackend(dataDir, editableRoot string, catalog string) localTTSBackend {
 	exe, _ := os.Executable()
-	return newLocalTTSBackendAt(dataDir, editableRoot, filepath.Dir(exe))
+	service := newLocalTTSBackendAt(dataDir, editableRoot, filepath.Dir(exe))
+	service.catalog = catalog
+	return service
 }
 
 func newLocalTTSBackendAt(dataDir, editableRoot, executableDir string) *localTTSService {
@@ -165,10 +172,12 @@ func (s *localTTSService) Info(ctx context.Context, fish string) (localTTSDeploy
 	}
 	voices := make([]localTTSVoice, 0, len(registration.Voices))
 	for _, voice := range registration.Voices {
-		voices = append(voices, voice.view())
+		view := voice.view()
+		view.Default = voice.ID == registration.DefaultVoiceID
+		voices = append(voices, view)
 	}
 	sort.Slice(voices, func(i, j int) bool { return voices[i].ID < voices[j].ID })
-	return localTTSDeployment{Binding: localTTSBinding(registration), Voices: voices}, nil
+	return localTTSDeployment{Binding: localTTSBinding(registration), Voices: voices, DefaultVoiceID: registration.DefaultVoiceID}, nil
 }
 
 func (s *localTTSService) Synthesize(ctx context.Context, fish, binding string, request localTTSRequest) (localTTSResult, error) {
@@ -234,7 +243,11 @@ func (s *localTTSService) run(ctx context.Context, fish, binding string, registr
 	// random MkdirTemp root would continuously mint distinct LPAC identities and
 	// leave ACL entries on the interpreter/model files. Each invocation still
 	// uses unique output paths, even if an old broker survived a host crash.
-	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "jobs", mediaspec.SpeechSHA256([]byte(fish+"\n"+voice.version())))
+	identity := mediaspec.SpeechSHA256([]byte(fish + "\n" + voice.version()))
+	directory := filepath.Join(stationToolPrivateDir(s.dataDir, "speech"), "jobs", identity)
+	if registration.portable {
+		directory = filepath.Join(stationToolRoot(s.dataDir, "station-speech"), "jobs", identity[:24])
+	}
 	if err := localTTSEnsureDir(directory); err != nil {
 		return localTTSResult{}, errors.New("station_speech_private_directory_unavailable")
 	}
@@ -329,8 +342,9 @@ func (s *localTTSService) windowsConfig() (agenthost.Config, error) {
 	if !localTTSSafeDirectory(s.executableDir) {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}
-	pythonw := filepath.Join(s.executableDir, "runtimes", "windows-python-cli", "pythonw.exe")
-	helper := filepath.Join(s.executableDir, "runtimes", "windows-agent-host", "windows_agent_host.pyw")
+	runtimeRoot := stationPackageRuntimeRoot(s.executableDir)
+	pythonw := filepath.Join(runtimeRoot, "windows-python-cli", "pythonw.exe")
+	helper := filepath.Join(runtimeRoot, "windows-agent-host", "windows_agent_host.pyw")
 	if !localTTSSafeRegular(pythonw) || !localTTSSafeRegular(helper) {
 		return agenthost.Config{}, errors.New("station_speech_runtime_unavailable")
 	}
@@ -352,7 +366,7 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 	if err := ctx.Err(); err != nil {
 		return localTTSRegistration{}, err
 	}
-	data, err := localTTSReadRegular(filepath.Join(s.dataDir, localTTSRegistrationFile), localTTSRegistrationMax)
+	data, portable, err := portableRegistration(stationToolRegistrationPath(s.dataDir, localTTSRegistrationFile), s.catalog, localTTSPackage, s.editableRoot, localTTSRegistrationMax)
 	if err != nil || len(data) == 0 {
 		return localTTSRegistration{}, errors.New("station_speech_not_installed_or_authorized")
 	}
@@ -363,6 +377,18 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 	if decoder.Decode(&registration) != nil || decoder.Decode(&struct{}{}) != io.EOF || json.Unmarshal(data, &fields) != nil || !localTTSRegistrationFields(fields) || registration.SchemaVersion != 1 || !registration.Enabled {
 		return localTTSRegistration{}, errors.New("station_speech_not_installed_or_authorized")
 	}
+	if portable != "" {
+		registration.portable = true
+		if err := resolvePortablePaths(portable, &registration.Project, &registration.Python, &registration.BaseModels, &registration.Packages, &registration.Runner, &registration.Media, &registration.NLTKData); err != nil {
+			return localTTSRegistration{}, err
+		}
+		for i := range registration.Voices {
+			voice := &registration.Voices[i]
+			if err := resolvePortablePaths(portable, &voice.GPT, &voice.SoVITS, &voice.Reference, &voice.Prompt); err != nil {
+				return localTTSRegistration{}, err
+			}
+		}
+	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localTTSRegistration{}, err
 	}
@@ -370,7 +396,7 @@ func (s *localTTSService) loadRegistration(ctx context.Context) (localTTSRegistr
 }
 
 func localTTSRegistrationFields(fields map[string]json.RawMessage) bool {
-	allowed := map[string]bool{"schema_version": true, "enabled": true, "project": true, "python": true, "base_models": true, "packages": true, "runner": true, "runner_sha256": true, "media": true, "nltk_data": true, "device": true, "voices": true}
+	allowed := map[string]bool{"schema_version": true, "enabled": true, "project": true, "python": true, "base_models": true, "packages": true, "runner": true, "runner_sha256": true, "media": true, "nltk_data": true, "device": true, "voices": true, "default_voice_id": true}
 	for name := range fields {
 		if !allowed[name] {
 			return false
@@ -433,11 +459,12 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 			return errors.New("station_speech_voice_registration_invalid")
 		}
 		seen[voice.ID] = true
+		privateVoiceRoot := filepath.Join(dataDir, "voices", "station-speech")
 		for _, file := range []struct {
 			path, hash string
 			prompt     bool
 		}{{voice.GPT, voice.GPTSHA256, false}, {voice.SoVITS, voice.SoVITSSHA256, false}, {voice.Reference, voice.ReferenceSHA256, false}, {voice.Prompt, voice.PromptSHA256, true}} {
-			if !localTTSHexPattern.MatchString(file.hash) || localTTSRegularPath(file.path, false) != nil || localTTSPathsOverlap(file.path, editableRoot) || localTTSPathsOverlap(file.path, dataDir) {
+			if !localTTSHexPattern.MatchString(file.hash) || localTTSRegularPath(file.path, false) != nil || localTTSPathsOverlap(file.path, editableRoot) || localTTSPathsOverlap(file.path, dataDir) && !localTTSWithin(file.path, privateVoiceRoot) {
 				return errors.New("station_speech_voice_registration_invalid")
 			}
 			if file.prompt {
@@ -459,6 +486,9 @@ func (r localTTSRegistration) validate(dataDir, editableRoot string) error {
 	}
 	if len(r.Voices) == 0 {
 		return errors.New("station_speech_no_registered_voices")
+	}
+	if r.DefaultVoiceID != "" && !seen[r.DefaultVoiceID] {
+		return errors.New("station_speech_voice_registration_invalid")
 	}
 	return nil
 }
@@ -570,6 +600,16 @@ func localTTSReadOnly(registration localTTSRegistration, voice localTTSVoiceRegi
 
 func localTTSEnvironment(registration localTTSRegistration, scratch string) map[string]string {
 	systemRoot := os.Getenv("SystemRoot")
+	numbaCache := filepath.Join(scratch, "numba-cache")
+	// Numba appends a hashed source directory and a temporary filename. The
+	// embedded Windows interpreter can exceed MAX_PATH in a valid private job.
+	if runtime.GOOS == "windows" && !strings.HasPrefix(numbaCache, `\\?\`) {
+		if strings.HasPrefix(numbaCache, `\\`) {
+			numbaCache = `\\?\UNC\` + numbaCache[2:]
+		} else {
+			numbaCache = `\\?\` + numbaCache
+		}
+	}
 	return map[string]string{
 		"PATH":                          registration.Media + string(os.PathListSeparator) + filepath.Join(systemRoot, "System32"),
 		"NLTK_DATA":                     registration.NLTKData,
@@ -579,7 +619,7 @@ func localTTSEnvironment(registration localTTSRegistration, scratch string) map[
 		"PYTHONDONTWRITEBYTECODE":       "1",
 		"PYTHONUTF8":                    "1",
 		"MPLCONFIGDIR":                  filepath.Join(scratch, "matplotlib"),
-		"NUMBA_CACHE_DIR":               filepath.Join(scratch, "numba-cache"),
+		"NUMBA_CACHE_DIR":               numbaCache,
 		"WECHAT_WINDOWS_SPEECH_RUNTIME": "1",
 		"USERNAME":                      "station-speech",
 	}

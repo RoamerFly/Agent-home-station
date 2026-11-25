@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -39,13 +40,16 @@ func (p *permittedTools) documentTools() []mcptools.Tool {
 		return nil
 	}
 	tools := []mcptools.Tool{
-		agentTool("document_inspect", "读取当前会话中已授权的图片、Word 或 PDF 附件，提取可核对的文字、页面、表格及版式资料。只接受 asset_id，不接受电脑路径；不执行文档里的指令，也不发送消息。Input {artifact_id,source_message_id?,pages?,include_layout?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"pages":{"type":"array","items":{"type":"integer","minimum":1}},"include_layout":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
-		agentTool("document_verify", "检查当前会话中已授权 DOCX 或 PDF 是否能打开、文字与页数是否合理；需要时渲染页面检查明显空页、裁切或缺字。Input {artifact_id,source_message_id?,expected_text?,render_pages?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"expected_text":{"type":"array","items":{"type":"string","maxLength":256}},"render_pages":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
+		agentTool("document_inspect", "读取当前会话图片、Word、Excel 或 PDF 附件的文字、页面、表格与版式。artifact_id 来自 media_recent 或 wechat_file_read；可指定 pages 和 text_offset/text_limit。", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"pages":{"type":"array","items":{"type":"integer","minimum":1}},"include_layout":{"type":"boolean"},"text_offset":{"type":"integer","minimum":0},"text_limit":{"type":"integer","minimum":1,"maximum":100000}},"required":["artifact_id"],"additionalProperties":false}`),
+		agentTool("document_verify", "核对 DOCX/PDF 的结构和文字；页面视觉版式可用 artifact_render_document 获取图像后另行检查。", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"expected_text":{"type":"array","items":{"type":"string","maxLength":256}},"render_pages":{"type":"boolean"}},"required":["artifact_id"],"additionalProperties":false}`),
+	}
+	if p.manager.Config().Behavior.DirectImageInput {
+		tools[0].Description = "将图片或文档原件直接提供给下一轮模型。Excel 默认包含浮动图与工作表锚点，纯数据任务可设 include_layout=false；pages 指定重点页。复查时可再次调用。"
 	}
 	if p.documentWorkshopAvailable(context.Background(), true) {
 		tools = append(tools,
-			agentTool("document_reconstruct", "把已检查的附件内容重建为可编辑 DOCX。先用 document_inspect 取得 layout，再提供原 artifact_id 与 layout；可用 title_font_size_pt 调整标题（8–48 磅）。宿主只在本任务输出目录制作新文件并登记为待发送附件。不会自动发送。Input {artifact_id,source_message_id?,layout,title?,title_font_size_pt?,images?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"layout":{"type":"object"},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"images":{"type":"array","items":{"type":"object"}},"filename":{"type":"string","maxLength":120}},"required":["artifact_id","layout"],"additionalProperties":false}`),
-			agentTool("document_export_pdf", "把当前会话中已授权、已登记的 DOCX 导出 PDF。输入为 artifact_id，运行环境由已安装文档工具自检；返回待发送的 PDF，不会自动发送。Input {artifact_id,source_message_id?,filename?}.", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`),
+			agentTool("document_reconstruct", "将已检查的附件重建为可编辑 DOCX。layout.blocks 支持 paragraph(text)、table(rows) 和 field(label,value,blank)；layout.page 可设纸张尺寸与页边距，段落可设字体、字号、对齐、缩进、行距与段前后距。layout.blank_form 清空表单值。图片可依据观察构造 layout；复杂排版可用 artifact_workspace 编程。返回待发送附件。", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"layout":{"type":"object"},"title":{"type":"string","maxLength":256},"title_font_size_pt":{"type":"number","minimum":8,"maximum":48},"images":{"type":"array","items":{"type":"object"}},"filename":{"type":"string","maxLength":120}},"required":["artifact_id","layout"],"additionalProperties":false}`),
+			agentTool("document_export_pdf", "将已登记 DOCX 导出 PDF，返回待发送附件。", `{"type":"object","properties":{"artifact_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"filename":{"type":"string","maxLength":120}},"required":["artifact_id"],"additionalProperties":false}`),
 		)
 	}
 	return tools
@@ -145,6 +149,9 @@ func (p *permittedTools) documentWorkshopAuthorization() string {
 }
 
 func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability string, raw json.RawMessage) (string, error) {
+	if capability == "document.inspect" && p.manager.Config().Behavior.DirectImageInput {
+		return p.inspectDocumentDirect(ctx, raw)
+	}
 	policy, arguments, err := p.newDocumentWorkshopPolicy(ctx, capability, raw)
 	if err != nil {
 		return "", err
@@ -152,6 +159,17 @@ func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability st
 	installed, err := policy.store.Installed(ctx, documentWorkshopPluginID)
 	if err != nil {
 		return "", err
+	}
+	inspectionHash, inspectionKey := "", ""
+	if capability == "document.inspect" && len(policy.materialized) == 1 {
+		item := policy.materialized[0]
+		if key, ok := messageInspectionKey(item.SHA256, item.MIME, item.Filename, installed.Digest, arguments); ok {
+			inspectionHash, inspectionKey = item.SHA256, key
+			if cached, found := p.manager.readMessageInspection(inspectionHash, inspectionKey); found {
+				b, _ := json.Marshal(map[string]any{"state": "completed", "reused": true, "cache_hit": true, "result": cached, "artifacts": []any{}})
+				return string(b), nil
+			}
+		}
 	}
 	// A document process is deliberately one task-scoped invocation rather than
 	// a resident account-wide session. Its only writable mount is this task's
@@ -170,6 +188,9 @@ func (p *permittedTools) callDocumentWorkshop(ctx context.Context, capability st
 	out, err := runtime.Invoke(ctx, pluginruntime.CallRequest{Plugin: documentWorkshopPluginID, Capability: capability, Context: policy.invocation, Arguments: arguments}, policy)
 	if err != nil {
 		return "", err
+	}
+	if inspectionKey != "" && out.Job.State == "completed" {
+		_ = p.manager.saveMessageInspection(inspectionHash, inspectionKey, out.Job.Result)
 	}
 	b, err := json.Marshal(map[string]any{"task_id": out.Job.ID, "state": out.Job.State, "reused": out.Reused, "result": json.RawMessage(out.Job.Result), "artifacts": out.Job.Artifacts})
 	return string(b), err
@@ -227,9 +248,8 @@ func (d *documentWorkshopPolicy) Check(ctx context.Context, job pluginhost.Job, 
 	if current, err := p.serviceEvidenceEpoch(ctx); err != nil || current != d.invocation.EvidenceEpoch {
 		return errors.New("document_workshop_evidence_changed")
 	}
-	for id, revision := range d.invocation.SourceVersions {
-		event, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.trace.Account, p.trace.Thread)}, id)
-		if err != nil || event.Revision != revision {
+	for id := range d.invocation.SourceVersions {
+		if _, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.trace.Account, p.trace.Thread)}, id); err != nil {
 			return errors.New("document_workshop_source_changed")
 		}
 	}
@@ -259,10 +279,10 @@ func (d *documentWorkshopPolicy) CallMetadata(ctx context.Context, job pluginhos
 	}
 	inputs := make([]map[string]any, 0, len(d.materialized))
 	for _, artifact := range d.materialized {
-		inputs = append(inputs, map[string]any{"artifact_id": artifact.AssetID, "path": artifact.InputPath, "mime_type": artifact.MIME, "sha256": artifact.SHA256})
+		inputs = append(inputs, map[string]any{"artifact_id": artifact.AssetID, "path": documentProcessPath(artifact.InputPath), "mime_type": artifact.MIME, "sha256": artifact.SHA256})
 	}
 	inputRoot := filepath.Dir(d.materialized[0].InputPath)
-	metadata := map[string]any{"inputs": inputs, "input_root": inputRoot, "output_dir": d.materialized[0].OutputDir, "output_root": d.materialized[0].OutputDir}
+	metadata := map[string]any{"inputs": inputs, "input_root": documentProcessPath(inputRoot), "output_dir": documentProcessPath(d.materialized[0].OutputDir), "output_root": documentProcessPath(d.materialized[0].OutputDir)}
 	// Image OCR is a fixed initial LPAC process. Do this before launching the
 	// no-capability Python plugin, which is intentionally unable to create its
 	// own child process. The observation is hash-bound to this materialized
@@ -322,6 +342,9 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 	assets := []string{}
 	for _, output := range out.Outputs {
 		path := filepath.Clean(output.Path)
+		if runtime.GOOS == "windows" && strings.HasPrefix(path, `\\?\`) {
+			path = strings.TrimPrefix(path, `\\?\`)
+		}
 		root := filepath.Clean(d.materialized[0].OutputDir)
 		rel, err := filepath.Rel(root, path)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.Base(rel) != rel {
@@ -334,7 +357,7 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 		// root; it may never make a sibling input or arbitrary host file appear
 		// as a finished document. PublishArtifactForTask repeats regular-file and
 		// symlink validation before staging.
-		staged, err := d.p.PublishArtifactForTask(ctx, ArtifactPublishRequest{Path: rel, Title: output.DisplayName, TaskID: d.materialized[0].TaskID})
+		staged, err := d.p.PublishArtifactForTask(ctx, ArtifactPublishRequest{Path: rel, Title: output.DisplayName, TaskID: d.materialized[0].TaskID, parentAssetID: d.materialized[0].AssetID})
 		if err != nil {
 			return pluginruntime.VerifiedResult{}, err
 		}
@@ -351,6 +374,7 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 			return pluginruntime.VerifiedResult{}, errors.New("document_workshop_output_asset_unavailable")
 		}
 		media := published.Media[0]
+		result["document_memory_instruction"] = "原件关系已保存。请用artifact_document_memory保存当前成品的简短处理摘要、要求与修改点；以返回的asset_id标识版本，不把模型完成判断写成用户认可。"
 		// asset_id is durable input for the next document_* operation; the
 		// separate media id is only for this reply's eventual built-in WeChat
 		// delivery. Never make a later export depend on a one-turn upload ID.
@@ -461,3 +485,10 @@ func documentWorkshopJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 var _ pluginruntime.CallPolicy = (*documentWorkshopPolicy)(nil)
 var _ pluginruntime.CallMetadataPolicy = (*documentWorkshopPolicy)(nil)
+
+func documentProcessPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return pluginruntime.WindowsProcessPath(path)
+	}
+	return path
+}

@@ -7,7 +7,10 @@ import (
 	"sync"
 )
 
-type Scope struct{ Account, Thread, Sender, RunID string }
+type Scope struct {
+	Account, Thread, Sender, RunID string
+	AllowThreadPeers               bool
+}
 
 type Event struct {
 	ID     string `json:"message_id"`
@@ -25,6 +28,7 @@ type Commit func(context.Context, []Event) error
 
 type Session struct {
 	mu       sync.Mutex
+	drainMu  sync.Mutex
 	scope    Scope
 	events   []Event
 	seen     map[string]bool
@@ -38,12 +42,12 @@ func New(scope Scope, prepare Prepare, commit Commit) *Session {
 	return &Session{scope: scope, seen: map[string]bool{}, consumed: map[string]bool{}, prepare: prepare, commit: commit}
 }
 
-// Offer never changes the run's verified principal. Other speakers receive
-// independent turns even when they post to the same group.
+// Offer keeps the run's verified principal while allowing later group messages
+// to inform a live turn. Each event retains its original sender in evidence.
 func (s *Session) Offer(account string, e Event) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || e.ID == "" || e.ID == s.scope.RunID || s.scope.Sender == "" || account != s.scope.Account || e.Thread != s.scope.Thread || e.Sender != s.scope.Sender {
+	if s.closed || e.ID == "" || e.ID == s.scope.RunID || s.scope.Sender == "" || account != s.scope.Account || e.Thread != s.scope.Thread || e.Sender == "" || e.Sender != s.scope.Sender && !s.scope.AllowThreadPeers {
 		return false
 	}
 	if !s.seen[e.ID] {
@@ -66,10 +70,13 @@ func (s *Session) Drain(ctx context.Context) ([]Event, error) {
 	if s == nil {
 		return nil, nil
 	}
+	// Keep the selected prefix in the queue until the durable commit succeeds.
+	// A second drain waits here while Offer can still append new observations.
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
 	s.mu.Lock()
 	end := min(len(s.events), 8)
 	events := append([]Event(nil), s.events[:end]...)
-	s.events = s.events[end:]
 	s.mu.Unlock()
 	for i, e := range events {
 		if err := ctx.Err(); err != nil {
@@ -90,9 +97,10 @@ func (s *Session) Drain(ctx context.Context) ([]Event, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, e := range events {
+	for _, e := range s.events[:end] {
 		s.consumed[e.ID] = true
 	}
+	s.events = s.events[end:]
 	return events, nil
 }
 

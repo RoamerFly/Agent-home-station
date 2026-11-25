@@ -116,12 +116,11 @@ func (p *permittedTools) dedicatedPluginToolNames(ctx context.Context, id string
 	return names
 }
 
-// Dynamic packages can receive account-private configuration and declared
-// permissions. Until a package declares a narrower, reviewable conversation
-// grant, only the configured owner may invoke it. The invocation is still
-// bound to the current account and conversation below.
+// Generic packages are limited to declared read/compute capabilities. They
+// run for the fish in any authorized conversation, with the current source
+// and package grant bound by the invocation policy below.
 func (p *permittedTools) dynamicPluginAllowed() bool {
-	return p.privateSurfOrigin == nil && !p.trace.Surf && p.privileged()
+	return p.privateSurfOrigin == nil && p.workspaceExecutionAllowed()
 }
 
 func (p *permittedTools) dynamicPluginCapabilities(ctx context.Context, id string) ([]pluginhost.Capability, error) {
@@ -236,9 +235,8 @@ func (d *dynamicPluginPolicy) Check(ctx context.Context, job pluginhost.Job, cap
 	if err != nil || job.Context.EvidenceEpoch == "" || job.Context.EvidenceEpoch != epoch {
 		return errors.New("dynamic plugin evidence changed")
 	}
-	for id, revision := range job.Context.SourceVersions {
-		event, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", job.Context.Account, job.Context.Thread)}, id)
-		if err != nil || event.Revision != revision {
+	for id := range job.Context.SourceVersions {
+		if _, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", job.Context.Account, job.Context.Thread)}, id); err != nil {
 			return errors.New("dynamic plugin source unavailable or changed")
 		}
 	}

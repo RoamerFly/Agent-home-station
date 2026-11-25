@@ -25,6 +25,9 @@ func PostPluginRoute(ctx context.Context, endpoint string, headers map[string]st
 // expanded in the host, rather than transferred across the MCP frame boundary.
 func PostPluginModel(ctx context.Context, endpoint string, headers map[string]string, body json.RawMessage, maxBytes int64, timeout time.Duration) (json.RawMessage, error) {
 	tr := newPublicTransport()
+	// Model inference may spend the entire requested budget before sending headers.
+	// The generic web-page transport has a 12-second header timeout.
+	tr.ResponseHeaderTimeout = timeout
 	defer tr.CloseIdleConnections()
 	return postPluginJSON(ctx, tr, endpoint, headers, body, maxBytes, timeout, 32<<20)
 }

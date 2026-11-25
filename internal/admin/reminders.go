@@ -15,6 +15,8 @@ import (
 )
 
 type reminderSpec struct {
+	Kind             string                  `json:"kind,omitempty"`
+	ResultGroup      string                  `json:"result_group,omitempty"`
 	GroundingChecked bool                    `json:"grounding_checked,omitempty"`
 	Binding          *companion.ReplyContext `json:"reply_context,omitempty"`
 	Due              time.Time               `json:"due_at"`
@@ -27,10 +29,38 @@ type reminderSpec struct {
 	Job              string                  `json:"job_id,omitempty"`
 	Attempts         int                     `json:"checks"`
 	ServerID         string                  `json:"server_id,omitempty"`
+	FollowUpTaskID   string                  `json:"follow_up_task_id,omitempty"`
 }
 
 func reminderTool() mcptools.Tool {
-	return agentTool("agent_reminder", "Create, list or cancel YOUR OWN harmless reminder in this conversation. Available to ordinary friends/group members; no shell or arbitrary file permission needed. Creates a real JSON task file in a dedicated private reminders directory, resumes after restart, and delivers after the due time WITHOUT proactive-greeting budgets/quiet-hour gates. Target=current conversation by default; destination=private may only send to the actual requester if present in the contact directory. Cannot target another person/group or run code. Use agent_clock for actual time; create requires text, request_key and exactly one of delay_seconds or run_at (RFC3339 with timezone). Return is scheduled, NOT delivered. list/cancel are restricted to the same sender and source conversation. Input {action:create|list|cancel,text?,request_key?,delay_seconds?,run_at?,destination:current|private?,id?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["create","list","cancel"]},"text":{"type":"string","maxLength":650},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return agentTool("agent_reminder", "管理明确指定时间的提醒：create/list/update/cancel/delete。先用 agent_clock 取本地时间并查询已有提醒；即时工作用 agent_task。kind=notify 发送文字，kind=execute 到时执行。列表默认 active，history 查已结束记录，delete 删除历史；scope=account 仅主人可用。", `{"type":"object","properties":{"kind":{"type":"string","enum":["notify","execute"]},"action":{"type":"string","enum":["create","list","update","cancel","delete"]},"text":{"type":"string","maxLength":2000},"request_key":{"type":"string","maxLength":128},"delay_seconds":{"type":"integer","minimum":1},"run_at":{"type":"string","maxLength":64},"destination":{"type":"string","enum":["current","private"]},"delivery_group":{"type":"string","maxLength":128},"title":{"type":"string","minLength":1,"maxLength":120},"scope":{"type":"string","enum":["current","account"]},"status":{"type":"string","enum":["active","history","all"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1},"id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+}
+
+func sameReminderFingerprint(t agentTask, account, sender, kind, target, resultGroup, text, runAt string, delay *int64) bool {
+	if t.Reminder == nil || t.Account != account || t.Sender != sender || t.State == "cancelled" || t.State == "completed" || t.State == "expired" {
+		return false
+	}
+	r := t.Reminder
+	if r.Kind != kind || r.Target != target || r.ResultGroup != resultGroup || r.Text != "提醒你："+text || r.RunAt != runAt {
+		return false
+	}
+	return (delay == nil && r.DelaySeconds == 0) || (delay != nil && r.DelaySeconds == *delay)
+}
+
+func songNeedsImmediateWork(request string) bool {
+	music := false
+	for _, word := range []string{"做歌", "唱歌", "翻唱", "换声", "歌曲", "音乐"} {
+		music = music || strings.Contains(request, word)
+	}
+	if !music {
+		return false
+	}
+	for _, word := range []string{"提醒我", "定时", "预约", "明天", "后天", "下周", "今晚", "凌晨", "点钟", "点再", "小时后", "分钟后"} {
+		if strings.Contains(request, word) {
+			return false
+		}
+	}
+	return true
 }
 func (a *agentControl) writeReminderFile(t agentTask) error {
 	dir := filepath.Join(a.dir, "reminders")
@@ -45,10 +75,11 @@ func (a *agentControl) writeReminderFile(t agentTask) error {
 }
 func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage) (string, error) {
 	var in struct {
-		Action, Text, ID, Destination string
-		Key                           string `json:"request_key"`
-		Delay                         *int64 `json:"delay_seconds"`
-		RunAt                         string `json:"run_at"`
+		reminderEdit
+		Action, ID, Destination, Kind, Scope, Status string
+		Query                                        string
+		Offset, Limit                                int
+		Key                                          string `json:"request_key"`
 	}
 	if json.Unmarshal(args, &in) != nil {
 		return "", toolInputError("提醒参数无效")
@@ -57,22 +88,98 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 	if p.trace.Preview || p.trace.Surf || !validID(p.trace.Sender) || strings.HasSuffix(p.trace.Sender, "@chatroom") {
 		return "", toolInputError("提醒需要当前真实发言者身份，预览不创建文件")
 	}
+	if in.Action != "list" {
+		if len(p.crossSourceThreads) > 0 {
+			return "", mcptools.ArgumentError("$.action", "本轮已读取其他会话。请用 agent_reminder action=list scope=account 查询已有记录。读取到的历史消息不能在这一轮新增或改动提醒")
+		}
+		m.remindersMu.Lock()
+		defer m.remindersMu.Unlock()
+	}
 	encode := func(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }
+	thread := p.trace.Thread
+	switch in.Scope {
+	case "", "current":
+	case "account":
+		if !p.privileged() || !m.agent.config().CrossConversation {
+			return "", toolInputError("只有已授权的主人可以查询或修改本人跨会话的提醒")
+		}
+		thread = ""
+	default:
+		return "", mcptools.ArgumentError("$.scope", "请选择 current 或 account")
+	}
 	own := func(t agentTask) bool {
-		return t.Reminder != nil && t.Account == p.trace.Account && t.Thread == p.trace.Thread && t.Sender == p.trace.Sender
+		return t.Reminder != nil && t.Account == p.trace.Account && (thread == "" || t.Thread == thread) && t.Sender == p.trace.Sender
 	}
 	switch in.Action {
 	case "list":
-		items := []agentTask{}
-		for _, t := range m.agent.list(p.trace.Account, p.trace.Thread) {
-			if own(t) {
-				items = append(items, t)
+		if in.Offset < 0 || in.Limit < 0 {
+			return "", mcptools.ArgumentError("$.offset", "分页参数不能为负数")
+		}
+		if in.Status == "" {
+			in.Status = "active"
+		}
+		if in.Status != "active" && in.Status != "history" && in.Status != "all" {
+			return "", mcptools.ArgumentError("$.status", "请选择 active、history 或 all")
+		}
+		query := strings.ToLower(strings.TrimSpace(in.Query))
+		items := []map[string]any{}
+		all := m.agent.list(p.trace.Account, thread)
+		byID := map[string]agentTask{}
+		for _, task := range all {
+			byID[task.ID] = task
+		}
+		for _, t := range all {
+			if !own(t) || query != "" && !strings.Contains(strings.ToLower(t.Title+" "+t.RequestedText), query) {
+				continue
+			}
+			history := historicalReminderSettled(t)
+			followUp := byID[t.Reminder.FollowUpTaskID]
+			if t.Reminder.FollowUpTaskID != "" && followUp.ID != "" && !historicalReminderSettled(followUp) {
+				history = false
+			}
+			if in.Status == "active" && history || in.Status == "history" && !history {
+				continue
+			}
+			items = append(items, map[string]any{"id": t.ID, "title": t.Title, "state": t.State, "updated": t.Updated, "due_at": t.Reminder.Due, "kind": t.Reminder.Kind, "text": t.RequestedText, "target": t.Reminder.Target, "result_group": t.Reminder.ResultGroup, "follow_up_task_id": t.Reminder.FollowUpTaskID, "follow_up_state": followUp.State})
+		}
+		start := min(in.Offset, len(items))
+		limit := in.Limit
+		if limit == 0 {
+			limit = 30
+		}
+		end := start + min(limit, len(items)-start)
+		return encode(map[string]any{"tasks": items[start:end], "total": len(items), "next_offset": end, "has_more": end < len(items), "status": in.Status})
+	case "delete":
+		for _, t := range m.agent.list(p.trace.Account, thread) {
+			if t.ID == in.ID && own(t) {
+				ids, err := m.agent.deleteHistoricalReminder(t.ID, p.trace.Account)
+				if err != nil {
+					return "", toolInputError(err.Error())
+				}
+				return encode(map[string]any{"deleted": ids})
 			}
 		}
-		return encode(map[string]any{"tasks": items})
-	case "cancel":
-		for _, t := range m.agent.list(p.trace.Account, p.trace.Thread) {
+		return "", toolInputError("未找到你在本会话创建的提醒")
+	case "update":
+		if in.Destination != "" || in.Key != "" || in.Kind != "" {
+			return "", mcptools.ArgumentError("$", "更新时请提供 id 和要改动的时间、标题、正文或群名")
+		}
+		for _, t := range m.agent.list(p.trace.Account, thread) {
 			if t.ID == in.ID && own(t) {
+				updated, err := m.editReminder(ctx, t, in.reminderEdit)
+				if err != nil {
+					return "", err
+				}
+				return encode(map[string]any{"id": t.ID, "state": updated.State, "due_at": updated.Reminder.Due, "updated_existing": true, "task": updated})
+			}
+		}
+		return "", toolInputError("未找到你在本会话创建的提醒")
+	case "cancel":
+		for _, t := range m.agent.list(p.trace.Account, thread) {
+			if t.ID == in.ID && own(t) {
+				if t.State == "expired" {
+					return "", toolInputError("这条提醒已过期，原记录已保留")
+				}
 				if t.State == "completed" {
 					return "", toolInputError("这条提醒已发送，不能取消或撤回")
 				}
@@ -86,24 +193,39 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		}
 		return "", toolInputError("未找到你在本会话创建的提醒")
 	case "create":
-		if strings.TrimSpace(in.Text) == "" || len(in.Text) > 2000 || in.Key == "" || len(in.Key) > 128 {
+		if songNeedsImmediateWork(p.voiceRequestText()) {
+			return "", mcptools.ArgumentError("$.action", "做歌与重试是当前持续任务：先查询现有音乐任务和 job_id，直接执行或续办；用户没有指定未来时间，不创建提醒")
+		}
+		if thread == "" {
+			return "", mcptools.ArgumentError("$.scope", "新提醒应绑定当前发言会话")
+		}
+		if in.Kind == "" {
+			in.Kind = "notify"
+		}
+		if in.Kind != "notify" && in.Kind != "execute" {
+			return "", toolInputError("kind需为notify或execute")
+		}
+		if in.Kind == "execute" && !contains(m.agent.config().OwnerIDs, p.trace.Sender) {
+			return "", toolInputError("执行任务需要主人授权")
+		}
+		resultGroup := ""
+		if in.DeliveryGroup != nil && strings.TrimSpace(*in.DeliveryGroup) != "" {
+			if in.Kind != "execute" || (in.Destination != "" && in.Destination != "current") {
+				return "", toolInputError("群名只用于执行类提醒的成品投递")
+			}
+			var e error
+			resultGroup, e = p.resolveNamedGroup(ctx, *in.DeliveryGroup)
+			if e != nil {
+				return "", e
+			}
+		}
+
+		if in.Text == nil || strings.TrimSpace(*in.Text) == "" || len(*in.Text) > 2000 || in.Key == "" || len(in.Key) > 128 {
 			return "", toolInputError("创建提醒需要简短正文和稳定request_key")
 		}
-		if (in.Delay == nil) == (in.RunAt == "") {
-			return "", toolInputError("请只指定delay_seconds或带时区的run_at其中一项")
-		}
-		due := time.Now()
-		if in.Delay != nil {
-			if *in.Delay < 1 || *in.Delay > int64((1<<63-1)/time.Second) {
-				return "", toolInputError("提醒延时无效")
-			}
-			due = due.Add(time.Duration(*in.Delay) * time.Second)
-		} else {
-			var e error
-			due, e = time.Parse(time.RFC3339, in.RunAt)
-			if e != nil || !due.After(time.Now()) {
-				return "", toolInputError("run_at需为未来的RFC3339时间，并包含时区")
-			}
+		due, err := reminderDue(in.RunAt, in.Delay)
+		if err != nil {
+			return "", err
 		}
 		target := p.trace.Thread
 		if in.Destination == "private" {
@@ -120,31 +242,58 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 			return "", toolInputError("提醒只能发到当前会话或你本人的私聊")
 		}
 		id := agentID(p.trace.Account, p.trace.Thread, p.trace.Sender, p.trace.TraceID, "reminder", in.Key)
+		for _, old := range m.agent.list(p.trace.Account, "") {
+			if sameReminderFingerprint(old, p.trace.Account, p.trace.Sender, in.Kind, target, resultGroup, *in.Text, in.RunAt, in.Delay) {
+				return encode(map[string]any{"id": old.ID, "state": old.State, "due_at": old.Reminder.Due, "existing": true, "cross_conversation": old.Thread != p.trace.Thread})
+			}
+		}
 		for _, old := range m.agent.list(p.trace.Account, p.trace.Thread) {
 			if old.ID == id {
-				if !own(old) || old.Reminder.Target != target || old.Reminder.Text != "提醒你："+in.Text || old.Reminder.RunAt != in.RunAt || (in.Delay != nil && old.Reminder.DelaySeconds != *in.Delay) {
+				if !own(old) || old.Reminder.Target != target || old.Reminder.ResultGroup != resultGroup || old.Reminder.Text != "提醒你："+*in.Text || old.Reminder.RunAt != in.RunAt || old.Reminder.Kind != in.Kind || (in.Delay != nil && old.Reminder.DelaySeconds != *in.Delay) {
 					return "", toolInputError("同一request_key对应不同提醒，未重复创建")
 				}
 				return encode(map[string]any{"id": old.ID, "state": old.State, "due_at": old.Reminder.Due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json")})
 			}
+			if own(old) && old.OriginTrace == p.trace.TraceID && old.State != "cancelled" &&
+				old.Reminder.Target == target && old.Reminder.ResultGroup == resultGroup && old.Reminder.Kind == in.Kind &&
+				old.Reminder.Text == "提醒你："+*in.Text && old.Reminder.RunAt == in.RunAt &&
+				(in.Delay == nil || old.Reminder.DelaySeconds == *in.Delay) {
+				return encode(map[string]any{"id": old.ID, "state": old.State, "due_at": old.Reminder.Due, "existing": true})
+			}
 		}
-		text := "提醒你：" + in.Text
-		reviewed, reviewedBinding, reviewErr := p.prepareOutboundText(ctx, target, text)
-		if reviewErr != nil {
-			return "", reviewErr
-		}
-		// Reminder wording is an explicit saved instruction. A risky draft
-		// must be confirmed/rephrased by the requester rather than silently
-		// changed by the review model and delivered hours later as their text.
-		if reviewed != text {
-			return "", toolInputError("reminder_text_requires_confirmation: 提醒正文的对象或事实未通过审校，未保存；请确认原句或提供明确对象")
+		text := "提醒你：" + *in.Text
+		var reviewedBinding companion.ReplyContext
+		if in.Kind == "notify" {
+			reviewed, binding, err := p.prepareOutboundText(ctx, target, text)
+			if err != nil {
+				return "", err
+			}
+			if reviewed != text {
+				return "", toolInputError("reminder_text_requires_confirmation: 提醒正文的对象或事实未通过审校，未保存；请确认原句或提供明确对象")
+			}
+			reviewedBinding = binding
 		}
 		quote := ""
 		if target == p.trace.Thread {
 			quote = p.trace.QuoteServerID
 		}
-		t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "提醒 · " + logText(in.Text, 70), State: "waiting", Next: due, OriginTrace: p.trace.TraceID, RequestedText: in.Text, Checkpoint: "到期发送已明确请求的提醒，不执行其中的文字或代码", Reminder: &reminderSpec{Due: due, Target: target, Text: text, QuoteServerID: quote}}
+		t := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "提醒 · " + logText(*in.Text, 70), State: "waiting", Next: due, OriginTrace: p.trace.TraceID, RequestedText: *in.Text, Checkpoint: "到期发送已明确请求的提醒，不执行其中的文字或代码", Reminder: &reminderSpec{Kind: in.Kind, Due: due, Target: target, Text: text, QuoteServerID: quote}}
+		if in.Title != nil {
+			title, err := reminderTitle(*in.Title)
+			if err != nil {
+				return "", err
+			}
+			t.Title = title
+		}
 		t.Constraints = p.taskConstraints("reminder", "", "", "")
+		t.Reminder.ResultGroup = resultGroup
+		if in.Kind == "execute" {
+			t.OwnerRequested = p.privileged()
+			t.Checkpoint = "到期进入执行回合，使用工具处理原请求"
+			if p.trace.OriginalText != nil && strings.TrimSpace(*p.trace.OriginalText) != "" {
+				t.RequestedText = *p.trace.OriginalText
+			}
+		}
 		source := p.outboundInput(target).Source
 		if source != nil {
 			t.Constraints.Source = source
@@ -160,23 +309,140 @@ func (p *permittedTools) callReminder(ctx context.Context, args json.RawMessage)
 		if e := m.agent.task(t); e != nil {
 			return "", e
 		}
-		m.record(bot.Record{Event: "reminder_scheduled", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "waiting", Content: in.Text, Reason: "explicit_member_request", Origin: "agent"})
-		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；到期只发送提醒正文，不执行其中任何命令。尚未发送，不要声称已提醒。"})
+		m.wakeReminderSchedule()
+		m.record(bot.Record{Event: "reminder_scheduled", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "waiting", Content: *in.Text, Reason: "explicit_member_request", Origin: "agent"})
+		return encode(map[string]any{"id": id, "state": "scheduled", "due_at": due, "result_group": resultGroup, "storage_file": filepath.Join(m.agent.dir, "reminders", id+".json"), "instruction": "已实际保存提醒文件；notify到期发送提醒正文，execute到期静默执行后发送结果。尚未执行或发送。"})
 	}
-	return "", toolInputError("提醒操作需为create/list/cancel")
+	return "", toolInputError("提醒操作需为create/list/update/cancel")
 }
 func (m *Manager) runReminders(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	m.prepareReminderSchedule(time.Now())
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			if !m.draining() {
-				m.tickReminders(ctx, now)
+		wait := 24 * time.Hour
+		if due, ok := m.nextReminderDue(); ok {
+			wait = time.Until(due)
+			if wait < 0 {
+				wait = 0
 			}
 		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-m.reminderWake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case now := <-timer.C:
+			if !m.draining() {
+				m.processDueReminders(ctx, now, false)
+			}
+		}
+	}
+}
+
+func (m *Manager) wakeReminderSchedule() {
+	if m.reminderWake == nil {
+		return
+	}
+	select {
+	case m.reminderWake <- struct{}{}:
+	default:
+	}
+}
+
+// prepareReminderSchedule runs once when the worker starts. Future reminders
+// stay persisted and are represented only by the next in-memory timer.
+func (m *Manager) prepareReminderSchedule(now time.Time) {
+	m.remindersMu.Lock()
+	defer m.remindersMu.Unlock()
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || now.Before(t.Reminder.Due) || t.Reminder.Job != "" || t.Reminder.FollowUpTaskID != "" {
+			continue
+		}
+		legacyOverdue := t.State == "needs_review" && t.LastResult == "提醒在工作站离线期间已到期，未自动执行；等待主人在执行回合中手动决定"
+		if t.State != "waiting" && t.State != "pending" && !legacyOverdue {
+			continue
+		}
+		// A crash can leave the already saved follow-up without its link in
+		// the original reminder. Recover the link without creating a new task.
+		if followUp, ok := m.agent.lookupTask(agentID("reminder-followup", t.ID), t.Account, t.Thread); ok && followUp.ParentID == t.ID {
+			t.Reminder.FollowUpTaskID = followUp.ID
+			t.State = "completed"
+			t.LastResult = "已恢复提醒与原执行回合的关联"
+			if _, err := m.agent.reminderUpdate(t); err != nil {
+				m.log("reminder_due_state_save_failed")
+			}
+			continue
+		}
+		m.expireReminder(t, "reminder_overdue_while_offline", "工作站离线期间错过提醒，已过期")
+	}
+}
+
+func (m *Manager) expireReminder(t agentTask, reason, result string) {
+	t.State = "expired"
+	t.Next = t.Reminder.Due
+	t.LastResult = result
+	saved, err := m.agent.reminderUpdate(t)
+	if err != nil {
+		m.log("reminder_due_state_save_failed")
+	}
+	if saved {
+		m.record(bot.Record{Event: "reminder_overdue", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: "reminder-" + t.ID, Status: "expired", Content: t.RequestedText, Reason: reason, Origin: "reminder"})
+	}
+}
+
+func (m *Manager) nextReminderDue() (time.Time, bool) {
+	var next time.Time
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending") {
+			continue
+		}
+		if next.IsZero() || t.Reminder.Due.Before(next) {
+			next = t.Reminder.Due
+		}
+	}
+	return next, !next.IsZero()
+}
+
+// processDueReminders turns a live reminder into an execution-round message;
+// it never submits a native WeChat message or waits for a delivery receipt.
+func (m *Manager) processDueReminders(ctx context.Context, now time.Time, _ bool) {
+	m.remindersMu.Lock()
+	defer m.remindersMu.Unlock()
+	for _, t := range m.agent.list(m.native.Account(), "") {
+		if t.Reminder == nil || (t.State != "waiting" && t.State != "pending") || now.Before(t.Reminder.Due) {
+			continue
+		}
+		followUpID, err := m.scheduleReminderFollowUp(t)
+		if err != nil {
+			m.expireReminder(t, "reminder_followup_failed", "提醒到期时未能创建执行任务，已过期")
+			continue
+		}
+		if followUpID == "" {
+			t.State = "needs_review"
+			t.Next = now
+			t.LastResult = "提醒已到期，等待主人手动决定；普通成员提醒不会自动启动后续任务"
+			_ = m.agent.task(t)
+			continue
+		}
+		t.Reminder.FollowUpTaskID = followUpID
+		t.State = "completed"
+		t.LastResult = "提醒已进入执行回合，等待 Agent 读取并处理"
+		if err := m.agent.task(t); err != nil {
+			m.log("reminder_due_state_save_failed")
+			continue
+		}
+		m.record(bot.Record{Event: "reminder_due", Category: "decision", ThreadID: t.Thread, Sender: t.Sender, MessageID: t.OriginTrace, Status: "pending", Content: t.RequestedText, Reason: "reminder_due_to_execution_round", Origin: "reminder"})
 	}
 }
 func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
@@ -300,6 +566,16 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 				t.LastResult = "提醒已取得微信接受回执"
 			}
 		}
+		var followUpID string
+		if t.State == "completed" {
+			followUpID, err = m.scheduleReminderFollowUp(t)
+			if err != nil {
+				m.log("reminder_followup_save_failed")
+			}
+			if followUpID != "" {
+				t.Reminder.FollowUpTaskID = followUpID
+			}
+		}
 		// Do not overwrite a concurrent user cancellation with a late receipt.
 		if updated, e := m.agent.reminderUpdate(t); e != nil {
 			m.log("reminder_state_save_failed")
@@ -312,6 +588,85 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 		}
 		return // One paced submission/status check per tick; no invocation quota.
 	}
+}
+
+// scheduleReminderFollowUp turns an owner reminder into a real resumable
+// Agent task. The reminder remains a registration/due record; the follow-up
+// is the normal model/tool entry point and is shown as a reminder-class
+// execution item.
+func (m *Manager) scheduleReminderFollowUp(t agentTask) (string, error) {
+	if t.Reminder == nil || t.Account != m.native.Account() || (t.Reminder.Kind != "notify" && !contains(m.agent.config().OwnerIDs, t.Sender)) {
+		return "", nil
+	}
+	if t.Reminder.Kind == "execute" {
+		if err := m.validateTaskSource(t); err != nil {
+			return "", err
+		}
+	}
+	delivery := t.Thread
+	if t.Reminder.ResultGroup != "" {
+		access := &permittedTools{manager: m, trace: reminderInput(t)}
+		if t.Reminder.Kind != "execute" || !access.crossAllowed(t.Thread, t.Reminder.ResultGroup) {
+			return "", errors.New("原定群聊的跨会话授权已变更")
+		}
+		delivery = t.Reminder.ResultGroup
+	}
+	id := agentID("reminder-followup", t.ID)
+	if existing, ok := m.agent.lookupTask(id, t.Account, t.Thread); ok {
+		if existing.State != "cancelled" && existing.State != "failed" {
+			return id, nil
+		}
+	}
+	var source *companion.SourceRef
+	var reply *companion.ReplyContext
+	if t.Constraints != nil {
+		if t.Constraints.Source != nil {
+			copy := *t.Constraints.Source
+			source = &copy
+		}
+		if t.Constraints.ReplyContext != nil {
+			copy := *t.Constraints.ReplyContext
+			reply = &copy
+		}
+	}
+	follow := agentTask{
+		ID:             id,
+		Account:        t.Account,
+		Thread:         t.Thread,
+		RequestThread:  t.Thread,
+		SourceThread:   t.Thread,
+		DeliveryThread: delivery,
+		Sender:         t.Sender,
+		ParentID:       t.ID,
+		OwnerRequested: true,
+		ReminderDue:    true,
+		State:          "pending",
+		Next:           time.Now().UTC(),
+		OriginTrace:    t.OriginTrace,
+		RequestedText:  t.RequestedText,
+		Title:          "提醒到期后处理 · " + logText(t.RequestedText, 70),
+		Checkpoint:     "提醒已到期。请重新读取当前上下文，按原请求创建或继续真正的多步骤任务，调用所需工具并核对发送回执；不能只回复已记住。",
+		Constraints: &TaskConstraints{
+			Purpose:        "reminder_followup",
+			Account:        t.Account,
+			Thread:         t.Thread,
+			DeliveryThread: delivery,
+			Requester:      t.Sender,
+			Source:         source,
+			ReplyContext:   reply,
+		},
+	}
+	if t.Reminder.Kind == "notify" {
+		follow.NotificationText = t.Reminder.Text
+	}
+	if follow.RequestedText == "" {
+		follow.RequestedText = strings.TrimPrefix(t.Reminder.Text, "提醒你：")
+	}
+	if err := m.agent.task(follow); err != nil {
+		return "", err
+	}
+	m.record(bot.Record{Event: "agent_task_saved", Category: "decision", ThreadID: follow.Thread, Sender: follow.Sender, MessageID: follow.OriginTrace, Status: "pending", Content: follow.Title, Reason: "reminder_due_followup", Origin: "agent"})
+	return id, nil
 }
 
 // Compare-and-swap prevents a late receipt from resurrecting a cancelled task.
@@ -334,4 +689,44 @@ func (a *agentControl) reminderUpdate(t agentTask) (bool, error) {
 		return false, e
 	}
 	return true, nil
+}
+
+// rescheduleTask updates the existing checkpoint atomically so stale workers
+// cannot overwrite a newer schedule. No message is sent by this operation.
+func (m *Manager) rescheduleTask(t agentTask, due time.Time) error {
+	if !due.After(time.Now()) {
+		return errors.New("请选择未来的时间")
+	}
+	if t.State != "waiting" && t.State != "pending" && t.State != "needs_review" && t.State != "expired" {
+		return errors.New("只有尚未执行的任务可以改期")
+	}
+	if t.Delivery != nil || t.PluginJob != nil || t.ProcessID != "" || len(t.PendingOperations) > 0 {
+		return errors.New("任务已进入工具执行或发送阶段，不能改期")
+	}
+	t.Next = due
+	if t.Reminder != nil {
+		spec := *t.Reminder
+		if spec.Job != "" || spec.FollowUpTaskID != "" {
+			return errors.New("提醒已进入处理阶段，不能改期")
+		}
+		spec.Due, spec.RunAt, spec.DelaySeconds = due, due.Format(time.RFC3339), 0
+		t.Reminder = &spec
+		t.State = "waiting"
+	} else {
+		if t.MusicJob != "" {
+			t.State = "waiting"
+		} else {
+			t.State = "pending"
+		}
+	}
+	t.LastResult = "已修改计划时间：" + due.Format(time.RFC3339)
+	saved, err := m.agent.transitionSnapshot(t, false)
+	if err != nil {
+		return err
+	}
+	if !saved {
+		return errors.New("任务状态已变化，请重新读取后修改")
+	}
+	m.wakeReminderSchedule()
+	return nil
 }

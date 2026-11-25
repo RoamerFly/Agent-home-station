@@ -70,7 +70,7 @@ func TestGroundingUsesIndependentJSONThinkingBudgetAndReportedUsage(t *testing.T
 	if _, ok := normal["reasoning_effort"]; ok {
 		t.Fatal("review effort leaked to normal chat")
 	}
-	if client.http.Timeout != 90*time.Second || client.maxTokens != 768 {
+	if client.http.Timeout != 5*time.Minute || client.maxTokens != 768 {
 		t.Fatal("shared client mutated")
 	}
 	if len(usages) != 3 || usages[0].Model != "configured-model" || usages[1].Model != "configured-model" || usages[2].Model != "configured-model" || usages[0].Purpose != "reply_grounding_check" || usages[1].Purpose != "reply_grounding_repair" || !usages[0].Reported || usages[0].Input != 120 || usages[0].Output != 350 || usages[0].CacheHit != 80 {
@@ -210,7 +210,7 @@ func TestGroundingTimeoutAndParentCancellationBoundTheWholeRequest(t *testing.T)
 			if !ok || d.Code != "model_deadline_exceeded" || d.Attempts != 1 || answer != "" || time.Since(start) > time.Second || requests.Load() != 1 {
 				t.Fatalf("review timeout not respected: answer=%q err=%v requests=%d duration=%s", answer, err, requests.Load(), time.Since(start))
 			}
-			if client.http.Timeout != 90*time.Second {
+			if client.http.Timeout != 5*time.Minute {
 				t.Fatal("review timeout changed shared client")
 			}
 		})
@@ -402,10 +402,8 @@ func TestGroundingEnvelopeAllowsBoundedReasoningWithoutReturningIt(t *testing.T)
 	if answer, err := client.ChatGrounding(context.Background(), "JSON policy", turns, GroundingOptions{}); err != nil || answer != "{}" {
 		t.Fatalf("bounded reasoning envelope failed: answer=%q err=%v", answer, err)
 	}
-	if _, err := client.Chat(context.Background(), "normal policy", turns); err == nil {
-		t.Fatal("normal response resource limit changed")
-	} else if d, ok := ErrorDiagnostics(err); !ok || d.Code != "model_response_too_large" {
-		t.Fatalf("wrong normal limit error: %v", err)
+	if answer, err := client.Chat(context.Background(), "normal policy", turns); err != nil || answer != "{}" {
+		t.Fatalf("normal response should fit the expanded transport budget: answer=%q err=%v", answer, err)
 	}
 }
 

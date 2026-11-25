@@ -94,7 +94,7 @@
   restore();const body=$('#flow-inspector-body');body.replaceChildren();
   const button=el('button','primary','打开'+(pages[id]||'相关功能'));button.type='button';
   button.addEventListener('click',()=>window.WechatApplicationHost.openSection(id));
-  body.append(el('p','hint','在当前微信应用或工作站公共工具中管理这项能力。'),button);
+  body.append(el('p','hint',id==='plugins'?'微信工作台只使用工作站公共工具；公共工具的安装、配置和启停在工作站统一管理。':'在微信工作台或工作站中打开相应设置。'),button);
   $('#flow-config-page').value=id;
  }
 

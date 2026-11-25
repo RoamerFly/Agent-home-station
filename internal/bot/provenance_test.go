@@ -22,7 +22,7 @@ func TestAmbientGroupMessageCannotRewriteAnotherMembersPlan(t *testing.T) {
 	}
 	m.SenderID = in.Sender
 	m.ID = "caption"
-	m.Body = "这是盒饭"
+	m.Body = "刚才那条我说错了，这是盒饭"
 	w.noticeConversationMessage(m, true)
 	if p.State != "review_pending" || len(p.Updates) != 1 || p.Updates[0].Source == nil || p.Updates[0].Sender != in.Sender {
 		t.Fatal("same sender supplement lost source", p)

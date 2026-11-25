@@ -20,7 +20,7 @@ type ServicePolicy interface {
 // arguments: a model must not be able to choose a filesystem path, artifact
 // mount, or another conversation by adding a JSON field to its request.
 //
-// The metadata is sent alongside wechat/context and is never persisted in the
+// The metadata is sent alongside an opaque station/call_id and is never persisted in the
 // public job arguments.  Adapters should use it only for per-call bindings
 // such as a materialized, already-authorized artifact.
 type CallMetadataPolicy interface {

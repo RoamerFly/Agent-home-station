@@ -48,6 +48,10 @@ def package_findings(index):
                 failures.append({"path": manifest, "reason": "invalid_package_member"})
                 continue
             content = index.get(root + name)
+            if content is not None and path.suffix.lower() in {".ps1", ".bat", ".cmd"}:
+                # Git stores these files with LF; the Windows catalog stages
+                # the CRLF checkout bytes specified by .gitattributes.
+                content = content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
             if content is None or not isinstance(digest, str) or hashlib.sha256(content).hexdigest() != digest:
                 failures.append({"path": root + name, "reason": "indexed_package_digest_mismatch"})
         for name in index:

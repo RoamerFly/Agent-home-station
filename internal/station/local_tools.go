@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,11 +14,13 @@ import (
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/stationruntime"
 )
 
 type localToolSet struct {
+	directMedia           *deepseek.Client
 	memory                companion.ToolAccess
 	files                 *localWorkspaceFileTools
 	process               *localProcessTools
@@ -45,12 +48,15 @@ type localToolSet struct {
 	publications          *localChatService
 	requestTime           time.Time
 	continuationGuard     func(context.Context) error
+	mcpSessions           map[string]*stationMCPSession
 	// catalog is the application index injected with the workspace note. It
 	// carries names and switch state only; no application content is loaded.
 	catalog map[string]any
 	// grants are the owner's general-capability consents for this turn. Groups
 	// the owner withdrew never reach the tool surface.
 	grants localToolGrants
+	// Application turns can call workstation tools, but never manage their lifecycle.
+	publicUseOnly bool
 }
 
 // Local owner actions already pass the actual tool's grant checks. Reuse the
@@ -131,7 +137,26 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		memoryTools, err := t.memory.List(ctx)
 		return append(memoryTools, localWechatMemorySchema()), err
 	}
+	if t.publicUseOnly {
+		if t.projectTools == nil || t.run == nil || !t.run.Tracked {
+			return nil, nil
+		}
+		// Only this read-only model directory still uses the local owner view.
+		// Execution and document inputs have application-owned source, task and
+		// delivery adapters; exposing their local-chat names here would bind a
+		// WeChat request to an unrelated local conversation.
+		if !t.grants.Media {
+			return nil, nil
+		}
+		return slices.DeleteFunc(t.localTTSTools(ctx), func(tool mcptools.Tool) bool { return tool.Name != localTTSVoicesTool }), nil
+	}
 	all := []mcptools.Tool{}
+	if t.projectTools != nil && !t.inspectOnly {
+		all = append(all, stationLifecycleTools()...)
+	}
+	all = append(all, t.localExternalHTTPTools(ctx)...)
+	all = append(all, t.localExternalTaskTools(ctx)...)
+	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
 		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
 	}
@@ -182,6 +207,16 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 }
 
 func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessage) (string, error) {
+	if t.publicUseOnly && (name == localExternalHTTPList || name == localExternalHTTPCall || name == localExternalTaskList || name == localExternalTaskCall ||
+		name == localExternalMCPServers || name == localExternalMCPList || name == localExternalMCPCall) {
+		return "", errors.New("外部工具微信应用入口须由应用工作台处理")
+	}
+	if t.publicUseOnly && (name == localRVCVoicesTool || name == localRVCStartTool || name == localRVCJobTool) {
+		return "", errors.New("RVC 微信应用入口须由应用工作台处理")
+	}
+	if t.publicUseOnly && strings.HasPrefix(name, "station_tool_") {
+		return "", errors.New("公共工具的安装、配置和启停由工作站管理")
+	}
 	if err := t.ValidateGenerationSources(ctx); err != nil {
 		return "", err
 	}
@@ -197,6 +232,18 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 		default:
 			return "", apphost.ErrObservationForbidden
 		}
+	}
+	if strings.HasPrefix(name, "station_tool_") {
+		return t.callStationLifecycle(ctx, name, raw)
+	}
+	if name == localExternalHTTPList || name == localExternalHTTPCall {
+		return t.callLocalExternalHTTP(ctx, name, raw)
+	}
+	if name == localExternalTaskList || name == localExternalTaskCall {
+		return t.callLocalExternalTask(ctx, name, raw)
+	}
+	if name == localExternalMCPServers || name == localExternalMCPList || name == localExternalMCPCall {
+		return t.callLocalExternalMCP(ctx, name, raw)
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)
@@ -240,7 +287,10 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	if name == localDocumentToolName {
 		return t.createLocalDocument(ctx, raw)
 	}
-	if name == localDocumentInspectTool || name == localDocumentExportTool {
+	if name == "project_document_memory" {
+		return t.documentMemory(ctx, raw)
+	}
+	if name == localDocumentInspectTool || name == localDocumentExportTool || name == localDocumentReviseTool || name == localDocumentVerifyTool {
 		return t.useLocalDocumentArtifact(ctx, name, raw)
 	}
 	if name == localAudioToolName {
@@ -249,7 +299,7 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	switch name {
 	case localRVCVoicesTool, localRVCStartTool, localRVCJobTool:
 		return t.callLocalRVC(ctx, name, raw)
-	case localComfyListTool, localComfyStartTool, localComfyJobTool:
+	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyStartTool, localComfyJobTool:
 		return t.callLocalComfy(ctx, name, raw)
 	case localYuEStartTool, localYuEJobTool:
 		return t.callLocalYuE(ctx, name, raw)

@@ -78,28 +78,7 @@ func verifyEncoderPeer(ctx context.Context, conn *net.TCPConn, pid uint32) error
 	if err != nil {
 		return ErrStreamEndpoint
 	}
-	listener := false
-	connected := false
-	for _, row := range rows {
-		if row.LocalPort != serverPort {
-			continue
-		}
-		switch row.State {
-		case obsTCPStateListen:
-			// A loopback control endpoint must not share its port with any
-			// wildcard or other interface listener.
-			if row.LocalAddr != obsLoopbackIPv4 || row.OwnerPID != pid {
-				return ErrStreamEndpoint
-			}
-			listener = true
-		case obsTCPStateEstablished:
-			if row.LocalAddr == obsLoopbackIPv4 && row.RemoteAddr == obsLoopbackIPv4 &&
-				row.RemotePort == clientPort && row.OwnerPID == pid {
-				connected = true
-			}
-		}
-	}
-	if !listener || !connected {
+	if !hasEncoderLoopbackPeer(rows, clientPort, serverPort, pid) {
 		return ErrStreamEndpoint
 	}
 	rows6, err := obsTCP6Rows()
@@ -112,6 +91,31 @@ func verifyEncoderPeer(ctx context.Context, conn *net.TCPConn, pid uint32) error
 		}
 	}
 	return nil
+}
+
+func hasEncoderLoopbackPeer(rows []obsTCPRowOwnerPID, clientPort, serverPort, pid uint32) bool {
+	listener := false
+	connected := false
+	for _, row := range rows {
+		if row.LocalPort != serverPort {
+			continue
+		}
+		switch row.State {
+		case obsTCPStateListen:
+			// A loopback control endpoint must not share its port with any
+			// wildcard or other interface listener.
+			if row.LocalAddr != obsLoopbackIPv4 || row.OwnerPID != pid {
+				return false
+			}
+			listener = true
+		case obsTCPStateEstablished:
+			if row.LocalAddr == obsLoopbackIPv4 && row.RemoteAddr == obsLoopbackIPv4 &&
+				row.RemotePort == clientPort && row.OwnerPID == pid {
+				connected = true
+			}
+		}
+	}
+	return listener && connected
 }
 
 // verifyEncoderPublisher verifies the opposite direction. The host owns the

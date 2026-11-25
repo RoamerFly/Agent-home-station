@@ -100,18 +100,16 @@ func (m mutatingVerdictModel) Chat(_ context.Context, _ string, turns []map[stri
 func TestGroundingCheckRejectsEvidenceChangesDuringCall(t *testing.T) {
 	s, c, _ := memoryFixture(t)
 	in := groundedInput(t, s, c, "alpha", "changing-source", "明确来源。")
-	source, ok := s.SourceForInput(in)
-	if !ok {
-		t.Fatal("missing source")
-	}
 	e := &Engine{Store: s, Config: c, model: mutatingVerdictModel{mutate: func() {
-		_, err := s.db.Exec("UPDATE events SET revision=revision+1 WHERE id=?", source.EventID)
-		if err != nil {
+		updated := in
+		updated.Text = "更正后的来源。"
+		updated.OriginalText = &updated.Text
+		if err := s.Observe(updated, c, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}}}
 	if _, err := e.checkReplyGrounding(t.Context(), in, Decision{Action: "reply", Messages: []string{"明确来源。"}}); err == nil {
-		t.Fatal("verdict outlived source revision")
+		t.Fatal("verdict outlived a correction to its evidence")
 	}
 }
 
@@ -150,7 +148,7 @@ func TestGroundingSnapshotCannotRelabelChangedEvidence(t *testing.T) {
 	}
 }
 
-func TestStaleReplyProofCannotRecoverByDroppingSourceVersions(t *testing.T) {
+func TestForgottenReplyProofCannotBeRebound(t *testing.T) {
 	s, c, _ := memoryFixture(t)
 	in := groundedInput(t, s, c, "alpha", "stale-proof", "原本的明确事实。")
 	e := &Engine{Store: s, Config: c, model: &groundingSequenceModel{}}
@@ -158,10 +156,8 @@ func TestStaleReplyProofCannotRecoverByDroppingSourceVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for id := range d.ReplyContexts[0].SourceVersions {
-		if _, err = s.db.Exec("UPDATE events SET revision=revision+1 WHERE id=?", id); err != nil {
-			t.Fatal(err)
-		}
+	if err := s.Clear(ScopeID(in.Channel, in.Account, in.Thread)); err != nil {
+		t.Fatal(err)
 	}
 	out, err := e.DiagnoseGroundedReply(t.Context(), in, d)
 	if err == nil || len(out.Messages) > 0 || e.model.(*groundingSequenceModel).calls != 0 {

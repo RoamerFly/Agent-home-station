@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/mediaspec"
 )
 
 // Parameters are attached to the generated asset, not a global most-recent song.
@@ -46,7 +48,7 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 		return mediaAsset{}, nil, err
 	}
 	for _, a := range items {
-		if a.ID != id || a.Account != p.trace.Account || a.Scope != assetScope(p.trace) {
+		if a.ID != id || a.Account != p.trace.Account || a.Scope != assetScope(p.trace) && !librarySong(a, p.trace.Account) {
 			continue
 		}
 		if !strings.HasPrefix(a.MIME, "audio/") || a.Hash == "" {
@@ -80,7 +82,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	if err != nil {
 		return "", err
 	}
-	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "这是同一会话完整性已校验的缓存，标题不代表已确认歌手、版本或人声。generation如存在是当时提交的配方。先识别并选定与歌词匹配的演唱片段，留意长前奏、主持口播和纯伴奏。music_local_start的reference_start_seconds/reference_seconds指定原录音中的范围，本机会先截取再上传；省略起点时默认采用提交歌词依据的最早位置，显式0仍保留开头。不要把演唱段歌词配到纯前奏。重发原版用media_reuse；生成会重新合成，结果仍需核实。"}
+	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "已读取本会话缓存。先核对歌手、版本和演唱片段；generation 是原提交配方。music_local_start 用 reference_start_seconds/reference_seconds 选原录音区间；省略起点沿用歌词依据最早位置，显式 0 保留开头。重发原版用 media_reuse。"}
 	out["available_lyrics"] = p.availableLyricEvidence(a)
 	if a.Music != nil {
 		out["lyrics_evidence_ids"] = a.Music.LyricEvidence
@@ -109,19 +111,28 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 		if err != nil {
 			return "", err
 		}
-		policy, err := p.newReferenceTranscriptionPolicy(ctx, a, wav, input.Offset, seconds)
-		if err != nil {
+		text, backend, check, err := p.transcribeReference(ctx, a, wav, input.Offset, seconds)
+		noSpeech := mediaspec.IsNoSpeech(err)
+		if err != nil && !noSpeech {
 			return "", err
 		}
-		text, err := policy.transcribe(ctx)
-		if err != nil {
+		out["offset_seconds"], out["window_seconds"] = input.Offset, seconds
+		out["transcription_backend"] = backend
+		if duration, e := wavDuration(wav); e == nil {
+			out["actual_window_seconds"] = duration
+		}
+		if err = check(ctx); err != nil {
 			return "", err
 		}
-		out["transcript"], out["offset_seconds"], out["window_seconds"] = text, input.Offset, seconds
+		if noSpeech {
+			out["transcription_status"] = "no_recognizable_speech"
+			out["transcript_warning"] = "本段未识别到可辨歌词。可选另一段演唱音频，或先分离人声再转写。"
+			b, _ := json.Marshal(out)
+			return string(b), nil
+		}
+		out["transcript"] = text
+		out["transcription_status"] = "transcribed"
 		out["reference_window_candidate"] = map[string]any{"reference_start_seconds": input.Offset, "reference_seconds": seconds, "instruction": "这是本次实际识别的区间；核对是否为目标歌曲演唱，ASR候选不等于音质或人声质量认证"}
-		if err = policy.checkCompleted(ctx); err != nil {
-			return "", err
-		}
 		e, err := p.saveLyricEvidence(a, text, "asr_candidate", input.Offset, seconds)
 		if err != nil {
 			return "", err
@@ -132,6 +143,23 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	}
 	b, _ := json.Marshal(out)
 	return string(b), nil
+}
+
+func (p *permittedTools) transcribeReference(ctx context.Context, asset mediaAsset, wav []byte, offset, seconds int) (string, string, func(context.Context) error, error) {
+	if station := p.manager.readyStationASR(ctx); station != nil {
+		_, check, err := p.newReferenceAudioOrigin(ctx, asset, offset, seconds, "transcribe selected reference recording", "reference-asr")
+		if err != nil {
+			return "", "", nil, err
+		}
+		text, err := station.transcribe(ctx, wav, check)
+		return text, "station_local_asr", check, err
+	}
+	policy, err := p.newReferenceTranscriptionPolicy(ctx, asset, wav, offset, seconds)
+	if err != nil {
+		return "", "", nil, err
+	}
+	text, err := policy.transcribe(ctx)
+	return text, policy.Backend(), policy.checkCompleted, err
 }
 
 func musicTranscriptionWindow(ctx context.Context, root string, data []byte, offset, seconds int) ([]byte, error) {

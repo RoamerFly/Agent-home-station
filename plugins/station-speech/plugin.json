@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "station-speech",
   "name": "本机语音",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "host_protocol": 1,
   "status": "ready",
   "platforms": ["windows-amd64"],
@@ -15,7 +15,8 @@
     "config.schema.json": "ccf99a88820549afe51215fd75032c812a02c7b26365d9d292cb02ba211aa80b",
     "MIGRATION.md": "12291209f669c591789c7f9570948aa5d29d3847d6e2280a5d9df73a6ee34a47",
     "PERMISSIONS.md": "b41d1d1da1a3131c2b566d78c1d14a9e3d04e67420e48e4517f0901140355211",
-    "README.md": "d3f0a79f0b648eaef9f2f3dd8f4c8a74d026f1702f9d0fd379b573b81032fa2d",
+    "README.md": "b28802078e2b5b3a425cee8ba4b9e7ca141e9e58fcde98a3b787aca221b1e1e3",
+    "run-speech.ps1": "641096d67ab359cd970e43c48d517b44e1125097fa6a59e3eaf805f0c630fd41",
     "runtime/managed-service.json": "b61b780b1e5fd67d6e9e93e81f0d97ed7283aacc7508f3bf4070acad523eeec2",
     "ui.schema.json": "6677fe276ccb10ad78b8b2647f6342c0aeed3a974f0429cccea45176a4f391de"
   }

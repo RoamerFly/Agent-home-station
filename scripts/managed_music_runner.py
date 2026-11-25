@@ -101,11 +101,36 @@ def canonical(path):
     return path.resolve(strict=True)
 
 
+def managed_public_root(path):
+    """Validate a read-only public tool root.
+
+    Older installations use ``managed-workspaces/public_workspace``.  New
+    releases may point at one registered public tool package instead, so the
+    public root no longer has to be a sibling of the account workspace.  The
+    package must still be a real directory with a manifest and runtime
+    directory; symlinks and junctions remain rejected by ``canonical``.
+    """
+    public = canonical(path)
+    if public.name == "public_workspace":
+        return public
+    manifest = public / "plugin.json"
+    runtime = public / "runtime"
+    if not manifest.is_file() or not runtime.is_dir():
+        raise ValueError("music_public_tool_package_required")
+    try:
+        raw = json.loads(manifest.read_text(encoding="utf8"))
+    except (OSError, ValueError):
+        raise ValueError("music_public_tool_manifest_invalid") from None
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"].strip():
+        raise ValueError("music_public_tool_manifest_invalid")
+    return public
+
+
 def command(public, private, cwd, argv, gpu=False, ipc=None):
     if sys.platform != "linux" or not shutil.which("bwrap"):
         raise RuntimeError("music_sandbox_unavailable")
-    public, private, cwd = map(canonical, (public, private, cwd))
-    if public.name != "public_workspace" or private.parent.name != "pri_workspace" or public.parent != private.parent.parent:
+    public, private, cwd = managed_public_root(public), canonical(private), canonical(cwd)
+    if private.parent.name != "pri_workspace" and not (private.parent.name == "workspaces" and private.name == "wechat"):
         raise ValueError("music_managed_layout_required")
     if not (cwd.is_relative_to(public) or cwd.is_relative_to(private)):
         raise ValueError("music_working_directory_outside_workspace")
@@ -219,8 +244,8 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
     """Trusted music-only policy; ordinary Agent broker has no such switch."""
     if sys.platform != "win32" or os.environ.get("WECHAT_WINDOWS_MUSIC_POLICY") != "registry-read-private-network-v1":
         raise RuntimeError("windows_music_policy_not_authorized")
-    public, private, cwd = map(canonical, (public, private, cwd))
-    if public.name != "public_workspace" or private.parent.name != "pri_workspace" or public.parent != private.parent.parent:
+    public, private, cwd = managed_public_root(public), canonical(private), canonical(cwd)
+    if private.parent.name != "pri_workspace" and not (private.parent.name == "workspaces" and private.name == "wechat"):
         raise ValueError("music_managed_layout_required")
     from music_account_scope import account_scope
     account_scope(private)
@@ -229,16 +254,76 @@ def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
     if not argv or any(not isinstance(x, str) or "\0" in x for x in argv):
         raise ValueError("music_argv_invalid")
     binary = canonical(argv[0])
-    if not binary.is_relative_to(public / "runtimes"):
+    runtime_root = public / ("runtime" if (public / "plugin.json").is_file() else "runtimes")
+    rvc_package = public.parent / "rvc-换声" if (public / "plugin.json").is_file() else None
+    rvc_runtime = rvc_package / "runtime" if rvc_package is not None else None
+    packaged_rvc = (rvc_package is not None and
+                    (rvc_package / "plugin.json").is_file() and
+                    json.loads((rvc_package / "plugin.json").read_text(encoding="utf-8")).get("id") == "rvc" and
+                    binary == canonical(rvc_runtime / "windows-music-python" / "python.exe"))
+    if not binary.is_relative_to(runtime_root) and not packaged_rvc:
         raise ValueError("music_interpreter_not_managed")
     training = training_readonly(public, argv)
     readonly = [str(public)]
-    if station_rvc:
-        control = canonical(Path(__file__).parent)
-        if (control.name != "windows-station-rvc" or control.is_relative_to(public.parent) or
-                len(argv) < 2 or canonical(argv[1]) != control / "singing_voice.py"):
-            raise ValueError("station_rvc_converter_not_packaged")
+    if packaged_rvc:
+        readonly.append(str(canonical(rvc_package)))
+    control = canonical(Path(__file__).parent)
+    control_converter = len(argv) >= 2 and canonical(argv[1]) == control / "singing_voice.py"
+    if control_converter:
         readonly.append(str(control))
+    # Named voice configuration is account state kept beside the application
+    # data, outside the private workspace mount. The trusted bridge may expose
+    # only the exact config directory read-only to its converter.
+    for index, argument in enumerate(argv[:-1]):
+        if argument == "--config":
+            config_path = canonical(argv[index + 1])
+            if not config_path.is_file():
+                raise ValueError("music_voice_config_missing")
+            readonly.append(str(config_path))
+            # Installed voice weights live under release/data while executable
+            # code stays in the public package. Mount the fixed voice tree when
+            # this selected configuration actually points to it.
+            voice_root = public.parent.parent / "data" / "voices" / "rvc" / "private-voice-library"
+            if voice_root.is_dir():
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+                    model = canonical(config["rvc_model"])
+                    index_file = canonical(config["rvc_index"])
+                    if model.is_relative_to(voice_root) and index_file.is_relative_to(voice_root):
+                        readonly.append(str(canonical(voice_root)))
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+            break
+    # Embedded Python runtimes may keep their large dependency wheels in a
+    # separately registered public runtime directory (the pth file is part of
+    # the package). Mount those declared directories read-only instead of
+    # copying several gigabytes into every tool package.
+    for pth in sorted(Path(argv[0]).parent.glob("python*_pth")):
+        try:
+            for raw in pth.read_text(encoding="utf-8").splitlines():
+                candidate = raw.strip()
+                if not candidate or candidate.startswith("#") or not Path(candidate).is_absolute():
+                    continue
+                dependency = canonical(Path(candidate))
+                if dependency.is_dir():
+                    readonly.append(str(dependency))
+                    # LPAC needs traversal permission on the registered
+                    # public-runtime parent before it can reach the sidecar
+                    # package directory at its original absolute path.
+                    readonly.append(str(dependency.parent))
+                    for parent in dependency.parents:
+                        if parent.name == "public_workspace":
+                            readonly.append(str(parent))
+                            break
+        except (OSError, UnicodeError, ValueError):
+            continue
+    if station_rvc:
+        packaged_control = runtime_root / "windows-station-rvc"
+        sibling_control = rvc_runtime / "windows-station-rvc" if packaged_rvc else None
+        if (control.name != "windows-station-rvc" or
+                control not in (packaged_control, sibling_control) or
+                not control_converter):
+            raise ValueError("station_rvc_converter_not_packaged")
     from windows_lpac import launch
     media = canonical(os.environ["WECHAT_WINDOWS_MUSIC_MEDIA"])
     if not (media / "ffmpeg.exe").is_file() or not (media / "ffprobe.exe").is_file():

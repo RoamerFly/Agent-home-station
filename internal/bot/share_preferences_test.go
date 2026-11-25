@@ -182,3 +182,35 @@ func TestHostGroupShareWorkerRegressionGatesAndEvidence(t *testing.T) {
 		t.Fatalf("card-only evidence was accepted: %v", err)
 	}
 }
+
+func TestPreferredGroupShareRetriesTransientRuntime(t *testing.T) {
+	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent","messages":[]}`, nil
+	}))
+	room := "retry-share@chatroom"
+	w.allowed[room] = true
+	w.config.GroupRules = map[string]GroupRule{room: {Mode: "mention"}}
+	share := fixtureMessage("retry-card", room, "", "incoming")
+	share.Type, share.SenderID = 49, "member-a"
+	subtype := 51
+	share.AppMessageType = &subtype
+	if err := e.Store.Observe(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: room, Sender: share.SenderID, TraceID: share.ID, Text: "分享", IsGroup: true}, e.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: room, Sender: share.SenderID, TraceID: share.ID, Text: "分享", Mode: "direct", IsGroup: true}
+	bindInputSource(&input, share, e)
+	calls := 0
+	w.config.ReadPreferredGroupShare = func(context.Context, companion.Input, linuxnative.Message) (string, MediaObservationEvidence, error) {
+		calls++
+		if calls < 3 {
+			return "", MediaObservationEvidence{}, errors.New("share_plugin_runtime_unavailable")
+		}
+		return "真实画面已读取", MediaObservationEvidence{ObservedRange: "frames 0-2", Excerpt: "真实画面已读取", Parts: []companion.ObservationPart{{Kind: companion.ObservationVisualFrames, Range: "frames 0-2", Excerpt: "真实画面已读取"}}}, nil
+	}
+	if err := w.preparePreferredGroupShare(t.Context(), e, &input, share); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || input.IncomingMedia[0].ObservationState != "observed" {
+		t.Fatalf("transient share runtime was not retried to success: calls=%d media=%+v", calls, input.IncomingMedia)
+	}
+}

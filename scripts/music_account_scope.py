@@ -13,7 +13,7 @@ HEADER = "X-Wechat-Agent-Account"
 
 def account_scope(private):
     path = Path(private)
-    if path.parent.name != "pri_workspace":
+    if path.parent.name not in {"pri_workspace", "workspaces"} or (path.parent.name == "workspaces" and path.name != "wechat"):
         raise ValueError("music_account_directory_required")
     if re.fullmatch(r"[a-f0-9]{64}", path.name):
         return path.name  # legacy path, same protocol identity
@@ -24,7 +24,7 @@ def account_scope(private):
         data = json.loads(identity.read_text(encoding='utf-8'))
         account = data['account_id']
         scope = data['scope']
-        if not isinstance(account,str) or not account or data['directory'] != path.name or scope != hashlib.sha256(account.encode()).hexdigest():
+        if not isinstance(account,str) or not account or (data['directory'] != path.name and path.name != "wechat") or scope != hashlib.sha256(account.encode()).hexdigest():
             raise ValueError('invalid_account_identity')
         return scope
     except (OSError,ValueError,KeyError,TypeError):

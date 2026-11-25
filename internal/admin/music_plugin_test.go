@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -26,7 +28,7 @@ func installMusicPluginFixture(t *testing.T, f *webFixture, permissions []string
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := s.Prepare(t.Context(), "../../plugins/music")
+	prepared, err := s.Prepare(t.Context(), legacyMusicPackageFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +52,85 @@ func installMusicPluginFixture(t *testing.T, f *webFixture, permissions []string
 		}
 	}
 	return s
+}
+
+// Historical cloud protocol tests use a synthetic copy of the retired
+// capability. The shipped music package must no longer advertise it.
+func legacyMusicPackageFixture(t *testing.T) string {
+	t.Helper()
+	source, target := "../../plugins/music", t.TempDir()
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, readErr error) error {
+		if readErr != nil {
+			return readErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(target, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(dest, 0700)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, raw, 0600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capPath := filepath.Join(target, "capabilities.json")
+	var capabilities map[string]any
+	raw, err := os.ReadFile(capPath)
+	if err != nil || json.Unmarshal(raw, &capabilities) != nil {
+		t.Fatal("synthetic music capabilities", err)
+	}
+	for _, value := range capabilities["capabilities"].([]any) {
+		cap := value.(map[string]any)
+		if cap["id"] == "music.generate" {
+			cap["implementation"], cap["discoverable"], cap["permissions"] = "ready", true, []string{"model.invoke"}
+		}
+	}
+	raw, _ = json.Marshal(capabilities)
+	if err := os.WriteFile(capPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	schemaPath := filepath.Join(target, "config.schema.json")
+	schemaRaw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)
+	properties["music_endpoint"] = map[string]any{"type": "string"}
+	properties["music_model"] = map[string]any{"type": "string"}
+	properties["music_key"] = map[string]any{"type": "string", "x-secret": true, "x-host-only": true}
+	schemaRaw, _ = json.Marshal(schema)
+	if err := os.WriteFile(schemaPath, schemaRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(target, "plugin.json")
+	var manifest map[string]any
+	data, err := os.ReadFile(manifestPath)
+	if err != nil || json.Unmarshal(data, &manifest) != nil {
+		t.Fatal("synthetic music package", err)
+	}
+	sum := sha256.Sum256(raw)
+	manifest["files"].(map[string]any)["capabilities.json"] = hex.EncodeToString(sum[:])
+	sum = sha256.Sum256(schemaRaw)
+	manifest["files"].(map[string]any)["config.schema.json"] = hex.EncodeToString(sum[:])
+	manifest["permissions"] = []string{"model.invoke", "network"}
+	manifest["http_routes"] = []map[string]any{{"id": "generate", "endpoint_config": "music_endpoint", "permission": "model.invoke",
+		"capabilities": []string{"music.generate"}, "credential": "music_key", "credential_header": "Authorization", "credential_prefix": "Bearer ", "optional": true}}
+	data, _ = json.Marshal(manifest)
+	if err := os.WriteFile(manifestPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return target
 }
 
 func musicPluginFixture(t *testing.T) (*webFixture, *permittedTools, *musicPluginPolicy) {
@@ -278,12 +359,12 @@ func TestMusicPluginJobCancellationAndTaskVoiceConstraints(t *testing.T) {
 	}
 }
 
-func TestMusicPluginBindsActualSourceRevisionAndActor(t *testing.T) {
+func TestMusicPluginAllowsSourceRevisionRefreshButBindsActor(t *testing.T) {
 	f, access, p := musicPluginFixture(t)
 	j, cap := musicPluginJob(p)
 	p.invocation.SourceVersions[access.trace.Source.EventID]++
-	if err := p.Check(t.Context(), j, cap); err == nil {
-		t.Fatal("stale source revision accepted")
+	if err := p.Check(t.Context(), j, cap); err != nil {
+		t.Fatal("metadata-only revision blocked the bound request", err)
 	}
 	other := access.trace
 	other.TraceID, other.Sender, other.Text, other.Source = "other-source", "other-user", "synthetic other user request", &companion.SourceRef{MessageID: "other-source"}

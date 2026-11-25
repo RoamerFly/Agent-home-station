@@ -29,11 +29,12 @@ func (p *permittedTools) videoTools() []mcptools.Tool {
 	if p.trace.Preview || p.trace.ReportOnly || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.Config().Behavior.ReadVideos {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("video_inspect", "视频精读/逐帧读取: inspect actual video metadata, consecutive decoded frames, or arbitrary audio ranges. Automatic6-frame overview is a DEFAULT, not a capability ceiling. Choose ONE source: asset_id, message_id, or public url. Trusted owners may inspect another authorized conversation of THIS account: use source_thread_id with asset_id; a message_id resolves its actual source automatically. Ordinary members remain current-conversation only. This reads media, not private service directories. action defaults to info when omitted; info returns metadata only, then choose frames/audio for content. action=info returns actual frame count and timestamps metadata. action=frames defaults start_frame=0,step=1,page_size=24,batch_size=8,max_dimension=960,analysis_tokens=4096; ALL these are adjustable to user needs. page_size has no64-frame clamp; work is decoded/analyzed batch by batch. step>1 is sampling, never call it frame-by-frame. Return actual indexes/timestamps, effective settings and next_start_frame; continue on partial completion. action=audio defaults duration_seconds=90,audio_chunk_seconds=180,audio_timeout_seconds=60; longer requested ranges are processed completely in chunks. requested_range_complete describes that range; complete/video_audio_complete refer to the whole audio endpoint, so continue next_start_seconds when the user wants all audio. Adjust chunk size and timeout; if PCM payload must be split to fit transport, return actual size/reason instead of silently shortening the range. timeout_seconds defaults240 for the whole call;0 adds no local deadline but preserves caller cancellation. audio_timeout_seconds=0 also inherits caller cancellation. Provider-specific limits are actual feedback, not a project image-count quota. question customizes analysis. No WeChat send. For long work persist checkpoints and continue returned cursors. Input {action:info|frames|audio,source_thread_id?,asset_id?|message_id?|url?,start_frame?,page_size?,step?,batch_size?,max_dimension?,analysis_tokens?,timeout_seconds?,start_seconds?,duration_seconds?,audio_chunk_seconds?,audio_timeout_seconds?,question?}.", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"],"default":"info"},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("video_inspect", "读取视频元数据、连续画面或音频。用 asset_id、message_id 或公开 url 选一个来源；管理员跨会话 asset_id 带 source_thread_id。info 查帧数，frames 按 start_frame/step/page_size 等分页，audio 按 start_seconds/duration_seconds 等分段；使用返回的 next_* 游标续读。参数可按需求调整，step>1 表示采样；timeout_seconds=0 不设本地截止时间，仍可取消。question 指定分析重点。只读取，不发送。", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"],"default":"info"},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"additionalProperties":false}`)}
 }
 
 type videoInspectionInput struct {
 	sourceFingerprint string
+	sourceVariant     string
 	SourceThread      string  `json:"source_thread_id"`
 	Action            string  `json:"action"`
 	Asset             string  `json:"asset_id"`
@@ -103,6 +104,36 @@ func (p *permittedTools) inspectionPublicURLPolicy(ctx context.Context, rawURL s
 		return nil, err
 	}
 	return policy, nil
+}
+
+// readPublicVideoThroughSharePlugin is the single host path for a public video
+// URL supplied during a WeChat turn.  Downloading a URL is still an
+// attachment operation, but resolving the page and obtaining its bytes must
+// use the installed share-reader package so its source binding, network grant,
+// provenance and tool records are identical to video_inspect and received
+// share observation.  Keeping this helper here also prevents the legacy
+// mcptools downloader from becoming an untracked optional execution path.
+func (p *permittedTools) readPublicVideoThroughSharePlugin(ctx context.Context, rawURL string, maxBytes int64) (mcptools.PublicVideo, error) {
+	policy, err := p.inspectionPublicURLPolicy(ctx, rawURL)
+	if err != nil {
+		return mcptools.PublicVideo{}, err
+	}
+	if maxBytes <= 0 {
+		return mcptools.PublicVideo{}, toolInputError("视频下载大小参数无效")
+	}
+	page, err := policy.readShare(ctx, maxBytes)
+	if err != nil {
+		return mcptools.PublicVideo{}, err
+	}
+	if page.Kind != "video" || len(page.Data) == 0 {
+		return mcptools.PublicVideo{}, toolInputError("分享链接没有返回实际视频")
+	}
+	return mcptools.PublicVideo{
+		Data:        page.Data,
+		ContentType: page.ContentType,
+		PageURL:     page.PageURL,
+		Title:       page.Title,
+	}, nil
 }
 
 func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspectionInput) ([]byte, string, error) {
@@ -181,7 +212,8 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 			if !ok {
 				return nil, "", errors.New("incoming_media_backend_unavailable")
 			}
-			b, _, e := reader.IncomingMedia(ctx, msg.ID, 64<<20)
+			b, variant, e := readIncomingVideo(ctx, reader, msg.ID, 64<<20)
+			in.sourceVariant = variant
 			return b, msg.ID, e
 		}
 		if wechatapp.IsChannelsShare(msg) {
@@ -271,6 +303,12 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		return "", err
 	}
 	out := map[string]any{"source_thread_id": in.SourceThread, "origin_thread_id": p.trace.Thread, "source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
+	if in.sourceVariant != "" {
+		out["source_variant"] = in.sourceVariant
+	}
+	if in.sourceVariant == linuxnative.VideoCDNRendition {
+		out["source_notice"] = "微信 CDN 可播放版本。字节与卡片声明的原件不同。"
+	}
 	out["effective_options"] = map[string]any{"action": in.Action, "batch_size": in.BatchSize, "max_dimension": in.MaxDimension, "analysis_tokens": in.Tokens, "timeout_seconds": seconds}
 	encode := func() (string, error) {
 		if !p.inspectionThreadAllowed(in.SourceThread) {
@@ -397,7 +435,6 @@ func (p *permittedTools) inspectVideoFrameRange(ctx context.Context, path, dir s
 			Account: p.trace.Account, Thread: p.trace.Thread, Requester: p.serviceRequester(),
 			Purpose: "inspect authorized video frames", RequestKey: agentID(baseKey, prompt),
 			EvidenceEpoch: epoch, Authorization: authorization, SourceVersions: sources,
-			RequestThread: p.trace.Thread,
 		}
 		policy, e := p.manager.newBoundMediaVisualObservationPolicy(actorCtx, images, inv, 1, check, prompt, tokens)
 		if e != nil {

@@ -52,7 +52,7 @@ func (m *Manager) record(r bot.Record) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
-	entry := LogEntry{MessageTime: r.MessageTime, SchemaVersion: 2, ID: m.nextLogIDLocked(), Time: now.Format(time.RFC3339Nano), Event: r.Event, Category: r.Category, ThreadID: logText(r.ThreadID, 256), Sender: logText(r.Sender, 256), Content: logText(r.Content, 4096), Reason: logText(r.Reason, 512), Status: r.Status, MessageID: logText(r.MessageID, 512), Origin: r.Origin}
+	entry := LogEntry{MessageTime: r.MessageTime, SchemaVersion: 2, ID: m.nextLogIDLocked(), Time: now.Format(time.RFC3339Nano), Event: r.Event, Category: r.Category, ThreadID: logText(r.ThreadID, 256), Sender: logText(r.Sender, 256), Content: logText(r.Content, len(r.Content)), Reason: logText(r.Reason, 512), Status: r.Status, MessageID: logText(r.MessageID, 512), Origin: r.Origin}
 	entry.SourceKind = "private"
 	if strings.HasPrefix(r.MessageID, "surf-") {
 		entry.Origin = "surf"
@@ -62,6 +62,7 @@ func (m *Manager) record(r bot.Record) {
 	entry.DecisionNote = logText(r.DecisionNote, 512)
 	entry.CallID = logText(r.CallID, 128)
 	entry.Tool = logText(r.Tool, 160)
+	entry.ToolArgs = logText(r.ToolArgs, 512)
 	entry.Effect = logText(r.Effect, 512)
 	entry.ToolCacheHit = r.ToolCacheHit
 	entry.ToolRequests = r.ToolRequests
@@ -86,6 +87,15 @@ func (m *Manager) record(r bot.Record) {
 	entry.ModelMaxFormatAttempts = r.ModelMaxFormatAttempts
 	entry.ModelProtocolCode = logText(r.ModelProtocolCode, 64)
 	entry.ReviewFailure = r.ReviewFailure
+	entry.UsageModel = logText(r.UsageModel, 128)
+	entry.UsagePurpose = logText(r.UsagePurpose, 128)
+	entry.UsagePriceSource = r.UsagePriceSource
+	entry.UsageReported = r.UsageReported
+	entry.UsagePriced = r.UsagePriced
+	entry.InputTokens = r.InputTokens
+	entry.OutputTokens = r.OutputTokens
+	entry.CacheHitTokens = r.CacheHitTokens
+	entry.EstimatedCosts = r.EstimatedCosts
 	entry.RetryAttempts = r.RetryAttempts
 	entry.RetryAt = r.RetryAt
 	entry.Source = r.ThreadID
@@ -110,6 +120,13 @@ func (m *Manager) record(r bot.Record) {
 		entry.Content = strings.ReplaceAll(entry.Content, m.config.APIKey, "[已隐藏密钥]")
 		entry.Reason = strings.ReplaceAll(entry.Reason, m.config.APIKey, "[已隐藏密钥]")
 		entry.Query = strings.ReplaceAll(entry.Query, m.config.APIKey, "[已隐藏密钥]")
+		entry.ToolArgs = strings.ReplaceAll(entry.ToolArgs, m.config.APIKey, "[已隐藏密钥]")
+	}
+	// Keep full bodies outside the bounded activity index, including after archive rotation.
+	if err := m.storeLogContent(&entry); err != nil {
+		m.storageError = "完整执行内容保存失败：" + err.Error()
+		m.status.LastEvent = "message_log_persistence_failed"
+		return
 	}
 	m.journal = append(m.journal, entry)
 	if err := m.pruneJournal(now); err != nil {
@@ -128,6 +145,7 @@ func (m *Manager) Logs() []LogEntry {
 	defer m.mu.Unlock()
 	out := append(append([]LogEntry{}, m.logs...), m.journal...)
 	for i := range out {
+		m.restoreLogContent(&out[i])
 		if out[i].Category == "" {
 			out[i].Category = eventCategory(out[i].Event)
 		}
@@ -157,8 +175,10 @@ func (m *Manager) manualContent(key string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := len(m.journal) - 1; i >= 0; i-- {
-		if m.journal[i].MessageID == key && m.journal[i].Content != "" {
-			return m.journal[i].Content
+		if m.journal[i].MessageID == key && (m.journal[i].Content != "" || m.journal[i].ContentRef != "") {
+			entry := m.journal[i]
+			m.restoreLogContent(&entry)
+			return entry.Content
 		}
 	}
 	return ""

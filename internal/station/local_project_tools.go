@@ -7,9 +7,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
+	"net/url"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,6 +28,13 @@ import (
 const localProjectToolIdle = 5 * time.Minute
 
 type localProjectTools struct {
+	legacyClientMu  sync.Mutex
+	legacyClient    *legacyToolClient
+	legacyMu        sync.Mutex
+	legacyAt        time.Time
+	legacyViews     map[string]localProjectToolView
+	mcpMu           sync.Mutex
+	mcpSessions     map[string]publicExternalMCPSession
 	home            *localHomeService
 	options         pluginruntime.Options
 	mu              sync.Mutex
@@ -40,6 +48,7 @@ type localProjectTools struct {
 	tts             localTTSBackend
 	audio           localAudioCppBackend
 	obs             localOBSPreview
+	obsProcesses    pluginruntime.ManagedServices
 	ttsCancel       context.CancelFunc           // protected by update
 	ttsJobID        string                       // protected by update
 	visionPost      pluginruntime.RouteTransport // host-only transport; tests use an offline substitute
@@ -48,26 +57,34 @@ type localProjectTools struct {
 }
 
 type localProjectToolHost struct {
-	store      *pluginhost.Store
-	controller *pluginruntime.Controller
+	store             *pluginhost.Store
+	controller        *pluginruntime.Controller
+	comfyVideoPublish sync.Mutex
 }
 
 type localProjectToolView struct {
-	ID               string                   `json:"id"`
-	Name             string                   `json:"name"`
-	CatalogAvailable bool                     `json:"catalog_available"`
-	RuntimeReady     bool                     `json:"runtime_ready"`
-	PDFReady         bool                     `json:"pdf_ready"`
-	UpdateAvailable  bool                     `json:"update_available"`
-	Installed        bool                     `json:"installed"`
-	Enabled          bool                     `json:"enabled"`
-	Revision         int                      `json:"revision"`
-	State            string                   `json:"state"`
-	Reason           string                   `json:"reason,omitempty"`
-	VoiceProfiles    []localRVCVoice          `json:"voice_profiles,omitempty"`
-	SpeechVoices     []localTTSVoice          `json:"speech_voices,omitempty"`
-	AudioModels      []localAudioCppModelView `json:"audio_models,omitempty"`
-	Workflows        []localComfyWorkflowView `json:"workflows,omitempty"`
+	DirectoryPackage   bool                         `json:"directory_package"`
+	Backends           []pluginhost.ToolBackendView `json:"backends,omitempty"`
+	PackageVersion     string                       `json:"package_version,omitempty"`
+	PackageDigest      string                       `json:"package_digest,omitempty"`
+	PackagePermissions []string                     `json:"package_permissions,omitempty"`
+	ExternalPackage    bool                         `json:"external_package,omitempty"`
+	Host               string                       `json:"host,omitempty"`
+	ID                 string                       `json:"id"`
+	Name               string                       `json:"name"`
+	CatalogAvailable   bool                         `json:"catalog_available"`
+	RuntimeReady       bool                         `json:"runtime_ready"`
+	PDFReady           bool                         `json:"pdf_ready"`
+	UpdateAvailable    bool                         `json:"update_available"`
+	Installed          bool                         `json:"installed"`
+	Enabled            bool                         `json:"enabled"`
+	Revision           int                          `json:"revision"`
+	State              string                       `json:"state"`
+	Reason             string                       `json:"reason,omitempty"`
+	VoiceProfiles      []localRVCVoice              `json:"voice_profiles,omitempty"`
+	SpeechVoices       []localTTSVoice              `json:"speech_voices,omitempty"`
+	AudioModels        []localAudioCppModelView     `json:"audio_models,omitempty"`
+	Workflows          []localComfyWorkflowView     `json:"workflows,omitempty"`
 }
 
 func (s *localProjectTools) runtimeReady() bool {
@@ -117,7 +134,7 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 		}
 		return s.host, nil
 	}
-	dir := filepath.Join(stationPublicToolsDir(s.home.dataDir), fish)
+	dir := filepath.Join(stationPublicToolsDir(s.home.dataDir), "catalog")
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return nil, err
@@ -145,11 +162,20 @@ func (s *localProjectTools) forFish(fish string) (*localProjectToolHost, error) 
 func (s *localProjectTools) close() error {
 	s.update.Lock()
 	defer s.update.Unlock()
+	s.mcpMu.Lock()
+	for key, session := range s.mcpSessions {
+		_ = session.hub.Close()
+		delete(s.mcpSessions, key)
+	}
+	s.mcpMu.Unlock()
 	s.obs.close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
 	var err error
+	obsCtx, obsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = s.obsProcesses.Close(obsCtx)
+	obsCancel()
 	if s.rvc != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		err = s.rvc.Close(ctx)
@@ -181,7 +207,7 @@ func (s *localProjectTools) close() error {
 var localProjectPackages = []struct{ ID, Name string }{
 	{pluginruntime.DocumentWorkshopID, "文档工坊"},
 	{localAudioPackage, "音频工坊"},
-	{localasr.PluginID, "本地媒体识别"},
+	{localasr.PluginID, "媒体识别"},
 	{localRVCPackage, "RVC 换声"},
 	{localComfyPackage, "ComfyUI 创作"},
 	{localYuEPackage, "YuE 作曲"},
@@ -210,12 +236,38 @@ func (s *localProjectTools) isActive(id string) bool {
 	return s.active[id] > 0
 }
 
-func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string) (localProjectToolView, error) {
-	view := localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+func (s *localProjectTools) projectView(ctx context.Context, host *localProjectToolHost, id, name string, discovered ...map[string]discoveredToolPackage) (view localProjectToolView, err error) {
+	view = localProjectToolView{ID: id, Name: name, RuntimeReady: s.runtimeReady(), State: "not_installed"}
+	var sources map[string]discoveredToolPackage
+	if len(discovered) > 0 {
+		sources = discovered[0]
+	} else {
+		sources = discoverToolPackages(s.options.CatalogDirectory)
+	}
+	defer func() {
+		_, view.DirectoryPackage = sources[id]
+		if err == nil {
+			s.populateToolBackends(ctx, host, &view)
+		}
+	}()
+	// A catalog migration placeholder is not an executable tool. Keep it visible
+	// with an actionable reason instead of reporting a ready Python runtime.
+	contract, contractErr := catalog.ContractFor(id)
+	if contractErr == nil && contract.Package.Runtime.Transport == "unbound" {
+		view.RuntimeReady = false
+		view.Reason = "该工具包尚未绑定执行后端。"
+		if id == "visual-generation" {
+			view.Reason = "本机图像和视频生成使用「ComfyUI 创作」中已登记的工作流。"
+		}
+		view.State = "not_available"
+		return view, nil
+	}
+
 	var backendBusy bool
+	var backendRunning bool
 	if s.options.CatalogDirectory != "" {
-		info, err := os.Lstat(filepath.Join(s.options.CatalogDirectory, view.ID, "plugin.json"))
-		view.CatalogAvailable = err == nil && info.Mode().IsRegular()
+		_, err := catalogPackageDir(s.options.CatalogDirectory, view.ID)
+		view.CatalogAvailable = err == nil
 	}
 	if id == localRVCPackage {
 		view.RuntimeReady = false
@@ -223,6 +275,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			info, err := s.rvc.Info(ctx, host.store.Account())
 			view.RuntimeReady, view.VoiceProfiles = err == nil && len(info.Profiles) != 0, info.Profiles
 			backendBusy = err == nil && info.Busy
+			backendRunning = err == nil && info.Running
 			if err != nil {
 				view.Reason = localRVCSetupReason(err)
 			} else if !view.RuntimeReady {
@@ -236,9 +289,12 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		if host != nil && s.comfy != nil {
 			info, workflows, err := s.comfySetup(ctx, host.store.Account())
 			view.RuntimeReady = err == nil
+			backendRunning = err == nil && info.Running
 			backendBusy = err == nil && info.Busy
 			view.Workflows = localComfyWorkflowViews(workflows)
-			if errors.Is(err, errLocalComfyWorkflowSetup) {
+			if err == nil {
+				view.Reason = ""
+			} else if errors.Is(err, errLocalComfyWorkflowSetup) {
 				view.Reason = "comfyui_workflows_missing"
 			} else if err != nil {
 				view.Reason = err.Error() // comfySetup returns only public setup messages.
@@ -251,7 +307,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		if host != nil && s.yue != nil {
 			info, err := s.yue.Info(ctx, host.store.Account())
 			if err == nil {
-				view.RuntimeReady, backendBusy, view.Reason = true, info.Busy, ""
+				view.RuntimeReady, backendBusy, backendRunning, view.Reason = true, info.Busy, info.Running, ""
 			} else {
 				view.Reason = localComputeSetupReason(localYuEPackage, err)
 			}
@@ -283,6 +339,7 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 					}
 				}
 				view.RuntimeReady, view.Reason, backendBusy = ready, "", info.Busy
+				backendRunning = info.Running
 				if !ready {
 					view.Reason = "audio_cpp_model_missing"
 				}
@@ -299,6 +356,19 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 				view.RuntimeReady = true
 				view.Reason = ""
 				backendBusy = s.obs.status(config).Active
+				backendRunning = s.obsProcesses.Status("preview").Running
+			}
+		}
+	}
+	if contractErr != nil {
+		if source, ok := sources[id]; ok {
+			view.ExternalPackage = true
+			view.PackageVersion, view.PackageDigest = source.Version, source.digest
+			view.PackagePermissions = source.Permissions
+			view.CatalogAvailable = source.compatible()
+			if !view.CatalogAvailable {
+				view.State = "not_available"
+				view.Reason = "此工具包的运行协议、入口或平台与当前工作站不兼容。"
 			}
 		}
 	}
@@ -321,18 +391,25 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 			}
 		}
 	}
-	contract, err := catalog.ContractFor(id)
-	if err != nil {
-		return view, err
+	targetDigest := contract.ManifestSHA256
+	if contractErr != nil {
+		view.CatalogAvailable = view.ExternalPackage && view.CatalogAvailable
+		view.ExternalPackage = true
+		if view.PackageVersion == "" {
+			view.PackageVersion = item.Package.Version
+			view.PackagePermissions = item.Permissions
+		}
+		targetDigest = view.PackageDigest
+		view.Reason = ""
 	}
-	view.UpdateAvailable = view.CatalogAvailable && item.Digest != contract.ManifestSHA256
+	view.UpdateAvailable = view.CatalogAvailable && item.Digest != targetDigest
 	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
-	case backendBusy || s.isActive(id):
+	case backendBusy || backendRunning || s.isActive(id):
 		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State
@@ -343,11 +420,63 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	return view, nil
 }
 
+func (s *localProjectTools) packages(ctx context.Context, host *localProjectToolHost, sources map[string]discoveredToolPackage) []struct{ ID, Name string } {
+	out := append([]struct{ ID, Name string }{}, localProjectPackages...)
+	seen := map[string]bool{}
+	for _, p := range out {
+		seen[p.ID] = true
+	}
+	if items, err := catalog.List(); err == nil {
+		for _, p := range items {
+			if p.ID != "mobile-control" && p.ID != "music" && !seen[p.ID] {
+				out = append(out, struct{ ID, Name string }{p.ID, p.Name})
+				seen[p.ID] = true
+			}
+		}
+	}
+	if host != nil {
+		if items, err := host.store.List(ctx); err == nil {
+			for _, p := range items {
+				if !p.Removed && p.Package.ID != "mobile-control" && p.Package.ID != "music" && !seen[p.Package.ID] {
+					out = append(out, struct{ ID, Name string }{p.Package.ID, p.Package.Name})
+					seen[p.Package.ID] = true
+				}
+			}
+		}
+	}
+	ids := make([]string, 0, len(sources))
+	for id := range sources {
+		if id != "music" && !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		out = append(out, struct{ ID, Name string }{id, sources[id].Name})
+	}
+	return out
+}
+
 func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) {
+	s.toolFileRoutes(owner, mux)
+	mux.HandleFunc("POST /api/local/project-tools/{id}/balance", owner.Protect(s.publicToolBalance))
 	s.visionConfigurationRoutes(owner, mux)
+	mux.HandleFunc("GET "+sharedASRRoute, owner.Protect(s.sharedASR))
+	mux.HandleFunc("POST "+sharedASRRoute, owner.Protect(s.sharedASR))
+	mux.HandleFunc("GET "+sharedSpeechRoute, owner.Protect(s.sharedSpeech))
+	mux.HandleFunc("POST "+sharedSpeechRoute, owner.Protect(s.sharedSpeech))
 	s.comfyDeploymentRoutes(owner, mux)
 	s.yueDeploymentRoutes(owner, mux)
 	s.audioCppDeploymentRoutes(owner, mux)
+	mux.HandleFunc("GET /api/local/project-tools/applications", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		rows := make([]localProjectToolView, 0)
+		for _, v := range s.legacyToolViews(r.Context()) {
+			rows = append(rows, v)
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+		w.Header().Set("Cache-Control", "no-store")
+		websession.Respond(w, 200, map[string]any{"wechat": rows})
+	}))
 	mux.HandleFunc("GET /api/local/project-tools", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		record, err := s.home.identity.Read()
 		if err != nil {
@@ -363,22 +492,43 @@ func (s *localProjectTools) routes(owner *websession.Store, mux *http.ServeMux) 
 			}
 		}
 		views := make([]localProjectToolView, 0, len(localProjectPackages))
-		for _, pkg := range localProjectPackages {
-			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name)
+		sources := discoverToolPackages(s.options.CatalogDirectory)
+		notes := s.refreshDirectoryTools(r.Context(), host, sources)
+		for _, pkg := range s.packages(r.Context(), host, sources) {
+			view, err := s.projectView(r.Context(), host, pkg.ID, pkg.Name, sources)
 			if err != nil {
 				websession.Fail(w, 503, "项目工具安装状态不可读")
 				return
+			}
+			if note := notes[pkg.ID]; note != "" {
+				view.Reason = note
 			}
 			views = append(views, view)
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		websession.Respond(w, 200, map[string]any{"tools": views})
 	}))
-	for _, pkg := range localProjectPackages {
-		mux.HandleFunc("PUT /api/local/project-tools/"+pkg.ID, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
-			s.changeProjectTool(w, r, pkg.ID, pkg.Name)
-		}))
-	}
+	mux.HandleFunc("PUT /api/local/project-tools/{id}", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		record, err := s.home.identity.Read()
+		if err != nil {
+			websession.Fail(w, 409, "身份不可读")
+			return
+		}
+		host, err := s.forFish(record.FishID)
+		if err != nil {
+			websession.Fail(w, 503, "工具目录不可读")
+			return
+		}
+		sources := discoverToolPackages(s.options.CatalogDirectory)
+		for _, p := range s.packages(r.Context(), host, sources) {
+			if p.ID == id {
+				s.changeProjectTool(w, r, id, p.Name)
+				return
+			}
+		}
+		websession.Fail(w, 404, "工具未登记")
+	}))
 	preview := owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		s.obsPreview(owner, w, r)
 	})
@@ -391,6 +541,8 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		Action           string `json:"action"`
 		Revision         int    `json:"revision"`
 		ApproveArtifacts bool   `json:"approve_artifacts"`
+		PackageDigest    string `json:"package_digest"`
+		IdleOnly         bool   `json:"idle_only"`
 	}
 	if !websession.Decode(w, r, &in) {
 		return
@@ -446,45 +598,40 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		}
 		contract, contractErr := catalog.ContractFor(id)
 		if contractErr != nil {
-			websession.Fail(w, 503, "官方工具声明不可读")
-			return
-		}
-		if in.Action == "install" && !missing && current.Digest != contract.ManifestSHA256 {
+			source, ok := discoverToolPackages(s.options.CatalogDirectory)[id]
+			if !ok || !source.compatible() || in.PackageDigest != source.digest {
+				websession.Fail(w, 409, "工具包未就绪或版本已变化，请刷新并重新确认")
+				return
+			}
+			if in.Action == "install" && !missing {
+				websession.Fail(w, 409, "工具已安装，请使用更新操作")
+				return
+			}
+			prepared, prepareErr := host.store.PrepareCatalog(ctx, source.directory, source.digest)
+			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != source.digest {
+				websession.Fail(w, 409, "工具包校验失败，请检查解压是否完整以及清单内的文件摘要")
+				return
+			}
+			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, prepared.Package.Permissions)
+		} else if in.Action == "install" && !missing && current.Digest != contract.ManifestSHA256 {
 			websession.Fail(w, 409, "已安装版本需要单独升级")
 			return
-		}
-		if missing || current.Digest != contract.ManifestSHA256 {
+		} else if missing || current.Digest != contract.ManifestSHA256 {
 			if s.options.CatalogDirectory == "" {
 				websession.Fail(w, 409, "当前发行包未提供该项目工具")
 				return
 			}
-			prepared, prepareErr := host.store.Prepare(ctx, filepath.Join(s.options.CatalogDirectory, id))
+			packageDir, resolveErr := catalogPackageDir(s.options.CatalogDirectory, id)
+			if resolveErr != nil {
+				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
+				return
+			}
+			prepared, prepareErr := host.store.PrepareCatalog(ctx, packageDir, contract.ManifestSHA256)
 			if prepareErr != nil || prepared.Package.ID != id || prepared.Digest != contract.ManifestSHA256 {
 				websession.Fail(w, 409, "项目工具发行源缺失或摘要不匹配")
 				return
 			}
-			grants := []string{"artifact.read", "artifact.write"}
-			if id == localasr.PluginID {
-				grants = []string{"artifact.read", "artifact.write", "model.invoke"}
-			}
-			if id == localRVCPackage {
-				grants = localRVCGrants
-			}
-			if id == localComfyPackage {
-				grants = localComfyGrants
-			}
-			if id == localYuEPackage {
-				grants = localYuEGrants
-			}
-			if id == localTTSPackage {
-				grants = localTTSGrants
-			}
-			if id == localAudioCppPackage {
-				grants = localAudioCppGrants
-			}
-			if id == localOBSPackage {
-				grants = []string{"network"}
-			}
+			grants := officialProjectToolGrants(id, contract.Package.Permissions)
 			_, err = host.store.Install(ctx, prepared.Token, prepared.Digest, grants)
 		}
 	} else {
@@ -496,7 +643,15 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 			websession.Fail(w, 409, "请先启用该项目工具")
 			return
 		}
-		if id == localOBSPackage {
+		if externalToolDataID(id) && (in.Action == "enable" || in.Action == "start" || in.Action == "restart") {
+			if err := s.loadExternalToolConfig(ctx, host, current); err != nil {
+				websession.Fail(w, 409, "工具配置暂未加载，请检查该工具配置目录中的 config.json 必填项和格式，或等待在途任务结束。已有配置保留。")
+				return
+			}
+		}
+		if in.Action == "start" || in.Action == "stop" || in.Action == "restart" {
+			err = s.changeLifecycle(ctx, host, id, current.Revision, in.Action, in.IdleOnly)
+		} else if id == localOBSPackage {
 			if in.Action == "enable" {
 				config, checkErr := localOBSConfiguration(ctx, host)
 				if checkErr != nil || !config.Configured {
@@ -505,7 +660,10 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 				}
 			}
 			if in.Action == "disable" {
-				s.obs.stop()
+				if err := s.stopOBSProcess(ctx); err != nil {
+					websession.Fail(w, 409, err.Error())
+					return
+				}
 			}
 			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
 		} else if id == localAudioCppPackage {
@@ -568,7 +726,23 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if in.Action == "enable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, true)
+			} else if in.Action == "disable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, false)
+			} else if in.Action == "stop" {
+				err = s.yue.Stop(ctx)
+			} else if in.Action == "start" || in.Action == "restart" {
+				info, infoErr := s.yue.Info(ctx, record.FishID)
+				if infoErr != nil {
+					err = infoErr
+				} else {
+					if in.Action == "restart" {
+						_ = s.yue.Stop(ctx)
+					}
+					err = s.yue.Use(ctx, record.FishID, info.Binding, true, func(localComfyAudioClient) error { return nil })
+				}
+			}
 			if err == nil && in.Action == "disable" && s.yue != nil {
 				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
 				err = s.yue.Stop(stopCtx)
@@ -607,7 +781,27 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 					return
 				}
 			}
-			_, err = host.store.SetEnabled(ctx, id, current.Revision, in.Action == "enable")
+			if in.Action == "enable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, true)
+			} else if in.Action == "disable" {
+				_, err = host.store.SetEnabled(ctx, id, current.Revision, false)
+			} else if in.Action == "stop" {
+				err = s.rvc.Stop(ctx)
+			} else if in.Action == "start" || in.Action == "restart" {
+				info, infoErr := s.rvc.Info(ctx, record.FishID)
+				if infoErr != nil || len(info.Profiles) == 0 {
+					err = infoErr
+					if err == nil {
+						err = errors.New("station_rvc_profile_not_registered")
+					}
+				} else {
+					if in.Action == "restart" {
+						_ = s.rvc.Stop(ctx)
+					}
+					profile := info.Profiles[0].ID
+					_, _, err = s.rvc.Call(ctx, record.FishID, info.Binding, http.MethodGet, "/rvc-health?voice_profile_id="+url.QueryEscape(profile), "", nil)
+				}
+			}
 			if err == nil && in.Action == "disable" && s.rvc != nil {
 				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
 				err = s.rvc.Stop(stopCtx)

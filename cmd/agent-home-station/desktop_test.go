@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -89,7 +88,7 @@ func testDesktopRun(t *testing.T, nativeURL string) {
 	done := make(chan error, 1)
 	args := []string{"--desktop", "--data", dataDir, "--workspace", workspace, "--listen", "127.0.0.1:0"}
 	if nativeURL != "" {
-		nativeDir := filepath.Join(dataDir, "apps", "wechat", "native")
+		nativeDir := filepath.Join(dataDir, "applications", "wechat", "native")
 		if err := os.MkdirAll(nativeDir, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -113,13 +112,7 @@ func testDesktopRun(t *testing.T, nativeURL string) {
 		t.Fatal(err)
 	}
 	client := &http.Client{Jar: jar, Timeout: 2 * time.Second}
-	loginRequest, err := http.NewRequest(http.MethodPost, "http://"+address+"/api/login", bytes.NewBufferString(`{"password":"synthetic-local-password"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	loginRequest.Header.Set("Content-Type", "application/json")
-	loginRequest.Header.Set("Origin", "http://"+address)
-	login, err := client.Do(loginRequest)
+	login, err := client.Get("http://" + address + "/api/session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +120,7 @@ func testDesktopRun(t *testing.T, nativeURL string) {
 	err = json.NewDecoder(login.Body).Decode(&session)
 	login.Body.Close()
 	if err != nil || login.StatusCode != http.StatusOK {
-		t.Fatalf("desktop login: %d %v", login.StatusCode, err)
+		t.Fatalf("desktop session: %d %v", login.StatusCode, err)
 	}
 	req, err := http.NewRequest(http.MethodGet, "http://"+address+"/api/local/runtime", nil)
 	if err != nil {

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import subprocess
 from types import SimpleNamespace
 
@@ -35,18 +36,21 @@ def main():
     p.add_argument('--semitones',type=int,default=0)
     p.add_argument('--index-rate',type=float,default=.65)
     p.add_argument('--protect',type=float,default=.33)
+    p.add_argument('--rms-mix-rate',type=float,default=.5)
+    p.add_argument('--filter-radius',type=int,default=-1)
     p.add_argument('--device',choices=['auto','cpu','cuda:0'],default='auto')
     p.add_argument('--precision',choices=['auto','float32'],default='auto')
     p.add_argument('--pitch-chunk-seconds',type=float,default=10,help='RMVPE core slice in seconds; 0 uses the whole recording')
     p.add_argument('--pitch-overlap-seconds',type=float,default=1,help='Pitch context on each side, aligned to the 10 ms model grid')
     p.add_argument('--conversion-chunk-seconds',type=float,default=8,help='Core vocal conversion slice; 0 keeps upstream whole-recording behavior')
     p.add_argument('--conversion-context-seconds',type=float,default=1,help='Vocal context around each slice, removed before joining')
+    p.add_argument('--conversion-crossfade-seconds',type=float,default=.08,help='Blend adjacent converted slices across their shared context')
     args=p.parse_args()
     from rvc_pitch import pitch_parameters
     pitch_parameters(args.pitch_chunk_seconds,args.pitch_overlap_seconds)
     from rvc_windows import conversion_parameters
-    conversion_options=conversion_parameters(args.conversion_chunk_seconds,args.conversion_context_seconds)
-    if not -12<=args.semitones<=12 or not 0<=args.index_rate<=1 or not 0<=args.protect<=.5:raise ValueError('invalid_conversion_parameters')
+    conversion_options=conversion_parameters(args.conversion_chunk_seconds,args.conversion_context_seconds,args.conversion_crossfade_seconds)
+    if not -12<=args.semitones<=12 or not 0<=args.index_rate<=1 or not 0<=args.protect<=.5 or not 0<=args.rms_mix_rate<=1 or args.filter_radius not in (-1,0,1,2,3,4,5,6,7):raise ValueError('invalid_conversion_parameters')
     project=Path(args.project).resolve();model=Path(args.model).resolve();source=Path(args.source).resolve();output=Path(args.output).resolve()
     index=str(Path(args.index).resolve()) if args.index else ''
     if not model.is_file() or not source.is_file() or index and not Path(index).is_file():raise ValueError('conversion_resource_missing')
@@ -115,7 +119,7 @@ def main():
         if conversion_options['chunk_samples']:
             vc.pipeline.t_max=len(part)+vc.pipeline.window
         try:
-            status,result=convert_backend(vc,str(source),args.semitones,index,args.index_rate,args.protect,backend)
+            status,result=convert_backend(vc,str(source),args.semitones,index,args.index_rate,args.protect,backend,args.rms_mix_rate,None if args.filter_radius<0 else args.filter_radius)
             if result is None:raise RuntimeError('RVC did not produce audio: '+status)
             rate,audio=result
             if rate is None or audio is None:raise RuntimeError('RVC did not produce valid audio: '+status)
@@ -123,11 +127,11 @@ def main():
         finally:
             rvc_modules.load_audio=original_loader
             vc.pipeline.t_max=previous_max
-    rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,progress=pitch_progress)
+    rate,audio=convert_vocal_windows(waveform,convert_part,chunk_seconds=args.conversion_chunk_seconds,context_seconds=args.conversion_context_seconds,crossfade_seconds=args.conversion_crossfade_seconds,progress=pitch_progress)
     if os.name=='nt' and index and args.index_rate>0 and not index_reads:
         raise RuntimeError('selected_rvc_index_was_not_used')
     output.parent.mkdir(parents=True,exist_ok=True);wavfile.write(str(output),rate,audio)
-    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','backend_layout':backend,'model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'index_vectors_used':index_reads[0] if index_reads else None,'protect':args.protect,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
+    output.with_suffix('.rvc.json').write_text(json.dumps({'engine':'RVC','backend_layout':backend,'model':model.name,'semitones':args.semitones,'index_rate':args.index_rate,'index_vectors_used':index_reads[0] if index_reads else None,'protect':args.protect,'rms_mix_rate':args.rms_mix_rate,'filter_radius':(0 if backend=='official-2026' else 3) if args.filter_radius<0 else args.filter_radius,'device':device,'precision':'float16' if config.is_half else 'float32','sample_rate':rate,'seconds':len(audio)/rate,'pitch':pitch_options,'conversion':conversion_options,'wechat_sends':0},indent=2),encoding='utf-8')
     print('RVC conversion complete; seconds',len(audio)/rate,'no messages sent',flush=True)
 
 

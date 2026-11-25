@@ -34,7 +34,13 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 					var text string
 					var evidence MediaObservationEvidence
 					var err error
-					if w.hasScopedMedia(current) {
+					// Follow-up images, voice and video must stay on the host's
+					// native media path.  The generic analyzer is also used by
+					// share cards, and letting it see a plain image can turn an
+					// image follow-up into share_persisted_source_unavailable.
+					// Keep the old WeChat behavior: resolve the exact message ID,
+					// then dispatch by its native media type.
+					if w.config.ScopedAnalyzer != nil && (current.Type == 3 || current.Type == 34 || current.Type == 43 || current.Type == 47) {
 						text, evidence, err = w.analyzeIncomingMediaEvidence(ctx, current)
 					} else {
 						text, evidence, err = analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)
@@ -100,7 +106,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			return w.persistErr
 		})
 	}
-	return agentrun.New(agentrun.Scope{Account: in.Account, Thread: in.Thread, Sender: in.Sender, RunID: in.TraceID}, prepare, commit)
+	return agentrun.New(agentrun.Scope{Account: in.Account, Thread: in.Thread, Sender: in.Sender, RunID: in.TraceID, AllowThreadPeers: in.IsGroup}, prepare, commit)
 }
 
 func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message, eligible bool) {
@@ -131,9 +137,9 @@ func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message
 	}
 }
 
-// settleGenerationFollowups runs on the actor. A consumed event completes with
-// its parent run; it never enters a second independent response. Failed runs
-// retain the existing uncertain-effect rule instead of blind effect replay.
+// A later message participates in the active turn when possible. If that turn
+// fails, process the message normally on its own turn instead of leaving an
+// indefinitely interrupted follow-up card.
 func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 	if j.session == nil {
 		return
@@ -147,9 +153,6 @@ func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 		if item.FollowupConsumed {
 			if success {
 				item.Phase = "completed"
-			} else if j.toolStarted {
-				item.Phase = "interrupted"
-				item.ToolStarted = true
 			}
 		}
 		item.Updated = time.Now().UTC()
@@ -172,20 +175,20 @@ func (w *Worker) settleGenerationFollowups(j *generationJob, success bool) {
 // recoverFollowups must run before normal restart recovery rewrites parent
 // phases. The inbox itself is the durable source; no raw media XML is stored.
 func (w *Worker) recoverFollowups() {
-	parents := map[string]inboxItem{}
+	parents := map[string]bool{}
 	for _, item := range w.runtime.Inbox {
-		parents[item.Event.Data.MessageID] = item
+		if item.ToolStarted {
+			parents[item.Event.Data.MessageID] = true
+		}
 	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.Phase != "following" {
 			continue
 		}
-		parent := parents[item.FollowupParent]
 		item.Phase = "received"
-		if item.FollowupConsumed && parent.ToolStarted {
+		if item.FollowupConsumed && parents[item.FollowupParent] {
 			item.Phase = "interrupted"
-			item.ToolStarted = true
 		}
 		if item.Phase == "received" {
 			item.FollowupParent = ""

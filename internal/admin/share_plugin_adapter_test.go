@@ -17,24 +17,27 @@ import (
 	"wechat-bot/internal/pluginruntime"
 )
 
-type shareFailureExecutor struct{}
+type shareFailureExecutor struct{ result string }
 
 func (e shareFailureExecutor) Start(context.Context, pluginhost.Package, pluginhost.Grant) (pluginhost.Session, error) {
 	return e, nil
 }
 func (shareFailureExecutor) Health(ctx context.Context) error { return ctx.Err() }
 func (shareFailureExecutor) Close() error                     { return nil }
-func (shareFailureExecutor) Call(ctx context.Context, _ pluginhost.Invocation, _ string, _ json.RawMessage) (json.RawMessage, error) {
+func (e shareFailureExecutor) Call(ctx context.Context, _ pluginhost.Invocation, _ string, _ json.RawMessage) (json.RawMessage, error) {
 	_, err := pluginruntime.InvokeHostService(ctx, "wechat/http_route", routeEnvelope("channels-parse", parseBody, ""))
 	if err != nil {
 		// The packaged stdio entry point deliberately returns this fixed code.
 		return json.RawMessage(`{"ok":false,"error":"host_service_denied_or_failed"}`), nil
 	}
+	if e.result != "" {
+		return json.RawMessage(e.result), nil
+	}
 	return json.RawMessage(`{"ok":false,"error":"untrusted_plugin_error_with_secret"}`), nil
 }
 
 func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing.T) {
-	for _, mode := range []string{"http", "network", "provider", "invalid_response", "source_changed", "arbitrary_error", "unreviewed_web_code", "plugin_error"} {
+	for _, mode := range []string{"http", "network", "provider", "invalid_response", "source_changed", "arbitrary_error", "unreviewed_web_code", "plugin_error", "plugin_parser_error"} {
 		t.Run(mode, func(t *testing.T) {
 			f, native, policy, ctx := receivedPolicyFixture(t, false)
 			calls := 0
@@ -50,7 +53,7 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 				case "source_changed":
 					native.msg.Body = "edited source"
 					return json.RawMessage(`{"code":0}`), nil
-				case "plugin_error":
+				case "plugin_error", "plugin_parser_error":
 					return json.RawMessage(`{"code":0,"data":{"playable_url":"` + previewURL + `"}}`), nil
 				case "unreviewed_web_code":
 					return nil, &mcptools.WebError{Code: "synthetic-private-token https://private.invalid/secret", Status: 403}
@@ -60,7 +63,11 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 					return json.RawMessage(`{"code":0,"data":{"playable_url":"https://private.invalid/secret"}}`), nil
 				}
 			}
-			controller, err := pluginruntime.NewController(policy.store, shareFailureExecutor{})
+			executor := shareFailureExecutor{}
+			if mode == "plugin_parser_error" {
+				executor.result = `{"ok":false,"error":"channels_feed_identity_unverified"}`
+			}
+			controller, err := pluginruntime.NewController(policy.store, executor)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,13 +75,13 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 			_, err = policy.resolve(ctx, native.source)
 			var diagnostic *shareResolutionFailure
 			stage := "channels_parse"
-			if mode == "plugin_error" {
+			if mode == "plugin_error" || mode == "plugin_parser_error" {
 				stage = "result_validation"
 			}
 			if !errors.As(err, &diagnostic) || diagnostic.stage != stage || calls != 1 {
 				t.Fatalf("lost host diagnostic: %v, calls=%d", err, calls)
 			}
-			want := map[string]string{"http": "share_plugin_route_http_rejected", "network": "share_plugin_route_network_failed", "provider": "share_route_provider_rejected", "invalid_response": "share_route_response_binding_failed", "source_changed": "share_native_source_changed", "arbitrary_error": "share_plugin_resolution_incomplete", "unreviewed_web_code": "share_plugin_resolution_incomplete", "plugin_error": "share_result_binding_failed"}[mode]
+			want := map[string]string{"http": "share_plugin_route_http_rejected", "network": "share_plugin_route_network_failed", "provider": "share_route_provider_rejected", "invalid_response": "share_route_response_binding_failed", "source_changed": "share_native_source_changed", "arbitrary_error": "share_plugin_resolution_incomplete", "unreviewed_web_code": "share_plugin_resolution_incomplete", "plugin_error": "share_parser_rejected", "plugin_parser_error": "channels_feed_identity_unverified"}[mode]
 			if diagnostic.code != want || sharedVideoReadReason(err) != want {
 				t.Fatalf("wrong safe cause: %+v", diagnostic)
 			}
@@ -106,17 +113,48 @@ func TestReceivedShareFailureKeepsHostStageWithoutReplayingUnknownJob(t *testing
 	}
 }
 
-type receivedPluginNative struct{ *bindingChannelsNative }
+type receivedPluginNative struct {
+	*bindingChannelsNative
+	shortLinkFailure error
+}
 
 func (n *receivedPluginNative) ChannelsShareURL(_ context.Context, id, thread, object string) (string, error) {
 	if id != n.msg.ID || thread != n.msg.ThreadID || object != n.source.ObjectID {
 		return "", errors.New("wrong native shortlink request")
 	}
+	if n.shortLinkFailure != nil {
+		return "", n.shortLinkFailure
+	}
 	return "https://weixin.qq.com/sph/synthetic123", nil
+}
+
+func TestChannelsResolverPreservesVerifiedNativeLinkFailure(t *testing.T) {
+	for _, tc := range []struct{ nativeReason, want string }{
+		{"channels_share_identity_missing", "channels_share_identity_missing"},
+		{"channels_share_identity_mismatch", "channels_share_identity_mismatch"},
+		{"resolver error at https://private.invalid/credential", "share_native_shortlink_unavailable"},
+	} {
+		f, n, policy, ctx := receivedPolicyFixture(t, false)
+		f.manager.native.(*receivedPluginNative).shortLinkFailure = errors.New(tc.nativeReason)
+		if _, err := policy.resolve(ctx, n.source); err == nil || err.Error() != tc.want || sharedVideoReadReason(err) != tc.want {
+			t.Fatalf("wrong safe native link failure for %q: %v", tc.want, err)
+		}
+	}
 }
 
 func receivedPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChannelsNative, *receivedSharePolicy, context.Context) {
 	return receivedPolicyFixtureFor(t, remember, 51)
+}
+
+func TestChannelsReadOnlyReplayGetsDistinctRequestKey(t *testing.T) {
+	f, native, original, ctx := receivedPolicyFixture(t, false)
+	replay, err := f.manager.newReceivedSharePolicyFor(companion.WithReplayNonce(ctx, "review-one"), native.msg, "share.resolve_channels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.invocation().RequestKey == original.invocation().RequestKey || !strings.Contains(replay.invocation().RequestKey, "admin-readonly-replay-review-one") {
+		t.Fatal("read-only replay reused the stopped parser job")
+	}
 }
 
 func receivedPolicyFixtureFor(t *testing.T, remember bool, kind int) (*webFixture, *bindingChannelsNative, *receivedSharePolicy, context.Context) {
@@ -134,7 +172,7 @@ func receivedPolicyFixtureFor(t *testing.T, remember bool, kind int) (*webFixtur
 		n.msg.Link = &linuxnative.LinkCard{URL: "https://public.example/share?key=synthetic", Title: "synthetic share"}
 		f.manager.mcp.Enabled, f.manager.mcp.WebFetchEnabled = true, true
 	}
-	f.manager.native = &receivedPluginNative{n}
+	f.manager.native = &receivedPluginNative{bindingChannelsNative: n}
 	ctx := t.Context()
 	if remember {
 		original := ""
@@ -163,10 +201,32 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 			if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
 				t.Fatal(err)
 			}
+			if remember {
+				before := p.epoch
+				other := companion.Input{Channel: "wechat", Account: "test", Thread: "separate-thread", Sender: "another-user", TraceID: "another-message", Text: "separate message"}
+				if err := f.manager.memory.Observe(other, f.manager.config.Companion, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.manager.memory.Clear(companion.ScopeID("wechat", "test", "separate-thread")); err != nil {
+					t.Fatal(err)
+				}
+				after, err := f.manager.memory.RecallEpoch(ctx)
+				if err != nil || after == before {
+					t.Fatal("separate memory update did not advance epoch", err)
+				}
+				if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+					t.Fatal("unrelated memory update blocked the original card", err)
+				}
+			}
 			foreign := j
 			foreign.Context.Thread = "another-room"
 			if err := p.Check(ctx, foreign, pluginhost.Capability{}); err == nil {
 				t.Fatal("cross room accepted")
+			}
+			n.msg.ServerID = "refreshed-server-id"
+			n.msg.CreatedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+			if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+				t.Fatal("transport metadata refresh blocked the same native content", err)
 			}
 			n.msg.Body = "edited native card"
 			if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
@@ -191,6 +251,53 @@ func TestReceivedSharePolicyScopeRevocationAndNoMemory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReceivedShareWithoutMemoryRecordUsesExactNativeCard(t *testing.T) {
+	for _, kind := range []int{5, 51} {
+		f, n, previous, ctx := receivedPolicyFixtureFor(t, false, kind)
+		f.manager.config.Companion.Permissions.Remember = true
+		f.manager.config.Companion.Permissions.ObserveGroups = true
+		n.msg.ThreadID = "synthetic@chatroom"
+		f.manager.config.GroupRules = []GroupRule{{ID: n.msg.ThreadID, Mode: "social"}}
+
+		p, err := f.manager.newReceivedSharePolicyFor(ctx, n.msg, previous.tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := pluginhost.Job{Plugin: "share-reader", Tool: p.tool, Context: p.invocation()}
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err != nil {
+			t.Fatal(err)
+		}
+		scope := companion.ScopeID("wechat", "test", n.msg.ThreadID)
+		if _, err := f.manager.memory.ReadEvent(ctx, []string{scope}, p.source.EventID); err == nil {
+			t.Fatal("native fallback created a memory event")
+		}
+		f.manager.config.Companion.Permissions.ObserveGroups = false
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
+			t.Fatal("fallback allowed reading a group after its observation grant was revoked")
+		}
+		f.manager.config.Companion.Permissions.ObserveGroups = true
+
+		changed := n.msg
+		changed.Body = "different card"
+		if _, err := f.manager.newReceivedSharePolicyFor(ctx, changed, p.tool); err == nil {
+			t.Fatal("fallback accepted content that did not match the native message")
+		}
+		other := companion.Input{Channel: "wechat", Account: "test", Thread: n.msg.ThreadID, Sender: n.msg.SenderID, TraceID: "another-message", Text: "synthetic text", MessageTime: n.msg.CreatedAt}
+		if err := f.manager.memory.Observe(other, f.manager.config.Companion, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.manager.memory.Clear(scope); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Check(ctx, j, pluginhost.Capability{}); err == nil {
+			t.Fatal("active fallback survived forgetting")
+		}
+		if _, err := f.manager.newReceivedSharePolicyFor(ctx, n.msg, p.tool); err == nil {
+			t.Fatal("fresh fallback bypassed the scope clear")
+		}
 	}
 }
 
@@ -231,6 +338,26 @@ func TestShareRequestConflictIsSafeDiagnostic(t *testing.T) {
 	failure := safeShareResolutionFailure("plugin_invoke", pluginhost.ErrRequestConflict)
 	if failure.code != "share_request_conflict" || failure.stage != "plugin_invoke" {
 		t.Fatalf("request conflict was not retained as a safe diagnostic: %+v", failure)
+	}
+}
+
+func TestPublicShareUpgradeChangesReadOnlyRequestIdentity(t *testing.T) {
+	_, p, _, ctx := publicPolicyFixture(t, false, 4)
+	i, err := p.store.Installed(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := p.store.Configuration(ctx, "share-reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := json.RawMessage(`{"url":"https://public.example/video","video_required":true}`)
+	p.setReadOnlyResolutionSnapshot(args, i, cfg)
+	before := p.invocation().RequestKey
+	i.Digest = strings.Repeat("b", 64)
+	p.setReadOnlyResolutionSnapshot(args, i, cfg)
+	if before == p.invocation().RequestKey {
+		t.Fatal("updated public parser reused old job")
 	}
 }
 

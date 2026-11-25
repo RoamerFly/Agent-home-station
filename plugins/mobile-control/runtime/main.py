@@ -102,8 +102,8 @@ class Wire:
                     result = {"tools":TOOLS}
                 elif method == "tools/call" and initialized:
                     params = request.get("params")
-                    context = params.get("_meta", {}).get("wechat/context", {}) if isinstance(params, dict) else {}
-                    if not all(isinstance(context.get(key), str) and context[key] for key in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id") if isinstance(params, dict) else None
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     if params.get("name") == "device.workflow":
                         result = workflow.transition(params.get("arguments"))

@@ -24,6 +24,62 @@ import wave
 from urllib.parse import parse_qs, urlsplit
 from music_account_scope import HEADER as ACCOUNT_HEADER, account_scope
 
+def publish_readable_output(state, jid, job, save):
+    if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid): return
+    filename=job.get('file','')
+    if not filename or Path(filename).name!=filename: return
+    source=Path(state)/filename
+    if not source.is_file() or source.is_symlink(): return
+    recipe=job.get('recipe') or {}
+    title=recipe.get('title') or '音乐作品'
+    title=re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', title).strip(' .')[:90] or '音乐作品'
+    name=title+'-'+jid[:8]+source.suffix.lower()
+    if filename==name:return
+    target=source.with_name(name)
+    if target.exists():return
+    previous=copy.deepcopy(job)
+    source.rename(target)
+    job['file']=name
+    for key in ('output','result'):
+        if isinstance(job.get(key),dict) and job[key].get('file')==filename:job[key]['file']=name
+    try:save()
+    except Exception:
+        job.clear();job.update(previous);target.rename(source);raise
+
+def archive_completed_intermediates(state, jid, job, pending_root=None):
+    """Only reclaim this completed job's scratch, after durable final output exists."""
+    if job.get('state') != 'completed' or not re.fullmatch(r'[a-f0-9]{32}', jid):
+        return []
+    state = Path(state).absolute()
+    if state.resolve() != state or state.is_symlink():
+        return []
+    filename = job.get('file', '')
+    if not filename or Path(filename).name != filename:
+        return []
+    final = state / filename
+    if not final.is_file() or final.is_symlink() or final.stat().st_size != job.get('bytes'):
+        return []
+    # Original downloaded assets and final audio/metadata are never candidates.
+    names = [jid+'-source.audio', jid+'-rvc-voice-work', jid+'-character-voice-voice-work']
+    moved = []
+    root = Path(pending_root) if pending_root is not None else state / 'scratch' / 'reclaimed'
+    if os.name != 'nt' and pending_root is None:
+        return []
+    batch = root / ('music-temp-'+jid+'-'+secrets.token_hex(4))
+    for name in names:
+        source = state / name
+        if not source.exists() or source.is_symlink() or source.resolve() != source:
+            continue
+        try:
+            batch.mkdir(parents=True, exist_ok=True)
+            if batch.resolve() != batch.absolute():
+                continue
+            source.rename(batch / name)
+            moved.append(name)
+        except OSError:
+            pass  # A locked scratch file remains; never change a successful job to failed.
+    return moved
+
 def singing_profile(config_path,expected_sha256=None):
     if not config_path:return None
     path=Path(config_path)
@@ -48,23 +104,96 @@ def requested_singing_profile(body,config_path):
     if voice is None:raise ValueError('singing_voice_not_ready')
     return voice
 
-def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None):
+_SHARED_RUNTIME_FIELDS = ('runtime', 'python', 'rvc_python', 'rvc_project')
+
+
+def _merge_profile_runtime_config(profile_path, base_path, destination):
+    """Use the current public runtime with a private profile's voice assets.
+
+    Voice profiles are private data and can outlive the public tool package.
+    Older profiles therefore contain absolute paths into the previous public
+    workspace.  Keep their model/index/profile fields, but take the executable
+    runtime paths from the current registered singing configuration.  The
+    merged file is an ephemeral private-workspace file and is removed after the
+    conversion; no profile data is rewritten in place.
+    """
+    if not base_path:
+        return Path(profile_path), None
+    profile = Path(profile_path).resolve(strict=True)
+    base = Path(base_path).resolve(strict=True)
+    if profile == base:
+        return profile, None
+    profile_data = load_singing_config(profile)
+    base_data = load_singing_config(base)
+    if profile_data.get('engine') != base_data.get('engine'):
+        raise ValueError('singing_voice_configuration_changed')
+    changed = False
+    for key in _SHARED_RUNTIME_FIELDS:
+        value = base_data.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError('singing_voice_resources_missing')
+        if profile_data.get(key) != value:
+            profile_data[key] = value
+            changed = True
+    if not changed:
+        return profile, None
+    destination = Path(destination).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f'.{destination.stem}-', suffix='.singing.json', dir=destination.parent)
+    os.close(fd)
+    temporary_path = Path(temporary)
+    try:
+        temporary_path.write_text(json.dumps(profile_data, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return temporary_path, temporary_path
+
+
+def convert_singing_voice(config_path,expected,source,destination,sandbox=None,*,cancelled=None,base_config_path=None,parameters=None):
     current=singing_profile(config_path,expected['config_sha256']) if cancelled is not None else singing_profile(config_path)
     if current is None or current['config_sha256']!=expected['config_sha256']:raise ValueError('singing_voice_configuration_changed')
-    if cancelled is not None or not sandbox:
-        converter=Path(__file__).with_name('singing_voice.py').resolve()
-    else:
-        converter=Path(sandbox['public'])/'projects/agent-tools/singing_voice.py'
-    argv=[current['python'],str(converter),'--config',str(config_path),'--source',str(source),'--output',str(destination)]
-    if cancelled is not None:
-        argv.append('--offline')
+    effective_config,temporary_config = _merge_profile_runtime_config(config_path,base_config_path,destination)
+    parameter_config=None
     try:
+        if parameters:
+            effective_data=load_singing_config(effective_config)
+            effective_data.update(rvc_cover.parameters(parameters))
+            fd,name=tempfile.mkstemp(prefix='.rvc-parameters-',suffix='.json',dir=Path(destination).parent)
+            os.close(fd)
+            parameter_config=Path(name)
+            parameter_config.write_text(json.dumps(effective_data,ensure_ascii=False),encoding='utf-8')
+            effective_config=parameter_config
+        if temporary_config is None:
+            interpreter=current['python']
+        else:
+            effective_data=load_singing_config(effective_config)
+            interpreter=effective_data.get('python')
+            if not isinstance(interpreter,str) or not interpreter:
+                raise ValueError('singing_voice_resources_missing')
+        if cancelled is not None or not sandbox:
+            converter=Path(__file__).with_name('singing_voice.py').resolve()
+        else:
+            converter=Path(sandbox['public'])/'projects/agent-tools/singing_voice.py'
+            # Standalone public tool packages do not duplicate the bridge control
+            # scripts under projects/agent-tools. Reuse the trusted control copy
+            # when that legacy path is absent; the Windows runner mounts it read-only.
+            if not converter.is_file():
+                converter=Path(__file__).with_name('singing_voice.py').resolve()
+        argv=[interpreter,str(converter),'--config',str(effective_config),'--source',str(source),'--output',str(destination)]
+        if cancelled is not None:
+            argv.append('--offline')
         if sandbox:
             from managed_music_runner import run
             options={'cancelled':cancelled} if cancelled is not None else {}
             run(sandbox['public'],sandbox['private'],str(destination.parent),argv,gpu=True,timeout=3600,**options)
         else:subprocess.run(argv,check=True,timeout=3600,**no_console_options())
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):raise ValueError('singing_voice_conversion_failed') from None
+    finally:
+        if parameter_config is not None:
+            parameter_config.unlink(missing_ok=True)
+        if temporary_config is not None:
+            temporary_config.unlink(missing_ok=True)
     if not destination.is_file() or destination.stat().st_size<44:raise ValueError('singing_voice_output_missing')
     return destination
 
@@ -187,6 +316,10 @@ def station_ready_file(value,nonce,token_path,scope):
     if not path.is_absolute() or path.name!=scope+'-'+nonce+'.json':
         raise ValueError('station_rvc_ready_path_invalid')
     parent=canonical(path.parent)
+    # The host keeps the token and one-time ready proof in the same private
+    # tool directory. Older builds used a root-level token, so derive the
+    # sibling directory from the actual token parent instead of hard-coding a
+    # second legacy name.
     if parent!=token_path.parent/'station-rvc-ready':
         raise ValueError('station_rvc_ready_path_invalid')
     return parent/path.name
@@ -198,18 +331,45 @@ def signal_station_ready(path,nonce,port,scope):
             json.dump({'nonce':nonce,'port':port,'scope':scope,'pid':os.getpid()},file)
             file.flush()
             os.fsync(file.fileno())
-        os.link(temporary,path)
+        # The scope and nonce can take an otherwise valid Windows path
+        # past MAX_PATH. Use the extended path API for this atomic link.
+        def native_path(value):
+            text = os.path.abspath(value)
+            if os.name != "nt" or text.startswith("\\\\?\\"):
+                return text
+            if text.startswith("\\\\"):
+                return "\\\\?\\UNC\\" + text[2:]
+            return "\\\\?\\" + text
+        os.link(native_path(temporary), native_path(path))
     finally:
         Path(temporary).unlink(missing_ok=True)
 
+
+def registered_comfy_url(value):
+    parsed = urlsplit(value or '')
+    if parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or parsed.username or parsed.password:
+        raise ValueError('comfy_url_must_be_loopback')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('comfy_url_path_invalid')
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError('comfy_url_port_invalid') from None
+    if port is None or not 1024 <= port <= 65535:
+        raise ValueError('comfy_url_port_invalid')
+    return f'http://127.0.0.1:{port}'
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input')
+    p=argparse.ArgumentParser();p.add_argument('--project',required=True);p.add_argument('--workflow-dir');p.add_argument('--state',required=True);p.add_argument('--token-file',required=True);p.add_argument('--port',type=int,default=6188);p.add_argument('--bind',default='127.0.0.1');p.add_argument('--singing-voice-config');p.add_argument('--managed-public');p.add_argument('--managed-private');p.add_argument('--comfy-socket');p.add_argument('--comfy-input');p.add_argument('--comfy-url',default='')
     p.add_argument('--rvc-only',action='store_true')
     p.add_argument('--station-fish')
     p.add_argument('--desktop',action='store_true')
     p.add_argument('--ready-file')
     p.add_argument('--ready-nonce')
     args=p.parse_args()
+    # Socket mode keeps the historical loopback URL as the request target for
+    # music_unix_client; an explicit URL selects a separately managed Comfy.
+    comfy_url=registered_comfy_url(args.comfy_url) if args.comfy_url else 'http://127.0.0.1:8188'
     station=args.rvc_only
     if (station != bool(args.station_fish) or args.desktop and not station or
             bool(args.ready_file) != bool(args.ready_nonce) or args.ready_file and not station):
@@ -239,7 +399,8 @@ def main():
             sandbox={'public':str(canonical(args.managed_public)),'private':str(canonical(args.managed_private))}
             bound_account=account_scope(sandbox['private'])
             if not state.is_relative_to(Path(sandbox['private'])):raise ValueError('music_state_outside_account')
-            if not args.comfy_socket or not args.comfy_input:raise ValueError('isolated_comfy_paths_required')
+            if not args.comfy_input or (not args.comfy_socket and not args.comfy_url):
+                raise ValueError('isolated_comfy_paths_required')
         input_dir=Path(args.comfy_input).resolve() if args.comfy_input else project/'comfy/ComfyUI/input'
         if sandbox and not input_dir.is_relative_to(Path(sandbox['private'])):raise ValueError('music_input_outside_account')
         input_dir.mkdir(parents=True,exist_ok=True)
@@ -292,8 +453,11 @@ def main():
             job.update(state='needs_review',reason='bridge_restarted_no_replay')
             if station:job['phase']='needs_review'
     save()
+    for key,job in jobs.items():
+        publish_readable_output(state,key,job,save)
+        archive_completed_intermediates(state,key,job)
     def api(route,body=None,timeout=20):
-        req=urllib.request.Request('http://127.0.0.1:8188'+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+        req=urllib.request.Request(comfy_url+route,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json'})
         with comfy_open(req,timeout=timeout) as r:
             data=r.read()
             return json.loads(data) if data else {}
@@ -334,7 +498,7 @@ def main():
                     audio=next((x for x in files if Path(x['filename']).suffix.lower() in ('.wav','.mp3','.flac','.ogg','.m4a')),None)
                     if not audio:raise ValueError('no_generated_audio')
                     from urllib.parse import urlencode
-                    with comfy_open('http://127.0.0.1:8188/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
+                    with comfy_open(comfy_url+'/view?'+urlencode(audio),timeout=60) as r:data=r.read(64*1024*1024+1)
                     if not 0<len(data)<=64*1024*1024:raise ValueError('output_size_limit')
                     output=state/(jid+Path(audio['filename']).suffix);output.write_bytes(data)
                     duration=float(subprocess.check_output(**no_console_options(), args=['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(output)],timeout=30))
@@ -355,6 +519,8 @@ def main():
                         api('/free',{'unload_models':True,'free_memory':True})
                         output=convert_singing_voice(args.singing_voice_config,voice,output,state/(jid+'-character-voice.wav'),sandbox=sandbox)
                     with lock:jobs[jid].update(state='completed',phase='completed',file=output.name,bytes=output.stat().st_size,duration_seconds=duration,requested_seconds=target);save()
+                    with lock:publish_readable_output(state,jid,jobs[jid],save)
+                    archive_completed_intermediates(state,jid,jobs[jid])
                     return
                 time.sleep(1)
             raise ValueError('generation_deadline')
@@ -397,9 +563,9 @@ def main():
             def convert_voice(config,expected,source,destination):
                 if station:
                     if cancelled():raise ValueError('station_rvc_interrupted')
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,cancelled=cancelled,base_config_path=args.singing_voice_config,parameters=body.get('rvc_parameters'))
                 else:
-                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox)
+                    convert_singing_voice(config,expected,source,destination,sandbox=sandbox,base_config_path=args.singing_voice_config,parameters=body.get('rvc_parameters'))
 
             output=rvc_cover.convert(body,state,jid,config,profile,convert_voice)
             if station:
@@ -411,6 +577,8 @@ def main():
                     persist_job(jid,{**output,'state':'completed','phase':'completed'})
                 else:
                     jobs[jid].update(output,state='completed',phase='completed');save()
+            with lock:publish_readable_output(state,jid,jobs[jid],save)
+            archive_completed_intermediates(state,jid,jobs[jid])
         except Exception as error:
             with lock:
                 if station and jobs[jid]['state']=='cancelling':
@@ -461,10 +629,9 @@ def main():
             if not self.allowed():return
             if station:return self.get_station_rvc()
             if self.path=='/rvc-health':
-                try:
-                    voice=singing_profile(args.singing_voice_config)
-                    return self.reply(200,{'ready':bool(voice and voice['engine']=='rvc'),'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'profile':voice['profile'] if voice else None,'resume_same_job':True})
-                except Exception:return self.reply(200,{'ready':False,'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'resume_same_job':True})
+                # A default singing voice is optional. Named profiles are checked
+                # against the submitted request in submit_rvc().
+                return self.reply(200,{'ready':True,'bridge_version':13,'engine':'rvc','voice_profiles':True,'private_voice_profiles':True,'resume_same_job':True})
             if self.path=='/parameters':
                 try:
                     info={kind:api('/object_info/'+kind)[kind] for _,kind,_ in yue_sampling.GROUPS.values()}
@@ -481,6 +648,7 @@ def main():
             with lock:job=dict(jobs.get(jid,{}))
             if not job:return self.reply(404,{'error':'not_found'})
             if len(parts)==3 and parts[2]=='audio':
+                if job.get('output_deleted'):return self.reply(410,{'error':'output_deleted_by_owner'})
                 if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
                 file=state/job['file'];data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','audio/flac' if file.suffix=='.flac' else 'audio/wav');self.send_header('Content-Length',str(len(data)))
                 if bound_account:self.send_header(ACCOUNT_HEADER,bound_account)
@@ -513,6 +681,7 @@ def main():
             with lock:job=dict(jobs.get(jid,{}))
             if not job:return self.reply(404,{'error':'not_found'})
             if not match[2]:return self.reply(200,self.job_view(job))
+            if job.get('output_deleted'):return self.reply(410,{'error':'output_deleted_by_owner'})
             if job['state']!='completed':return self.reply(409,{'error':'not_completed'})
             try:data=station_rvc.read_output(state,jid,job)
             except (OSError,ValueError):
@@ -662,7 +831,7 @@ def main():
                     return self.reply(400,{'error':'station_rvc_profile_pin_required'})
                 if not isinstance(details['reference_source_sha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',details['reference_source_sha256']):
                     return self.reply(400,{'error':'station_rvc_source_hash_required'})
-                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id','profile_config_sha256'}:
+                if set(body)-{'title','reference_base64','reference_start_seconds','reference_seconds','reference_pretrimmed','reference_source_sha256','voice_profile_id','profile_config_sha256','rvc_parameters'}:
                     return self.reply(400,{'error':'station_rvc_unknown_request_field'})
                 try:
                     with wave.open(io.BytesIO(base64.b64decode(body['reference_base64'],validate=True)),'rb') as wav:

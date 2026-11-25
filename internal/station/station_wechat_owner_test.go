@@ -21,7 +21,7 @@ import (
 func TestStationWechatOwnerBindingUsesNativeSenderAndAccount(t *testing.T) {
 	base := t.TempDir()
 	data, home := filepath.Join(base, "data"), filepath.Join(base, "home")
-	nativeRoot := filepath.Join(data, "apps", "wechat", "native")
+	nativeRoot := filepath.Join(data, "applications", "wechat", "native")
 	mustWriteSnapshotFixture(t, filepath.Join(nativeRoot, "api-token"), []byte("synthetic-owner-binding-token"))
 	var mu sync.Mutex
 	dataset, generation := "synthetic-dataset", "synthetic-generation"
@@ -114,7 +114,7 @@ func TestStationWechatOwnerBindingUsesNativeSenderAndAccount(t *testing.T) {
 	if initial["revision"] != float64(0) || initial["binding"] != nil {
 		t.Fatal(initial)
 	}
-	if _, err := os.Stat(filepath.Join(data, "apps", "wechat", "workers")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(data, "applications", "wechat", "workers")); !os.IsNotExist(err) {
 		t.Fatal("opening binding created worker", err)
 	}
 	previewInput := map[string]any{"action": "preview", "revision": 0, "message_id": "owner"}

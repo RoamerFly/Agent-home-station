@@ -15,9 +15,7 @@ import (
 	"path/filepath"
 
 	"wechat-bot/internal/comfyui"
-	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/pluginhost"
-	"wechat-bot/internal/stationyue"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -285,18 +283,9 @@ func (e localYuEInvocation) publishYuEFLAC(ctx context.Context, client localComf
 		return nil, writeErr
 	}
 	path := filepath.Join(dir, name)
-	limit := localYuEDecodedLimit(submission.Effective.DurationSeconds)
-	evidence, err := mediadecode.VerifyFLAC(ctx, path, mediadecode.FLACVerificationOptions{
-		FFmpegPath: deploy.FFmpegPath, MaxInputBytes: localYuEMaxInputBytes, MaxDecodedPCMBytes: limit,
-		MaxSampleRate: localYuEMaxSampleRate, MaxChannels: localYuEMaxChannels,
-	})
-	if err != nil || evidence.SHA256 != flac.SHA256 {
-		return nil, errors.New("YuE 成品 FLAC 未通过完整性校验")
-	}
-	precision := 1 / float64(evidence.SampleRate)
-	duration, err := stationyue.ValidateDuration(evidence.Duration.Seconds(), submission.Effective.DurationSeconds, submission.Effective.MinDurationSeconds, &precision)
-	if err != nil || !duration.Accepted {
-		return nil, errors.New("YuE 成品时长与已提交配方不一致")
+	evidence, duration, err := verifyYuEFLACAtPath(ctx, path, deploy, submission, flac.SHA256)
+	if err != nil {
+		return nil, err
 	}
 	if err := e.checkSource(ctx, args); err != nil {
 		return nil, err

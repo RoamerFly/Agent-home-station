@@ -16,6 +16,18 @@ import (
 type voiceFile = mediaspec.VoiceFile
 type voiceEntry = mediaspec.VoiceEntry
 
+func voiceSupportsRVC(v voiceEntry) bool {
+	if v.ProfileID == "" {
+		return false
+	}
+	for _, weight := range v.Weights {
+		if strings.EqualFold(weight.Kind, "rvc") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(v.Engine), "rvc")
+}
+
 func readVoiceEntries(dir string) ([]voiceEntry, error) {
 	if _, err := os.Lstat(dir); os.IsNotExist(err) {
 		return nil, nil
@@ -46,7 +58,7 @@ func readVoiceEntries(dir string) ([]voiceEntry, error) {
 }
 
 func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
-	public, err := readVoiceEntries(filepath.Join(p.executionContext().Public, "models", "voice-library"))
+	public, err := readVoiceEntries(p.manager.publicVoiceLibrary())
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +67,43 @@ func (p *permittedTools) accessibleVoices() ([]voiceEntry, error) {
 		public[i].Public = true
 		seen[public[i].ID] = true
 	}
-	if p.privileged() {
+	// A persisted owner task carries the owner's authorization into its
+	// continuation trace. This matters after a restart: the continuation may
+	// no longer have the original chat sender fields attached, but it must still
+	// be able to select the owner's private RVC/GPT-SoVITS voice.
+	ownerTask := false
+	// The scheduler may resume a task in a delivery conversation whose thread
+	// no longer matches the task's original source thread.  Resolve the
+	// persisted task by account and ID first, then validate the persisted
+	// owner identity and source thread.  Using lookupTask with the current
+	// continuation thread alone made private voices disappear after recovery.
+	ownerTaskAuthorized := func(task agentTask) bool {
+		c := p.manager.agent.config()
+		return task.OwnerRequested && task.Account == p.manager.native.Account() &&
+			contains(c.OwnerIDs, task.Sender) && c.allowsPrivilegedThread(task.Thread) &&
+			permittedRecipient(p.manager.Config().Config, task.Thread)
+	}
+	for _, candidate := range []string{p.trace.TaskID, p.trace.TraceID, strings.TrimPrefix(p.trace.TraceID, "recover-")} {
+		if candidate == "" || ownerTask {
+			continue
+		}
+		if task, ok := p.manager.agent.lookupTask(candidate, p.trace.Account, p.trace.Thread); ok {
+			ownerTask = ownerTaskAuthorized(task)
+		}
+		if ownerTask {
+			break
+		}
+		// A recovery can legitimately change the delivery thread.  Search the
+		// persisted task/history by account without trusting the model-provided
+		// thread, while retaining the owner and recipient checks above.
+		for _, task := range p.manager.agent.list(p.trace.Account, "") {
+			if task.ID == candidate && ownerTaskAuthorized(task) {
+				ownerTask = true
+				break
+			}
+		}
+	}
+	if p.privileged() || ownerTask {
 		private, err := readVoiceEntries(p.manager.privateVoiceLibrary())
 		if err != nil {
 			return nil, err
@@ -85,9 +133,9 @@ func privateVoiceRelative(f voiceFile) (string, error) {
 }
 func (p *permittedTools) voiceTools() []mcptools.Tool {
 	return []mcptools.Tool{
-		agentTool("voice_library_list", "Discover registered character voices by query/engine. Ordinary members see public voices; trusted owner also sees this account's private GPT-SoVITS/Bailian/RVC archive. No disk scan, synthesis or default changes. Paginated, default limit20; follow next_offset. Input {query?,engine?,offset?,limit?}.", `{"type":"object","properties":{"query":{"type":"string"},"engine":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
-		agentTool("voice_library_read", "Read exact discovered voice_id: weight versions, references, current status and matching synthesis route. GPT-SoVITS speech: speech_synthesize(voice_id,text) uses registered project runtime; project_read exposes CLI for custom operation. RVC singing uses returned music_rvc_start profile. No credentials/other accounts; never substitute default voice. Input {voice_id:string}.", `{"type":"object","properties":{"voice_id":{"type":"string"}},"required":["voice_id"],"additionalProperties":false}`),
-		agentTool("voice_library_prepare", "Prepare selected voice files with SHA256 checks for file/Shell access. Defaults recommended/latest weight per kind plus references (or previews); file_ids chooses exact hash.ext files from voice_library_read, including older epochs. Personal voices owner only: return existing canonical account voice-library files without duplicate copies; legacy control archives are copied into global. Use server_* global=true. Public models are copied into current conversation. Never mounts credentials, executes weights or sends. Input {voice_id:string,file_ids?:string[]}.", `{"type":"object","properties":{"voice_id":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["voice_id"],"additionalProperties":false}`),
+		agentTool("voice_library_list", "分页发现登记的角色声线；可按 query/engine 筛选。主人可见本账号私有条目，普通成员仅见公共条目。", `{"type":"object","properties":{"query":{"type":"string"},"engine":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`),
+		agentTool("voice_library_read", "读取指定 voice_id 的权重、参考素材、状态和对应合成方式。说话可用 speech_synthesize，RVC 演唱使用返回的 music_rvc_start.voice_profile_id。", `{"type":"object","properties":{"voice_id":{"type":"string"}},"required":["voice_id"],"additionalProperties":false}`),
+		agentTool("voice_library_prepare", "按 voice_library_read 的 file_ids 准备选定声线文件；默认推荐权重与参考。主人私有声线在账号 global 工作区，用 server_* global=true；公共声线准备到当前会话。", `{"type":"object","properties":{"voice_id":{"type":"string"},"file_ids":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["voice_id"],"additionalProperties":false}`),
 	}
 }
 
@@ -109,7 +157,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 	if name == "voice_library_list" {
 		rows := []map[string]any{}
 		for _, v := range voices {
-			if (in.Engine == "" || in.Engine == v.Engine) && strings.Contains(strings.ToLower(v.Name+" "+v.Engine), strings.ToLower(in.Query)) {
+			if (in.Engine == "" || strings.EqualFold(in.Engine, v.Engine)) && strings.Contains(strings.ToLower(v.Name+" "+v.Engine), strings.ToLower(in.Query)) {
 				rows = append(rows, voiceSummary(v))
 			}
 		}
@@ -138,14 +186,14 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 		if name == "voice_library_read" {
 			row := voiceSummary(v)
 			row["notes"], row["files"], row["recommended_weights"], row["synthesis_instruction"] = v.Notes, files, v.Recommended, v.Instruction
-			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": strings.Contains(strings.ToLower(v.Engine), "rvc") && v.ProfileID != "", "instruction": "GPT-SoVITS权重用于对应TTS引擎，不是RVC歌声转换权重；能读取不等于可用作原曲换声。指定声线未兼容时不要提交默认声音冒充，也不要把格式差异说成主人权限不足。"}
+			row["engine_compatibility"] = map[string]any{"direct_rvc_cover": voiceSupportsRVC(v), "instruction": "同一声线可同时登记 GPT-SoVITS 朗读权重和 RVC 换声权重；按实际可用的权重选择工具。"}
 			row["usage"] = "voice_library_prepare取得可读模型和参考，然后project_list/project_read定位相应引擎。GPT-SoVITS、RVC和百炼音色不互换；权重齐全不等于运行环境和听感已经验证。"
 			if strings.EqualFold(v.Engine, "GPT-SoVITS") {
 				row["project_id"] = "gpt-sovits"
 				row["speech_synthesize"] = map[string]string{"voice_id": v.ID, "text": "填写本次需要合成的原文"}
 				row["usage"] = "先project_read({id:gpt-sovits})读取登记的GPT-SoVITS项目、真实解释器和CLI。voice_library_prepare取得明确选定的GPT/SoVITS配对权重、参考音频及其转录；优先speech_synthesize(voice_id,text)。自定义命令在Windows使用server_windows_process(global=true,gpu=true)，Linux使用server_process(global=true,gpu=true)，工作目录选账号受管工作区；不需要访问源码仓库根目录。不因在群里发起而拒绝真实管理员，也不能只查看旧目录后宣称本机未安装。生成后核验实际音频再发送。"
 			}
-			if v.ProfileID != "" {
+			if voiceSupportsRVC(v) {
 				row["music_rvc_start"] = map[string]string{"voice_id": v.ID, "voice_profile_id": v.ProfileID}
 				row["spoken_text"] = map[string]string{"tool": "speech_synthesize", "rvc_target_id": v.ID, "usage": "朗读文字时直接传 text 和 rvc_target_id。voice_id 仅选择底稿 TTS；仅有本地语音时需选一个可用 GPT-SoVITS 底稿声线。底稿不投递。"}
 			}
@@ -163,7 +211,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 		// mount. Verify and return its canonical files instead of duplicating
 		// hundreds of MB for every prepare call. Legacy control archives still
 		// need an explicit verified copy into the global workspace.
-		canonical := !v.Public && p.manager.privateVoiceLibrary() == filepath.Join(p.executionContext().Private, "voice-library")
+		canonical := !v.Public && (p.manager.privateVoiceLibrary() == filepath.Join(p.executionContext().Private, "voice-library") || voiceLibraryPath(p.executionContext().Private, "") != "")
 		if canonical {
 			dest = p.manager.privateVoiceLibrary()
 		}
@@ -231,7 +279,7 @@ func (p *permittedTools) callVoiceLibrary(ctx context.Context, name string, raw 
 				return "", e
 			}
 			if v.Public {
-				sourceDir = filepath.Join(p.executionContext().Public, "models", "voice-library")
+				sourceDir = p.manager.publicVoiceLibrary()
 				relative, e = publicVoiceRelative(sourceDir, f)
 				if e != nil {
 					return "", toolInputError("public_voice_path_outside_models")

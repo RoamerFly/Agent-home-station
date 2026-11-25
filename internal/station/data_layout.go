@@ -56,6 +56,10 @@ func stationMemoryDir(dataDir string) string {
 
 func stationWorkspaceDir(dataDir string) string {
 	if structuredDataRoot(dataDir) {
+		modern := filepath.Join(dataDir, "workspaces")
+		if directoryExists(modern) {
+			return modern
+		}
 		return filepath.Join(dataDir, "workspace")
 	}
 	return filepath.Join(dataDir, "managed-workspaces")
@@ -77,9 +81,34 @@ func stationObservationsDir(dataDir string) string {
 	return filepath.Join(dataDir, "app-observations")
 }
 
+func stationBillingDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "local-billing")
+	}
+	return filepath.Join(dataDir, "local-billing")
+}
+
+func stationProcessesDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "local-processes")
+	}
+	return filepath.Join(dataDir, "local-processes")
+}
+
+// stationNativeLifecycleRelative keeps native locks and stop proofs inside
+// main_setting for structured homes. Legacy homes continue using their
+// historical root-level filenames during migration.
+func stationNativeLifecycleRelative(dataDir, name string) string {
+	if structuredDataRoot(dataDir) && directoryExists(filepath.Join(dataDir, "main_setting")) {
+		return filepath.Join("main_setting", name)
+	}
+	return name
+}
+
 // DefaultWorkspaceRoot is exported for the command entry point and legacy
 // migration commands. It keeps old tests and homes on their former path while
-// new release data uses data/main/workspaces.
+// new release data uses data/workspaces. Existing structured homes without
+// that directory retain their historical data/workspace root.
 func DefaultWorkspaceRoot(dataDir string) string { return stationWorkspaceDir(dataDir) }
 
 // ApplicationsRoot and PublicToolsRoot expose the same layout to the command
@@ -88,25 +117,62 @@ func ApplicationsRoot(dataDir string) string { return stationApplicationsDir(dat
 func PublicToolsRoot(dataDir string) string  { return stationPublicToolsDir(dataDir) }
 func AuthorityRoot(dataDir string) string    { return stationAuthorityDir(dataDir) }
 
+// stationToolDataDir is the compatibility seam for the data/tools migration.
+// A migrated tool can opt into data/tools/<id> one at a time. Legacy homes and
+// tools without a migrated directory continue using data/publictools/<id>.
+func stationToolDataDir(dataDir, tool string) string {
+	if structuredDataRoot(dataDir) {
+		if tool != "" && directoryExists(filepath.Join(dataDir, "tools", tool)) {
+			return filepath.Join(dataDir, "tools")
+		}
+		if tool == "" && directoryExists(filepath.Join(dataDir, "tools")) {
+			return filepath.Join(dataDir, "tools")
+		}
+		return stationPublicToolsDir(dataDir)
+	}
+	return dataDir
+}
+
 func stationToolPrivateDir(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool, "private")
+		return filepath.Join(stationToolDataDir(dataDir, tool), tool, "private")
 	}
 	return filepath.Join(dataDir, "station-"+tool)
 }
 
 func stationToolRoot(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool)
+		return filepath.Join(stationToolDataDir(dataDir, tool), tool)
 	}
 	return dataDir
 }
 
 func stationToolLogsDir(dataDir, tool string) string {
 	if structuredDataRoot(dataDir) {
-		return filepath.Join(stationPublicToolsDir(dataDir), tool, "logs")
+		return filepath.Join(stationToolDataDir(dataDir, tool), tool, "logs")
 	}
 	return filepath.Join(dataDir, "station-"+tool+"-logs")
+}
+
+func stationRVCRegistrationPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolRoot(dataDir, "rvc"), "station-rvc.json")
+	}
+	return filepath.Join(dataDir, "station-rvc.json")
+}
+
+func stationRVCTokenPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolPrivateDir(dataDir, "rvc"), "station-rvc-token")
+	}
+	return filepath.Join(dataDir, "station-rvc-token")
+}
+
+func stationYuERegistrationPath(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationToolRoot(dataDir, "yue"), "station-yue.json")
+	}
+	return filepath.Join(dataDir, "station-yue.json")
 }
 
 func preferDataDirectory(root, preferred, legacy string) string {
@@ -134,4 +200,12 @@ func structuredDataRoot(root string) bool {
 func regularFileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+// Tool registration files have a single location in structured portable homes.
+func stationToolRegistrationPath(dataDir, name string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationPublicToolsDir(dataDir), "registrations", name)
+	}
+	return filepath.Join(dataDir, name)
 }

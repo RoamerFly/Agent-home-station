@@ -1,12 +1,9 @@
 【歌曲演唱策略 v3】
-此策略每次请求重新提供，不依赖旧聊天或压缩摘要。2026-10-28更新：翻唱默认RVC直接换声；做相似歌曲或原创才用YuE，明确指定其他方式则遵从本次要求。
-- 已有歌曲翻唱：先取得用户要的正确歌手/版本的真实原录音，再用music_rvc_start。它分离原曲人声→用已配置的大肥鱼C角色模型进行RVC换声→混回原伴奏，不经过YuE重新作词作曲。原词、原旋律、节奏和伴奏来自原录音，不能用YuE重合成冒充直接翻唱。RVC不需要先ASR重写歌词，也不需要重新训练声线。
-- 原创歌曲、用户要做相似歌曲或相似风格的新演绎：用music_local_start运行YuE。原创mode=original；以已有曲目为参考重新合成时mode=cover。参考重合成会生成新演唱，无法承诺逐音符、逐字节复刻。只有用户明确指定YuE翻唱时才把原曲翻唱交给YuE。
-- 默认大肥鱼角色女声翻唱；YuE默认singing_voice=native、vocal_gender=female。原唱男声不代表用户要求男声；YuE只有本次明确要求男声才传male及逐字引用的vocal_gender_request。不默认在YuE成品后叠加RVC；明确需要角色声线时才另行转换。
-- 原曲先按歌曲/歌手/版本真实查找并缓存到本会话，先media_recent读取明确引用，不能用上一首生成物冒充原录音，也不能仅查本地后声称网上没找到。核对有人声，排除伴奏、长前奏、串场口播或不完整版本。
-- RVC默认处理实际原录音完整长度；用户只要开头20秒/指定片段时传reference_start_seconds/reference_seconds，不擅自改成短试听或整首。单窗口上限来自当前本地处理资源，长曲用显式片段处理，保留原文件。音色、咬字与分离伪影仍需实际听辨，不把模型路径或profile等同于听觉通过。
-- YuE参考重新合成才需要音乐乐谱和歌词证据：music_reference_inspect/music_lyrics_compare可互补核对。style按用户要求明确保持原曲调和原歌词，歌词与所选演唱区间一致，按乐句保留换行；ASR相邻窗口可能跨窗重复或漏词，不能盲目拼接。reference_mode默认melody，full包括和弦。相似新歌若用户要改词可自行编写，不把改词版本说成原词翻唱。
-- 查询、提交、完成、微信接受、手机播放是不同事实。已有job_id只查询原任务；转换/生成完成后的自动续交用music_local_status取得实际附件。发送后换文件/重发原件用media_reuse对应asset_id，不重新转换、训练或生成。
-- 默认完整分段语音，每段不超过60秒，段间动态延迟。用户要文件则发完整文件，明确两者都要时用both；用户中途不要语音、改要文件时停止余下语音并复用同一原件。附件被微信接受后再发送完成介绍。不得用循环、静音或拉伸伪造时长。
-- YuE的max_duration只是生成上限；min_duration_seconds默认目标90%，显式0用于短预览。按generation_result.actual_seconds及实际音频观察检验时长/人声/听感，不将vocal_gender、参考参数或女声提示视为验证证明。
-- 可用music_sampling_options读取YuE原生采样范围、枚举和默认值；music_local_start.sampling支持semantic、render、score，planning_mode控制原创ABC规划。默认值不是能力上限，可按需求调整；参数不适用于RVC直接换声。RVC音高、index、protect等高级调整可在授权范围内读取项目和配置后运行，保留原曲调性与伴奏，不单独将人声调成不协调的调。
+翻唱默认RVC直接换声，原创或重编使用YuE；明确指定方式时按本次要求。
+- 已有歌曲翻唱：先匹配歌曲、歌手和版本，优先复用本地原录音，再用music_rvc_start分离人声、换声并混回原伴奏。保留原旋律、歌词和节奏。
+- 原创或相似风格新演绎：用music_local_start；原创mode=original，参考重新合成mode=cover。YuE默认singing_voice=native、vocal_gender=female；明确要求男声时再传male及vocal_gender_request。
+- 原录音核对版本、完整度和人声。用户指定片段时传reference_start_seconds/reference_seconds；整曲默认处理完整长度，长曲按资源需要分段。RVC音高、index、protect等参数可按需求和实际听感调整。
+- YuE参考生成可用music_reference_inspect和music_lyrics_compare核对乐谱、歌词及演唱区间。歌词按乐句换行；reference_mode默认melody，full包含和弦。music_sampling_options提供采样范围，按需求调整。
+- 有job_id时查询原任务；完成后用music_local_status取得附件。重发或换格式用media_reuse对应asset_id。生成、微信接受和手机播放分别按实际结果表达。
+- 默认按60秒内分段发送语音；用户要文件则发完整文件，两者都要时用both。用户变更格式或停止时调整未发部分，复用原音频。完成介绍在附件被微信接受后发送。
+- YuE的max_duration是上限，min_duration_seconds默认目标90%，显式0可作短预览。根据generation_result.actual_seconds和音频观察判断时长、人声与听感。

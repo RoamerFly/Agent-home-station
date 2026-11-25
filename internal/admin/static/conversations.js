@@ -25,6 +25,11 @@
   $('#memory-panel').scrollTop=position;window.scrollTo({top:y,behavior:'instant'});
  }
  function syncCompression(){
+  if(view?.data?.compression){
+   const remote=view.data.compression;
+   if((remote.state==='queued'||remote.state==='running')&&!jobs.has(view.item.id))jobs.set(view.item.id,{pending:true,text:remote.message||'正在压缩…'});
+   else if((remote.state==='completed'||remote.state==='failed'||remote.state==='cancelled')&&!jobs.has(view.item.id))jobs.set(view.item.id,{pending:false,text:remote.message||remote.state,error:remote.state!=='completed'});
+  }
   renderIndex();if(!view)return;$('#context-summary-view').disabled=!view.data;const job=jobs.get(view.item.id);$('#context-compress-now').disabled=!view.item.id||!!job?.pending;$('#context-compress-state').textContent=job?.text||'';
  }
  async function refresh(){const b=$('#conversation-refresh');b.disabled=true;try{await Promise.all([window.WechatAdmin.refreshScopes()]);renderIndex()}catch(e){$('#conversation-state').textContent=e.message}finally{b.disabled=false}}
@@ -33,7 +38,26 @@
   jobs.set(item.id,{pending:true,text:'正在压缩…'});syncCompression();
   try{
    const result=await api('/api/companion/memory/'+encodeURIComponent(item.id)+'/compress',{method:'POST',json:{}});if(stamp!==epoch)return;
-   jobs.set(item.id,{pending:false,text:result.compressed?'已压缩':'近期消息不足，无需压缩'});
+   let final=result;
+   if(result&&result.queued){
+    const statusURL=result.status_url||('/api/companion/memory/'+encodeURIComponent(item.id)+'/compression');
+    let status=null;
+    // The server owns the model request. Polling is bounded so closing the
+    // browser never leaves this button waiting forever; a later refresh can
+    // still inspect the persisted completion/failure activity.
+    for(let i=0;i<120;i++){
+     await new Promise(resolve=>setTimeout(resolve,500));
+     if(stamp!==epoch)return;
+     try{status=await api(statusURL);}
+     catch(error){if(i===119)throw error;continue}
+     if(status.state==='completed'||status.state==='failed'||status.state==='cancelled')break;
+    }
+    if(status?.state==='completed') final={compressed:status.changed,scope_id:item.id};
+    else if(status?.state==='failed') throw new Error(status.message||status.code||'压缩失败，原始记忆已保留');
+    else if(status?.state==='cancelled') throw new Error(status.message||'压缩已中止，原始记忆已保留');
+    else {jobs.set(item.id,{pending:false,text:'后台压缩仍在运行，刷新会话可查看结果'});syncCompression();return}
+   }
+   jobs.set(item.id,{pending:false,text:final.compressed?'已压缩':'近期消息不足，无需压缩'});
    await window.WechatAdmin.refreshScopes();if(stamp!==epoch)return;
    // Completing A must never reload B's transcript or disable B's controls.
    if(view?.item.id===item.id)await loadView(view);

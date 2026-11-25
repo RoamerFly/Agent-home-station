@@ -20,7 +20,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	now := time.Now().UTC()
 	messages := map[string]linuxnative.Message{}
 	longID := "msg_" + strings.Repeat("abcdef", 50)
-	for i, id := range []string{"old", "new", "share", "quote", "foreign", longID} {
+	for i, id := range []string{"old", "new", "share", "quote", "foreign", longID, "notice"} {
 		messages[id] = linuxnative.Message{ID: id, AccountID: "one", ThreadID: thread, SenderID: "member", ServerID: id + "-server", Type: 1, Direction: "incoming", Body: strings.Repeat("中文", 8), CreatedAt: now.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)}
 	}
 	large := messages[longID]
@@ -33,8 +33,11 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	m.Type, m.Quote, m.Body = 49, &linuxnative.QuoteReference{ServerID: "old-server", Type: 1}, `<msg><appmsg><title>quoted reply</title></appmsg></msg>`
 	messages["quote"] = m
 	m = messages["foreign"]
-	m.ThreadID = "another-room@chatroom"
+	m.ThreadID, m.Type, m.SenderID, m.Direction = "another-room@chatroom", 10000, "", ""
 	messages["foreign"] = m
+	m = messages["notice"]
+	m.Type, m.SenderID, m.Direction, m.Body = 10000, "", "", "[Message recalled]"
+	messages["notice"] = m
 	store, err := companion.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +69,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 				out(map[string]any{"items": []linuxnative.Message{messages["share"]}, "coverage": "native-last-page"})
 				return
 			}
-			out(map[string]any{"items": []linuxnative.Message{messages["new"], messages["old"]}, "nextCursor": "native-next", "coverage": "native-page"})
+			out(map[string]any{"items": []linuxnative.Message{messages["new"], messages["notice"], messages["old"]}, "nextCursor": "native-next", "coverage": "native-page"})
 		case "/v1/accounts/one/groups/" + thread + "/members":
 			out(map[string]any{"items": []map[string]any{{"id": "member", "roomDisplayName": "synthetic name", "secret": "hidden"}}})
 		default:
@@ -80,6 +83,11 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 				if err := store.Clear(companion.ScopeID("wechat", "one", thread)); err != nil {
 					t.Error(err)
 				}
+			}
+			if id == "notice" {
+				out(map[string]any{"id": row.ID, "accountId": row.AccountID, "threadId": row.ThreadID, "serverId": row.ServerID,
+					"senderId": nil, "direction": nil, "type": row.Type, "body": row.Body, "createdAt": row.CreatedAt})
+				return
 			}
 			out(row)
 		}
@@ -100,7 +108,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 		t.Fatal("history on by default")
 	}
 	tools.reads = map[string]time.Time{thread: now}
-	if available, _ := tools.List(t.Context()); len(available) != 2 {
+	if available, _ := tools.List(t.Context()); len(available) < 2 || available[0].Name != "wechat_read" || available[1].Name != "wechat_message_read" {
 		t.Fatal("missing history tools", available)
 	}
 	call := func(name, raw string) map[string]any {
@@ -124,7 +132,8 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	}
 	page := call("wechat_read", `{"kind":"messages","limit":75}`)
 	rows := page["items"].([]any)
-	if len(rows) != 2 || rows[0].(map[string]any)["message_id"] != "old" || rows[1].(map[string]any)["sender_id"] != "member" || page["coverage"] != "native-page" {
+	if len(rows) != 3 || rows[0].(map[string]any)["message_id"] != "old" || rows[1].(map[string]any)["sender_id"] != "member" ||
+		rows[2].(map[string]any)["read_scope"] != "notice_only" || page["coverage"] != "native-page" {
 		t.Fatal(page)
 	}
 	next := page["next_cursor"].(string)
@@ -161,6 +170,10 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	deny("wechat_message_read", `{"message_id":"old","offset":6}`)
 	deny("wechat_message_read", `{"message_id":"old","expected_sha256":"changed"}`)
 	deny("wechat_message_read", `{"message_id":"foreign"}`)
+	notice := call("wechat_message_read", `{"message_id":"notice"}`)
+	if notice["read_scope"] != "notice_only" || notice["sender_id"] != "" || notice["text"] != "[微信系统通知]\n[Message recalled]" {
+		t.Fatal(notice)
+	}
 	card := call("wechat_message_read", `{"message_id":"share"}`)
 	if card["read_scope"] != "publisher_card_only" || !strings.Contains(card["text"].(string), "publisher copy") || strings.Contains(card["text"].(string), "token=secret") {
 		t.Fatal(card)
@@ -187,7 +200,7 @@ func TestStationHistoryScopedPagingAndSourceChecks(t *testing.T) {
 	deny("wechat_read", `{"kind":"messages","cursor":"`+next+`","limit":75}`)
 	deny("wechat_message_read", `{"message_id":"old"}`)
 	page = call("wechat_read", `{"kind":"messages","limit":75}`)
-	if page["filtered_count"] != float64(1) || page["returned_count"] != float64(1) {
+	if page["filtered_count"] != float64(1) || page["returned_count"] != float64(2) {
 		t.Fatal(page)
 	}
 	forgetDuringRead.Store(true)

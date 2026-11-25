@@ -39,7 +39,7 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 		{"workspace-agent", p.workspaceAgentTools, workspaceAgentToolName, p.callAgent},
 		{"mobile", p.mobileTools, func(n string) bool { return strings.HasPrefix(n, "device_") }, p.callMobile},
 		{"plugin-jobs", p.pluginTaskTools, namedTools("plugin_job_status", "plugin_job_cancel"), p.callPluginJob},
-		{"bailian-speech", p.speechTools, namedTools("speech_synthesize", "music_generate"), p.callSpeech},
+		{"bailian-speech", p.speechTools, namedTools("speech_synthesize", "station_speech_voices", "music_generate"), p.callSpeech},
 		{"yue", p.yueTools, namedTools("music_rvc_start", "music_sampling_options", "music_local_start", "music_local_status", "music_local_resume", "music_reference_inspect", "music_lyrics_compare", "music_service_status"), p.callYuE},
 		{"run-output", p.outputTools, namedTools("tool_output_read"), p.readToolOutput},
 		{"surf-interaction", p.surfInteractionTools, namedTools("surf_interaction"), p.callSurfInteraction},

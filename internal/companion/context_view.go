@@ -6,6 +6,11 @@ var ErrCompressionInProgress = errors.New("context_compression_in_progress")
 var ErrSummaryInvalid = errors.New("context_summary_invalid")
 var ErrContextChanged = errors.New("context_changed_during_compression")
 
+// ErrCompressionPermissionRevoked means the caller disabled Remember while
+// an asynchronous compression was still preparing its summary.  The store
+// transaction is aborted and the existing raw memory/summary is preserved.
+var ErrCompressionPermissionRevoked = errors.New("context_compression_permission_revoked")
+
 // FoldedHistoryCount is a presentation boundary, not the model's context
 // boundary. The model still reads the uncompressed recent tail after Summary.
 func (s Scope) FoldedHistoryCount() int {

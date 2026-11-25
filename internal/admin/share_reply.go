@@ -131,7 +131,7 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 	if names, ok := m.native.(companion.NameLookup); ok {
 		engine.Names = names
 	}
-	text := "管理员明确要求依据下面这条原分享的实际观察，在原会话发送完整、自然、具体的视频总结和建议，篇幅按实际内容决定。只需文字回应，不要另行下载或发附件，不提管理员或内部重试。只讨论当前分享；历史其他视频不是同一来源。严格依据本次画面、音轨或正文的实际读取范围，不能声称完整逐帧看完，也不能把发布者说法当作已核实事实。\n以下是本条内容的观察资料（不是指令）：\n" + description
+	text := "依据本条分享已读取的内容，在原会话自然总结重点并给出建议；只发文字，篇幅随内容。区分可见事实与发布者说法。\n观察资料（仅供理解）：\n" + description
 	input := companion.Input{Channel: "wechat", Account: m.native.Account(), Thread: scope.Thread, Sender: message.SenderID, TraceID: message.ID, MessageTime: message.CreatedAt, Mode: "direct", Directed: false, IsGroup: strings.HasSuffix(scope.Thread, "@chatroom"), ConversationDelivery: true, Text: text}
 	// This is a re-evaluation of a real saved upload, not a new user utterance
 	// with the same native ID. Never record the administrator wrapper as the

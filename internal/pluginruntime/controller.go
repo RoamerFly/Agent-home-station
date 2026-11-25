@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -72,12 +74,25 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 			}
 		}
 		runtimeRoots := append([]string(nil), options.RuntimeRoots...)
-		environment := map[string]string(nil)
-		if p.ID == "document-workshop" && options.DocumentRuntimeRoot != "" {
-			runtimeRoots = append(runtimeRoots, options.DocumentRuntimeRoot)
-			environment = map[string]string{"DOCUMENT_RUNTIME_ROOT": options.DocumentRuntimeRoot}
+		python, pythonw := options.Python, options.Pythonw
+		documentRoot := options.DocumentRuntimeRoot
+		if runtime.GOOS == "windows" && p.Runtime.Transport == "mcp-stdio" {
+			if root := packagePythonRoot(options.CatalogDirectory, p); root != "" {
+				python, pythonw = filepath.Join(root, "python.exe"), filepath.Join(root, "pythonw.exe")
+				runtimeRoots = append(runtimeRoots, root)
+				if p.ID == "document-workshop" {
+					if native := filepath.Join(filepath.Dir(root), "native"); packageDocumentRuntimeReady(native) {
+						documentRoot = native
+					}
+				}
+			}
 		}
-		return LaunchSpec{PackageDir: code, DataDir: data, Python: options.Python, Pythonw: options.Pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: runtimeRoots, Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Environment: environment, Configuration: &config}, nil
+		environment := map[string]string(nil)
+		if p.ID == "document-workshop" && documentRoot != "" {
+			runtimeRoots = append(runtimeRoots, documentRoot)
+			environment = map[string]string{"DOCUMENT_RUNTIME_ROOT": documentRoot}
+		}
+		return LaunchSpec{PackageDir: code, DataDir: data, Python: python, Pythonw: pythonw, WindowsHelper: options.WindowsHelper, RuntimeRoots: runtimeRoots, Resources: append([]ReadOnlyResource(nil), resources...), HostMetadata: cloneMetadata(metadata), Environment: environment, Configuration: &config}, nil
 	}}
 }
 
@@ -112,6 +127,8 @@ type Controller struct {
 	idleWake    chan struct{}
 	idleStop    chan struct{}
 	idleDone    chan struct{}
+	idleCtx     context.Context
+	idleCancel  context.CancelFunc
 	closed      bool
 	services    *ManagedServices
 }
@@ -163,7 +180,8 @@ func newControllerWithIdleLoop(store *pluginhost.Store, executor pluginhost.Exec
 	if clock == nil {
 		clock = wallClock{}
 	}
-	c := &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}, automatic: map[string]time.Time{}, manual: map[string]map[string]bool{}, idleTimeout: 10 * time.Minute, clock: clock, idleWake: make(chan struct{}), idleStop: make(chan struct{}), idleDone: make(chan struct{})}
+	idleCtx, idleCancel := context.WithCancel(context.Background())
+	c := &Controller{store: store, host: h, busy: map[string]bool{}, changed: make(chan struct{}), failures: map[string]string{}, loaded: map[string]loadedPlugin{}, automatic: map[string]time.Time{}, manual: map[string]map[string]bool{}, idleTimeout: 10 * time.Minute, clock: clock, idleWake: make(chan struct{}), idleStop: make(chan struct{}), idleDone: make(chan struct{}), idleCtx: idleCtx, idleCancel: idleCancel}
 	if runIdleLoop {
 		go c.idleLoop()
 	} else {
@@ -508,7 +526,21 @@ func (c *Controller) startOne(ctx context.Context, id string, revision int, enab
 	c.mu.Unlock()
 	return nil
 }
-func (c *Controller) Stop(ctx context.Context, id string, revision int) (err error) {
+func (c *Controller) Stop(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, true)
+}
+
+// StopSession releases the running session without revoking administrator enable intent.
+func (c *Controller) StopSession(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, false)
+}
+
+// StopIdleSession cannot cancel pending work or active calls.
+func (c *Controller) StopIdleSession(ctx context.Context, id string, revision int) error {
+	return c.stop(ctx, id, revision, false, true)
+}
+
+func (c *Controller) stop(ctx context.Context, id string, revision int, disable bool, idleOnly ...bool) (err error) {
 	if err = c.begin(id); err != nil {
 		return err
 	}
@@ -523,6 +555,15 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 	c.mu.Lock()
 	services := c.services
 	c.mu.Unlock()
+	if len(idleOnly) > 0 && idleOnly[0] {
+		pending, checkErr := c.store.HasUnfinishedJobs(ctx, id)
+		if checkErr != nil {
+			return checkErr
+		}
+		if pending || c.host.Status(id).ActiveCalls > 0 || services != nil && services.OwnerBusy(id) {
+			return errors.New("tool_busy_wait_for_completion")
+		}
+	}
 	if services != nil {
 		if err = services.StopOwner(ctx, id); err != nil {
 			return err
@@ -533,7 +574,9 @@ func (c *Controller) Stop(ctx context.Context, id string, revision int) (err err
 			return err
 		}
 	}
-	_, err = c.store.SetEnabled(ctx, id, revision, false)
+	if disable {
+		_, err = c.store.SetEnabled(ctx, id, revision, false)
+	}
 	if err == nil {
 		c.mu.Lock()
 		delete(c.loaded, id)
@@ -554,6 +597,9 @@ func (c *Controller) Close() error {
 	services := c.services
 	c.loaded = map[string]loadedPlugin{}
 	c.notifyLocked()
+	if c.idleCancel != nil {
+		c.idleCancel()
+	}
 	close(c.idleStop)
 	c.mu.Unlock()
 	// Let a reaper which already reserved a session finish its exact close

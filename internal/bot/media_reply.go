@@ -74,6 +74,9 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
+		if w.roundClosed(r.Input.Thread, r.Trace) || w.inputRoundClosed(r.Input) {
+			continue
+		}
 		if r.Paused || r.terminal() {
 			continue
 		}

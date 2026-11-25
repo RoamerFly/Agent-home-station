@@ -6,14 +6,25 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality
+from yue_bridge import prepare_song_graph, song_options, singing_profile, convert_singing_voice, _merge_profile_runtime_config, song_recipe, requested_singing_profile, generation_style, reference_window, generation_controls, duration_quality, registered_comfy_url
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / 'components/yue2/app/workflows_api'
 
 class SongWorkflowTests(unittest.TestCase):
+    def test_comfy_url_is_loopback_and_canonical(self):
+        self.assertEqual(registered_comfy_url('http://127.0.0.1:6191'), 'http://127.0.0.1:6191')
+        for value in ('http://localhost:6191', 'http://192.168.1.2:6191',
+                      'https://127.0.0.1:6191', 'http://127.0.0.1:80',
+                      'http://127.0.0.1:6191/path'):
+            with self.assertRaises(ValueError):
+                registered_comfy_url(value)
+
     def test_managed_conversion_uses_helper_inside_public_mount(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);output=root/'output.wav';expected={'config_sha256':'synthetic','python':'/usr/bin/python3'}
+            converter=root/'public_workspace/projects/agent-tools/singing_voice.py'
+            converter.parent.mkdir(parents=True)
+            converter.write_bytes(b'synthetic converter')
             sandbox={'public':str(root/'public_workspace'),'private':str(root/'pri_workspace/account')}
             def complete(*args,**kwargs):output.write_bytes(b'synthetic wav'+b'\0'*50)
             with patch('yue_bridge.singing_profile',return_value=expected),patch('managed_music_runner.run',side_effect=complete) as run:
@@ -21,6 +32,17 @@ class SongWorkflowTests(unittest.TestCase):
                 argv=run.call_args.args[3]
                 self.assertEqual(Path(argv[1]),root/'public_workspace/projects/agent-tools/singing_voice.py')
                 self.assertTrue(run.call_args.kwargs['gpu'])
+
+    def test_private_profile_uses_current_public_runtime_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);profile=root/'private-profile.json';base=root/'current.json';destination=root/'jobs/out.wav'
+            profile.write_text(json.dumps({'enabled':True,'engine':'rvc','profile':'mom','runtime':'E:/old/runtime','python':'E:/old/python.exe','rvc_python':'E:/old/python.exe','rvc_project':'E:/old/project','rvc_model':'E:/private/mom.pth','rvc_index':'E:/private/mom.index'}),encoding='utf-8')
+            base.write_text(json.dumps({'enabled':True,'engine':'rvc','profile':'default','runtime':'E:/release/models/separator','python':'E:/release/runtime/python.exe','rvc_python':'E:/release/runtime/python.exe','rvc_project':'E:/release/project'}),encoding='utf-8')
+            merged,temporary=_merge_profile_runtime_config(profile,base,destination)
+            self.assertIsNotNone(temporary)
+            self.assertEqual(json.loads(merged.read_text(encoding='utf-8'))['python'],'E:/release/runtime/python.exe')
+            self.assertEqual(json.loads(merged.read_text(encoding='utf-8'))['rvc_model'],'E:/private/mom.pth')
+            temporary.unlink(missing_ok=True)
 
     def test_native_is_default_and_never_reads_or_requires_rvc_resources(self):
         with patch('yue_bridge.singing_profile',side_effect=RuntimeError('broken RVC')) as profile:
@@ -75,7 +97,7 @@ class SongWorkflowTests(unittest.TestCase):
 
     def test_recovery_uses_persisted_workflow_instead_of_changed_project_file(self):
         body=self.body()
-        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text())
+        template=json.loads((WORKFLOWS/'audio_yue2_text_to_music.json').read_text(encoding='utf-8'))
         template['33:8']['inputs']['steps']=57
         with tempfile.TemporaryDirectory() as tmp:
             graph=prepare_song_graph(Path(tmp)/'missing-workflows',body,'synthetic',Path(tmp),template=template)

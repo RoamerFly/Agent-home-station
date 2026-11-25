@@ -270,7 +270,14 @@ def run(request_path):
                 argv=[request["shell"],"/d","/s","/c",command]
             else:
                 argv=[request["shell"],"-NoProfile","-NonInteractive","-WindowStyle","Hidden","-EncodedCommand",encoded]
-            process = launch(argv, request["cwd"], request["roots"], [*request.get("read_only", []), *training], output, diagnostic if direct is not None else None,
+            readonly = [*request.get("read_only", []), *training]
+            if policy == "registry-read-offline-speech-v1" and len(argv) > 1 and Path(argv[0]).name.lower() == "python.exe" and Path(argv[1]).name == "gpt_sovits.py":
+                # Bootstrap the approved runner inside the same offline LPAC.
+                # Keep the owner-pinned runner and its command arguments intact.
+                bootstrap = Path(__file__).resolve().with_name("windows_speech_compat.py")
+                readonly.append(str(bootstrap))
+                argv = [argv[0], "-B", str(bootstrap), *argv[1:]]
+            process = launch(argv, request["cwd"], request["roots"], readonly, output, diagnostic if direct is not None else None,
                              music_runtime=policy == "registry-read-private-network-v1",
                              speech_runtime=policy == "registry-read-offline-speech-v1",
                              environment=request.get("environment"))

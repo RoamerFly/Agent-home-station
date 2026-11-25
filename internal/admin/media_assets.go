@@ -16,15 +16,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/documentmemory"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 )
 
 type assetOriginal struct {
+	parentAssetID       string // Host-verified lineage, committed with the first index entry.
 	InboundMessage      *linuxnative.Message
 	VoiceID             string
 	VoiceEngine         string
@@ -39,6 +40,7 @@ type assetOriginal struct {
 	Parent              *assetOriginal
 }
 type assetRequest struct {
+	SentFile           bool      `json:"sent_file,omitempty"`
 	SourceFingerprint  string    `json:"source_fingerprint,omitempty"`
 	MessageTime        string    `json:"message_time,omitempty"`
 	TraceID            string    `json:"trace_id,omitempty"`
@@ -56,10 +58,12 @@ type assetFormat struct {
 	FullOriginal bool     `json:"full_original,omitempty"`
 }
 type mediaAsset struct {
-	VoiceID       string `json:"voice_id,omitempty"`
-	VoiceEngine   string `json:"voice_engine,omitempty"`
-	VoiceProfile  string `json:"voice_profile_id,omitempty"`
-	SynthesisText string `json:"synthesis_text,omitempty"`
+	DocumentMemory *documentmemory.Note `json:"document_memory,omitempty"`
+	StorageName    string               `json:"stored_filename,omitempty"`
+	VoiceID        string               `json:"voice_id,omitempty"`
+	VoiceEngine    string               `json:"voice_engine,omitempty"`
+	VoiceProfile   string               `json:"voice_profile_id,omitempty"`
+	SynthesisText  string               `json:"synthesis_text,omitempty"`
 	// False means the bytes have no unambiguous, verified speech input. Do
 	// not guess it from titles, requests, captions, or old model prose.
 	SynthesisTextKnown bool                   `json:"synthesis_text_known,omitempty"`
@@ -122,6 +126,11 @@ func (m *Manager) loadAssets() ([]mediaAsset, error) {
 	return items, err
 }
 func (m *Manager) saveAssets(items []mediaAsset) error {
+	var namingErr error
+	items, namingErr = m.nameAssetFiles(items)
+	if namingErr != nil {
+		return namingErr
+	}
 	// History is committed first. An interrupted index replacement can retain
 	// extra verified associations, but must never erase an older association.
 	compact := append([]mediaAsset{}, items...)
@@ -142,6 +151,9 @@ func (m *Manager) saveAssets(items []mediaAsset) error {
 	}
 	if e = writePrivate(filepath.Join(m.dir, "media-assets.json"), b); e != nil {
 		return e
+	}
+	if err := m.publishAssetNames(items); err != nil {
+		return err
 	}
 	return m.indexMemoryAssets(items)
 }
@@ -179,6 +191,7 @@ func (a *mediaAsset) noteOriginal(in companion.Input, msg *linuxnative.Message) 
 		return
 	}
 	if msg != nil && msg.ID == r.TraceID && msg.AccountID == in.Account && msg.ThreadID == in.Thread && msg.SenderID == r.RequesterID && msg.CreatedAt == r.MessageTime {
+		r.SentFile = sentConversationFile(*msg)
 		r.SourceMessageType = msg.Type
 		r.SourceFingerprint = inboundFingerprint(*msg)
 	}
@@ -227,7 +240,7 @@ func (m *Manager) rememberAsset(in companion.Input, original assetOriginal, kind
 // Commit every upload material of a format together, so concurrent requests
 // never see a half-prepared replacement bundle.
 func (m *Manager) rememberAssetFormats(in companion.Input, original assetOriginal, uploads []stagedUpload) (mediaAsset, error) {
-	parentID := ""
+	parentID := original.parentAssetID
 	if original.Parent != nil {
 		parent := *original.Parent
 		parent.Parent = nil // A conversion carries one verified parent, not recursion.
@@ -246,6 +259,18 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	items, e := m.loadAssets()
 	if e != nil {
 		return zero, e
+	}
+	if parentID != "" {
+		found := false
+		for _, candidate := range items {
+			if candidate.ID == parentID && candidate.Scope == assetScope(in) && candidate.Account == in.Account {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return zero, errors.New("artifact_parent_not_in_conversation")
+		}
 	}
 	hash := sha256.Sum256(original.Data)
 	digest := hex.EncodeToString(hash[:])
@@ -288,6 +313,8 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		a.URL = u.String()
 	}
 	if index >= 0 {
+		a.StorageName = items[index].StorageName
+		a.DocumentMemory = items[index].DocumentMemory
 		if a.VoiceID == "" {
 			a.VoiceID = items[index].VoiceID
 			a.VoiceEngine = items[index].VoiceEngine
@@ -361,6 +388,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 	}
 
 	if index >= 0 {
+		a.StorageName = items[index].StorageName
 		items[index] = a
 	} else {
 		items = append(items, a)
@@ -456,12 +484,6 @@ func (p *permittedTools) reuseAsset(ctx context.Context, id, kind string) (strin
 	return p.reuseAssetConverted(ctx, id, kind, nil)
 }
 func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind string, conversion *voiceConversion) (string, error) {
-	if err := conversion.validate(kind); err != nil {
-		return "", err
-	}
-	if p.trace.Preview || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
-		return "", errors.New("media_permission_denied")
-	}
 	m := p.manager
 	m.assetMu.Lock()
 	locked := true
@@ -476,7 +498,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 	}
 	index := -1
 	for i, a := range items {
-		if a.ID == id && a.Account == p.trace.Account && a.Scope == assetScope(p.trace) {
+		if a.ID == id && a.Account == p.trace.Account && (a.Scope == assetScope(p.trace) || librarySong(a, p.trace.Account) || a.Music != nil && p.privileged()) {
 			index = i
 			break
 		}
@@ -485,6 +507,20 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		return "", errors.New("当前会话没有该素材")
 	}
 	a := items[index]
+	if kind == "" {
+		kind = "file"
+		if strings.HasPrefix(a.MIME, "video/") {
+			kind = "video"
+		} else if strings.HasPrefix(a.MIME, "image/") {
+			kind = "image"
+		}
+	}
+	if err := conversion.validate(kind); err != nil {
+		return "", err
+	}
+	if p.trace.Preview || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
+		return "", errors.New("media_permission_denied")
+	}
 	synthesisText, synthesisKnown := assetSynthesisForRequest(a, p.trace, kind, conversion)
 	formatKey := kind
 	if conversion != nil {
@@ -535,11 +571,11 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 		source = format.Sources[0]
 	}
 	if source == "" {
-		if kind != "file" || len(a.Hash) != 64 {
+		if (kind != "file" && !(kind == "video" && strings.HasPrefix(a.MIME, "video/")) && !(kind == "image" && strings.HasPrefix(a.MIME, "image/"))) || len(a.Hash) != 64 {
 			if a.ParentAssetID != "" {
 				for _, parent := range items {
 					if parent.ID == a.ParentAssetID && parent.Account == p.trace.Account && parent.Scope == assetScope(p.trace) {
-						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "没有执行下载或发送；当前素材没有所选格式。父素材已在本会话缓存。若用户要原视频文件，请调用media_reuse(asset_id=parent_asset_id,kind=file)；不要重新下载同一资源。根据用户要求自行选择正确素材和格式。"})
+						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "没有执行下载或发送；当前素材没有所选格式。父素材已在本会话缓存。若用户要原视频文件，请调用media_reuse(asset_id=parent_asset_id,kind=video)；不要重新下载同一资源。根据用户要求自行选择正确素材和格式。"})
 						return string(b), nil
 					}
 				}
@@ -610,15 +646,10 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 }
 
 func boundedAssetSynthesisText(text string) string {
-	text = strings.TrimSpace(text)
-	if len(text) > 4096 {
-		for n := 4096; n > 0; n-- {
-			if utf8.ValidString(text[:n]) {
-				return text[:n]
-			}
-		}
-	}
-	return text
+	// Keep the verified script intact. The caller decides how much text a
+	// model request or UI page can display, so asset persistence must not
+	// silently rewrite the source script.
+	return strings.TrimSpace(text)
 }
 
 // Preserve a script only for delivery of the exact original, whole voice

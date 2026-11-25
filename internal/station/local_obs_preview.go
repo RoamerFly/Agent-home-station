@@ -259,6 +259,11 @@ func (s *localProjectTools) prepareOBS(ctx context.Context, in localOBSInput, se
 		if err != nil || config.Revision != view.ConfigRevision || json.Unmarshal(config.Values["password"], &password) != nil || password == "" {
 			return view, nil, "", pluginhost.ErrRevision
 		}
+		if in.Action == "start" {
+			if err := s.ensureOBSProcess(ctx, view.Port, password); err != nil {
+				return view, nil, "", err
+			}
+		}
 		session, err := s.obs.claim(in.Action, ticket)
 		return view, session, password, err
 	}

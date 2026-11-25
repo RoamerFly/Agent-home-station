@@ -25,7 +25,7 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	const account, origin, source, ownerID = "one", "origin@chatroom", "source@chatroom", "wxid-synthetic-owner"
 	base := t.TempDir()
 	data, home := filepath.Join(base, "data"), filepath.Join(base, "home")
-	nativeRoot := filepath.Join(data, "apps", "wechat", "native")
+	nativeRoot := filepath.Join(data, "applications", "wechat", "native")
 	mustWriteSnapshotFixture(t, filepath.Join(nativeRoot, "api-token"), []byte("synthetic-cross-token"))
 	var mu sync.Mutex
 	messages := map[string]linuxnative.Message{}
@@ -190,8 +190,13 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv := httptest.NewServer(h)
-		t.Cleanup(srv.Close)
-		t.Cleanup(func() { _ = h.Close() })
+		t.Cleanup(func() {
+			// Stop HTTP handlers before closing their SQLite-backed host.
+			srv.Close()
+			if err := h.Close(); err != nil {
+				t.Error("station host cleanup failed", err)
+			}
+		})
 		jar, _ := cookiejar.New(nil)
 		return &localHomeFixture{t: t, server: srv, client: &http.Client{Jar: jar}, handler: h, dir: data, root: home}
 	}
@@ -274,7 +279,7 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	}
 	tools, input := makeTools("query-one", origin, ownerID)
 	catalog, err := tools.List(t.Context())
-	if err != nil || len(catalog) != 1 || catalog[0].Name != stationWechatCrossToolName || tools.cross != nil {
+	if err != nil || !hasTool(catalog, stationWechatCrossToolName) || tools.cross != nil {
 		t.Fatal("discovery preloaded foreign data", catalog, err)
 	}
 	stamp := tools.MemoryResultAuthorization()
@@ -624,7 +629,7 @@ func TestStationWechatCrossMemoryPrivateDeliveryAndRevocation(t *testing.T) {
 	mu.Unlock()
 	first, firstInput := makeTools("lost-forward-reply", origin, ownerID, words)
 	listed, err := first.List(t.Context())
-	if err != nil || len(listed) != 2 || listed[1].Name != stationWechatForwardToolName {
+	if err != nil || !hasTool(listed, stationWechatForwardToolName) {
 		t.Fatal("explicit command tool absent", listed, err)
 	}
 	unknownReceipt := forward(first, `{}`, "unknown")

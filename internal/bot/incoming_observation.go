@@ -10,11 +10,11 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
-// Once a group turn is eligible, resolve its attachments before composing a
-// reply. Private conversations retain on-demand reading for passive media.
+// Resolve eligible attachments before capturing the model's evidence snapshot.
+// Otherwise a successful on-demand read updates RecallEpoch inside the tool
+// loop and invalidates its own generation before the result can be used.
 func (w *Worker) readMediaBeforeDecision(m linuxnative.Message) bool {
-	engine, ok := w.model.(*companion.Engine)
-	return strings.HasSuffix(m.ThreadID, "@chatroom") || w.hasScopedMedia(m) || m.Type == 34 || m.FileAttachmentName() != "" || !ok || engine.Tools == nil || w.generation == nil
+	return w.observationAllowed(m)
 }
 
 func incomingObservationTool() mcptools.Tool {

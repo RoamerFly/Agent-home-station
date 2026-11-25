@@ -9,7 +9,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/websession"
@@ -25,6 +24,7 @@ type localComfyDeploymentView struct {
 }
 
 func (s *localProjectTools) comfyDeploymentRoutes(owner *websession.Store, mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/local/project-tools/comfyui/input", owner.Protect(s.comfyInputUpload))
 	for _, method := range []string{"GET", "PUT"} {
 		mux.HandleFunc(method+" /api/local/project-tools/comfyui/deployment", owner.Protect(s.comfyDeployment))
 	}
@@ -32,7 +32,7 @@ func (s *localProjectTools) comfyDeploymentRoutes(owner *websession.Store, mux *
 
 func (s *localProjectTools) readComfyDeployment() (localComfyDeploymentView, error) {
 	v := localComfyDeploymentView{Revision: "unconfigured"}
-	path := filepath.Join(s.home.dataDir, localComfyRegistrationFile)
+	path := stationToolRegistrationPath(s.home.dataDir, localComfyRegistrationFile)
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return v, nil
 	}
@@ -128,7 +128,7 @@ func (s *localProjectTools) comfyDeployment(w http.ResponseWriter, r *http.Reque
 		websession.Fail(w, 409, err.Error())
 		return
 	}
-	path := filepath.Join(s.home.dataDir, localComfyRegistrationFile)
+	path := stationToolRegistrationPath(s.home.dataDir, localComfyRegistrationFile)
 	release, err := hostfile.Lock(path + ".lock")
 	if err != nil {
 		websession.Fail(w, 503, "ComfyUI 部署登记暂不可写")

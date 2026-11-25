@@ -42,12 +42,14 @@ func (m *Manager) installedServiceState(ctx context.Context, id, prefix string) 
 }
 
 type receivedSharePolicy struct {
+	sharedVision       bool
 	manager            *Manager
 	store              *pluginhost.Store
 	message            linuxnative.Message
 	source             companion.SourceRef
 	fingerprint, epoch string
 	remember           bool
+	nativeRecall       *companion.Input
 	tool               string
 	requestSuffix      string
 	// resolutionSnapshotSuffix distinguishes immutable read-only share parses
@@ -115,7 +117,7 @@ func safeShareResolutionFailure(stage string, err error) *shareResolutionFailure
 		return failure
 	}
 	switch err.Error() {
-	case "share_native_source_required", "share_source_scope_mismatch", "share_persisted_source_unavailable", "source_actor_not_authorized", "source_actor_authorization_changed", "share_request_authorization_changed", "share_plugin_disabled", "share_plugin_snapshot_changed", "share_invocation_changed", "share_source_changed", "share_native_source_unavailable", "share_native_source_changed", "share_source_binding_unavailable", "share_source_binding_changed", "share_route_out_of_order", "share_route_source_mismatch", "share_route_chain_finished", "share_route_response_invalid", "share_route_response_binding_failed", "share_result_binding_failed", "share_bridge_unavailable", "share_bridge_rejected", "share_bridge_response_invalid", "share_bridge_source_mismatch", "share_bridge_timeout_invalid", "share_bridge_already_consumed", "share_bridge_configuration_unavailable", "share_bridge_configuration_invalid":
+	case "share_native_source_required", "share_source_scope_mismatch", "share_persisted_source_unavailable", "source_actor_not_authorized", "source_actor_authorization_changed", "share_request_authorization_changed", "share_plugin_disabled", "share_plugin_snapshot_changed", "share_invocation_changed", "share_source_changed", "share_native_source_unavailable", "share_native_source_changed", "share_source_binding_unavailable", "share_source_binding_changed", "share_route_out_of_order", "share_route_source_mismatch", "share_route_chain_finished", "share_route_response_invalid", "share_route_response_binding_failed", "share_result_binding_failed", "share_parser_rejected", "share_result_route_incomplete", "share_result_schema_invalid", "share_result_source_mismatch", "share_result_media_mismatch", "share_bridge_unavailable", "share_bridge_rejected", "share_bridge_response_invalid", "share_bridge_source_mismatch", "share_bridge_timeout_invalid", "share_bridge_already_consumed", "share_bridge_configuration_unavailable", "share_bridge_configuration_invalid", "channels_feed_identity_unverified", "channels_feed_lookup_failed", "channels_media_locator_missing", "channels_playable_link_missing", "channels_resolved_video_mismatch", "channels_resolver_response_invalid", "channels_share_link_invalid", "channels_yuanbao_parse_failed", "channels_decode_key_invalid", "channels_assistant_shortlink_failed", "channels_assistant_export_id_required", "channels_object_bridge_response_invalid", "channels_nonce_id_invalid", "invalid_channels_arguments", "invalid_channels_bridge_arguments", "invalid_timeout_seconds", "ambiguous_channels_source":
 		failure.code = err.Error()
 	}
 	return failure
@@ -177,6 +179,15 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 		return nil, err
 	}
 	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: wechatapp.ReceivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
+	if tool == "share.resolve_public" || tool == "share.resolve_channels" {
+		nonce := companion.ReplayNonce(ctx)
+		if nonce == "" {
+			nonce = companion.ReplayNonceFromContext(ctx)
+		}
+		if nonce != "" {
+			p.requestSuffix = "admin-readonly-replay-" + nonce
+		}
+	}
 	if actor, ok := sourceActorFromContext(ctx); ok {
 		// The proof is useful only for the exact account and source conversation
 		// it was minted for. Do not downgrade a mismatched explicit request into
@@ -195,25 +206,38 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 			found, valid := m.memory.SourceForInput(in)
 			if !valid {
 				// The caller has read the actual native message. Repair only the
-				// old false collision with an unknown legacy namespace; explicit
-				// quarantine, forgetting and current-dataset conflicts stay blocked.
+				// old false collision with an unknown legacy namespace or a
+				// distinctly older native row; explicit quarantine and forgetting
+				// remain blocked.
 				found, valid, err = m.memory.ReconcileLegacySource(ctx, in)
 				if err != nil {
 					return nil, err
 				}
 			}
-			if !valid {
-				return nil, errors.New("share_persisted_source_unavailable")
+			if valid {
+				ref = *found
+			} else {
+				// Follow-up media may arrive while a model turn is in progress.
+				// Check the exact native message without writing provisional
+				// observations that would invalidate the in-flight turn.
+				p.nativeRecall = &in
+				if err := p.checkNativeRecall(ctx); err != nil {
+					return nil, err
+				}
+				if err := p.checkNativeSource(ctx); err != nil {
+					return nil, err
+				}
 			}
-			ref = *found
 		}
-		if ref.Account != message.AccountID || ref.Thread != message.ThreadID || ref.MessageID != message.ID || ref.Sender != message.SenderID {
-			return nil, errors.New("share_source_scope_mismatch")
+		if p.nativeRecall == nil {
+			if ref.Account != message.AccountID || ref.Thread != message.ThreadID || ref.MessageID != message.ID || ref.Sender != message.SenderID {
+				return nil, errors.New("share_source_scope_mismatch")
+			}
+			p.source = ref
+			return p, nil
 		}
-		p.source = ref
-	} else {
-		p.source = companion.SourceRef{Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, MessageID: message.ID, ServerID: message.ServerID, EventID: "native:" + p.fingerprint, Revision: 1, MessageType: message.Type, OccurredAt: message.CreatedAt}
 	}
+	p.source = companion.SourceRef{Account: message.AccountID, Thread: message.ThreadID, Sender: message.SenderID, MessageID: message.ID, ServerID: message.ServerID, EventID: "native:" + p.fingerprint, Revision: 1, MessageType: message.Type, OccurredAt: message.CreatedAt}
 	return p, nil
 }
 
@@ -221,8 +245,6 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 	c := pluginhost.Invocation{Account: p.message.AccountID, Thread: p.message.ThreadID, Requester: p.message.SenderID, Purpose: "read received video share", RequestKey: "received-share-" + agentID(p.source.EventID, p.message.ID), SourceVersions: map[string]int{p.source.EventID: p.source.Revision}, EvidenceEpoch: p.epoch, Authorization: p.fingerprint}
 	if p.actor != nil {
 		c.Requester = p.actor.actor
-		c.OriginSourceSender = p.message.SenderID
-		c.RequestThread = p.actor.requestThread
 		c.RequestKey += "-actor-" + agentID(p.actor.actor, p.actor.requestThread, p.actor.taskID, p.actor.requestKey, p.message.ID, p.tool)
 	}
 	if p.requestSuffix != "" {
@@ -244,15 +266,15 @@ func (p *receivedSharePolicy) invocation() pluginhost.Invocation {
 
 // setReadOnlyResolutionSnapshot makes the request key track every immutable
 // input which the runtime stores in its job fingerprint.  It is intentionally
-// limited to share.resolve_channels: other tools have distinct side-effect and
+// limited to read-only share resolution: other tools have distinct side-effect and
 // replay contracts.  The digest is a one-way identifier, so neither a short
 // link nor private configuration is exposed in the durable request key.
 func (p *receivedSharePolicy) setReadOnlyResolutionSnapshot(raw json.RawMessage, installed pluginhost.InstalledPackage, configuration pluginhost.Configuration) {
-	if p.tool != "share.resolve_channels" {
+	if p.tool != "share.resolve_channels" && p.tool != "share.resolve_public" {
 		return
 	}
 	p.resolutionSnapshotSuffix = "snapshot-" + agentID(
-		"share.resolve_channels.readonly.v1",
+		p.tool+".readonly.v1",
 		p.requestSuffix,
 		string(raw),
 		p.source.EventID,
@@ -289,7 +311,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 		return errors.New("share_request_authorization_changed")
 	}
 	i, err := p.store.Installed(ctx, j.Plugin)
-	if err != nil || !i.Enabled || i.Removed {
+	if !(p.sharedVision && p.tool == "media.observe" && j.PackageDigest == "") && (err != nil || !i.Enabled || i.Removed) {
 		return errors.New("share_plugin_disabled")
 	}
 	// A job created by the plugin runtime has an immutable package/config
@@ -328,16 +350,31 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if string(a) != string(b) {
 		return errors.New("share_invocation_changed")
 	}
-	epoch, err := p.manager.memory.RecallEpoch(ctx)
-	if err != nil || epoch != p.epoch {
-		return errors.New("share_source_changed")
-	}
-	if p.remember {
+	if p.nativeRecall != nil {
+		if err := p.checkNativeRecall(ctx); err != nil {
+			return err
+		}
+	} else if p.remember {
 		ev, err := p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.message.AccountID, p.message.ThreadID)}, p.source.EventID)
-		if err != nil || ev.Revision != p.source.Revision || ev.Sender != p.message.SenderID || ev.Trace != p.message.ID || ev.Hash != p.source.BodyHash {
+		if err != nil || ev.Sender != p.message.SenderID || ev.Trace != p.message.ID {
 			return errors.New("share_source_changed")
 		}
 	}
+	return p.checkNativeSource(ctx)
+}
+
+func (p *receivedSharePolicy) checkNativeRecall(ctx context.Context) error {
+	if !p.manager.memory.LegacyHistoryAllowed(p.message.AccountID, p.message.ThreadID) {
+		return errors.New("share_source_changed")
+	}
+	allowed, err := p.manager.memory.NativeRecallAllowed(ctx, *p.nativeRecall)
+	if err != nil || !allowed {
+		return errors.New("share_source_changed")
+	}
+	return nil
+}
+
+func (p *receivedSharePolicy) checkNativeSource(ctx context.Context) error {
 	current, err := p.manager.native.Message(ctx, p.message.ID)
 	if err != nil {
 		return errors.New("share_native_source_unavailable")
@@ -345,6 +382,9 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if current.AccountID == "" {
 		current.AccountID = p.manager.native.Account()
 	}
+	// The transport can refresh the server identifier and timestamp. The
+	// content used by an already prepared share or media request must agree.
+	current.ServerID, current.CreatedAt = p.message.ServerID, p.message.CreatedAt
 	if wechatapp.ReceivedSourceFingerprint(current, p.tool) != p.fingerprint {
 		return errors.New("share_native_source_changed")
 	}
@@ -407,6 +447,20 @@ func (p *receivedSharePolicy) Validate(ctx context.Context, j pluginhost.Job, ca
 	if p.binding == nil {
 		return pluginruntime.VerifiedResult{}, errors.New("share_source_binding_unavailable")
 	}
+	// The packaged parser returns a fixed, non-sensitive code for a failed
+	// read. Preserve only reviewed codes; never journal arbitrary plugin text.
+	var parserResult struct {
+		OK    *bool  `json:"ok"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &parserResult) == nil && parserResult.OK != nil && !*parserResult.OK {
+		switch parserResult.Error {
+		case "channels_feed_identity_unverified", "channels_feed_lookup_failed", "channels_media_locator_missing", "channels_playable_link_missing", "channels_resolved_video_mismatch", "channels_resolver_response_invalid", "channels_share_link_invalid", "channels_yuanbao_parse_failed", "channels_decode_key_invalid", "channels_assistant_shortlink_failed", "channels_assistant_export_id_required", "channels_object_bridge_response_invalid", "channels_nonce_id_invalid", "invalid_channels_arguments", "invalid_channels_bridge_arguments", "invalid_timeout_seconds", "ambiguous_channels_source":
+			return pluginruntime.VerifiedResult{}, errors.New(parserResult.Error)
+		default:
+			return pluginruntime.VerifiedResult{}, errors.New("share_parser_rejected")
+		}
+	}
 	verified, _, err := p.binding.ValidateResult(ctx, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
 	return verified, err
 }
@@ -451,7 +505,10 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		}
 		link, err := native.ChannelsShareURL(ctx, message.ID, message.ThreadID, source.ObjectID)
 		if err != nil {
-			return "", errors.New("share_native_shortlink_unavailable")
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", channelsShortLinkFailure(err)
 		}
 		return link, nil
 	})
@@ -487,6 +544,13 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		return source, err
 	}
 	out, err := h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
+	if err == nil && out.Reused && out.Job.State == "needs_review" && out.Job.Diagnostic == nil {
+		// Channel resolution only reads the bound source. An interrupted read
+		// can be retried without reusing its ambiguous execution record.
+		p.resolutionSnapshotSuffix += "-retry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		job.Context = p.invocation()
+		out, err = h.Invoke(ctx, pluginruntime.CallRequest{Plugin: job.Plugin, Capability: job.Tool, Context: job.Context, Arguments: raw}, p)
+	}
 	if err != nil {
 		return source, p.recordResolutionFailure(out.Job, safeShareResolutionFailure("plugin_invoke", err))
 	}
@@ -502,4 +566,15 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		return source, errors.New("share_plugin_handoff_invalid")
 	}
 	return resolved, nil
+}
+
+func channelsShortLinkFailure(err error) error {
+	// Preserve the native identity outcome without exposing the upstream body,
+	// URL or a third-party resolver's error text.
+	switch code := err.Error(); code {
+	case "channels_share_identity_missing", "channels_share_identity_mismatch", "channels_share_lookup_rejected", "channels_share_response_invalid", "channels_share_link_invalid":
+		return errors.New(code)
+	default:
+		return errors.New("share_native_shortlink_unavailable")
+	}
 }

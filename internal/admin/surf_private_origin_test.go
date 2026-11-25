@@ -22,8 +22,8 @@ func privateSurfFixture(t *testing.T) (*webFixture, *bot.SurfTask, *privateSurfT
 	installPublicWebFixture(t, f)
 	f.manager.config.Companion.Enabled = true
 	f.manager.config.Companion.QuietStart, f.manager.config.Companion.QuietEnd = "00:00", "00:00"
-	// The independent browsing authorization does not imply any sending grant.
-	f.manager.config.Companion.Permissions = companion.Permissions{Remember: true}
+	// The unified autonomous switch does not imply any sending grant.
+	f.manager.config.Companion.Permissions = companion.Permissions{Remember: true, Proactive: true}
 	f.manager.surf.Settings.Enabled = true
 	f.manager.surf.Settings.ForceShare = true
 	f.manager.surf.Settings.Threads = nil

@@ -88,7 +88,10 @@ func TestEveryMessageJudgedWhileSendBudgetPermissionsAndQuietHoursRemain(t *test
 	e.Config.QuietStart = now.Add(-time.Hour).Format("15:04")
 	e.Config.QuietEnd = now.Add(time.Hour).Format("15:04")
 	d, _ = e.Respond(context.Background(), input)
-	if d.Reason != "quiet_hours" || model.calls != 3 {
-		t.Fatal("question bypassed quiet hours", d)
+	if d.Reason != "model_chose_silence" || model.calls != 4 {
+		t.Fatal("quiet hours blocked incoming message judgement", d)
+	}
+	if err := e.Claim(input); err == nil || err.Error() != "quiet hours" {
+		t.Fatal("quiet hours did not protect outgoing delivery", err)
 	}
 }

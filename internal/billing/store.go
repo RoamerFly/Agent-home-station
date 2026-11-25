@@ -142,6 +142,30 @@ func addUsage(t Totals, u deepseek.Usage, p Prices, priced bool) Totals {
 	}
 	return t
 }
+
+// Estimate returns the same price estimate used by Record for one provider
+// response. It reads the existing local price configuration and never calls a
+// provider or changes the aggregate ledger. Missing usage or prices stay
+// unknown rather than becoming a zero-cost request.
+func (s *Store) Estimate(c ModelConfig, u deepseek.Usage) (map[string]float64, bool, string) {
+	if s == nil || !u.Reported {
+		return nil, false, ""
+	}
+	if u.Model != "" {
+		c.Model = u.Model
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, known, custom := s.pricesLocked(c, u.Time)
+	if !known {
+		return nil, false, ""
+	}
+	source := "reference"
+	if custom {
+		source = "custom"
+	}
+	return addUsage(Totals{}, u, p, true).Costs, true, source
+}
 func (s *Store) Record(c ModelConfig, u deepseek.Usage) error {
 	// An independent reviewer shares credentials and endpoint, but its actual
 	// model and price identity must not inherit the conversational model.

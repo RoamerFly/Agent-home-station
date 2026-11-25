@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { project, stage, activityTarget } = require('../internal/admin/static/rounds.js');
+const { project: projectRounds, stage, activityTarget } = require('../internal/admin/static/rounds.js');
+// Historical fixtures are evaluated at their last event unless a test supplies
+// wall time explicitly. The production projection always uses the real clock.
+const project = (items, states, now, inbox, sendStates, planStates) => projectRounds(items, states, now ?? Math.max(...items.map(item => Date.parse(item.time))), inbox, sendStates, planStates);
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
@@ -14,17 +17,46 @@ test('status filters group terminal failures separately from unresolved receipts
   ['task_delivery_updated','decision','partially_completed','','done'],
   ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
   ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
-  ['send_failed','error','failed','send_outcome_unknown','done'],
+  ['reminder_overdue','decision','expired','reminder_overdue_while_offline','done'],
+  ['send_failed','error','failed','send_outcome_unknown','pending'],
   ['message_sent','sent','accepted','','done']
  ];
  for(const [event,category,status,reason,group] of cases){
   const r=project([entry(1,{event,category,status,reason})])[0];
   assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
-  if(status==='needs_review'||reason==='send_outcome_unknown'){
+  if(status==='needs_review'){
    const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
    assert.equal(project([...r.entries,processed])[0].group,'done');
   }
+  if(reason==='send_outcome_unknown') assert.equal(project([...r.entries,entry(2,{event:'message_processed',category:'decision',status:'completed'})])[0].group,'pending');
  }
+});
+
+test('an unsent semantic reply cannot make its execution round completed',()=>{
+ const rows=[
+  entry(1,{event:'message_received',category:'received',status:'received'}),
+  entry(2,{event:'utterance_plan_queued',category:'decision',status:'queued',reason:'semantic_message_plan'}),
+  entry(3,{event:'send_failed',category:'error',status:'failed',reason:'reply_evidence_epoch_changed'}),
+  entry(4,{event:'bot_runtime_failed',category:'error',status:'failed',reason:'bot_saved_state_unavailable'}),
+ ];
+ const key='fixture@chatroom\0message-1';
+ const stopped={state:'stopped',stop_reason:'reply_evidence_epoch_changed',index:0,total:1,created:at(2)};
+ const [unfinished]=project(rows,{},undefined,undefined,undefined,{[key]:stopped});
+ assert.equal(unfinished.status,'waiting');assert.equal(unfinished.group,'pending');
+ assert.equal(project(rows)[0].group,'pending');
+ const [receiptPending]=project(rows,{},undefined,undefined,undefined,{[key]:{...stopped,state:'waiting_receipt'}});
+ assert.equal(receiptPending.group,'active');
+ const [delivered]=project([...rows,entry(5,{event:'message_sent',category:'sent',status:'accepted'})],{},undefined,undefined,undefined,{[key]:{...stopped,state:'accepted',index:1}});
+ assert.equal(delivered.status,'accepted');assert.equal(delivered.group,'done');
+});
+
+test('an expired reminder leaves the original chat round unchanged', () => {
+ const received = entry(1,{event:'message_received',category:'received',status:'received'});
+ const expired = entry(2,{message_id:'reminder-1',event:'reminder_overdue',category:'decision',status:'expired'});
+ const rounds = project([received, expired]);
+ assert.equal(rounds.length, 2);
+ assert.equal(rounds[0].status, 'expired');
+ assert.equal(rounds[1].status, 'received');
 });
 
 test('only an actual receipt check is shown as Agent work until the receipt arrives',()=>{
@@ -37,6 +69,89 @@ test('only an actual receipt check is shown as Agent work until the receipt arri
  assert.equal(project([wait,update,end,receipt])[0].group,'done');
  assert.equal(project([entry(1,{event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12)}),entry(2,{event:'send_failed',category:'error',status:'failed',reason:'receipt_wait_timeout'})])[0].status,'checking_receipt');
 });
+test('orphan receipt wait without an inbound turn is settled instead of shown as active forever',()=>{
+ const row=entry(1,{thread_id:'wxid-owner',source_kind:'private',source:'主人',event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'未提交的旧草稿'});
+ const [round]=project([row]);
+ assert.equal(round.status,'needs_review');
+ assert.equal(round.group,'done');
+ assert.equal(round.orphanReceipt,true);
+});
+test('receipt-only continuation remains unfinished until a verified receipt',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'合成旧回复'});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const [round]=project([inbound,wait,detached]);
+ assert.equal(round.group,'pending');assert.equal(round.status,'waiting');assert.equal(round.receiptOnly,true);
+ assert.equal(round.timeline.some(e=>e.event==='delivery_waiting'),true);
+ const scheduled=entry(2,{...wait,retry_at:at(12)});
+ assert.equal(project([inbound,scheduled,detached])[0].group,'active');
+	const confirmed=entry(4,{event:'message_sent',category:'sent',status:'accepted',content:'合成旧回复'});
+ assert.equal(project([inbound,wait,detached,confirmed])[0].group,'done');
+});
+test('paused text receipt stays pending even after a task ends and an old retry was scheduled',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'未确认文字',retry_at:at(20)});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const paused=entry(4,{event:'delivery_receipt_paused',category:'decision',status:'waiting',content:'未确认文字'});
+ const taskStates={'fixture@chatroom\0message-1':{state:'completed',updated:at(3),active:false}};
+ const [pending]=project([inbound,wait,detached,paused],taskStates,Date.parse(at(5)));
+ assert.equal(pending.group,'pending');assert.equal(pending.status,'waiting');
+ const accepted=entry(6,{event:'message_sent',category:'sent',status:'accepted',content:'未确认文字'});
+ const planStates={'fixture@chatroom\0message-1':{state:'accepted',index:1,total:1,created:at(1)}};
+ assert.equal(project([inbound,wait,detached,paused,accepted],taskStates,Date.parse(at(6)),undefined,undefined,planStates)[0].group,'done');
+});
+test('legacy exhausted receipt is pending without a synthetic pause event',()=>{
+ const inbound=entry(1,{event:'message_received',category:'received',status:'received'});
+ const wait=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'旧发送',retry_at:at(30)});
+ const detached=entry(3,{event:'utterance_plan_stopped',category:'decision',status:'completed',reason:'receipt_only_reconciliation'});
+ const key='fixture@chatroom\0message-1';
+ const planStates={[key]:{state:'stopped',stop_reason:'receipt_only_reconciliation',index:0,total:1,created:at(1),receipt_dormant:true}};
+ const [round]=project([inbound,wait,detached],{},Date.parse(at(4)),undefined,undefined,planStates);
+ assert.equal(round.group,'pending');assert.equal(round.status,'waiting');assert.equal(round.receiptDormant,true);
+});
+test('receipt for another text segment does not finish an unresolved segment',()=>{
+ const received=entry(1,{event:'message_received',category:'received',status:'received'});
+ const pending=entry(2,{event:'delivery_waiting',category:'decision',status:'waiting',content:'第一段',retry_at:at(20)});
+ const sent=entry(3,{event:'message_sent',category:'sent',status:'accepted',content:'第二段'});
+ const [round]=project([received,pending,sent]);
+ assert.equal(round.group,'active');assert.equal(round.status,'checking_receipt');
+});
+test('old stopped review with an accepted segment leaves the execution list',()=>{
+ const accepted=entry(1,{message_id:'old-review',event:'message_sent',category:'sent',status:'accepted',send_id:'segment-1'});
+ const review=entry(2,{message_id:'old-review',event:'generation_paused',category:'decision',status:'needs_review'});
+ const later={...entry(3,{message_id:'new-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(review.time)+2*60*60*1000).toISOString()};
+ const rounds=project([accepted,review,later]);
+ assert.equal(rounds.some(x=>x.triggerMessageID==='old-review'),false);
+});
+test('thread identity wins over a stale source kind label',()=>{
+ const [round]=project([entry(1,{source_kind:'private',thread_id:'fixture@chatroom',event:'message_received',category:'received',status:'received'})]);
+ assert.equal(round.source_kind,'group');
+});
+test('an old receive-only round is shown as stopped when later activity exists',()=>{
+ const old=entry(1,{message_id:'old-message',event:'message_received',category:'received',status:'received'});
+ const later={...entry(2,{message_id:'later-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const [round]=project([old,later]).filter(x=>x.triggerMessageID==='old-message');
+ assert.equal(round.status,'stopped');
+ assert.equal(round.group,'done');
+ assert.equal(round.staleUnfinished,true);
+});
+test('owner continuation and accepted cross-media batch leave pending',()=>{
+ const id='a'.repeat(64), thread='owner-chat', target='group@chatroom';
+ const owner=entry(1,{thread_id:thread,message_id:'admin-owner-request-'+id,event:'owner_request_queued',status:'pending'});
+ const media=entry(2,{thread_id:target,message_id:'console-media-'+id,event:'cross_media_queued',status:'queued'});
+ const states={[thread+'\0'+id]:{state:'cancelled',updated:owner.time},[target+'\0console-media-'+id]:{state:'completed',updated:media.time}};
+ const rounds=project([owner,media],states);
+ assert.equal(rounds.find(x=>x.thread_id===thread).status,'stopped');
+ assert.equal(rounds.find(x=>x.thread_id===target).status,'completed');
+});
+test('a durable continuation stays pending or active even when older than later activity',()=>{
+ const old=entry(1,{message_id:'saved-task',event:'message_received',category:'received',status:'received'});
+ const saved=entry(2,{message_id:'saved-task',event:'task_execution_waiting',category:'decision',status:'waiting'});
+ const later={...entry(3,{message_id:'later-message',event:'message_received',category:'received',status:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const [round]=project([old,saved,later]).filter(x=>x.triggerMessageID==='saved-task');
+ assert.equal(round.status,'waiting');
+ assert.equal(round.staleUnfinished,undefined);
+});
 test('a 25-message unread batch retains all evidence but has a single timeline entry before the actual failure',()=>{
  const items=[];
  for(let i=0;i<25;i++) items.push(entry(i,{message_id:'m'+i,event:'message_received',category:'received',content:'合成消息'}));
@@ -46,7 +161,7 @@ test('a 25-message unread batch retains all evidence but has a single timeline e
  const [round]=project(items);
  assert.equal(round.batchSize,25);assert.equal(round.batchMessages.length,25);
  assert.deepEqual(round.timeline.map(x=>x.event),['unread_batch_summary','send_failed']);
- assert.equal(round.entries.length,items.length);assert.equal(round.status,'failed');assert.equal(round.hasDiagnostics,true);
+ assert.equal(round.entries.length,items.length);assert.equal(round.status,'waiting');assert.equal(round.hasDiagnostics,true);
 });
 
 test('one autonomous decision is visible, with its scheduled follow-up and raw context available',()=>{
@@ -83,6 +198,23 @@ test('startup unread from multiple people becomes one conversation round with or
  ]);
  assert.equal(rows.length,2);const batch=rows.find(x=>x.thread_id==='fixture@chatroom');assert.equal(batch.received.length,2);assert.equal(batch.received[0].message_time,'2026-10-26T22:00:00+08:00');
 });
+test('aggregated child messages join the parent instead of leaving pending cards',()=>{
+ const child=entry(1,{message_id:'child',event:'message_received',category:'received',status:'received'});
+ const aggregate=entry(2,{message_id:'child',related_message_id:'parent',event:'message_aggregated',status:'aggregated'});
+ const parent=entry(3,{message_id:'parent',event:'message_processed',status:'completed'});
+ const [round]=project([child,aggregate,parent]);
+ assert.equal(round.entries.length,3);assert.equal(round.group,'done');
+ const [legacy]=project([entry(1,{message_id:'older-child',event:'message_aggregated',status:'aggregated'})]);
+ assert.equal(legacy.group,'done');
+});
+test('old queued cards use a successful inbox snapshot before being settled',()=>{
+ const queued=entry(1,{message_id:'old-queue',event:'message_queued',status:'queued'});
+ const now=Date.parse(queued.time)+11*60*1000;
+ assert.equal(project([queued],{},now,{loaded:false,states:{}})[0].group,'pending');
+ assert.equal(project([queued],{},now,{loaded:true,states:{'old-queue':{phase:'received'}}})[0].group,'pending');
+ assert.equal(project([queued],{},now,{loaded:true,states:{}})[0].group,'done');
+ assert.equal(project([queued],{},Date.parse(queued.time),{loaded:true,states:{'old-queue':{phase:'skipped'}}})[0].group,'done');
+});
 
 test('one round keeps receive, decision, failed tool, recovered tool and delivery evidence', () => {
   const rows = project([
@@ -106,6 +238,109 @@ test('explicit same-session followups merge, cancellation evidence and other thr
   ]);
   assert.equal(rows.length, 3);
   assert.equal(rows.find(x => x.received.some(m => m.content === '改成文件')).received.length, 2);
+});
+test('background continuations merge only with an explicit source and preserve raw activity', () => {
+  const items = [
+    entry(1, { message_id: 'saved-task', event: 'generation_started', category: 'decision', status: 'running' }),
+    entry(2, { message_id: 'new-message', event: 'message_received', category: 'received', content: '继续处理' }),
+    entry(3, { message_id: 'saved-task', related_message_id: 'new-message', event: 'background_turn_yielded', category: 'decision', status: 'waiting' }),
+    entry(4, { message_id: 'orphan-task', event: 'background_turn_yielded', category: 'decision', status: 'waiting' }),
+    entry(5, { message_id: 'unrelated-task', related_message_id: 'new-message', event: 'generation_stopped', category: 'decision', status: 'stopped' }),
+  ];
+  const before = JSON.stringify(items);
+  const rows = project(items);
+  assert.equal(JSON.stringify(items), before);
+  assert.equal(rows.length, 3);
+  const continued = rows.find(x => x.triggerMessageID === 'new-message');
+  assert(continued);
+  assert.equal(continued.entries.length, 3);
+  assert.equal(continued.received[0].message_id, 'new-message');
+  assert.equal(rows.find(x => x.triggerMessageID === 'orphan-task').entries.length, 1);
+  assert.equal(rows.find(x => x.triggerMessageID === 'unrelated-task').entries.length, 1);
+});
+test('latest task execution evidence moves one round to waiting and later work resumes it', () => {
+  const items = [
+    entry(1, { message_id: 'task', event: 'generation_started', category: 'decision', status: 'running' }),
+    entry(2, { message_id: 'task', event: 'task_execution_waiting', category: 'decision', status: 'waiting', reason: 'silent_execution_pending' }),
+    entry(3, { message_id: 'other-task', event: 'generation_started', category: 'decision', status: 'running' }),
+  ];
+  let rows = project(items);
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').status, 'waiting');
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').group, 'pending');
+  assert.equal(rows.find(x => x.triggerMessageID === 'other-task').status, 'running');
+  rows = project([...items, entry(4, { message_id: 'task', event: 'generation_started', category: 'decision', status: 'running' })]);
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').status, 'running');
+  assert.equal(rows.find(x => x.triggerMessageID === 'task').group, 'active');
+});
+test('timestamped attempts of one durable task form one card with its persisted final state', () => {
+ const id='a'.repeat(64), first=`task-${id}-20261122T010000.000000001`, second=`task-${id}-20261122T020000.000000002`;
+ const items=[
+  entry(1,{message_id:first,event:'generation_started',status:'running'}),
+  entry(2,{message_id:first,event:'task_execution_waiting',status:'waiting'}),
+  entry(3,{message_id:second,event:'generation_started',status:'running'}),
+  entry(4,{message_id:second,event:'task_execution_waiting',status:'waiting'}),
+ ];
+ const [round]=project(items,{['fixture@chatroom\0'+id]:{state:'completed',updated:at(5)}});
+ assert.equal(round.entries.length,4);assert.equal(round.attempts,2);
+ assert.equal(round.taskID,id);assert.equal(round.status,'completed');assert.equal(round.group,'done');
+ assert.equal(project(items,{['fixture@chatroom\0'+id]:{state:'needs_review',updated:at(5)}})[0].status,'needs_review');
+});
+test('two callbacks for the same music result form one completed card', () => {
+ const id='b'.repeat(64);
+ const rounds=project([
+  entry(1,{message_id:`music-result-${id}-010000.000000001`,event:'task_execution_waiting',status:'waiting'}),
+  entry(2,{message_id:`music-result-${id}-010100.000000002`,event:'message_sent',category:'sent',status:'accepted'}),
+ ]);
+ assert.equal(rounds.length,1);assert.equal(rounds[0].attempts,2);assert.equal(rounds[0].group,'done');
+});
+test('old tool-only round with every call settled is no longer shown as running', () => {
+ const old=entry(1,{message_id:'old-tool',event:'tool_started',category:'tool',tool:'read',call_id:'call-1',status:'running'});
+ const end=entry(2,{message_id:'old-tool',event:'tool_completed',category:'tool',tool:'read',call_id:'call-1',status:'succeeded'});
+ const later={...entry(3,{message_id:'later',event:'message_received',category:'received'}),time:new Date(Date.parse(old.time)+11*60*1000).toISOString()};
+ const settled=project([old,end,later]).find(x=>x.triggerMessageID==='old-tool');
+ assert.equal(settled.status,'needs_review');assert.equal(settled.orphanTools,true);
+ const unfinished=project([old,later]).find(x=>x.triggerMessageID==='old-tool');
+ assert.equal(unfinished.group,'active');
+});
+test('interrupted share read and untracked tool calls cannot stay active forever', () => {
+ const received=entry(1,{message_id:'share',event:'message_received',category:'received',status:'received'});
+ const failed=entry(2,{message_id:'share',event:'group_input_read_failed',category:'error',status:'failed'});
+ const restarted=entry(3,{message_id:'share',event:'shared_video_read_started',category:'decision',status:'processing'});
+ const open=entry(4,{message_id:'share',event:'tool_started',category:'tool',tool:'share.resolve_public',call_id:'open-call',status:'running'});
+ assert.equal(project([received,failed,restarted,open])[0].group,'active');
+ const [stale]=project([received,failed,restarted,open],{},Date.parse(open.time)+61*60*1000);
+ assert.equal(stale.status,'failed');assert.equal(stale.group,'done');assert.equal(stale.staleUnfinished,true);
+});
+test('a final share observation failure ends the round immediately', () => {
+ const start=entry(1,{event:'shared_video_read_started',status:'processing'});
+ const unavailable=entry(2,{event:'shared_video_observation_unavailable',status:'unavailable',reason:'share_plugin_resolution_needs_review'});
+ const [round]=project([start,unavailable]);
+ assert.equal(round.status,'failed');assert.equal(round.group,'done');
+});
+test('native accepted cross-conversation send settles standalone queued card', () => {
+ const queued=entry(1,{message_id:'cross-request',event:'cross_conversation_reply_queued',category:'decision',status:'queued',send_id:'send-1'});
+ const receipt={'fixture@chatroom\0send-1':true};
+ assert.equal(project([queued])[0].group,'pending');
+ assert.equal(project([queued],{},undefined,undefined,receipt)[0].status,'accepted');
+ assert.equal(project([queued],{'fixture@chatroom\0cross-request':{state:'pending',active:true,updated:queued.time}},undefined,undefined,receipt)[0].group,'active');
+ assert.equal(project([queued],{},undefined,undefined,{'other@chatroom\0send-1':true})[0].group,'pending');
+ const collision=entry(2,{message_id:'another-request',event:'agent_cross_send',category:'sent',status:'queued',send_id:'send-1'});
+ assert(project([queued,collision],{},undefined,undefined,receipt).every(round=>round.group==='pending'));
+});
+test('sent-file read evidence cannot create a pending conversation card', () => {
+ const rows=['identified','downloading','available'].map((part,i)=>entry(i,{message_id:'owner-sent-file',event:'sent_file_read_'+part,category:'tool',status:part}));
+ const [round]=project(rows);
+ assert.equal(round.group,'done');assert.equal(round.auxiliaryRead,true);
+});
+test('a fresh persisted task or scheduled receipt lookup remains live', () => {
+ const id='c'.repeat(64), trace=`task-${id}-20261122T010000.000000001`;
+ const running=entry(1,{message_id:trace,event:'generation_started',status:'running'});
+ const updated=new Date(Date.parse(running.time)+65*60*1000).toISOString();
+ assert.equal(project([running],{['fixture@chatroom\0'+id]:{state:'running',updated}},Date.parse(updated)+1000)[0].group,'active');
+ assert.equal(project([running],{['fixture@chatroom\0'+id]:{state:'running',updated}},Date.parse(updated)+25*60*60*1000)[0].group,'done');
+ const wait=entry(2,{message_id:'receipt',event:'delivery_waiting',status:'checking_receipt',retry_at:new Date(Date.parse(running.time)+2*60*60*1000).toISOString()});
+ const inbound=entry(1,{message_id:'receipt',event:'message_received',category:'received',status:'received'});
+ assert.equal(project([inbound,wait],{},Date.parse(wait.time)+70*60*1000)[0].group,'active');
 });
 test('no time-based merging; orphan system events form separate system periods', () => {
   const rows = project([
@@ -139,6 +374,21 @@ test('an accepted acknowledgement is not completion of a long-running task', () 
     entry(3, { category: 'tool', event: 'tool_call_succeeded', tool: 'music_generate', status: 'succeeded' }),
   ]);
   assert.equal(rows[0].status, 'running'); assert.equal(rows[0].sent[0].status, 'accepted');
+});
+
+test('an unfinished group task keeps its round active and includes later messages', () => {
+  const items = [
+    entry(1, { message_id:'image-request', event:'message_received', category:'received', content:'画一张居家照', status:'received' }),
+    entry(2, { message_id:'image-request', event:'agent_task_saved', category:'decision', status:'pending' }),
+    entry(3, { message_id:'image-request', event:'message_sent', category:'sent', content:'我画好了发你', status:'accepted' }),
+    entry(4, { message_id:'followup', event:'message_received', category:'received', content:'这个画完没', status:'received' }),
+    entry(5, { message_id:'followup', event:'message_processing', category:'decision', status:'processing' }),
+  ];
+  const states = { 'fixture@chatroom\0image-request': {state:'pending',active:true,updated:at(5)} };
+  const rows = project(items, states);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].group, 'active');
+  assert.equal(rows[0].received.length, 2);
 });
 test('a later partial delivery timeout remains visible after an earlier accepted segment', () => {
   const rows = project([

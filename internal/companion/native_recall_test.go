@@ -51,7 +51,8 @@ func TestNativeRecallRespectsIdentityRevisionAndForgetting(t *testing.T) {
 				}
 			}
 			allowed, err := s.NativeRecallAllowed(t.Context(), in)
-			if err != nil || allowed != (action == "unchanged") {
+			want := action == "unchanged" || action == "time" || action == "server"
+			if err != nil || allowed != want {
 				t.Fatal(action, allowed, err)
 			}
 		})
@@ -68,5 +69,28 @@ func TestNativeRecallUnseenDoesNotImportOrChangeEpoch(t *testing.T) {
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil || count != 0 || recallEpochForTest(t, s) != before {
 		t.Fatal(count, err)
+	}
+}
+
+func TestNativeRecallUnknownSystemSenderKeepsParticipantProtection(t *testing.T) {
+	s, cfg, original := memoryFixture(t)
+	now := time.Now().UTC()
+	original.Channel, original.MessageTime = "wechat", now.Format(time.RFC3339Nano)
+	notice := original
+	notice.Sender = ""
+	notice.Source = &SourceRef{MessageID: original.TraceID, MessageType: 10000}
+	if allowed, err := s.NativeRecallAllowed(t.Context(), notice); err != nil || !allowed {
+		t.Fatal("unseen system notice must be readable", allowed, err)
+	}
+	notice.Source.MessageType = 1
+	if allowed, err := s.NativeRecallAllowed(t.Context(), notice); err != nil || allowed {
+		t.Fatal("unattributed user message must be rejected", allowed, err)
+	}
+	if err := s.Observe(original, cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	notice.Source.MessageType = 10000
+	if allowed, err := s.NativeRecallAllowed(t.Context(), notice); err != nil || allowed {
+		t.Fatal("unattributed notice bypassed the original participant identity", allowed, err)
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 func queueTool() mcptools.Tool {
-	return mcptools.Tool{Name: "wechat_queue_control", Description: "Inspect/pause/resume/cancel retained attachment queues in THIS conversation. Ordinary chat never changes a queue. pause/resume affects only an unsubmitted or safely paused queue. A user-cancelled segmented voice job requires trace_id and a new explicit resume instruction: it may resume only verified missing segments under a NEW native job, never replay accepted segments; if any segment is in-flight or unverified, report the boundary instead. trace_id selects one original turn; omitted selects queues belonging to current sender plus autonomous shares. The real owner may manage all queues here. Cancel removes pending content, not already delivered messages; recall is separate. Input {action:list|pause|resume|cancel,trace_id?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","pause","resume","cancel"]},"trace_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
+	return mcptools.Tool{Name: "wechat_queue_control", Description: "Inspect/pause/resume/cancel retained attachment queues in this conversation. The fish may manage its current conversation's queues when a later message changes the task. Cancel removes pending content, not already delivered messages; recall is separate. A cancelled segmented voice send resumes only verified missing parts. Input {action:list|pause|resume|cancel,trace_id?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","pause","resume","cancel"]},"trace_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
 }
 
 func queueOwned(in, old companion.Input, owner bool) bool {
@@ -64,6 +64,9 @@ func (w *Worker) resumedMediaExists(old *mediaDelivery) *mediaDelivery {
 }
 
 func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old *mediaDelivery) (*mediaDelivery, string) {
+	if old == nil || w.inputRoundClosed(in) || w.inputRoundClosed(old.Input) || w.roundClosed(old.Input.Thread, old.Trace) {
+		return nil, "round_manually_closed"
+	}
 	n, ok := w.sender.(resumeMissingMediaNative)
 	if !ok {
 		return nil, "native_resume_missing_not_supported"
@@ -284,7 +287,7 @@ func (w *Worker) controlQueue(ctx context.Context, in companion.Input, owner boo
 			return "", w.persistErr
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"action": args.Action, "thread_id": in.Thread, "items": rows, "instruction": "已发内容保留真实回执。暂停保留原队列；已取消的分段语音只有在明确 resume 且每段状态已核实后，才会新建仅含未发段的任务，绝不重放已接受段。"})
+	b, _ := json.Marshal(map[string]any{"action": args.Action, "thread_id": in.Thread, "items": rows, "instruction": "暂停保留队列；resume 按回执续发未送达的分段。"})
 	return string(b), nil
 }
 

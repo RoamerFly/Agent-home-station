@@ -161,6 +161,30 @@ func TestCrossConversationTaskPersistsSourceAndPrivateDelivery(t *testing.T) {
 	}
 }
 
+func TestTaskBindsCurrentInboundMessageWithoutAnotherRead(t *testing.T) {
+	_, p := trustedAgent(t)
+	p.trace.Source = &companion.SourceRef{
+		Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender,
+		MessageID: "actual-inbound", Integrity: "verified",
+	}
+	original := "12点做一首歌"
+	p.trace.OriginalText = &original
+	for _, item := range []struct{ key, args string }{
+		{"auto", ""},
+		{"exact", `,"source_message_ids":["actual-inbound"]`},
+	} {
+		out, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"`+item.key+`","title":"做歌","checkpoint":"到点执行","state":"waiting"`+item.args+`}`))
+		var result struct{ Task agentTask }
+		if err != nil || json.Unmarshal([]byte(out), &result) != nil || result.Task.RequestedText != original ||
+			strings.Join(result.Task.SourceMessageIDs, ",") != "actual-inbound" {
+			t.Fatal(out, err)
+		}
+	}
+	if _, err := p.Call(t.Context(), "agent_task", json.RawMessage(`{"key":"invented","title":"做歌","checkpoint":"到点执行","state":"waiting","source_message_ids":["invented"]}`)); err == nil {
+		t.Fatal("unread source was accepted")
+	}
+}
+
 func TestOwnerCanCancelSpecifiedCrossConversationTask(t *testing.T) {
 	f, p := trustedAgent(t)
 	cfg := f.manager.agent.config()

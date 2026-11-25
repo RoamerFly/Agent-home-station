@@ -14,6 +14,33 @@ import (
 	catalog "wechat-bot/plugins"
 )
 
+func TestSharedStationOwnsAllPublicToolMutations(t *testing.T) {
+	f := setup(t)
+	f.login()
+	password := filepath.Join(t.TempDir(), "station-password")
+	if err := os.WriteFile(password, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_STATION_ADMIN_PASSWORD_FILE", password)
+	for _, request := range []struct {
+		path string
+		body any
+	}{
+		{"/api/plugin-packages/speech/configuration", map[string]any{"revision": 0, "values": map[string]string{"tts_model": "stale"}}},
+		{"/api/plugin-packages/music/configuration", map[string]any{"revision": 0, "values": map[string]string{"music_model": "stale"}}},
+		{"/api/plugin-packages/media-understanding/configuration", map[string]any{"revision": 0, "values": map[string]string{"audio_review_model": "stale"}}},
+		{"/api/plugin-packages/install", map[string]any{"confirm": true}},
+		{"/api/plugin-packages/speech/runtime", map[string]any{"action": "start", "revision": 1}},
+		{"/api/plugin-migrations/apply", map[string]any{"confirm": true}},
+		{"/api/plugins/install", map[string]any{}},
+		{"/api/plugins/example/remove", map[string]any{}},
+	} {
+		if code, _, _ := f.request("POST", request.path, request.body, true, true); code != 409 {
+			t.Fatalf("legacy public mutation %s returned %d, want 409", request.path, code)
+		}
+	}
+}
+
 func TestPluginPackageUpgradeReportsRequiredConfigurationMigration(t *testing.T) {
 	f := setup(t)
 	f.login()

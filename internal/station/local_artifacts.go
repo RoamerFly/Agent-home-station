@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/documentmemory"
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/websession"
@@ -23,11 +25,13 @@ import (
 )
 
 type localArtifactStore struct {
-	home *localHomeService
-	chat *localChatService
+	noteMu sync.Mutex
+	home   *localHomeService
+	chat   *localChatService
 }
 
 type localArtifact struct {
+	DocumentMemory                         *documentmemory.Note `json:"document_memory,omitempty"`
 	ID, Name, SHA256, Fish, Owner, Request string
 	PathHash                               string
 	Bytes                                  int64

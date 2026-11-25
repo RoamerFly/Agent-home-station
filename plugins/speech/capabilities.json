@@ -3,11 +3,9 @@
   "capabilities": [
     {
       "id": "speech.synthesize",
-      "implementation": "ready",
-      "description": "通过宿主绑定的云端接口合成默认说话声线；宿主核验音频并负责素材登记与微信投递。",
-      "permissions": [
-        "model.invoke"
-      ],
+      "implementation": "migration-pending",
+      "description": "旧语音入口已退役；请使用工作站统一管理的 station-speech 声线与合成能力。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {
@@ -33,16 +31,13 @@
       "output_schema": {
         "type": "object"
       },
-      "discoverable": true
+      "discoverable": false
     },
     {
       "id": "speech.synthesize_named",
-      "implementation": "ready",
-      "description": "使用宿主登记并绑定的 GPT-SoVITS 命名说话声线；宿主核验资源、隔离执行并验证实际 WAV。voice.version 是资源绑定摘要，version 是模型版本。",
-      "permissions": [
-        "artifact.read",
-        "model.invoke"
-      ],
+      "implementation": "migration-pending",
+      "description": "旧语音入口已退役；请使用工作站统一管理的 station-speech 声线与合成能力。",
+      "permissions": [],
       "input_schema": {
         "type": "object",
         "properties": {
@@ -186,7 +181,7 @@
         ],
         "additionalProperties": false
       },
-      "discoverable": true
+      "discoverable": false
     },
     {
       "id": "speech.voices",

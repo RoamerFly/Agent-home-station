@@ -72,7 +72,7 @@ func clearSyntheticReplyWindow(t *testing.T, x *surfShareFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := hostfile.WritePrivate(filepath.Join(x.f.dir, "apps", "douyin", "reply-pacing", a.record.FishID, a.record.Profile+".json"), mustLocalDouyinJSON(douyinReplyPacing{Next: time.Now().Add(-time.Second).UTC()})); err != nil {
+	if err := hostfile.WritePrivate(filepath.Join(stationApplicationsDir(x.f.dir), "douyin", "reply-pacing", a.record.FishID, a.record.Profile+".json"), mustLocalDouyinJSON(douyinReplyPacing{Next: time.Now().Add(-time.Second).UTC()})); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -391,7 +391,7 @@ func TestSurfActionFollowupShutdownKeepsOriginalCheckpoint(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("desktop close waited for platform timeout")
 	}
-	reopened, err := pluginhost.OpenStore(filepath.Join(x.f.dir, "project-tools", actor.Account), actor.Account)
+	reopened, err := pluginhost.OpenStore(filepath.Join(stationPublicToolsDir(x.f.dir), "catalog"), actor.Account)
 	if err != nil {
 		t.Fatal(err)
 	}

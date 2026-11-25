@@ -37,7 +37,7 @@ func TestLiveVideoObservationWithSelectedCharacterSpeech(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	video := filepath.Join(f.dir, "synthetic-character-video.mp4")
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "color=c=blue:s=192x128:r=6:d=4", "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-t", "4", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", video)
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "color=c=blue:s=192x128:r=6:d=4", "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-t", "4", "-c:v", "mpeg4", "-threads", "1", "-c:a", "aac", video)
 	if cmd.Run() != nil {
 		t.Fatal("synthetic video creation failed")
 	}

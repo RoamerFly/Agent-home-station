@@ -112,7 +112,36 @@ func (d *mediaDelivery) unconfirmedVoiceParts() bool {
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
 func awaitingMediaReceipt(d *mediaDelivery) bool {
-	return d.State == "checking_receipt" || (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+	return d.State == "checking_receipt" || (d.State == "cancelling" && d.Status.CancelRequested && d.Status.State == "needs_review") || (d.State == "waiting" || d.State == "unknown") && (d.Status.State == "needs_review" || d.Status.State == "unknown" || d.Reason == "media_receipt_id_missing")
+}
+
+// mediaStatusConfirmed is the terminal-delivery gate. A native job-level
+// accepted state is not enough for paced voice uploads: every chunk must carry
+// its own accepted state and server receipt, with a complete, unique index
+// sequence. Missing or partial chunk detail stays in receipt reconciliation
+// and is retried with the durable randomized backoff.
+func mediaStatusConfirmed(status linuxnative.ToolStatus, kind string) bool {
+	if status.State != "accepted" || status.ServerID == "" {
+		return false
+	}
+	if kind != "voice" {
+		return true
+	}
+	if status.VoicePartsIncomplete || len(status.VoiceChunks) == 0 {
+		return false
+	}
+	minIndex := status.VoiceChunks[0].Index
+	if minIndex != 0 && minIndex != 1 {
+		return false
+	}
+	seen := make(map[int]bool, len(status.VoiceChunks))
+	for offset, part := range status.VoiceChunks {
+		if part.State != "accepted" || !part.HasReceipt || part.ServerID == "" || seen[part.Index] || part.Index != minIndex+offset {
+			return false
+		}
+		seen[part.Index] = true
+	}
+	return true
 }
 
 // Once a submission is uncertain and resending is disabled, this lane may
@@ -156,7 +185,7 @@ func (w *Worker) checkMediaReceipt(ctx context.Context, n mediaNative, d *mediaD
 		}
 		switch s.State {
 		case "accepted":
-			if s.ServerID != "" {
+			if mediaStatusConfirmed(s, d.Kind) {
 				d.State, d.Reason, d.CompletedAt = "accepted", "media_server_accepted", time.Now().UTC()
 				w.advanceSendGate(d.Input.Thread)
 				w.mediaRecord(d, "message_sent", "sent")
@@ -311,6 +340,9 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 	if !ok || w.runtime == nil {
 		return false
 	}
+	if w.inputRoundClosed(input) {
+		return true
+	}
 	if w.mediaTraceCancelled(input.TraceID) {
 		w.activity(Record{Event: "media_callback_ignored", Category: "decision", ThreadID: input.Thread, MessageID: input.TraceID, Status: "stopped", Reason: "media_trace_cancelled"})
 		return true
@@ -365,7 +397,7 @@ func (w *Worker) adoptMediaSeeds() {
 		return
 	}
 	for _, seed := range w.config.MediaSeeds() {
-		if w.mediaTraceCancelled(seed.Trace) {
+		if w.roundClosed(seed.Input.Thread, seed.Trace) || w.inputRoundClosed(seed.Input) || seed.OriginInput != nil && w.inputRoundClosed(*seed.OriginInput) || w.mediaTraceCancelled(seed.Trace) {
 			continue
 		}
 		if seed.Key != "" {
@@ -409,6 +441,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 	}
 	defer func() {
 		for _, d := range w.runtime.Media {
+			if w.roundClosed(d.Input.Thread, d.Trace) || w.inputRoundClosed(d.Input) {
+				continue
+			}
 			w.refreshMediaParent(d.Trace)
 			if d.State == "accepted" && !d.CrossSettled && d.CrossRequester != "" && w.config.MediaSeedSettled != nil {
 				if e := w.config.MediaSeedSettled(d.Trace, d.Key, d.Status); e != nil {
@@ -424,11 +459,14 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if ctx.Err() != nil || w.persistErr != nil {
 			return
 		}
+		if w.roundClosed(d.Input.Thread, d.Trace) || w.inputRoundClosed(d.Input) {
+			continue
+		}
 		// The receipt journal may have committed just before a crash while this
 		// worker checkpoint still says prepared/unknown. Restore the fact before
 		// considering a new native lookup, cancellation or send.
 		if d.CrossRequester != "" && d.State != "accepted" && w.config.MediaSeedReceipt != nil {
-			if receipt, known := w.config.MediaSeedReceipt(d.Trace, d.Key); known && receipt.State == "accepted" && receipt.ServerID != "" && receipt.ThreadID == d.Input.Thread && (receipt.SourceID == "" || receipt.SourceID == d.SourceID) {
+			if receipt, known := w.config.MediaSeedReceipt(d.Trace, d.Key); known && mediaStatusConfirmed(receipt, d.Kind) && receipt.ThreadID == d.Input.Thread && (receipt.SourceID == "" || receipt.SourceID == d.SourceID) {
 				d.State, d.Status, d.Phase = "accepted", receipt, receipt.Phase
 				if receipt.ID != "" {
 					d.ID = receipt.ID
@@ -498,7 +536,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				continue
 			}
 			d.ID, d.Status, d.Phase = status.ID, status.WithVoiceReceipts(), status.Phase
-			if d.Status.State == "accepted" && d.Status.ServerID != "" {
+			if mediaStatusConfirmed(d.Status, d.Kind) {
 				d.State, d.Reason, d.CompletedAt = "accepted", "media_server_accepted_before_cancel", time.Now().UTC()
 				w.mediaRecord(d, "message_sent", "sent")
 				w.refreshMediaParent(d.Trace)
@@ -681,7 +719,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		d.Phase = status.Phase
 		status = status.WithVoiceReceipts()
 		d.Status = status
-		if status.State == "accepted" && status.ServerID != "" {
+		if mediaStatusConfirmed(status, d.Kind) {
 			d.State = "accepted"
 			if d.CompletedAt.IsZero() {
 				d.CompletedAt = time.Now().UTC()
@@ -693,13 +731,11 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			continue
 		}
 		if status.State == "accepted" {
-			if !w.retryUncertainMedia(d) && !d.UserCancelled {
-				w.awaitMediaReceipt(d)
-				continue
-			}
-			d.State = "unknown"
-			d.Reason = "media_receipt_id_missing"
-			w.mediaRecord(d, "media_waiting", "decision")
+			// A job-level accepted state without the required media proof is
+			// still an unknown outcome. Keep the original job in receipt-only
+			// reconciliation and apply the durable randomized backoff; never
+			// downgrade it into a fresh submit path.
+			w.awaitMediaReceipt(d)
 			continue
 		}
 		if !cancelledTask && !w.mediaAllowed(d) {

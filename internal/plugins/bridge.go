@@ -157,6 +157,40 @@ func (b *ExternalBridge) PollLimits(name string) (interval, attempts, timeout in
 	return
 }
 
+type ExternalTaskDefinition struct {
+	Protocol   ExternalJobProtocol
+	Interval   int
+	AttemptMax int
+	Deadline   int
+	CanCancel  bool
+}
+
+// Task describes the host scheduling policy separately from the parser contract.
+func (b *ExternalBridge) Task(name string) (ExternalTaskDefinition, error) {
+	if protocol, err := b.JobProtocol(name); err == nil {
+		interval, deadline, attempts := b.runtime.JobLimits(name)
+		return ExternalTaskDefinition{Protocol: protocol, Interval: interval, AttemptMax: attempts, Deadline: deadline,
+			CanCancel: b.runtime.tools[name].Job.Cancel != nil}, nil
+	}
+	protocol, err := b.PollProtocol(name)
+	if err != nil {
+		return ExternalTaskDefinition{}, err
+	}
+	interval, attempts, deadline, err := b.PollLimits(name)
+	return ExternalTaskDefinition{Protocol: protocol, Interval: interval, AttemptMax: attempts, Deadline: deadline}, err
+}
+
+func (b *ExternalBridge) TaskTools() []ExternalProtocolTool {
+	out := []ExternalProtocolTool{}
+	for name := range b.runtime.tools {
+		if task, err := b.Task(name); err == nil {
+			out = append(out, task.Protocol.Tool)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func (b *ExternalBridge) tool(name string, ticket JobTicket, requireJob bool) (APITool, Installed, error) {
 	if requireJob {
 		return b.runtime.jobTool(ticket)

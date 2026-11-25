@@ -1,6 +1,72 @@
-param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop)
+﻿param([string]$OutputDirectory, [switch]$Test, [switch]$Portable, [switch]$LocalStation, [switch]$WithWeChatApp, [switch]$WithWeChatRuntime, [switch]$WithShareReader, [switch]$WithMediaUnderstanding, [switch]$WithDocumentWorkshop, [switch]$WithAudioWorkshop, [switch]$WithRVCBackend, [switch]$WithComfyUI, [switch]$WithYuE, [switch]$WithStationSpeech, [switch]$WithAudioCpp, [switch]$WithOBSPreview, [string]$WeChatRuntimeDirectory, [string]$NativeSourceDirectory, [string]$MediaDirectory, [string]$GoSourcePatch, [string]$DocumentPythonPackagesDirectory, [string]$DocumentTesseractDirectory, [string]$DocumentFontsDirectory, [string]$DocumentPDFiumWheel, [string]$ToolPackagesDirectory, [string]$ApplicationPackagesDirectory, [string]$QuarantineDirectory, [switch]$WithBilibiliApp, [switch]$WithDouyinApp, [switch]$LegacyWechatDesktop, [switch]$WithExternalTools, [switch]$WithProjectDevelopment)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
+
+function Write-PortableReleaseManifest([string]$Root) {
+ $checker=Join-Path $PSScriptRoot 'check_portable_release.py'
+ if(-not(Test-Path -LiteralPath $checker -PathType Leaf)){throw 'Portable release contract checker is missing.'}
+ & python -X utf8 $checker --release-root $Root --write-manifest
+ if($LASTEXITCODE -ne 0){throw 'Portable release contract check failed.'}
+ $migrationBuilder=Join-Path $PSScriptRoot 'build_migration_manifest.py'
+ $migrationChecker=Join-Path $PSScriptRoot 'validate_migration_manifest.py'
+ if(-not(Test-Path -LiteralPath $migrationBuilder -PathType Leaf) -or -not(Test-Path -LiteralPath $migrationChecker -PathType Leaf)){throw 'Migration manifest tools are missing.'}
+ $registry=Join-Path $Root 'data\main_setting\registry'
+ New-Item -ItemType Directory -Force -Path $registry | Out-Null
+ $migrationManifest=Join-Path $registry 'migration-manifest.json'
+ & python -X utf8 $migrationBuilder --release-root $Root --output $migrationManifest
+ if($LASTEXITCODE -ne 0){throw 'Migration manifest generation failed.'}
+ $migrationReport=Join-Path $registry 'migration-validation.json'
+ & python -X utf8 $migrationChecker --release-root $Root --manifest $migrationManifest --output $migrationReport
+ if($LASTEXITCODE -ne 0){throw 'Migration manifest validation failed.'}
+}
+
+function Get-ToolBusyEvidence([string]$ToolID,[string]$PackageDirectory,[string]$DataRoot) {
+ $evidence=@()
+ $package=[IO.Path]::GetFullPath($PackageDirectory)
+ $processes=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($package,[StringComparison]::OrdinalIgnoreCase)) -or
+  ($_.CommandLine -and $_.CommandLine.IndexOf($package,[StringComparison]::OrdinalIgnoreCase) -ge 0)
+ }
+ foreach($process in $processes){$evidence+='process '+$process.ProcessId}
+ foreach($jobsRoot in @((Join-Path $DataRoot ('publictools\'+$ToolID+'\jobs')),(Join-Path $DataRoot ('tools\'+$ToolID+'\jobs')))){
+  if(-not(Test-Path -LiteralPath $jobsRoot -PathType Container)){continue}
+  foreach($file in Get-ChildItem -LiteralPath $jobsRoot -Recurse -File -Filter '*.json' -ErrorAction SilentlyContinue){
+   try{$record=Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json}catch{continue}
+   $status=[string]$record.status
+   if($status -in @('queued','pending','running','retrying','waiting_tool','waiting_receipt')){$evidence+='job '+$file.Name}
+  }
+ }
+ return $evidence
+}
+
+# Do not depend on the PowerShell Utility module being auto-loaded. The
+# Windows PowerShell process started by the Python build/test harness can have
+# a mixed PSModulePath, making Get-FileHash unavailable even though the
+# interactive shell exposes it. Keep integrity checks deterministic by using
+# the .NET hashing API directly.
+function Get-Sha256Hex([string]$Path){
+ if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw ('Cannot hash missing file: '+$Path)}
+ $sha=[System.Security.Cryptography.SHA256]::Create()
+ try {
+  $stream=[IO.File]::OpenRead($Path)
+  try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+  finally {$stream.Dispose()}
+ } finally {$sha.Dispose()}
+}
+
+function Assert-CanonicalSource {
+ $markerPath=Join-Path $workspace '.build-source.json'
+ if(-not(Test-Path -LiteralPath $markerPath -PathType Leaf)){throw 'This checkout is not the registered canonical Windows build source.'}
+ try {$marker=Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json} catch {throw 'The canonical build source marker is invalid.'}
+ if($marker.schema_version -ne 1 -or $marker.canonical_id -ne 'agent-home-station-windows' -or $marker.module -ne 'wechat-bot'){
+  throw 'The selected checkout is not the registered canonical Windows build source.'
+ }
+ if(-not(Test-Path -LiteralPath (Join-Path $workspace 'go.mod') -PathType Leaf) -or -not(Test-Path -LiteralPath (Join-Path $workspace 'connected-apps\wechat\app.json') -PathType Leaf)){
+  throw 'The canonical Windows build source is incomplete.'
+ }
+}
+
+Assert-CanonicalSource
 
 function Get-RelativeRuntimePath([string]$Root,[string]$Path){
  $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
@@ -25,6 +91,22 @@ function Assert-NoReparsePointAncestor([string]$Path){
  }
 }
 
+function Get-SourceProvenance {
+ # Windows PowerShell can stop the native process early when Select-Object
+ # takes its first output line. Read the complete single-value Git response.
+ $commit=(& git -C $workspace rev-parse HEAD 2>$null)
+ if($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)){throw 'Unable to determine the canonical source commit.'}
+ $remote=(& git -C $workspace config --get remote.origin.url 2>$null)
+ $dirty=((& git -C $workspace status --porcelain 2>$null) | Where-Object {$_ -and $_.Trim()}).Count -gt 0
+ return [ordered]@{
+  source_root=(Split-Path $workspace -Leaf)
+  source_commit=$commit.Trim()
+  source_remote=([string]$remote).Trim()
+  source_dirty=$dirty
+  build_utc=(Get-Date).ToUniversalTime().ToString('o')
+ }
+}
+
 function Test-LocalStationRuntimeIdentical([string]$Existing,[System.Collections.IDictionary]$ExpectedFiles,[string]$ExpectedNativeHash){
  if(-not(Test-Path -LiteralPath $Existing -PathType Container)){return $false}
  Assert-NoReparsePointAncestor $Existing
@@ -38,7 +120,7 @@ function Test-LocalStationRuntimeIdentical([string]$Existing,[System.Collections
   if($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)){return $false}
   $relative=Get-RelativeRuntimePath $Existing $file.FullName
   if($relative -eq 'windows-native-manifest.json'){continue}
-  $actual[$relative]=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
+  $actual[$relative]=Get-Sha256Hex $file.FullName
  }
  if($actual.Count -ne $ExpectedFiles.Count){return $false}
  foreach($entry in $ExpectedFiles.GetEnumerator()){
@@ -68,11 +150,11 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
  if($sourceManifest.schema_version -ne 1 -or $sourceManifest.platform -ne 'windows-x64'){throw 'The selected WeChat runtime manifest is not a Windows x64 native bundle.'}
  $wxSource=Join-Path $source 'wx.exe'
  if(-not(Test-Path -LiteralPath $wxSource -PathType Leaf)){throw 'The selected WeChat runtime has no wx.exe.'}
- $wxHash=(Get-FileHash -LiteralPath $wxSource -Algorithm SHA256).Hash.ToLower()
+ $wxHash=Get-Sha256Hex $wxSource
  if([string]::IsNullOrWhiteSpace($sourceManifest.native_sha256) -or $sourceManifest.native_sha256.ToLower() -ne $wxHash){throw 'The selected WeChat runtime wx.exe does not match its manifest hash.'}
  $legacyAdminSource=Join-Path $source 'wechat-admin.exe'
  if(-not(Test-Path -LiteralPath $legacyAdminSource -PathType Leaf)){throw 'The selected WeChat runtime has no wechat-admin.exe for the legacy console.'}
- $legacyAdminHash=(Get-FileHash -LiteralPath $legacyAdminSource -Algorithm SHA256).Hash.ToLower()
+ $legacyAdminHash=Get-Sha256Hex $legacyAdminSource
  if([string]::IsNullOrWhiteSpace($sourceManifest.admin_sha256) -or $sourceManifest.admin_sha256.ToLower() -ne $legacyAdminHash){throw 'The selected wechat-admin.exe does not match its manifest hash.'}
 
  $required=@('wx.exe','wechat-admin.exe','vcruntime140.dll','MSVC-REDISTRIBUTABLE-NOTICE.txt','agent-wechat-LICENSE.txt')
@@ -87,7 +169,10 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
   if(-not $allowed){throw ('The selected WeChat runtime contains a file that is not a native dependency or notice: '+$relative)}
  }
 
- $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
+ $runtimeRoot=Join-Path $PackageDirectory 'applications/wechat/runtime'
+ # Existing external catalogs are read-only build inputs. Stage their native
+ # overlay separately so the caller can apply it to the chosen catalog.
+ if($ApplicationPackagesDirectory){$runtimeRoot=Join-Path $PackageDirectory 'env'}
  $destination=Join-Path $runtimeRoot 'windows-x64'
  Assert-NoReparsePointAncestor $PackageDirectory
  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -103,12 +188,21 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    $target=Join-Path $staging $relative.Replace('/','\')
    New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
    Copy-Item -LiteralPath $file.FullName -Destination $target
-   $sourceHash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower()
-   $targetHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLower()
+   $sourceHash=Get-Sha256Hex $file.FullName
+   $targetHash=Get-Sha256Hex $target
    if($sourceHash -ne $targetHash){throw ('WeChat runtime copy hash mismatch: '+$relative)}
    $hashes[$relative]=$targetHash
   }
+  # The console is our source-built component; native dependencies above
+  # remain verified against their original bundle manifest.
+  Push-Location $workspace
+  try {
+   & go build -buildvcs=false -trimpath -o (Join-Path $staging 'wechat-admin.exe') ./cmd/wechat-admin
+   if($LASTEXITCODE -ne 0){throw 'Failed to build the current WeChat console.'}
+  } finally { Pop-Location }
+  $hashes['wechat-admin.exe']=Get-Sha256Hex (Join-Path $staging 'wechat-admin.exe')
   if($hashes['wx.exe'] -ne $wxHash){throw 'The staged wx.exe hash is not the validated native hash.'}
+  $provenance=Get-SourceProvenance
   $record=[ordered]@{
    schema_version=1
    platform='windows-x64'
@@ -118,14 +212,31 @@ function Stage-LocalStationWeChatRuntime([string]$SourceDirectory,[string]$Packa
    native_patch_sha256=$sourceManifest.native_patch_sha256
    native_license_commit=$sourceManifest.native_license_commit
    native_sha256=$wxHash
-   admin_sha256=$(if($sourceManifest.admin_sha256){$sourceManifest.admin_sha256.ToLower()}else{''})
+   admin_sha256=$hashes['wechat-admin.exe']
+   source_root=$provenance.source_root
+   source_commit=$provenance.source_commit
+   source_remote=$provenance.source_remote
+   source_dirty=$provenance.source_dirty
+   build_utc=$provenance.build_utc
    files=$hashes
    live_login_verified=$false
    live_delivery_verified=$false
   }
   [IO.File]::WriteAllText((Join-Path $staging 'windows-native-manifest.json'),($record | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
-  if((Get-FileHash -LiteralPath (Join-Path $staging 'wx.exe') -Algorithm SHA256).Hash.ToLower() -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
+  if((Get-Sha256Hex (Join-Path $staging 'wx.exe')) -ne $wxHash){throw 'The staged wx.exe failed its final hash validation.'}
   if(Test-Path -LiteralPath $destination){
+   # A previous manual update could have left the temporary backup names that
+   # Windows tools commonly create beside the native bundle. They are not part
+   # of the verified runtime and would make the station's strict inventory
+   # check reject an otherwise valid package. Remove only these two known
+   # generated names; all other unexpected files remain a hard error.
+   foreach($backupName in @('wechat-admin.exe~','wx.exe~')){
+    $backupPath=Join-Path $destination $backupName
+    if(Test-Path -LiteralPath $backupPath -PathType Leaf){
+     Remove-Item -LiteralPath $backupPath -Force
+     Write-Output ('Removed stale native runtime backup: '+$backupPath)
+    }
+   }
    if(Test-LocalStationRuntimeIdentical -Existing $destination -ExpectedFiles $hashes -ExpectedNativeHash $wxHash){
     Write-Output ('Verified existing WeChat native runtime: '+$destination+'; it was not replaced.')
     return
@@ -150,9 +261,9 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
  $source=Join-Path $workspace 'plugins\speech\runtime\gpt_sovits.py'
  if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw 'The trusted local speech runner is missing from plugins/speech/runtime.'}
  Assert-NoReparsePointAncestor $source
- $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLower()
- $runtimeRoot=Join-Path $PackageDirectory 'runtimes'
- $destination=Join-Path $runtimeRoot 'windows-station-speech'
+ $hash=Get-Sha256Hex $source
+ $runtimeRoot=Join-Path $PackageDirectory 'publictools\station-speech-站内语音\runtime'
+ $destination=Join-Path $runtimeRoot 'control'
  $manifestPath=Join-Path $destination 'runtime-manifest.json'
  Assert-NoReparsePointAncestor $PackageDirectory
  New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -165,14 +276,14 @@ function Stage-LocalStationSpeechRunner([string]$PackageDirectory){
   $entries=@(Get-ChildItem -LiteralPath $destination -Force)
   if($entries.Count -ne 2 -or $entries | Where-Object {$_.PSIsContainer -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)}){throw 'Existing station speech runner has unexpected files.'}
   $staged=Join-Path $destination 'gpt_sovits.py'
-  if(-not(Test-Path -LiteralPath $staged -PathType Leaf) -or (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Existing station speech runner integrity check failed.'}
+  if(-not(Test-Path -LiteralPath $staged -PathType Leaf) -or ((Get-Sha256Hex $staged) -ne $hash)){throw 'Existing station speech runner integrity check failed.'}
   Write-Output ('Verified existing station speech runner: '+$staged+' (SHA-256 '+$hash+').')
   return
  }
  New-Item -ItemType Directory -Path $destination | Out-Null
  $staged=Join-Path $destination 'gpt_sovits.py'
  Copy-Item -LiteralPath $source -Destination $staged
- if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLower() -ne $hash){throw 'Station speech runner source changed during staging.'}
+ if((Get-Sha256Hex $staged) -ne $hash){throw 'Station speech runner source changed during staging.'}
  [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
  Write-Output ('Staged trusted station speech runner: '+$staged+' (SHA-256 '+$hash+'). Backend registration must use this explicit absolute path and digest.')
 }
@@ -189,6 +300,7 @@ if($WithYuE -and -not $LocalStation){throw 'WithYuE is only valid with -LocalSta
 if($WithStationSpeech -and -not $LocalStation){throw 'WithStationSpeech is only valid with -LocalStation.'}
 if($WithAudioCpp -and -not $LocalStation){throw 'WithAudioCpp is only valid with -LocalStation.'}
 if($WithOBSPreview -and -not $LocalStation){throw 'WithOBSPreview is only valid with -LocalStation.'}
+if($WithExternalTools -and -not $LocalStation){throw 'WithExternalTools is only valid with -LocalStation.'}
 if($WithBilibiliApp -and -not $LocalStation){throw 'WithBilibiliApp is only valid with -LocalStation.'}
 if($WithDouyinApp -and -not $LocalStation){throw 'WithDouyinApp is only valid with -LocalStation.'}
 foreach($externalDirectory in @(@{Name='ToolPackagesDirectory';Value=$ToolPackagesDirectory},@{Name='ApplicationPackagesDirectory';Value=$ApplicationPackagesDirectory})){
@@ -217,14 +329,24 @@ if($hasDocumentRuntimeInput -and (-not $DocumentPythonPackagesDirectory -or -not
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace ($(if($LocalStation){'dist\local-station-preview'}else{'dist\windows-desktop'}))}
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 # Rebuilding is not a migration or a request to delete previous output.
-foreach($relative in @('plugins\mobile-control','runtimes\windows-music\mobile_bridge.py')){
+foreach($relative in @('plugins\mobile-control','env\windows-music\mobile_bridge.py')){
  $obsolete=Join-Path $OutputDirectory $relative
  if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
   throw 'Output contains retired mobile components; build into a fresh directory.'
  }
 }
 if($LocalStation){
- $foreignOutput=@('WechatAgent.exe','runtimes\windows-music')
+ $foreignOutput=@('WechatAgent.exe','runtimes\windows-x64','env\windows-music')
+ # A Station build must never be layered over the retired mobile/phone
+ # desktop output.  The old windows-x64 and windows-music trees contain a
+ # second native host and can make the package appear to start while the
+ # wrong product is actually serving the port.
+ foreach($retired in @('runtimes\windows-music','env\windows-x64','env\windows-music','mobile_bridge.py')){
+  $obsolete=Join-Path $OutputDirectory $retired
+  if(Get-Item -LiteralPath $obsolete -Force -ErrorAction SilentlyContinue){
+   throw 'Output contains retired mobile components; build into a fresh directory.'
+  }
+ }
 }else{
  $foreignOutput=@('AgentHomeStation.exe','agent-home-station-server.exe')
 }
@@ -250,7 +372,7 @@ $archive=$cache+'.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $cache -Parent),$OutputDirectory | Out-Null
 # The zero-application preview deliberately has no optional tool catalog.  The
 # regular desktop package retains the catalog validation/staging contract.
-if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview) -and -not ($LocalStation -and $ToolPackagesDirectory)){
+if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaUnderstanding -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithComfyUI -or $WithYuE -or $WithStationSpeech -or $WithAudioCpp -or $WithOBSPreview -or $WithExternalTools -or $WithProjectDevelopment) -and -not ($LocalStation -and $ToolPackagesDirectory)){
  $pluginSource=Join-Path $workspace 'plugins'
  $catalogArgs=@('--source',$pluginSource,'--output',(Join-Path $OutputDirectory 'plugins'))
  if(-not $LocalStation){
@@ -273,9 +395,38 @@ if(((-not $LocalStation) -or $WithWeChatApp -or $WithShareReader -or $WithMediaU
  if($LocalStation -and $WithStationSpeech){$catalogArgs+=@('--package','station-speech')}
  if($LocalStation -and $WithAudioCpp){$catalogArgs+=@('--package','audio-cpp')}
  if($LocalStation -and $WithOBSPreview){$catalogArgs+=@('--package','obs-preview')}
+ if($LocalStation -and $WithExternalTools){$catalogArgs+=@('--package','external-tools')}
+ if($LocalStation -and $WithProjectDevelopment){$catalogArgs+=@('--package','project-development')}
  if($LocalStation -and $WithWeChatApp){$catalogArgs+=@('--package','web-search')}
  & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') @catalogArgs
  if($LASTEXITCODE -ne 0){throw 'Official plugin catalog staging failed; use a fresh output directory.'}
+ if($LocalStation){
+  # Package IDs stay stable; only the human-facing directory has a purpose suffix.
+  $purposes=@{'audio-cpp'='语音识别与生成';'audio-workshop'='音频处理';'comfyui'='图像生成';'document-workshop'='文档处理';'external-tools'='外部工具';'media-understanding'='媒体理解';'music'='音乐生成与投递';'obs-preview'='直播预览';'project-development'='项目开发';'rvc'='换声';'share-reader'='分享内容读取';'speech'='语音处理';'station-speech'='站内语音';'visual-generation'='视觉生成';'web-search'='网络搜索';'yue'='作曲'}
+  $publicRoot=Join-Path $OutputDirectory 'publictools'
+  New-Item -ItemType Directory -Force -Path $publicRoot | Out-Null
+  $stagedRoot=(Resolve-Path -LiteralPath (Join-Path $OutputDirectory 'plugins')).ProviderPath
+  foreach($package in Get-ChildItem -LiteralPath $stagedRoot -Directory){
+   $suffix=$purposes[$package.Name]
+   if(-not $suffix){$suffix='公共工具'}
+   $destination=Join-Path $publicRoot ($package.Name+'-'+$suffix)
+   if($package.Parent.FullName -ne $stagedRoot){throw 'Unexpected tool source path.'}
+   if(Test-Path -LiteralPath $destination){
+    $dataRoot=Join-Path $OutputDirectory 'data'
+    $busy=Get-ToolBusyEvidence $package.Name $destination $dataRoot
+    if($busy.Count){throw ('工具包 '+$package.Name+' 当前不可替换，检测到 '+($busy -join ', ')+ '。请先等待任务完成或停止工具。')}
+    if(-not $QuarantineDirectory){
+     $QuarantineDirectory=Join-Path (Split-Path $OutputDirectory -Parent) ('.release-tool-replacements-'+[Guid]::NewGuid().ToString('N'))
+    }
+    New-Item -ItemType Directory -Force -Path $QuarantineDirectory | Out-Null
+    $retired=Join-Path $QuarantineDirectory ($package.Name+'-'+(Get-Date -Format 'yyyyMMddHHmmssfff'))
+    Move-Item -LiteralPath $destination -Destination $retired
+   }
+   Move-Item -LiteralPath $package.FullName -Destination $destination
+  }
+  Remove-Item -LiteralPath $stagedRoot # Empty staging container only.
+ }
+
 }
 # Adding application source does not connect an account or enable its runtime.
 $appIDs=@()
@@ -284,13 +435,14 @@ if($WithBilibiliApp){$appIDs+='bilibili'}
 if($WithDouyinApp){$appIDs+='douyin'}
 if($appIDs.Count -and -not ($LocalStation -and $ApplicationPackagesDirectory)){
  $appPackages=@(foreach($appID in $appIDs){'--package';$appID})
- & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output (Join-Path $OutputDirectory 'connected-apps') --descriptor app.json @appPackages
+ $applicationCatalog = Join-Path $OutputDirectory $(if($LocalStation){'applications'}else{'connected-apps'})
+ & python -B (Join-Path $PSScriptRoot 'stage_plugin_catalog.py') --source (Join-Path $workspace 'connected-apps') --output $applicationCatalog --descriptor app.json @appPackages
  if($LASTEXITCODE -ne 0){throw 'Application source staging failed; use a fresh output directory.'}
 }
 if(-not(Test-Path -LiteralPath $archive)){
  Invoke-WebRequest -Uri ('https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/'+$version+'/microsoft.web.webview2.'+$version+'.nupkg') -OutFile $archive
 }
-if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash){throw 'WebView2 SDK package hash mismatch; build refused.'}
+if((Get-Sha256Hex $archive).ToUpperInvariant() -ne $expectedHash){throw 'WebView2 SDK package hash mismatch; build refused.'}
 if(-not(Test-Path -LiteralPath (Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'))){Expand-Archive -LiteralPath $archive -DestinationPath $cache -Force}
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if(-not(Test-Path -LiteralPath $compiler)){throw 'The Windows .NET Framework C# compiler is required.'}
@@ -300,7 +452,7 @@ $core=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.Core.dll'
 $forms=Join-Path $cache 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
 $loader=Join-Path $cache 'runtimes\win-x64\native\WebView2Loader.dll'
 $target=Join-Path $OutputDirectory ($(if($LocalStation){'AgentHomeStation.exe'}else{'WechatAgent.exe'}))
-$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'ProcessOwnership.cs'),(Join-Path $source 'LocalStationRuntime.cs'),$wechatSupervisor,(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'DesktopInstance.cs'),(Join-Path $source 'DouyinAuthorizationDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
+$arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/utf8output',('/out:'+$target),('/win32manifest:'+(Join-Path $source 'app.manifest')),'/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll','/reference:System.Net.Http.dll','/reference:System.Web.Extensions.dll',('/reference:'+$core),('/reference:'+$forms),('/resource:'+$core+',Microsoft.Web.WebView2.Core.dll'),('/resource:'+$forms+',Microsoft.Web.WebView2.WinForms.dll'),('/resource:'+$loader+',WebView2Loader.dll'),(Join-Path $source 'Deployment.cs'),(Join-Path $source 'WindowsRuntime.cs'),(Join-Path $source 'ProcessOwnership.cs'),(Join-Path $source 'LocalStationRuntime.cs'),$wechatSupervisor,(Join-Path $source 'CloseSettings.cs'),(Join-Path $source 'CloseChoiceDialog.cs'),(Join-Path $source 'DesktopInstance.cs'),(Join-Path $source 'DouyinAuthorizationDialog.cs'),(Join-Path $source 'ShareCredentialLoginDialog.cs'),(Join-Path $source 'LegacyWechatConsoleDialog.cs'),(Join-Path $source 'ApplicationWorkbenchDialog.cs'),(Join-Path $source 'Program.cs'),(Join-Path $source 'MainForm.cs'))
 if($LocalStation){$arguments+='/define:LOCAL_STATION'}
 $icon=Join-Path $source 'assets\agent-home.ico'
 $arguments+=('/resource:'+(Join-Path $source 'assets\agent-home.png')+',AgentHomeStation.Icon.png')
@@ -310,17 +462,43 @@ $arguments+=('/win32icon:'+$icon)
 & $compiler @arguments
 if($LASTEXITCODE -ne 0){throw 'Desktop build failed.'}
 if($LocalStation){
- $station=Join-Path $OutputDirectory 'agent-home-station-server.exe'
+ $stationRoot=Join-Path $OutputDirectory 'data\main_setting\runtime'
+ New-Item -ItemType Directory -Force -Path $stationRoot | Out-Null
+ $station=Join-Path $stationRoot 'agent-home-station-server.exe'
  $oldOS=$env:GOOS; $oldArch=$env:GOARCH
+ $oldGitDir=$env:GIT_DIR; $oldGitWorkTree=$env:GIT_WORK_TREE
  Push-Location $workspace
  try {
   $env:GOOS='windows'; $env:GOARCH='amd64'
   & (Join-Path $workspace 'scripts\Test-WindowsDeviceRetirement.ps1') -SourceDirectory $workspace -Target Station -Test:$Test
-  & go build -trimpath -o $station './cmd/agent-home-station'
+  $gitStamp='-buildvcs=false'
+  $revision=''
+  if(Get-Command git -ErrorAction SilentlyContinue){
+   $env:GIT_DIR=$null; $env:GIT_WORK_TREE=$null
+   $gitRoot=& git rev-parse --show-toplevel 2>$null
+   if($LASTEXITCODE -eq 0 -and [IO.Path]::GetFullPath($gitRoot) -eq [IO.Path]::GetFullPath($workspace)){
+    # Go may otherwise use the enclosing repository to stamp a linked worktree.
+    $env:GIT_DIR=& git rev-parse --absolute-git-dir
+    if($LASTEXITCODE -ne 0){throw 'LocalStation worktree Git metadata is unavailable.'}
+    $env:GIT_WORK_TREE=$workspace
+    $revision=& git rev-parse HEAD
+    if($LASTEXITCODE -ne 0){throw 'LocalStation worktree revision is unavailable.'}
+    $gitStamp='-buildvcs=true'
+   }
+  }
+  & go build $gitStamp -trimpath -o $station './cmd/agent-home-station'
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
- } finally {$env:GOOS=$oldOS; $env:GOARCH=$oldArch; Pop-Location}
+  if($revision){
+   $metadata=& go version -m $station
+   if($LASTEXITCODE -ne 0 -or -not ($metadata -match ('\bvcs\.revision='+[regex]::Escape($revision)+'$'))){throw 'LocalStation server build revision does not match the worktree.'}
+  }
+ } finally {
+  $env:GOOS=$oldOS; $env:GOARCH=$oldArch
+  $env:GIT_DIR=$oldGitDir; $env:GIT_WORK_TREE=$oldGitWorkTree
+  Pop-Location
+ }
  if($appIDs.Count -and -not $ApplicationPackagesDirectory){
-  & $station verify-app-catalog @appIDs
+  & $station verify-app-catalog --catalog $applicationCatalog @appIDs
   if($LASTEXITCODE -ne 0){throw 'Connected Apps do not match the built LocalStation server.'}
  }
  if($WithWeChatRuntime){Stage-LocalStationWeChatRuntime -SourceDirectory $WeChatRuntimeDirectory -PackageDirectory $OutputDirectory}
@@ -365,16 +543,23 @@ function Invoke-DesktopPackageTests {
  }
 }
 # Incremental desktop updates need the matching plugin launch protocol too.
-$broker=Join-Path $OutputDirectory 'runtimes\windows-agent-host'
+ $broker=Join-Path $OutputDirectory 'env\windows-agent-host'
 New-Item -ItemType Directory -Force -Path $broker | Out-Null
-foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
+foreach($name in @('windows_lpac.py','windows_plugin_host.pyw','windows_agent_host.pyw','windows_speech_compat.py')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $broker $name)}
 if($WithRVCBackend){
- $control=Join-Path $OutputDirectory 'runtimes\windows-station-rvc'
+ $control=Join-Path $OutputDirectory 'publictools\rvc-换声\runtime\windows-station-rvc'
  $files=[ordered]@{}
- foreach($name in @('managed_music_runner.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
+ foreach($name in @('managed_music_runner.py','managed_music_service.py','managed_music_ipc.py','music_unix_client.py','music_account_scope.py','process_window.py','rvc_backend.py','rvc_cover.py',
                     'rvc_pitch.py','rvc_profiles.py','rvc_recovery.py','rvc_voice.py','rvc_windows.py','singing_config.py',
                     'singing_voice.py','station_rvc.py','windows_lpac.py','yue_bridge.py','yue_recovery.py','yue_sampling.py')){
-  $files[$name]=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+  $files[$name]=Get-Sha256Hex (Join-Path $PSScriptRoot $name)
+ }
+ $sources=@{}
+ foreach($name in $files.Keys){$sources[$name]=Join-Path $PSScriptRoot $name}
+ foreach($workflow in Get-ChildItem -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -File -Filter '*.json'){
+  $name='workflows/'+$workflow.Name
+  $sources[$name]=$workflow.FullName
+  $files[$name]=Get-Sha256Hex $workflow.FullName
  }
  $manifest=([ordered]@{schema_version=1;platform='windows-x64';policy='station-rvc-v1';files=$files}|ConvertTo-Json -Depth 4)
  Assert-NoReparsePointAncestor $control
@@ -384,18 +569,19 @@ if($WithRVCBackend){
   if(-not(Test-Path -LiteralPath $manifestPath -PathType Leaf) -or [IO.File]::ReadAllText($manifestPath) -cne $manifest){
    throw 'Existing standalone RVC control package differs; use a fresh output directory.'
   }
-  if(@(Get-ChildItem -LiteralPath $control -Force).Count -ne ($files.Count+1)){throw 'Unexpected files in the standalone RVC control package.'}
+  if(@(Get-ChildItem -LiteralPath $control -Recurse -File -Force).Count -ne ($files.Count+1)){throw 'Unexpected files in the standalone RVC control package.'}
   foreach($name in $files.Keys){
    $staged=Join-Path $control $name
    Assert-NoReparsePointAncestor $staged
-   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC control integrity check failed.'}
+   if((Get-Sha256Hex $staged) -ne $files[$name]){throw 'Standalone RVC control integrity check failed.'}
   }
  }else{
   New-Item -ItemType Directory -Path $control | Out-Null
   foreach($name in $files.Keys){
    $staged=Join-Path $control $name
-   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $staged
-   if((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash.ToLowerInvariant() -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
+   New-Item -ItemType Directory -Force -Path (Split-Path $staged -Parent) | Out-Null
+   Copy-Item -LiteralPath $sources[$name] -Destination $staged
+   if((Get-Sha256Hex $staged) -ne $files[$name]){throw 'Standalone RVC source changed during staging.'}
   }
   [IO.File]::WriteAllText($manifestPath,$manifest,[Text.UTF8Encoding]::new($false))
  }
@@ -406,8 +592,8 @@ if($WithRVCBackend){
 # reviewed package and font source directories explicitly stages the bounded
 # native PDF runtime beside that CLI.  Portable bundles use the shared resource
 # preparer below, so avoid repeating either integrity-checked operation here.
-if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithAudioCpp -or $WithMediaUnderstanding) -and -not $Portable){
- $runtimeRoot=Join-Path $OutputDirectory 'runtimes'
+if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWorkshop -or $WithRVCBackend -or $WithStationSpeech -or $WithAudioCpp -or $WithMediaUnderstanding -or $WithExternalTools) -and -not $Portable){
+ $runtimeRoot=Join-Path $OutputDirectory 'env'
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_windows_python.py') --target (Join-Path $runtimeRoot 'windows-python-cli') --cache (Join-Path $workspace 'temp\\windows-runtime-downloads')
  if($LASTEXITCODE -ne 0){throw 'Managed Windows Python preparation failed for the selected project tools.'}
  if($hasDocumentRuntimeInput){
@@ -418,9 +604,14 @@ if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWo
   if($LASTEXITCODE -ne 0){throw 'Project-local native document runtime preparation failed.'}
  }
 }
+if($LocalStation -and -not $Portable -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
+ & python -X utf8 (Join-Path $PSScriptRoot 'prepare_public_tool_runtimes.py') --release $OutputDirectory
+ if($LASTEXITCODE -ne 0){throw 'Standalone public tool Python preparation failed.'}
+}
 if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $ApplicationPackagesDirectory)){
- $secrets=Join-Path $OutputDirectory 'secrets'
- $deployment=Join-Path $secrets 'local-deployment.json'
+ $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))
+ $settingsRoot=Join-Path $dataRoot 'main_setting'
+ $deployment=Join-Path $settingsRoot 'local-deployment.json'
  Assert-NoReparsePointAncestor $deployment
  $existingDeployment=Get-Item -LiteralPath $deployment -Force -ErrorAction SilentlyContinue
  if($existingDeployment){
@@ -429,18 +620,16 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
    if($entry.Value -and [string]$existingData.($entry.Name) -ne [IO.Path]::GetFullPath($entry.Value)){throw ('Existing local-deployment.json has a different '+$entry.Name+'. Use a fresh output directory or edit the package configuration explicitly.')}
   }
  }else{
-  New-Item -ItemType Directory -Force -Path $secrets | Out-Null
-  $dataRoot=[IO.Path]::GetFullPath((Join-Path $OutputDirectory 'data'))
-  New-Item -ItemType Directory -Force -Path $dataRoot,(Join-Path $dataRoot 'applications'),(Join-Path $dataRoot 'publictools'),(Join-Path $dataRoot 'main_setting'),(Join-Path $dataRoot 'workspace') | Out-Null
+  New-Item -ItemType Directory -Force -Path $settingsRoot | Out-Null
+  New-Item -ItemType Directory -Force -Path $dataRoot,(Join-Path $dataRoot 'applications'),(Join-Path $dataRoot 'publictools'),(Join-Path $dataRoot 'main_setting'),(Join-Path $dataRoot 'workspaces') | Out-Null
   $layoutPath=Join-Path $dataRoot 'data-layout.json'
   if(-not (Test-Path -LiteralPath $layoutPath -PathType Leaf)){
-   [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/main"}',[Text.UTF8Encoding]::new($false))
+   [IO.File]::WriteAllText($layoutPath,'{"schema_version":1,"layout":"applications/publictools/tools/workspaces/main_setting"}',[Text.UTF8Encoding]::new($false))
   }
-  $jsonData=[ordered]@{backend='local-station';data_root=(Join-Path $OutputDirectory 'data');workspace_root=(Join-Path $OutputDirectory 'data\managed-workspaces')}
-  $jsonData.workspace_root=(Join-Path $dataRoot 'workspace')
-  if($WithWeChatRuntime){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
-  if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)}
-  if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)}
+  $jsonData=[ordered]@{backend='local-station';data_root='data';workspace_root='data\workspaces'}
+  if($WithWeChatRuntime -and $ApplicationPackagesDirectory){$jsonData.wechat_native_url='http://127.0.0.1:6174';$jsonData.wechat_native_enabled=$true}
+  if($ToolPackagesDirectory){$jsonData.tool_packages_directory=[IO.Path]::GetFullPath($ToolPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools')){$jsonData.tool_packages_directory='publictools'}
+  if($ApplicationPackagesDirectory){$jsonData.application_packages_directory=[IO.Path]::GetFullPath($ApplicationPackagesDirectory)} elseif(Test-Path -LiteralPath (Join-Path $OutputDirectory 'applications')){$jsonData.application_packages_directory='applications'}
   $json=($jsonData | ConvertTo-Json)
   $bytes=[Text.Encoding]::UTF8.GetBytes($json)
   $file=[IO.File]::Open($deployment,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
@@ -449,32 +638,38 @@ if($LocalStation -and ($WithWeChatRuntime -or $ToolPackagesDirectory -or $Applic
  if($WithWeChatRuntime -and $Portable){$portableWeChatDefaults=$true}
 }
 if($Portable){
- $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
+ $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
+ if($LocalStation -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
+  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_public_tool_runtimes.py') --release $OutputDirectory
+  if($LASTEXITCODE -ne 0){throw 'Standalone public tool Python preparation failed.'}
+ }
   if($LocalStation){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
+  Write-PortableReleaseManifest $OutputDirectory
   Invoke-DesktopPackageTests
   Get-Item -LiteralPath $target | Select-Object FullName,Length
-  Get-FileHash -LiteralPath $target -Algorithm SHA256
+  [ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}
   return
  }
- $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'runtimes\windows-x64')}
+ $nativeArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env\windows-x64')}
  if($NativeSourceDirectory){$nativeArgs.SourceDirectory=$NativeSourceDirectory}
  if($Test){$nativeArgs.Test=$true}
  if($GoSourcePatch){$nativeArgs.GoSourcePatch=$GoSourcePatch}
  & (Join-Path $PSScriptRoot 'Build-WindowsNative.ps1') @nativeArgs
  if($LASTEXITCODE -ne 0){throw 'Windows native build failed.'}
- $music=Join-Path $OutputDirectory 'runtimes\windows-music'
+ $music=Join-Path $OutputDirectory 'env\windows-music'
  New-Item -ItemType Directory -Force -Path $music | Out-Null
  Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.py' | Where-Object {$_.Name -notlike 'test_*' -and $_.Name -ne 'mobile_bridge.py'} | ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $music}
  foreach($name in @('gpt_sovits_windows_requirements.txt')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $music}
  Copy-Item -LiteralPath (Join-Path $workspace 'components\yue2\app\workflows_api') -Destination (Join-Path $music 'workflows') -Recurse -Force
  $musicFiles=@{}
- Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}
+ Get-ChildItem -LiteralPath $music -Recurse -File | Where-Object Name -ne 'runtime-manifest.json' | ForEach-Object {$musicFiles[$_.FullName.Substring($music.Length+1)]=Get-Sha256Hex $_.FullName}
  [IO.File]::WriteAllText((Join-Path $music 'runtime-manifest.json'),(@{schema_version=1;platform='windows-x64';policy='registry-read-private-network-v1';files=$musicFiles}|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory '使用说明.txt')
 }
+if($LocalStation){Write-PortableReleaseManifest $OutputDirectory}
 Invoke-DesktopPackageTests
 Get-Item -LiteralPath $target | Select-Object FullName,Length
-Get-FileHash -LiteralPath $target -Algorithm SHA256
+[ordered]@{Algorithm='SHA256';Hash=(Get-Sha256Hex $target);Path=$target}

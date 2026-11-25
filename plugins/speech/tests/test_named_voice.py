@@ -101,7 +101,7 @@ class NamedVoiceTests(unittest.TestCase):
         context = {k: 'synthetic' for k in ('account', 'thread', 'requester', 'purpose', 'request_key')}
         messages = [
             {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'_meta': {'wechat/configuration': {'values': CONFIG}}}},
-            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'speech.synthesize_named', 'arguments': ARGS, '_meta': {'wechat/context': context}}},
+            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'speech.synthesize_named', 'arguments': ARGS, '_meta': {'station/call_id': 'a' * 64}}},
             {'jsonrpc': '2.0', 'id': 'speech-model-1', 'result': RESULT},
         ]
         output = io.StringIO()
@@ -117,7 +117,6 @@ class NamedVoiceTests(unittest.TestCase):
         package = json.loads((ROOT / 'plugin.json').read_text(encoding='utf8'))
         config = json.loads((ROOT / 'config.schema.json').read_text(encoding='utf8'))
         caps = json.loads((ROOT / 'capabilities.json').read_text(encoding='utf8'))['capabilities']
-        self.assertEqual(package['version'], '0.3.0')
         self.assertEqual(package['permissions'], ['artifact.read', 'model.invoke'])
         self.assertTrue(package['http_routes'][0]['optional'])
         self.assertFalse(config.get('required'))

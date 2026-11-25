@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Event contains metadata only. Message content is fetched only after its
@@ -67,6 +69,77 @@ type QuoteReference struct {
 
 func (m Message) IsQuotedText() bool {
 	return m.Type == 49 && (m.Quote != nil || m.AppMessageType != nil && *m.AppMessageType == 57)
+}
+
+func (m Message) IsForwardedConversation() bool {
+	return m.Type == 49 && m.AppMessageType != nil && *m.AppMessageType == 19
+}
+
+func (m Message) IsPassiveNotice() bool {
+	if m.Type == 10000 {
+		return true
+	}
+	if m.Type != 49 || m.AppMessageType == nil {
+		return false
+	}
+	switch *m.AppMessageType {
+	case 17, 74, 87:
+		return true
+	}
+	return false
+}
+
+// CardContext returns display-only fields and text already present in the
+// native projection, including the text carried by a combined forward.
+func (m Message) CardContext() (summary, context string) {
+	switch {
+	case m.Type == 42, m.Type == 48:
+		summary = "[微信名片]"
+		if m.Type == 48 {
+			summary = "[微信位置]"
+		}
+		context = m.Body
+	case m.Type == 10000:
+		summary, context = "[微信系统通知]", m.Body
+	case m.Type == 49 && m.AppMessageType != nil:
+		switch *m.AppMessageType {
+		case 1:
+			summary = "[微信分享文字]"
+		case 17:
+			summary = "[微信位置共享通知]"
+		case 19:
+			summary = "[微信合并转发]"
+			body := strings.TrimSpace(m.Body)
+			if utf8.ValidString(body) && len(body) <= 64<<10 &&
+				(body == "[Chat History]" || strings.HasPrefix(body, "[Chat History] ") || strings.HasPrefix(body, "[Chat History]\n")) {
+				return summary, body
+			}
+			return summary, ""
+		case 33, 36:
+			summary = "[微信小程序卡片]"
+		case 74:
+			summary = "[微信文件发送通知]"
+		case 87:
+			summary = "[微信群公告]"
+		default:
+			return "", ""
+		}
+		if m.Link != nil {
+			var fields []string
+			for _, field := range []struct{ label, value string }{
+				{"标题", m.Link.Title}, {"简介", m.Link.Description}, {"来源", m.Link.SourceName},
+			} {
+				if value := strings.TrimSpace(field.value); value != "" {
+					fields = append(fields, field.label+"："+value)
+				}
+			}
+			context = strings.Join(fields, "\n")
+		}
+	}
+	if !utf8.ValidString(context) || len(context) > 12<<10 {
+		context = ""
+	}
+	return summary, context
 }
 
 type LinkCard struct {

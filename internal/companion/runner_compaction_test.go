@@ -15,6 +15,9 @@ func TestActionCompactionPreservesToolPairsAndLatestFollowup(t *testing.T) {
 		turns = append(turns, map[string]string{"role": "assistant", "content": string(call)}, map[string]string{"role": "user", "content": string(result)})
 	}
 	compacted := compactActionTurns("policy", turns)
+	if len(compacted) > 30 {
+		t.Fatalf("old tool transcript still expands each model call: %d turns", len(compacted))
+	}
 	if !strings.Contains(currentMessage(compacted), "改发原文件") {
 		t.Fatal("latest structured followup was compressed away")
 	}

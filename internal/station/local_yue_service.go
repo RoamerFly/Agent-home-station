@@ -78,13 +78,16 @@ type localYuERegistration struct {
 type localYuEManifest = localComfyManifest
 
 type localYuEService struct {
+	catalog      string
 	dataDir      string
 	editableRoot string
 	managed      *localComfyService
 }
 
-func newLocalYuEService(dataDir, workspace string) localYuEBackend {
-	return newLocalYuEServiceAt(dataDir, workspace)
+func newLocalYuEService(dataDir, workspace string, catalog string) localYuEBackend {
+	service := newLocalYuEServiceAt(dataDir, workspace)
+	service.catalog = catalog
+	return service
 }
 
 func newLocalYuEServiceAt(dataDir, editableRoot string) *localYuEService {
@@ -200,7 +203,14 @@ func (s *localYuEService) loadRegistration(ctx context.Context) (localYuERegistr
 	if err := ctx.Err(); err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err
 	}
-	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localYuERegistrationFile), "station_yue_", localYuEMaxManifest)
+	data, portable, err := portableRegistration(stationYuERegistrationPath(s.dataDir), s.catalog, "yue", s.editableRoot, localYuEMaxManifest)
+	if err != nil && portable == "" {
+		// Preserve the existing public error codes for private registrations.
+		_, legacyErr := readLocalComputeRegistration(stationYuERegistrationPath(s.dataDir), "station_yue_", localYuEMaxManifest)
+		if legacyErr != nil {
+			err = legacyErr
+		}
+	}
 	if err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err
 	}
@@ -211,6 +221,11 @@ func (s *localYuEService) loadRegistration(ctx context.Context) (localYuERegistr
 	}
 	if !r.Enabled {
 		return localYuERegistration{}, localYuEManifest{}, errors.New("station_yue_not_installed_or_authorized")
+	}
+	if portable != "" {
+		if err := resolvePortablePaths(portable, &r.Runtime, &r.Models, &r.Workflows, &r.FFmpeg); err != nil {
+			return localYuERegistration{}, localYuEManifest{}, err
+		}
 	}
 	if err := r.validate(s.dataDir, s.editableRoot); err != nil {
 		return localYuERegistration{}, localYuEManifest{}, err

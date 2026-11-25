@@ -1,6 +1,8 @@
 (() => {
   "use strict";
   const $ = (selector) => document.querySelector(selector);
+  const workbenchQuery = new URLSearchParams(window.location.search).get("workbench");
+  const standaloneWorkbenchApp = ["douyin", "bilibili"].includes(workbenchQuery) ? workbenchQuery : "";
   const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView(), toolGrants: null };
   const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
   let activeView = "chat";
@@ -11,14 +13,14 @@
   let desktopControl = { available: false, enabled: false, busy: false };
   let directoryPickerSequence = 0;
   const pendingDirectoryPickers = new Map();
-  const loginView = $("#login-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
-  const loginSubmit = $("#login-submit"), initializeButton = $("#initialize-button"), accessButton = $("#access-button"), logoutButton = $("#logout-button");
-  const settingsAccessButton = $("#settings-access-button"), settingsLogoutButton = $("#settings-logout-button"), chatStream = $("#chat-stream");
+  const connectionView = $("#connection-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
+  const initializeButton = $("#initialize-button"), accessButton = $("#access-button");
+  const settingsAccessButton = $("#settings-access-button"), chatStream = $("#chat-stream");
 
   function showMessage(text, kind = "") { message.textContent = text || ""; message.className = `page-message${kind ? ` is-${kind}` : ""}`; }
   function safeServerMessage(body, fallback) { const value = body && (body.error || body.message || body.detail); return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : fallback; }
   function responseMessage(status) {
-    if (status === 401 || status === 403) return "登录状态已失效，请重新验证。";
+    if (status === 401 || status === 403) return "本机连接暂时不可用，请重试。";
     if (status === 409) return "当前请求正在处理，或已被新的状态替代。";
     if (status === 503) return "还没有可用的聊天模型，请先完成模型设置。";
     if (status === 502) return "模型暂时没有返回结果。可以稍后手动重试这条消息。";
@@ -37,6 +39,15 @@
     let response;
     try { response = await fetch(url, { ...fetchOptions, headers, credentials: "same-origin" }); }
     catch (_) { const error = new Error("无法连接本机服务。"); error.status = 0; throw error; }
+    if (response.status === 401 && url !== "/api/session") {
+      const renewal = await fetch("/api/session", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (renewal.ok) {
+        const session = await renewal.json();
+        state.csrf = String(session.csrf || "");
+        if (state.csrf && options.method && options.method !== "GET") headers.set("X-CSRF-Token", state.csrf);
+        response = await fetch(url, { ...fetchOptions, headers, credentials: "same-origin" });
+      }
+    }
     let body = null;
     try { body = await response.json(); } catch (_) { /* Do not render non-JSON error bodies. */ }
     if (!response.ok) { const error = new Error(safeServerMessage(body, responseMessage(response.status))); error.status = response.status; error.body = body; throw error; }
@@ -45,7 +56,7 @@
   function authenticated(session) { return Boolean(session && (session.authenticated || session.logged_in || session.csrf)); }
   function setBusy(busy) {
     state.busy = busy;
-    for (const node of [loginSubmit, initializeButton, accessButton, logoutButton, settingsAccessButton, settingsLogoutButton]) node.disabled = busy;
+    for (const node of [initializeButton, accessButton, settingsAccessButton]) node.disabled = busy;
   }
   function chatConfigured() { return Boolean(state.model && state.model.key_configured); }
   function setActiveView(view) {
@@ -61,7 +72,7 @@
     }
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
-    if (view === "project-tools") loadProjectTools();
+    if (view === "project-tools") refreshProjectToolsPanel();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
     if (view === "settings") void loadToolGrants();
@@ -90,7 +101,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newProjectToolsView() {
-    return { loading: false, applying: "", tools: [], vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
+    return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, aliyunBalance: null, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
   }
   function appElement(tag, text, className = "") {
     const node = document.createElement(tag);
@@ -187,8 +198,8 @@
   function appSessionExpired(results) {
     if (!results.some((result) => result.status === "rejected" && result.reason?.status === 401)) return false;
     state.csrf = "";
-    showLogin();
-    showMessage("登录状态已失效，请重新验证。", "warn");
+    showConnection();
+    showMessage("本机连接暂时不可用，请重试。", "warn");
     return true;
   }
   function appRows(result, key) {
@@ -379,7 +390,7 @@
     if (current.wechatRelocation.get(id)?.busy || current.setupBusy || current.loading) return;
     const entry = { busy: digest ? "confirm" : "read", controller: new AbortController(), digest: "" };
     current.wechatRelocation.set(id, entry);
-    const visible = () => current === apps && activeView === "apps" && $("#app-dialog").open &&
+    const visible = () => current === apps && activeView === "apps" && $("#app-configuration").open &&
       appAccountVisible("wechat") && current.wechatRelocation.get(id) === entry;
     const path = "/api/apps/wechat/connections/" + encodeURIComponent(id) + "/legacy-import/relocation/readiness";
     renderApps();
@@ -1065,6 +1076,16 @@
       }
       const action = value.enabled ? "disable" : "enable";
       content.append(appSetupButton((value.enabled ? "停用" : "启用") + (media ? "媒体理解" : "解析"), () => load({ action, revision: value.revision })));
+      if (!media) {
+        const loginNote = appElement("small", "可在受限登录窗口中完成登录；Cookie 只由桌面宿主保存为主机凭据，不会显示给页面或工具。", "share-reader-login-note");
+        const loginRow = appElement("div", "", "app-worker-actions share-reader-login-actions");
+        const openLogin = (provider, label) => appSetupButton(label, () => {
+          if (!window.chrome?.webview) { appFeedback("请从桌面工作站打开网页登录。", true); return; }
+          window.chrome.webview.postMessage({ type: "share-reader-auth-open", provider, connection: id, revision: value.revision });
+        });
+        loginRow.append(openLogin("yuanbao", "网页登录元宝"), openLogin("assistant", "网页登录视频号助手"));
+        content.append(loginNote, loginRow);
+      }
       if (value.enabled) return;
       if (media) content.append(appElement("small", "视觉与音轨转写分别配置。接口地址须为完整 HTTPS 地址。"));
       const configuration = value.configuration || {};
@@ -1626,7 +1647,7 @@
     work.pending = new Map([...work.pending].filter(([, pending]) => pending.has("cancel")));
   }
   function shouldPollDouyinWebLogin(current, value) {
-    return current === apps && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" &&
+    return current === apps && activeView === "apps" && $("#app-configuration").open && current.openID === "douyin" &&
       (appAccountVisible("douyin") || appConfiguration?.section === "browse") && value?.active === true;
   }
   function scheduleDouyinWebLoginPoll(current) {
@@ -2181,12 +2202,12 @@
       $("#memory-source-label").hidden = false;
       button.textContent = "刷新微信来源";
       if (!value.sources.length) {
-        current.error = "当前没有获准微信来源，请在微信进入应用后的账号与授权中授权工作站查询范围。";
+        current.error = "当前没有获准微信来源，请在微信工作台的账号与授权中授权工作站查询范围。";
         renderMemoryPage();
       }
     } catch (error) {
       if (current === memory && generation === current.sourcesGeneration) {
-        if (error.status === 401) { showLogin(); return; }
+        if (error.status === 401) { showConnection(); return; }
         current.error = error.message; renderMemoryPage();
       }
     } finally { if (current === memory && generation === current.sourcesGeneration) button.disabled = false; }
@@ -2275,7 +2296,7 @@
       if (current.selected && !current.source) void readMemoryDetail();
     } catch (error) {
       if (current !== memory || generation !== current.generation) return;
-      if (error.status === 401) { showLogin(); return; }
+      if (error.status === 401) { showConnection(); return; }
       current.error = error.message;
     } finally {
       if (current === memory && generation === current.generation) { current.loading = false; renderMemoryPage(); }
@@ -2363,7 +2384,7 @@
       if (!current.source) panel.append(memoryButton("返回原会话", "button compact secondary", () => { setActiveView("chat"); $("#chat-tab").focus(); }));
     } catch (error) {
       if (current !== memory || generation !== current.detailGeneration) return;
-      if (error.status === 401) { showLogin(); return; }
+      if (error.status === 401) { showConnection(); return; }
       panel.replaceChildren(appElement("h4", "记忆详情"), appElement("p", error.message),
         memoryButton(current.source ? "刷新来源记忆" : "重新读取", "button compact secondary", current.source ? refreshMemoryScope : () => void readMemoryDetail()));
     }
@@ -2499,6 +2520,23 @@
     control.append(input, track, appElement("span", "应用开关 · " + note + (enabled === true ? "（自主功能另行授权）" : ""), "app-power-label"));
     return control;
   }
+  function openLegacyWechatConsole() {
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "wechat-legacy-console-open" });
+      return;
+    }
+    // Keep a browser fallback for local preview builds. The desktop host
+    // replaces this navigation with an owned modal window in the packaged app.
+    window.location.href = "http://127.0.0.1:8080/?from_station=1";
+  }
+  function openApplicationWorkbench(id) {
+    if (!["douyin", "bilibili"].includes(id)) return;
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "application-workbench-open", app_id: id });
+      return;
+    }
+    window.location.href = "/?workbench=" + encodeURIComponent(id);
+  }
   function renderApps(renderDetail = true) {
     const list = $("#apps-list");
     list.setAttribute("aria-busy", String(apps.loading || Boolean(apps.installing)));
@@ -2525,36 +2563,30 @@
       card.dataset.connection = evidence.state;
       head.append(appMark(record.id, label), appElement("h4", label), appElement("span", connectionLabel, "app-card-status"));
       const open = appElement("button", "", "app-card-entry");
-      open.type = "button"; open.setAttribute("aria-label", "管理" + label);
-      open.setAttribute("aria-controls", "app-dialog"); open.setAttribute("aria-expanded", String(apps.openID === record.id));
+      open.type = "button"; open.setAttribute("aria-label", "打开" + label + "工作台");
+      if (!["wechat", "douyin", "bilibili"].includes(record.id)) open.setAttribute("aria-controls", "app-configuration");
       open.dataset.app = record.id;
-      const foot = appElement("span", "管理应用  ›", "app-card-footer");
+      const foot = appElement("span", "打开工作台  ›", "app-card-footer");
       open.append(head, appEvidenceRows(evidence), appElement("p", version, "app-card-version"), foot); card.append(open);
       const power = appPowerSwitch(record);
       if (power) card.append(power);
       open.addEventListener("click", () => {
-        // The WeChat application is deliberately opened in the complete
-        // legacy Whale Console. Its page, controls and API contract are the
-        // old bot implementation; the station only owns the outer identity
-        // and native-account lifecycle.
-        if (record.id === "wechat" && window.location.port !== "8080") {
-          window.location.href = "http://127.0.0.1:8080/?from_station=1";
+        if (record.id === "wechat") {
+          openLegacyWechatConsole();
+          return;
+        }
+        if (record.id === "douyin" || record.id === "bilibili") {
+          openApplicationWorkbench(record.id);
           return;
         }
         if (apps.openID && apps.openID !== record.id) {
           clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
         }
-        const dialog = $("#app-dialog"), changing = apps.openID !== record.id;
-        if (changing) appFeedback("");
-        apps.openID = record.id; apps.detailTab ||= "capabilities";
-        if (!dialog.open) dialog.show();
-        renderApps();
-        if (changing) $("#app-dialog-body").scrollTop = 0;
-        $("#app-dialog-title").focus({ preventScroll: true });
-        renderLiveSafety();
+        appFeedback("");
+        apps.openID = record.id;
+        openAppConfiguration("overview");
         if (record.id === "douyin") {
           void loadDouyinWebLogin(apps);
-          if (apps.detailTab === "account" && apps.douyinActivityTab === "publications") void loadPublicationWork(apps, "douyin", apps.douyinWork.cursors);
         }
       });
       cards.push(card);
@@ -2565,12 +2597,12 @@
       list.replaceChildren(appElement("p", text, "apps-empty"));
     }
     if (focused) [...list.querySelectorAll("[data-app]")].find((button) => button.dataset.app === focused)?.focus({ preventScroll: true });
-    if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
+    if (renderDetail && $("#app-configuration").open && records.has(apps.openID)) renderAppConfiguration();
+    else if (renderDetail && $("#app-dialog").open && records.has(apps.openID)) renderAppDialog(records.get(apps.openID), catalog.get(apps.openID));
   }
   let appConfiguration = null;
   function appAccountVisible(id) {
-    if (activeView !== "apps" || !$("#app-dialog").open || apps.openID !== id) return false;
-    if (!$("#app-configuration").open) return false;
+    if (activeView !== "apps" || !$("#app-configuration").open || apps.openID !== id) return false;
     const section = appConfiguration?.section;
     return section === "account" || (id === "wechat" && section === "conversations");
   }
@@ -2743,9 +2775,12 @@
     void refresh();
     async function refresh() {
       try {
-        const result = await Promise.all([request(path + "/surf", { signal }), request(path + "/surf-reader", { signal })]);
+        const nextSchedule = await request(path + "/surf", { signal });
         if (!active()) return;
-        [schedule, reader] = result;
+        schedule = nextSchedule;
+        if (schedule.managed_by_legacy) { render(); return; }
+        reader = await request(path + "/surf-reader", { signal });
+        if (!active()) return;
         sharing.refresh();
         appSurf.refresh();
         render();
@@ -2754,7 +2789,7 @@
       }
     }
     async function write(action, draft, readerAction = false) {
-      if (busy || !active()) return;
+      if (busy || !active() || schedule?.managed_by_legacy) return;
       busy = true;
       feedback.textContent = "";
       for (const node of content.querySelectorAll("button")) node.disabled = true;
@@ -2788,6 +2823,13 @@
       }
     }
     function render() {
+      if (schedule.managed_by_legacy) {
+        status.textContent = "当前微信由旧版控制台管理。实际开关状态、目标和活动记录请在统一设置中查看。";
+        box.replaceChildren(appElement("h4", "自主发言与网上冲浪"), status,
+          appElement("p", "打开旧版微信控制台后，进入「活动 → 自主发言与冲浪」。", "app-scope-note"),
+          memoryButton("打开自主发言与冲浪设置", "button compact primary", openLegacyWechatConsole));
+        return;
+      }
       status.textContent = schedule.enabled
         ? (schedule.public_reader_ready || schedule.application_reader_ready ? "已启用，随微信工作器运行" : "已启用，等待获准的读取入口") +
           (schedule.next ? " · 下次可运行 " + new Date(schedule.next).toLocaleString("zh-CN") : "")
@@ -2975,7 +3017,7 @@
     const form = appElement("form", "", "configuration-surf-form");
     const feedback = appElement("p", "", "app-scope-note"); feedback.setAttribute("role", "status");
     node.append(appElement("h4", "应用浏览与互动"), status,
-      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用的「进入应用 → 互动任务」核对。", "app-scope-note"), form, feedback);
+      appElement("p", "为独立冲浪选择应用入口、读取字段和互动。应用本身的授权仍需有效。后续字段只在应用返回对应入口时可读，不会因此获得额外能力。互动任务和平台回执在对应应用工作台的「互动任务」核对。", "app-scope-note"), form, feedback);
     const key = connection + ":apps";
     let saved, busy = false, serial = 0;
     async function refresh() {
@@ -3376,7 +3418,7 @@
             (available.some((source) => source.kind === kind) ? "" : " · 当前来源已撤销")));
           group.append(label);
         }
-        if (!available.length) group.append(appElement("p", "请在抖音进入应用中核对本机记忆留存与读取授权。", "app-scope-note"));
+        if (!available.length) group.append(appElement("p", "请在抖音工作台中核对本机记忆留存与读取授权。", "app-scope-note"));
         form.append(group);
       }
       const save = appElement("button", "保存微信" + rangeLabel, "button compact primary"); save.type = "submit"; save.disabled = busy;
@@ -3492,7 +3534,7 @@
       model_chose_silence: "角色选择保持安静", grounding_check_failed: "回复复核未完成，草稿未发送", grounding_check_rejected: "回复复核未通过，草稿未发送",
       grounding_context_invalidated: "复核前依据已变化，草稿已作废", grounding_check_stopped_unverified_reply: "回复复核未完成，草稿未发送",
       invalid_model_decision: "模型返回的决策格式无效，未发送", invalid_tool_arguments: "工具参数格式无效", tool_unavailable_or_budget_exhausted: "工具不可用或调用次数已用尽",
-      hourly_reply_budget: "回复预算已用尽", quiet_hours: "处于安静时段", proactive_permission_denied: "主动问候权限未开启", text_reply_permission_denied: "发送权限不足",
+      hourly_reply_budget: "回复预算已用尽", quiet_hours: "处于安静时段", proactive_permission_denied: "自主发言与冲浪未开启", text_reply_permission_denied: "发送权限不足",
       media_unavailable_or_permission_denied: "生成媒体不可用或没有发送权限", source_identity_conflict_or_unavailable: "消息来源身份冲突，未生成回复", auth_required: "微信登录需要重新验证",
       submission_outcome_unknown: "原生发送未取得可验证回执，结果待确认", receipt_wait_timeout: "等待发送回执超时，结果待确认", receipt_lookup_failed: "读取发送回执失败，结果待确认",
       send_outcome_unknown: "发送结果不确定，未自动重发", wechat_rejected: "微信拒绝了本次消息", service_rejected: "微信服务拒绝了本次消息", wechat_not_ready: "微信登录或发送连接未就绪",
@@ -4509,12 +4551,25 @@
     switch (section) {
       case "overview":
         controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
+        if (record.id === "douyin") {
+          const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
+          const overview = appElement("section", "", "app-layer douyin-workbench-overview");
+          const account = appElement("div", "", "douyin-workbench-account");
+          account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
+          const routes = appElement("div", "", "douyin-workbench-routes");
+          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
+            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => selectAppConfiguration(view, id)));
+          }
+          overview.append(account, routes);
+          controls.splice(1, 0, overview);
+        }
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
         if (record.id === "wechat") {
           if (!apps.power.loaded && !apps.power.loading && apps.registered?.some((row) => row.id === "wechat")) void loadWechatPower();
           const page = legacyWechatSection("账号与授权", "沿用旧版微信 Bot 的账号卡、扫码登录和授权核对入口。", "legacy-account-page");
+          page.append(memoryButton("打开旧版微信控制台", "button compact secondary", openLegacyWechatConsole));
           page.append(wechatDesktopServiceRow(), appConnectionRow(record, view.connection));
           if (selected && apps.registered?.some((row) => row.id === "wechat" && row.registration === "station-native")) {
             if (view.ownerPanel?.connection !== selected.id) view.ownerPanel = { connection: selected.id, node: appWechatOwnerBinding(view, selected.id) };
@@ -4714,9 +4769,13 @@
     stopAppConfigurationReads();
     const view = { record, section: "overview", initialSection: typeof initialSection === "string" ? initialSection : "overview", returnFocus: document.activeElement, returnSection: document.activeElement?.dataset.configurationSection || "", returnScroll: $("#app-dialog-body").scrollTop, sections: [], connection: "", archivePanel: null, controller: new AbortController(), sequence: 0, error: "" };
     appConfiguration = view;
-    dialog.classList.toggle("wechat-legacy-skin", id === "wechat");
+    // Both application workbenches share the same card and navigation skin;
+    // their sections and operations remain specific to the selected app.
+    dialog.classList.toggle("wechat-legacy-skin", id === "wechat" || id === "douyin" || id === "bilibili");
+    dialog.classList.toggle("douyin-workbench-skin", id === "douyin");
+    document.body.classList.toggle("standalone-workbench", Boolean(standaloneWorkbenchApp));
     $("#app-dialog-body").replaceChildren();
-    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + " · 进入应用"));
+    $("#app-configuration-title").replaceChildren(appMark(id, record.name || id), document.createTextNode((record.name || id) + "工作台"));
     dialog.showModal();
     renderAppConfiguration();
     $("#app-configuration-title").focus({ preventScroll: true });
@@ -4775,7 +4834,7 @@
           appConfigurationShortcut("管理资料与版本", "source")];
         break;
       case "capabilities": {
-        controls = [appCapabilityRows(evidence), appConfigurationShortcut("进入应用配置", "overview")];
+        controls = [appCapabilityRows(evidence), appConfigurationShortcut("打开工作台", "overview")];
         break;
       }
       default:
@@ -4834,7 +4893,7 @@
       const generation = ++draft.generation;
       const controller = new AbortController(); draft.controller = controller; draft.busy = true; draft.error = ""; draft.result = null;
       renderApps();
-      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-dialog").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
+      const selected = () => current === apps && generation === draft.generation && activeView === "apps" && $("#app-configuration").open && current.openID === "douyin" && (appAccountVisible("douyin") || appConfiguration?.section === "live");
       try {
         const body = automatic ? { discover: true } : { executable: draft.path.trim() };
         const value = await request("/api/local/apps/douyin/live-client/inspect", { method: "POST", body: JSON.stringify(body), signal: controller.signal });
@@ -5018,7 +5077,7 @@
     if (task.state === "failed" && task.progress?.stage === "rejected") return ["未提交成功", "本次发布已被拒绝。"];
     const normal = publicationStates[task.state] || publicationStates.awaiting_receipt;
 	const creatorIssues = {
-	  creator_login_required: "创作者中心需要重新登录，请在抖音应用详情打开登录窗口。",
+	  creator_login_required: "创作者中心需要重新登录，请在抖音工作台打开登录窗口。",
 	  creator_profile_busy: "专属登录窗口仍在使用，关闭并确认保存后可继续原任务。",
 	  creator_controls_unavailable: "创作者页面未准备好，或网页控件发生变化；尚未确认提交。",
 	  creator_upload_incomplete: "视频上传尚未完成，或页面已清除所选文件。",
@@ -5802,8 +5861,8 @@
       if (current !== apps) return;
       if (error.status === 401 || error.status === 403) {
         state.csrf = "";
-        showLogin();
-        showMessage("登录状态已失效，请重新验证。", "warn");
+        showConnection();
+        showMessage("本机连接暂时不可用，请重试。", "warn");
       } else {
         appFeedback(error.message, true);
         if (error.status === 409) {
@@ -5819,7 +5878,153 @@
       }
     }
   }
+  function toolBackendKind(backend) {
+    return { local: "本机运行", loopback: "本机服务", api: "上游 API", web: "联网读取", service: "外部服务", package: "按配置运行", unknown: "后端待确认" }[backend.kind] || "后端待确认";
+  }
+  function toolBackendState(backend) {
+    return { configured: "已配置", missing: "未配置", unreadable: "配置不可读", declared: "由工具包设置" }[backend.state] || "配置待确认";
+  }
+  function toolBackendCredential(backend) {
+    const label = { api_key: "API Key", session: "登录凭据", local_token: "服务令牌", local_password: "本机密码" }[backend.credential];
+    return label ? `${label}${backend.key_configured ? "已保存" : "未填写"}` : "无需 API Key";
+  }
+  function toolCardBackends(tool) {
+    const list = appElement("div", "", "tool-card-backends");
+    for (const backend of tool.backends || []) {
+      const row = appElement("div", "", "tool-card-backend");
+      const mode = appElement("span", toolBackendKind(backend), "tool-backend-mode");
+      mode.dataset.kind = backend.kind;
+      const meta = [backend.origin || backend.model, backend.credential ? toolBackendCredential(backend) : toolBackendState(backend)].filter(Boolean);
+      row.append(mode, appElement("span", meta.join(" · "), "tool-card-backend-meta"));
+      list.append(row);
+    }
+    return list;
+  }
+  function toolBackendDetails(tool, showTitle = true) {
+    const section = appElement("section", "", "tool-backend-section");
+    if (showTitle) section.append(appElement("h3", "后端配置 · 工作站"));
+    const grid = appElement("div", "", "tool-backend-grid");
+    for (const backend of tool.backends || []) {
+      const record = appElement("div", "", "tool-backend-record");
+      const heading = appElement("div", "", "tool-backend-heading");
+      const mode = appElement("span", toolBackendKind(backend), "tool-backend-mode");
+      mode.dataset.kind = backend.kind;
+      heading.append(appElement("strong", backend.name), mode);
+      const fields = appElement("dl", "", "tool-backend-fields");
+      const rows = [["配置状态", toolBackendState(backend)]];
+      if (backend.origin || backend.kind === "api") rows.push(["服务地址", backend.origin || "未填写"]);
+      if (backend.model) rows.push(["模型", backend.model]);
+      if (!["package", "unknown"].includes(backend.kind)) rows.push(["凭据", toolBackendCredential(backend)]);
+      for (const [label, value] of rows) fields.append(appElement("dt", label), appElement("dd", value));
+      record.append(heading, fields);
+      if (backend.credential === "api_key" && backend.key_configured) {
+        if (backend.origin === "https://api.deepseek.com" && ["media-understanding", "web-search"].includes(tool.id) && showTitle) {
+          const balance = appElement("div", "", "tool-balance");
+          const button = appElement("button", "查询余额", "button compact secondary"); button.type = "button";
+          const result = appElement("span", "", "local-vision-note"); result.setAttribute("role", "status");
+          button.addEventListener("click", async () => {
+            button.disabled = true; result.textContent = "正在查询…";
+            try {
+              const reply = await request(`/api/local/project-tools/${encodeURIComponent(tool.id)}/balance`, { method: "POST", body: "{}" });
+              result.textContent = (reply.balance_infos || []).map((v) => `${v.total_balance} ${v.currency}`).join(" · ") || "未返回余额";
+            } catch (err) { result.textContent = err.message || "余额查询暂不可用"; }
+            finally { button.disabled = false; }
+          });
+          balance.append(button, result); record.append(balance);
+        } else if (showTitle && tool.id === "media-understanding" && /^https:\/\/([a-z0-9.-]+\.)?(aliyuncs\.com|maas\.aliyun\.com)$/.test(backend.origin || "")) {
+          record.append(aliyunBalanceControls());
+        } else record.append(appElement("p", "余额由服务商控制台提供", "local-vision-note"));
+      }
+      grid.append(record);
+    }
+    section.append(grid);
+    return section;
+  }
+  function aliyunBalanceControls() {
+    if (projectTools.aliyunBalance) return projectTools.aliyunBalance.section;
+    const route = "/api/local/project-tools/media-understanding/aliyun-balance";
+    const section = appElement("section", "", "aliyun-balance");
+    const details = appElement("details");
+    const heading = appElement("summary", "财务凭据");
+    const link = appElement("a", "阿里云费用中心");
+    link.href = "https://usercenter2.aliyun.com/home";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const save = appElement("button", "保存财务凭据", "button compact secondary");
+    const clear = appElement("button", "清除财务凭据", "button compact secondary");
+    for (const button of [save, clear]) button.type = "button";
+    const result = appElement("p", "正在读取阿里云账户余额…");
+    result.setAttribute("role", "status");
+    const id = document.createElement("input");
+    const secret = document.createElement("input");
+    id.autocomplete = "off";
+    id.spellcheck = false;
+    secret.type = "password";
+    secret.autocomplete = "new-password";
+    function field(label, input) {
+      const element = appElement("label", label);
+      element.append(input);
+      return element;
+    }
+    const editorActions = appElement("div", "", "tool-balance");
+    editorActions.append(save, clear);
+    details.append(heading, appElement("p", "使用获准查询账户余额的阿里云 RAM 凭据。", "local-vision-note"),
+      field("AccessKey ID", id), field("AccessKey Secret", secret), editorActions);
+    section.append(result, link, details);
+    let configured = false;
+    let pending = false;
+    function busy(value) {
+      pending = value;
+      save.disabled = value;
+      clear.disabled = value || !configured;
+    }
+    async function readBalance() {
+      result.textContent = "正在读取阿里云账户余额…";
+      const reply = await request(route, { method: "POST", body: "{}" });
+      result.textContent = `现金余额 ${reply.cash_balance} ${reply.currency} · 可用额度 ${reply.available_amount} ${reply.currency}`;
+    }
+    async function refresh() {
+      if (pending) return;
+      busy(true);
+      try {
+        const status = await request(route);
+        configured = status.configured === true;
+        if (configured) await readBalance();
+        else result.textContent = "展开「财务凭据」后可显示余额。";
+      } catch (err) { result.textContent = err.message || "余额暂不可读。"; }
+      finally { busy(false); }
+    }
+    async function update(clearCredential) {
+      if (!clearCredential && (!id.value.trim() || !secret.value.trim())) {
+        result.textContent = "请填写 AccessKey ID 和 AccessKey Secret。";
+        return;
+      }
+      busy(true);
+      try {
+        const body = clearCredential ? { clear: true } : { access_key_id: id.value.trim(), access_key_secret: secret.value.trim() };
+        const reply = await request(route, { method: "PUT", body: JSON.stringify(body) });
+        configured = reply.configured === true;
+        id.value = ""; secret.value = "";
+        if (configured) {
+          details.open = false;
+          try { await readBalance(); }
+          catch (err) { result.textContent = "财务凭据已保存。" + (err.message || "余额暂不可读。"); }
+        } else result.textContent = "财务凭据已清除。";
+      } catch (err) { result.textContent = err.message || "更新财务凭据失败。"; }
+      finally { busy(false); }
+    }
+    save.addEventListener("click", () => update(false));
+    clear.addEventListener("click", () => update(true));
+    projectTools.aliyunBalance = { section, refresh };
+    void refresh();
+    return section;
+  }
   function projectToolStatus(tool) {
+    if (tool?.external_package && !tool.installed) {
+      if (!tool.catalog_available) return ["工具包不可用", tool.reason || "请检查工具包清单。"];
+      return ["已发现，待安装", `版本 ${tool.package_version}。确认工具来源和权限后即可安装。`];
+    }
+    if (tool?.state === "not_available") return ["暂不可运行", tool.reason || "工具包没有可用的执行后端。"];
     if (!tool || !tool.installed && !tool.catalog_available) return ["未随当前发行包提供", "请安装包含此工具的 Windows 发行包。"];
     if (tool && tool.id === "obs-preview") {
       const preview = projectTools.obsPreview;
@@ -5936,7 +6141,7 @@
   }
   function normalizeDeployment(value, id = "comfyui") {
     const spec = deploymentDescriptor(id), source = value && typeof value === "object" ? value : {};
-    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", ffmpeg: "" };
+    const defaults = { runtime: "", python: "python_embeded/python.exe", entry: "ComfyUI/main.py", frontend: "python_embeded/Lib/site-packages/comfyui_frontend_package/static", manifest: "", models: "", workflows: "", custom_nodes: "", model_library: "", ffmpeg: "" };
     const text = (key) => typeof source[key] === "string" ? source[key] : defaults[key];
     const number = (key, fallback) => Object.hasOwn(source, key) && source[key] !== undefined && source[key] !== null ? source[key] : fallback;
     const configuration = {
@@ -5950,6 +6155,8 @@
       if (source.workflow_pins && typeof source.workflow_pins === "object" && !Array.isArray(source.workflow_pins)) configuration.workflow_pins = { ...source.workflow_pins };
       if (typeof source.ffmpeg_sha256 === "string" && source.ffmpeg_sha256) configuration.ffmpeg_sha256 = source.ffmpeg_sha256;
     }
+    if (id === "comfyui" && text("custom_nodes")) configuration.custom_nodes = text("custom_nodes");
+    if (id === "comfyui" && text("model_library")) configuration.model_library = text("model_library");
     return configuration;
   }
   function validateDeploymentDraft(draft, id) {
@@ -5964,7 +6171,7 @@
   }
   function normalizeLocalVision(configuration) {
     const value = configuration || {};
-    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "max" };
+    return { endpoint: String(value.endpoint || ""), model: String(value.model || ""), backend: value.backend === "deepseek" ? "deepseek" : "openai-compatible", max_tokens: value.max_tokens ?? 1024, thinking: value.thinking === true, reasoning_effort: ["low", "high", "max"].includes(value.reasoning_effort) ? value.reasoning_effort : "low" };
   }
   function validLocalVision(view) {
     return view && Number.isSafeInteger(view.revision) && view.revision >= 0 && view.configuration && typeof view.configuration === "object" && typeof view.key_configured === "boolean" && typeof view.ready === "boolean";
@@ -6032,7 +6239,7 @@
     const current = projectTools, vision = current.vision;
     const section = appElement("section", "", "local-vision-settings");
     const heading = appElement("div", "", "local-vision-heading");
-    heading.append(appElement("strong", "视觉观察"), appElement("span", vision.server?.ready ? "已配置 · 按需调用" : vision.server?.reason || "为本机大肥鱼单独配置视觉服务。"));
+    heading.append(appElement("strong", "工作站视觉 API 设置"), appElement("span", vision.server?.ready ? "已保存 · 按需调用" : "配置上游地址、视觉模型和 API Key。"));
     section.append(heading);
     if (vision.error) section.append(appElement("p", vision.error, "local-vision-error"));
     if (vision.notice) section.append(appElement("p", vision.notice, "local-vision-note"));
@@ -6044,9 +6251,9 @@
     const busy = vision.loading || vision.saving;
     const fields = [
       ["接口类型", "backend", { select: [["openai-compatible", "OpenAI 兼容"], ["deepseek", "DeepSeek"]] }],
-      ["视觉模型", "model", {}], ["接口地址", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
+      ["视觉模型", "model", {}], ["上游接口 URL", "endpoint", { type: "url", placeholder: "https://example.com/v1/chat/completions" }],
       ["输出上限", "max_tokens", { type: "number", min: 1, inputMode: "numeric" }],
-      ["思考强度", "reasoning_effort", { select: [["high", "高"], ["max", "最高"]] }]
+      ["思考强度", "reasoning_effort", { select: [["low", "低"], ["high", "高"], ["max", "最高"]] }]
     ];
     for (const [label, key, options] of fields) {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: busy || key === "reasoning_effort" && !draft.thinking });
@@ -6055,7 +6262,7 @@
       field.input.addEventListener("input", () => { draft[key] = field.input.value; vision.error = ""; vision.notice = ""; });
       form.append(field.label);
     }
-    const keyLabel = appElement("label", "服务密钥");
+    const keyLabel = appElement("label", "API Key");
     const key = document.createElement("input"); key.type = "password"; key.autocomplete = "new-password"; key.id = "local-vision-key";
     key.value = vision.apiKey; key.placeholder = vision.server.key_configured ? "已配置，留空保留" : "填写此服务的密钥"; key.disabled = busy || vision.clearKey;
     key.addEventListener("input", () => { vision.apiKey = key.value; }); keyLabel.append(key); form.append(keyLabel);
@@ -6229,6 +6436,8 @@
       [id === "yue" ? "审核清单（选填，留空由宿主生成）" : "审核清单", "manifest", { placeholder: id === "yue" ? "已有清单可填写；留空自动生成" : "相对安装目录或宿主私有绝对路径" }]
     ];
     if (id === "yue") fields.push(["FFmpeg 程序", "ffmpeg", { placeholder: "已审核的 ffmpeg.exe 绝对路径" }]);
+    if (id === "comfyui") fields.push(["自建节点目录", "custom_nodes", { placeholder: "留空禁用；启用时使用工作站 data/resources/comfyui/custom_nodes", pickDirectory: true, toolID: id }]);
+    if (id === "comfyui") fields.push(["有权限的外部模型库", "model_library", { placeholder: "例如 F:\\AI_Comfyui模型库；读取 image/video 下的模型", pickDirectory: true, toolID: id }]);
     fields.forEach(([label, key, options]) => {
       const field = comfyDeploymentField(label, key, draft, { ...options, disabled: fieldsDisabled });
       field.input.id = `${spec.prefix}-deployment-${key}`; field.label.htmlFor = field.input.id;
@@ -6322,7 +6531,7 @@
       section.append(appElement("span", "工具包可以先安装；管理员登记并核验本机语音后端和声线后才可启用。"));
       return section;
     }
-    section.append(appElement("span", "只使用宿主登记的本机语音后端和明确指定的声线；不会用默认声线替代。"));
+    section.append(appElement("span", "使用宿主登记的本机语音后端。未指定声线时选用已登记的默认声线。"));
     return section;
   }
   function renderStationSpeechVoices(tool) {
@@ -6335,7 +6544,7 @@
     }
     const list = appElement("div", "", "project-tool-voice-list");
     voices.forEach((voice) => {
-      const label = appElement("span", voice.label.trim(), "project-tool-voice");
+      const label = appElement("span", voice.label.trim() + (voice.default === true ? "（默认）" : ""), "project-tool-voice");
       label.title = voice.id.trim();
       list.append(label);
     });
@@ -6364,15 +6573,6 @@
     });
     section.append(form);
     return section;
-  }
-  function projectToolApprovalCopy(tool) {
-    if (tool?.id === "obs-preview") return "确认仅访问本机 OBS WebSocket";
-    if (tool?.id === "rvc") return "确认任务素材读写与本机 GPU";
-    if (tool?.id === "comfyui") return "确认任务成品写入与本机 GPU";
-    if (tool?.id === "yue") return "确认任务素材读写与本机 GPU";
-    if (tool?.id === "station-speech") return "确认本机语音成品写入与 GPU";
-    if (tool?.id === "audio-cpp") return "确认本机语音模型读取与成品写入";
-    return "确认本机素材读写";
   }
   function projectToolPDFNote(tool) {
     if (!tool || !tool.installed) return "安装后会检查 DOCX 导出 PDF 所需的本地环境。";
@@ -6543,7 +6743,7 @@
     } catch (error) {
       if (current !== projectTools || generation !== preview.generation) return;
       clearOBSPreview();
-      if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); return; }
+      if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); return; }
       current.obsPreview.error = error.message || "无法读取 OBS 预览状态。";
     } finally {
       if (current === projectTools && generation === preview.generation) { preview.loading = false; renderProjectTools(); scheduleOBSPreviewFrame(); }
@@ -6585,7 +6785,7 @@
       if (action === "start") projectToolsFeedback("正在显示 OBS 当前节目画面。");
     } catch (error) {
       if (current !== projectTools || generation !== preview.generation) return;
-      if (error.status === 401 || error.status === 403) { clearOBSPreview(); state.csrf = ""; showLogin(); return; }
+      if (error.status === 401 || error.status === 403) { clearOBSPreview(); state.csrf = ""; showConnection(); return; }
       preview.error = error.message || "OBS 预览操作未完成。";
       if (action === "stop" || action === "frame") { clearOBSPreview(); updateOBSPreviewPanel(); }
     } finally {
@@ -6676,17 +6876,123 @@
     }
     return panel;
   }
+  let toolFileOffset = 0, toolFilesLoading = false;
+  const selectedToolFiles = new Set();
+  function updateFileSelection(){ $("#tool-files-delete").disabled=toolFilesLoading||!selectedToolFiles.size; $("#tool-files-delete").textContent=`删除选中文件（${selectedToolFiles.size}）`; const boxes=[...$("#tool-files-list").querySelectorAll("input[type=checkbox]")]; $("#tool-files-select-all").checked=boxes.length>0&&boxes.every(x=>x.checked); $("#tool-files-select-all").indeterminate=boxes.some(x=>x.checked)&&!boxes.every(x=>x.checked); }
+  function selectToolPanel(panel) {
+    projectTools.panel = panel;
+    if (panel !== "files") projectTools.catalogPanel = panel;
+    $("#project-tool-tabs").hidden = panel === "files";
+    $("#tool-files-panel").hidden = panel !== "files";
+    $("#project-tools-list").hidden = panel !== "public";
+    $("#app-tools-panel").hidden = panel !== "applications";
+    $("#tool-files-tab").textContent = panel === "files" ? "返回工具列表" : "工具缓存与产物";
+    $("#tool-files-tab").setAttribute("aria-expanded", String(panel === "files"));
+    for (const [id, selected] of [["tool-catalog-tab", panel === "public"], ["app-tools-tab", panel === "applications"]]) {
+      $("#" + id).setAttribute("aria-selected", String(selected)); $("#" + id).tabIndex = selected ? 0 : -1;
+    }
+    refreshProjectToolsPanel();
+  }
+  function refreshProjectToolsPanel() {
+    if (projectTools.panel === "files") return loadToolFiles(false);
+    if (projectTools.panel === "applications") return loadApplicationTools();
+    return loadProjectTools();
+  }
+  async function loadApplicationTools() {
+    const current = projectTools, panel = $("#app-tools-panel");
+    if (current.appToolsLoading || !state.home?.initialized) return;
+    current.appToolsLoading = true;
+    panel.setAttribute("aria-busy", "true");
+    $("#project-tools-refresh").disabled = true;
+    if (!panel.childElementCount) panel.append(appElement("p", "正在读取应用工具…", "project-tools-empty"));
+    const labels = {
+      wechat: ["会话与消息读取", "文字、图片、语音、视频和文件收发", "通讯录与群管理", "视频号账号内解析"],
+      douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
+      bilibili: ["稿件与评论读取", "账号授权与视频发布"]
+    };
+    const wechatLabels = { "share-reader": "微信分享解析", "music": "微信音乐与投递" };
+    try {
+      const [catalog, config] = await Promise.allSettled([request("/api/local/apps/catalog"), request("/api/local/project-tools/applications")]);
+      if (current !== projectTools) return;
+      if (catalog.status === "rejected") throw catalog.reason;
+      const cards = (catalog.value.applications || []).map((app) => {
+        const card = appElement("article", "", "app-tool-group");
+        const head = appElement("div", "", "app-tool-group-heading");
+        const manage = appElement("button", ["wechat", "douyin", "bilibili"].includes(app.id) ? "打开工作台" : "应用中心", "button compact secondary");
+        manage.type = "button";
+        manage.setAttribute("aria-label", ["wechat", "douyin", "bilibili"].includes(app.id) ? `打开${app.name || app.id}工作台` : `在应用中心管理${app.name || app.id}工具`);
+        manage.addEventListener("click", () => {
+          if (app.id === "wechat") openLegacyWechatConsole();
+          else if (app.id === "douyin" || app.id === "bilibili") openApplicationWorkbench(app.id);
+          else { setActiveView("apps"); $("#apps-tab").focus(); }
+        });
+        head.append(appElement("h3", app.name || app.id), manage);
+        const capabilities = appElement("ul", "", "app-tool-capabilities");
+        for (const label of labels[app.id] || []) capabilities.append(appElement("li", label));
+        card.append(head, capabilities);
+        if (app.id === "wechat" && config.status === "fulfilled") {
+          for (const live of config.value.wechat || []) {
+            if (!wechatLabels[live.id] || !live.backends?.length) continue;
+            const detail = appElement("details", "", "app-tool-settings-summary");
+            detail.append(appElement("summary", wechatLabels[live.id]), toolBackendDetails(live, false));
+            card.append(detail);
+          }
+        }
+        if (app.id === "wechat") {
+          if (config.status === "rejected") card.append(appElement("p", "微信独有工具状态暂不可读；公共工具请在“公共工具”标签管理。", "local-vision-note"));
+          else if (!config.value.wechat?.length) card.append(appElement("p", "微信当前没有独有工具；文档工坊、分享读取、媒体理解、音乐等公共工具请在“公共工具”标签管理。", "local-vision-note"));
+        }
+        return card;
+      });
+      panel.replaceChildren(...(cards.length ? cards : [appElement("p", "没有可显示的应用工具。", "project-tools-empty")]));
+    } catch (error) {
+      if (current === projectTools) panel.replaceChildren(appElement("p", error.message, "project-tools-empty"));
+    } finally {
+      if (current === projectTools) {
+        current.appToolsLoading = false;
+        panel.setAttribute("aria-busy", "false");
+        if (current.panel === "applications") $("#project-tools-refresh").disabled = false;
+      }
+    }
+  }
+  async function loadToolFiles(append) {
+    if (toolFilesLoading) return; toolFilesLoading = true;
+    const status = $("#tool-files-status"), list = $("#tool-files-list");
+    $("#tool-files-refresh").disabled = true; $("#tool-files-more").disabled = true; status.textContent = "正在读取本机文件…";
+    try {
+      const params = new URLSearchParams({ q: $("#tool-files-query").value, kind: $("#tool-files-kind").value, offset: String(append ? toolFileOffset : 0), limit: "100" });
+      const data = await request("/api/local/tool-files?" + params);
+      if (!append) {list.replaceChildren();selectedToolFiles.clear();}
+      for (const file of data.files) {
+        const row = appElement("article", "", "tool-file-row");
+        const selection=document.createElement("input"); selection.type="checkbox"; selection.className="tool-file-check"; selection.dataset.fileId=file.id; selection.setAttribute("aria-label","选择 "+file.name);
+        selection.addEventListener("change",()=>{if(selection.checked)selectedToolFiles.add(file.id);else selectedToolFiles.delete(file.id);row.classList.toggle("is-selected",selection.checked);updateFileSelection();});row.append(selection);
+        const content=appElement("div","","tool-file-content");
+        const heading=appElement("div","","tool-file-heading");heading.append(appElement("strong",file.name),appElement("span",`${file.kind} · ${(file.bytes/1048576).toFixed(2)} MB · ${new Date(file.modified).toLocaleString()}`,"tool-file-meta"));content.append(heading);
+        const source=appElement("p",`来源：${file.source}`,"tool-file-source");source.title=file.source;content.append(source);
+        if(file.job_id)content.append(appElement("p",`任务：${file.job_id}${file.state ? " · "+file.state : ""}`,"tool-file-meta"));
+        const storedName=file.path.split(/[\\/]/).pop();
+        if(storedName!==file.name)content.append(appElement("p",`磁盘文件名：${storedName}（按内容哈希存储，原始名称如上）`,"tool-file-meta"));
+        content.append(appElement("p",file.path,"tool-file-path"));row.append(content);
+        const open=appElement("button","定位文件","button compact secondary tool-file-locate");open.type="button";open.title="在文件资源管理器中选中实际文件";
+        open.addEventListener("click",async()=>{open.disabled=true;try{await request("/api/local/tool-files/open",{method:"POST",body:JSON.stringify({id:file.id})});}catch(error){status.textContent=error.message;}finally{open.disabled=false;}});
+        row.append(open);list.append(row);
+      }
+      toolFileOffset = data.next_offset; $("#tool-files-more").hidden = toolFileOffset < 0;
+      status.textContent = `${data.total} 个文件 · ${(data.bytes / 1073741824).toFixed(2)} GB。仅显示正式素材与产物；任务临时文件不在此列。${data.warnings.length ? "部分目录不可读，清单不完整。" : ""}`;
+    } catch(error) {status.textContent=error.message;} finally {toolFilesLoading=false;$("#tool-files-refresh").disabled=false;$("#tool-files-more").disabled=false;updateFileSelection();}
+  }
   function renderProjectTools() {
     const list = $("#project-tools-list"), current = projectTools;
     list.setAttribute("aria-busy", String(current.loading || Boolean(current.applying)));
     $("#project-tools-refresh").disabled = current.loading || Boolean(current.applying);
-    $("#project-tools-refresh").textContent = current.loading ? "刷新中…" : "刷新";
+    $("#project-tools-refresh").textContent = current.loading ? "扫描中…" : "扫描 / 重载";
     if (current.loading && !current.tools.length) {
-      list.replaceChildren(appElement("p", "正在读取项目工具…", "project-tools-empty"));
+      list.replaceChildren(appElement("p", "正在扫描公共工具目录…", "project-tools-empty"));
       return;
     }
     if (!current.tools.length) {
-      list.replaceChildren(appElement("p", "当前没有可管理的项目工具。", "project-tools-empty"));
+      list.replaceChildren(appElement("p", "公共工具目录中没有可显示的工具包。", "project-tools-empty"));
       return;
     }
     list.replaceChildren(...current.tools.map((tool) => {
@@ -6698,7 +7004,9 @@
       const mark = appElement("span", (tool.name || "工").slice(0, 1), "project-tool-mark");
       mark.setAttribute("aria-hidden", "true");
       heading.append(mark, appElement("strong", tool.name || tool.id));
-      card.append(heading, appElement("span", status, "tool-card-status"), appElement("span", "设置与资源", "tool-card-link"));
+      card.append(heading, appElement("span", status, "tool-card-status"));
+      if (tool.backends?.length) card.append(toolCardBackends(tool));
+      card.append(appElement("span", "设置与资源", "tool-card-link"));
       card.addEventListener("click", () => {
         if (current.openID === "obs-preview") invalidateOBSDeploymentView(current);
         current.openID = tool.id; renderProjectToolDialog(tool);
@@ -6742,9 +7050,10 @@
       const [status, note] = projectToolStatus(tool);
       const detail = appElement("div", "", "project-tool-detail");
       const summary = appElement("div", "", "project-tool-permissions");
-      summary.append(appElement("strong", status));
-      if (note && tool.id !== "obs-preview") summary.append(appElement("span", note));
+      summary.append(appElement("strong", `运行状态 · ${status}`));
+      if (note && tool.id !== "obs-preview" && tool.id !== "media-understanding") summary.append(appElement("span", note));
       detail.append(summary);
+      if (tool.backends?.length) detail.append(toolBackendDetails(tool));
       if (tool.id === "media-understanding" && tool.installed) detail.append(renderLocalVision(tool));
       if (tool.id === "audio-workshop") {
         const scope = appElement("div", "", "project-tool-permissions");
@@ -6794,16 +7103,8 @@
       const controls = appElement("div", "", "project-tool-actions");
       const busy = current.applying === tool.id;
       const controlsDisabled = current.loading || Boolean(current.applying);
-      const canInstall = tool.runtime_ready || tool.id === "comfyui" || tool.id === "yue" || tool.id === "station-speech" || tool.id === "audio-cpp" || tool.id === "obs-preview";
       if (!tool.installed) {
-        const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-        approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !tool.catalog_available || !canInstall;
-        approval.append(checkbox, copy);
-        const install = appElement("button", busy ? "正在安装…" : tool.id === "obs-preview" ? "安装预览工具" : "安装", "button compact primary");
-        install.type = "button"; install.disabled = true;
-        checkbox.addEventListener("change", () => { install.disabled = checkbox.disabled || !checkbox.checked; });
-        install.addEventListener("click", () => updateProjectTool(tool, "install", checkbox.checked));
-        controls.append(approval, install);
+        controls.append(appElement("span", tool.reason || "工具包会在扫描目录时自动登记。", "project-tool-update-note"));
       } else {
         const action = tool.enabled ? "disable" : "enable";
         const button = appElement("button", busy ? "正在处理…" : (tool.enabled ? "停用" : "启用"), tool.enabled ? "button compact secondary" : "button compact primary");
@@ -6811,25 +7112,16 @@
         button.type = "button"; button.disabled = controlsDisabled || (action === "enable" && !ready);
         button.addEventListener("click", () => updateProjectTool(tool, action, false));
         controls.append(button);
-        if (tool.id === "audio-cpp" && tool.enabled) {
-          const restart = appElement("button", busy ? "正在处理…" : "重启服务", "button compact secondary");
-          restart.type = "button"; restart.disabled = controlsDisabled;
-          restart.addEventListener("click", () => updateProjectTool(tool, "restart", false));
-          controls.append(restart);
-        }
-        if (tool.update_available) {
-          if (tool.enabled) {
-            controls.append(appElement("span", "请先停用，再更新到新版本。", "project-tool-update-note"));
-          } else {
-            const approval = document.createElement("label"), checkbox = document.createElement("input"), copy = appElement("span", projectToolApprovalCopy(tool));
-            approval.className = "project-tool-approval"; checkbox.type = "checkbox"; checkbox.disabled = controlsDisabled || !canInstall;
-            approval.append(checkbox, copy);
-            const upgrade = appElement("button", busy ? "正在更新…" : "更新", "button compact secondary");
-            upgrade.type = "button"; upgrade.disabled = true;
-            checkbox.addEventListener("change", () => { upgrade.disabled = checkbox.disabled || !checkbox.checked; });
-            upgrade.addEventListener("click", () => updateProjectTool(tool, "upgrade", checkbox.checked));
-            controls.append(approval, upgrade);
+        if (tool.enabled) {
+          for (const [action, label] of [["start", "启动"], ["stop", "停止"], ["restart", "重启"]]) {
+            const control = appElement("button", label, "button compact secondary");
+            control.type = "button"; control.disabled = controlsDisabled || (action !== "stop" && !tool.runtime_ready);
+            control.addEventListener("click", () => updateProjectTool(tool, action, false)); controls.append(control);
           }
+        }
+        if (tool.update_available || tool.reason) {
+          const guidance = tool.reason || "新版工具包将在扫描目录时重载。";
+          controls.append(appElement("span", projectToolReason(tool) || guidance, "project-tool-update-note"));
         }
       }
       detail.append(controls); card.append(detail); return card;
@@ -6842,7 +7134,7 @@
     try {
       const payload = await request("/api/local/project-tools");
       if (current !== projectTools) return;
-      current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string") : [];
+      current.tools = Array.isArray(payload.tools) ? payload.tools.filter((tool) => tool && typeof tool.id === "string" && tool.directory_package === true) : [];
       const obs = current.tools.find((tool) => tool.id === "obs-preview");
       if (obs?.obs_preview) applyOBSPreview(obs.obs_preview);
       if (obs?.installed) await loadOBSPreview(current);
@@ -6858,7 +7150,7 @@
     if (current.loading || current.applying || !tool || !/^[a-z0-9-]+$/.test(tool.id)) return;
     current.applying = tool.id; projectToolsFeedback(""); renderProjectTools();
     try {
-      const result = await request("/api/local/project-tools/" + encodeURIComponent(tool.id), { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts) }) });
+      const result = await request("/api/local/project-tools/" + encodeURIComponent(tool.id), { method: "PUT", body: JSON.stringify({ action, revision: Number(tool.revision || 0), approve_artifacts: Boolean(approveArtifacts), package_digest: tool.package_digest || "" }) });
       if (current !== projectTools) return;
       const updated = result && result.tool;
       if (updated && typeof updated.id === "string") current.tools = current.tools.map((item) => item.id === updated.id ? updated : item);
@@ -6949,7 +7241,7 @@
       }
     }
   }
-  function showLogin() {
+  function showConnection() {
     window.clearTimeout(liveSafety.timer);
     liveSafety.reading?.abort();
     liveSafety = newLiveSafety();
@@ -6978,11 +7270,11 @@
     projectToolsFeedback("");
     setActiveView("chat");
     document.body.classList.remove("is-home-ready");
-    localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; loginView.hidden = false; $("#login-password").value = "";
+    localWorkspace.hidden = true; $("#local-tabs").hidden = true; $(".rail-brand").hidden = true; homeView.hidden = true; connectionView.hidden = false;
   }
   function shortId(id, fallback) { const value = String(id || ""); return value ? `${value.slice(0, 11)}…${value.slice(-6)}` : fallback; }
   function showHome(home) {
-    state.home = home; loginView.hidden = true; homeView.hidden = false;
+    state.home = home; connectionView.hidden = true; homeView.hidden = false;
     const initialized = Boolean(home.initialized), enabled = Boolean(home.home_access), chatAvailable = home.chat_available !== false;
     $("#status-kicker").textContent = initialized ? "本地相处" : "准备中";
     $("#status-title").textContent = initialized ? "大肥鱼在家" : "为大肥鱼准备家";
@@ -7014,7 +7306,7 @@
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
       if (activeView === "chat") void loadRecentMemory();
-      await Promise.all([loadModel(state.model === null), loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
+      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   // General capabilities are the owner's to hand over. The list is explicit so
@@ -7072,6 +7364,8 @@
     $("#model-name").value = source.model || "deepseek-flash";
     $("#model-max-tokens").value = String(source.max_tokens || 4096);
     $("#model-thinking").checked = source.thinking_enabled !== false;
+    $("#model-task-reasoning").value = source.task_reasoning || "auto";
+    $("#model-direct-media").checked = !!source.direct_media_input;
     $("#model-reasoning").value = ["high", "max"].includes(source.reasoning_effort) ? source.reasoning_effort : "max";
     $("#model-reasoning").disabled = !$("#model-thinking").checked;
     $("#model-persona").value = source.persona || "";
@@ -7250,8 +7544,16 @@
   async function loadSession() {
     try {
       const session = await request("/api/session"); state.csrf = String(session.csrf || session.csrf_token || "");
-      if (!authenticated(session)) { showLogin(); return; } await loadHome();
-    } catch (error) { if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); return; } showLogin(); showMessage("暂时无法连接本机服务，请稍后再试。", "error"); }
+      if (!authenticated(session)) { showConnection(); return; }
+      if (standaloneWorkbenchApp) activeView = "apps";
+      await loadHome();
+      if (standaloneWorkbenchApp && state.home?.initialized) {
+        apps.openID = standaloneWorkbenchApp;
+        $("#app-configuration-close").textContent = "关闭工作台";
+        openAppConfiguration("overview");
+        if (!$("#app-configuration").open) showMessage("应用工作台暂时无法读取，请稍后刷新。", "error");
+      }
+    } catch (error) { if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); return; } showConnection(); showMessage("暂时无法连接本机服务，请稍后再试。", "error"); }
   }
   async function saveHome(action) {
     if (state.busy || !state.home) return; setBusy(true); showMessage("");
@@ -7261,13 +7563,13 @@
       showMessage(action === "initialize" ? "大肥鱼的家已经准备好。" : "工作空间授权已更新。", "success");
     } catch (error) {
       if (error.status === 409) { try { await loadHome(); } catch (_) {} showMessage("状态已经更新，已刷新当前信息。", "warn"); }
-      else if (error.status === 401 || error.status === 403) { state.csrf = ""; showLogin(); showMessage("登录状态已失效，请重新验证。", "warn"); }
+      else if (error.status === 401 || error.status === 403) { state.csrf = ""; showConnection(); showMessage("本机连接暂时不可用，请重试。", "warn"); }
       else showMessage(error.message || responseMessage(error.status), "error");
     } finally { setBusy(false); }
   }
   async function saveModel(event) {
     event.preventDefault();
-    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
+    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
     const button = $("#model-save"); button.disabled = true;
     try {
       state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model);
@@ -7285,20 +7587,10 @@
       else showMessage(error.message || responseMessage(error.status), "error");
     } finally { button.disabled = false; }
   }
-  async function logout() {
-    if (state.busy) return; setBusy(true);
-    try { await request("/api/logout", { method: "POST" }); state.csrf = ""; showLogin(); showMessage("已退出登录。", "success"); }
-    catch (_) { showMessage("退出登录未完成，请重试。", "error"); } finally { setBusy(false); }
-  }
-  $("#login-form").addEventListener("submit", async (event) => {
-    event.preventDefault(); if (state.busy) return; setBusy(true); showMessage("");
-    try { const session = await request("/api/login", { method: "POST", body: JSON.stringify({ password: $("#login-password").value }) }); state.csrf = String(session.csrf || session.csrf_token || ""); await loadHome(); showMessage("验证完成。", "success"); }
-    catch (error) { showMessage(error.status === 401 || error.status === 403 ? "密码不正确，请重新输入。" : (error.message || responseMessage(error.status)), "error"); } finally { setBusy(false); }
-  });
+  $("#connection-retry").addEventListener("click", loadSession);
   initializeButton.addEventListener("click", () => saveHome("initialize"));
   accessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
   settingsAccessButton.addEventListener("click", () => saveHome(state.home && state.home.home_access ? "pause" : "authorize"));
-  logoutButton.addEventListener("click", logout); settingsLogoutButton.addEventListener("click", logout); $("#local-logout-button").addEventListener("click", logout);
   $("#open-memory-button").addEventListener("click", () => { setActiveView("memory"); $("#memory-tab").focus(); });
   $("#memory-source-load").addEventListener("click", () => void loadMemorySources());
   $("#memory-source").addEventListener("change", (event) => {
@@ -7335,11 +7627,24 @@
   }
   $("#apps-refresh").addEventListener("click", () => { appFeedback(""); loadApps(); });
   $("#app-dialog-refresh").addEventListener("click", () => { clearWechatRelocation(apps); appFeedback(""); loadApps(); });
-  $("#tool-dialog-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); if (projectTools.openID === "media-understanding") void loadLocalVision(); if (deploymentDescriptor(projectTools.openID)) void loadDeployment(projectTools.openID); if (projectTools.openID === "obs-preview") void loadOBSDeployment(projectTools, true); });
+  $("#tool-dialog-refresh").addEventListener("click", () => {
+    projectToolsFeedback("");
+    loadProjectTools();
+    const id = projectTools.openID;
+    if (id === "media-understanding") {
+      void loadLocalVision();
+      void projectTools.aliyunBalance?.refresh();
+    }
+    if (deploymentDescriptor(id)) void loadDeployment(id);
+    if (id === "obs-preview") void loadOBSDeployment(projectTools, true);
+  });
   $("#tool-dialog-close").addEventListener("click", () => $("#tool-dialog").close());
   $("#tool-dialog").addEventListener("close", () => {
     const id = projectTools.openID;
-    if (id === "media-understanding") { projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false; }
+    if (id === "media-understanding") {
+      projectTools.vision.generation += 1; projectTools.vision.loading = false; projectTools.vision.saving = false;
+      projectTools.aliyunBalance = null;
+    }
     const spec = deploymentDescriptor(id);
     if (spec) { projectTools[spec.state].generation += 1; projectTools[spec.state].approved = false; }
     if (id === "obs-preview") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
@@ -7351,7 +7656,14 @@
     if (opener && activeView === "project-tools") opener.focus({ preventScroll: true });
   });
   $("#app-configuration-open").addEventListener("click", openAppConfiguration);
-  $("#app-configuration-close").addEventListener("click", () => $("#app-configuration").close());
+  $("#app-configuration-close").addEventListener("click", () => {
+    if (standaloneWorkbenchApp && window.chrome?.webview) {
+      window.chrome.webview.postMessage({ type: "application-workbench-close" });
+      return;
+    }
+    if (standaloneWorkbenchApp) { window.location.href = "/"; return; }
+    $("#app-configuration").close();
+  });
   $("#app-configuration-refresh").addEventListener("click", async () => {
     const view = appConfiguration;
     if (!view) return;
@@ -7360,21 +7672,36 @@
   });
   $("#app-configuration").addEventListener("close", () => {
     if ($("#app-configuration").open) return;
+    document.body.classList.remove("standalone-workbench");
+    if (standaloneWorkbenchApp && state.home?.initialized) {
+      if (window.chrome?.webview) window.chrome.webview.postMessage({ type: "application-workbench-close" });
+      else window.location.href = "/";
+      return;
+    }
     const closed = appConfiguration;
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
-    $("#app-configuration").classList.remove("wechat-legacy-skin");
+    $("#app-configuration").classList.remove("wechat-legacy-skin", "douyin-workbench-skin");
     stopAppConfigurationReads();
     $("#app-configuration-body").replaceChildren();
     renderLiveSafety();
-    if (activeView === "apps" && $("#app-dialog").open) {
-      renderApps();
-      $("#app-dialog-body").scrollTop = closed?.returnScroll || 0;
-      const shortcut = closed?.returnSection && $("#app-dialog-body").querySelector('[data-configuration-section="' + CSS.escape(closed.returnSection) + '"]');
-      (shortcut || (closed?.returnFocus?.isConnected && closed.returnFocus) || $("#app-configuration-open")).focus({ preventScroll: true });
+    if (activeView === "apps") {
+      if ($("#app-dialog").open) {
+        renderApps();
+        $("#app-dialog-body").scrollTop = closed?.returnScroll || 0;
+        const shortcut = closed?.returnSection && $("#app-dialog-body").querySelector('[data-configuration-section="' + CSS.escape(closed.returnSection) + '"]');
+        (shortcut || (closed?.returnFocus?.isConnected && closed.returnFocus) || $("#app-configuration-open")).focus({ preventScroll: true });
+      } else {
+        const opener = closed?.record.id;
+        apps.openID = "";
+        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+        renderApps(false);
+        const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
+        (button || $("#apps-search")).focus({ preventScroll: true });
+      }
     }
   });
   $("#app-dialog-close").addEventListener("click", () => $("#app-dialog").close());
@@ -7393,7 +7720,33 @@
       (button || $("#apps-search")).focus({ preventScroll: true });
     }
   });
-  $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); loadProjectTools(); });
+  $("#tool-files-select-all").addEventListener("change",()=>{for(const box of $("#tool-files-list").querySelectorAll("input[type=checkbox]")){box.checked=$("#tool-files-select-all").checked;box.closest(".tool-file-row").classList.toggle("is-selected",box.checked);if(box.checked)selectedToolFiles.add(box.dataset.fileId);else selectedToolFiles.delete(box.dataset.fileId);}updateFileSelection();});
+  $("#tool-files-delete").addEventListener("click", async()=>{
+    if(!selectedToolFiles.size)return;
+    const ids=[...selectedToolFiles];$("#tool-files-delete").disabled=true;
+    try{
+      const preview=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids,preview:true})});
+      if(!window.confirm(`永久删除选中的资源及关联文件，共 ${preview.files.length} 个文件？\n素材索引和任务输出引用也会清理，此操作不可恢复。\n\n${preview.files.join("\n")}`))return;
+      const result=await request("/api/local/tool-files/delete",{method:"POST",body:JSON.stringify({ids})});
+      await loadToolFiles(false);$("#tool-files-status").textContent=`已永久删除 ${result.deleted.length} 个文件。${result.failures.length ? "未删除："+result.failures.join("；") : "关联索引已更新。"}`;
+    }catch(error){$("#tool-files-status").textContent=error.message;}finally{updateFileSelection();}
+  });
+  $("#tool-files-tab").addEventListener("click", () => selectToolPanel(projectTools.panel === "files" ? projectTools.catalogPanel : "files"));
+  for (const [id, panel] of [["tool-catalog-tab", "public"], ["app-tools-tab", "applications"]]) {
+    const tab = $("#" + id);
+    tab.addEventListener("click", () => selectToolPanel(panel));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "public" : event.key === "End" ? "applications" : panel === "public" ? "applications" : "public";
+      selectToolPanel(next);
+      $(next === "public" ? "#tool-catalog-tab" : "#app-tools-tab").focus();
+    });
+  }
+  $("#tool-files-refresh").addEventListener("click", () => loadToolFiles(false));
+  $("#tool-files-more").addEventListener("click", () => loadToolFiles(true));
+  $("#tool-files-query").addEventListener("keydown", (event) => { if (event.key === "Enter") loadToolFiles(false); });
+  $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); refreshProjectToolsPanel(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel);
   $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
@@ -7432,6 +7785,16 @@
   if (window.chrome?.webview) {
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
+      if (value.type === "open-public-tools") { setActiveView("project-tools"); selectToolPanel("public"); return; }
+      if (value.type === "share-reader-auth-result") {
+        if (value.ok === true) {
+          appFeedback(value.message || "登录凭据已保存。");
+          if (appConfiguration?.record?.id === "wechat") renderAppConfiguration();
+        } else if (value.message) {
+          appFeedback(value.message, true);
+        }
+        return;
+      }
       if (value.type === "project-directory-picker-result") {
         const pending = pendingDirectoryPickers.get(String(value.request_id || ""));
         if (!pending) return;

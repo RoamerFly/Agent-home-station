@@ -51,6 +51,30 @@ func TestLocalTTSRegistrationRejectsPrivateRuntimeMounts(t *testing.T) {
 	}
 }
 
+func TestLocalTTSVoiceFilesCanLiveInStationData(t *testing.T) {
+	dataDir, editableRoot, executableDir, registration := localTTSRegistrationFixture(t)
+	voice := &registration.Voices[0]
+	destination := filepath.Join(dataDir, "voices", "station-speech", voice.ID)
+	if err := os.MkdirAll(destination, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []*string{&voice.GPT, &voice.SoVITS, &voice.Reference, &voice.Prompt} {
+		data, err := os.ReadFile(*field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(destination, filepath.Base(*field))
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		*field = path
+	}
+	localTTSWriteRegistration(t, dataDir, registration)
+	if _, err := newLocalTTSBackendAt(dataDir, editableRoot, executableDir).Info(context.Background(), localTTSFixtureFishID()); err != nil {
+		t.Fatalf("private voice in station data: %v", err)
+	}
+}
+
 func localTTSFixtureFishID() string { return "fish-" + strings.Repeat("a", 48) }
 
 func TestLocalTTSRequestLimitsAndCanonicalPrompt(t *testing.T) {
@@ -102,7 +126,7 @@ func TestLocalTTSRealWindowsLPACSyntheticRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"windows_agent_host.pyw", "windows_lpac.py"} {
+	for _, name := range []string{"windows_agent_host.pyw", "windows_lpac.py", "windows_speech_compat.py"} {
 		data, readErr := os.ReadFile(filepath.Join(scripts, name))
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -162,7 +186,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 	if err := os.MkdirAll(broker, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"windows_agent_host.pyw", "windows_lpac.py"} {
+	for _, name := range []string{"windows_agent_host.pyw", "windows_lpac.py", "windows_speech_compat.py"} {
 		contents, readErr := os.ReadFile(filepath.Join(scripts, name))
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -171,7 +195,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 			t.Fatal(writeErr)
 		}
 	}
-	runner := filepath.Join(filepath.Dir(registration.Runner), "synthetic_runner.py")
+	runner := filepath.Join(filepath.Dir(registration.Runner), "gpt_sovits.py")
 	if err := os.WriteFile(runner, []byte(localTTSSyntheticRunner), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +203,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 	registration.RunnerSHA256 = localTTSFileSHA(runner)
 	localTTSWriteRegistration(t, dataDir, registration)
 	backend := newLocalTTSBackendAt(dataDir, editableRoot, executableDir)
+	spool := filepath.Join(stationToolPrivateDir(dataDir, "speech"), "spool")
 	fish := localTTSFixtureFishID()
 	info, err := backend.Info(context.Background(), fish)
 	if err != nil {
@@ -187,7 +212,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 	request := localTTSRequest{VoiceID: registration.Voices[0].ID, Text: "离线合成夹具。"}
 	result, err := backend.Synthesize(context.Background(), fish, info.Binding, request)
 	if err != nil {
-		t.Fatalf("real LPAC synthetic synthesis: %v (broker=%s)", err, localTTSLPACDetails(filepath.Join(dataDir, "station-speech-spool")))
+		t.Fatalf("real LPAC synthetic synthesis: %v (broker=%s)", err, localTTSLPACDetails(spool))
 	}
 	if result.VoiceID != request.VoiceID || result.Version != info.Voices[0].Version || result.Speed != 1 || len(result.WAV) <= 64<<10 {
 		t.Fatalf("unexpected synthesis result: %#v bytes=%d", result, len(result.WAV))
@@ -196,7 +221,7 @@ func TestLocalTTSSynthesizeThroughRealWindowsLPAC(t *testing.T) {
 	if err != nil || rate != 16000 || seconds != 3 {
 		t.Fatalf("synthetic WAV: rate=%d seconds=%v err=%v", rate, seconds, err)
 	}
-	if files, err := os.ReadDir(filepath.Join(dataDir, "station-speech-spool")); err != nil || len(files) != 0 {
+	if files, err := os.ReadDir(spool); err != nil || len(files) != 0 {
 		t.Fatalf("completed synthesis retained plaintext broker spool: %d files, %v", len(files), err)
 	}
 }
@@ -229,6 +254,7 @@ func localTTSCopyTree(source, target string) error {
 }
 
 const localTTSSyntheticRunner = `import argparse, hashlib, json, pathlib, struct, wave
+import asyncio
 p = argparse.ArgumentParser()
 for name in ('project','models','gpt','sovits','reference','prompt-text-file','text','text-lang','prompt-lang','device','version','parameters','output'):
     p.add_argument('--' + name, required=True)

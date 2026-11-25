@@ -14,7 +14,7 @@ import (
 )
 
 func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxnative.Message) (string, error) {
-	if !a.manager.Config().Behavior.ReadVideos {
+	if !a.manager.Config().Behavior.ReadVideos && (m.AppMessageType == nil || *m.AppMessageType != 5) {
 		return "", errors.New("media_understanding_disabled")
 	}
 	if m.Link == nil || m.Link.URL == "" || m.AccountID != a.manager.native.Account() {

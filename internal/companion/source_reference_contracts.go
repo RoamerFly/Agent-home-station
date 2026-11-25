@@ -65,7 +65,7 @@ func (e *Engine) currentReferenceRoles(ctx context.Context, in Input, d Decision
 		if !item.Active {
 			continue
 		}
-		roles = append(roles, map[string]any{"message_index": i, "request_actor_id": in.Sender, "focus": item.Focus, "event_id": item.Source.EventID, "source_revision": item.Source.Revision, "established_event_participant_ids": item.EstablishedParticipantIDs, "target_roles": item.TargetRoles, "reporter_role_does_not_establish_participation_or_personal_experience": true, "instruction": "Respond about the explicitly sourced third party or ask an open clarification. Do not make the reporting/quoting target a participant or invent their sensations, setting or feelings."})
+		roles = append(roles, map[string]any{"message_index": i, "request_actor_id": in.Sender, "focus": item.Focus, "event_id": item.Source.EventID, "source_revision": item.Source.Revision, "established_event_participant_ids": item.EstablishedParticipantIDs, "target_roles": item.TargetRoles, "reporter_role_does_not_establish_participation_or_personal_experience": true, "instruction": "Describe the sourced third party as reported; ask an open question for missing participation details."})
 	}
 	return roles
 }

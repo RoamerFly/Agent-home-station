@@ -40,7 +40,7 @@ func TestLegacyManagementReceiptImportIsLocalAndSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 	host, home := filepath.Join(base, "host"), filepath.Join(base, "home")
-	app := filepath.Join(host, "apps", "wechat")
+	app := filepath.Join(host, "applications", "wechat")
 	native := filepath.Join(app, "native")
 	mustWriteSnapshotFixture(t, filepath.Join(native, "api-token"), []byte("synthetic-legacy-native-token"))
 	config, err := json.Marshal(legacyImportSource{Root: snapshot, LegacyHostRoot: legacy, Primary: fixture.primary, Stopped: true, ManifestDigest: preview.ManifestDigest})
@@ -244,7 +244,7 @@ func exerciseLegacySurfSupplement(t *testing.T, f *localHomeFixture, legacy, ori
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustWriteSnapshotFixture(t, filepath.Join(f.dir, "apps", "wechat", legacySurfSourceFile), source)
+	mustWriteSnapshotFixture(t, filepath.Join(f.dir, "applications", "wechat", legacySurfSourceFile), source)
 	got := req("GET", primary+"/surf", 200)
 	configuration := got["settings"].(map[string]any)
 	if got["schedule"] != "paused" || got["history_available"] != true || configuration["enabled"] != true || configuration["interval_max_minutes"] != float64(90) {

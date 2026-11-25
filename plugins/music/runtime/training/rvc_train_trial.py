@@ -10,6 +10,7 @@ from pathlib import Path
 import random
 import shutil
 import hashlib
+import stat
 
 
 def checkpoint_digest(path):
@@ -68,7 +69,8 @@ def training_layout(project):
 def create_shadow(source, destination):
     """Keep all mutable training state private; reuse only read-only assets."""
     source, destination = training_path(source), training_path(destination)
-    if not source.is_dir() or source.is_symlink() or (os.name == 'nt' and source.is_junction()):
+    if (not source.is_dir() or source.is_symlink()
+            or (os.name == 'nt' and source.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
         raise ValueError('training_source_directory_required')
     if destination.exists():
         raise ValueError('training_shadow_destination_must_be_new')
@@ -101,12 +103,36 @@ def fix_shadow_preprocess(project):
     file=root/'train/preprocess.py'
     if not file.is_file():return
     source=file.read_text(encoding='utf-8')
+    original='''                    if len(audio[start:]) > self.tail * self.sr:
+                        tmp_audio = audio[start : start + int(self.per * self.sr)]
+                        self.norm_write(tmp_audio, output_key, idx1)
+                        idx1 += 1
+                    else:
+                        tmp_audio = audio[start:]
+                        idx1 += 1
+                        break
+            self.norm_write(tmp_audio, output_key, idx1)'''
+    previously_patched=original.rsplit('\n',1)[0]+'\n                    self.norm_write(tmp_audio, output_key, idx1)'
+    fixed='''                    if len(audio[start:]) > self.tail * self.sr:
+                        tmp_audio = audio[start : start + int(self.per * self.sr)]
+                        self.norm_write(tmp_audio, output_key, idx1)
+                        idx1 += 1
+                    else:
+                        tmp_audio = audio[start:]
+                        self.norm_write(tmp_audio, output_key, idx1)
+                        idx1 += 1
+                        break'''
     old='            self.norm_write(tmp_audio, output_key, idx1)\n            if should_report'
-    fixed='                self.norm_write(tmp_audio, output_key, idx1)\n            if should_report'
-    if old in source:
-        file.write_text(source.replace(old,fixed,1),encoding='utf-8')
-        meta=json.loads((root/'training-source.json').read_text())
-        meta['compatibility_patches']=['retain_each_silence_sliced_tail']
+    if original in source or previously_patched in source:
+        source=source.replace(original,fixed,1).replace(previously_patched,fixed,1)
+    elif old in source:
+        source=source.replace(old,'                self.norm_write(tmp_audio, output_key, idx1)\n            if should_report',1)
+    else:
+        return
+    if source != file.read_text(encoding='utf-8'):
+        file.write_text(source,encoding='utf-8')
+        meta=json.loads((root/'training-source.json').read_text(encoding='utf-8'))
+        meta['compatibility_patches']=['retain_each_silence_sliced_tail_once']
         (root/'training-source.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
 
 
@@ -234,14 +260,16 @@ def main():
                 run(layout['features'],device,1,0,0,experiment,'v2')
             prepare_mute(project)
             rows=training_filelist(experiment,project/'logs/mute')
-            if len(rows)-2 != len(list((experiment/'0_gt_wavs').glob('*.wav'))):
+            all_wavs=list((experiment/'0_gt_wavs').glob('*.wav'))
+            missing_pitch=[wav for wav in all_wavs if not (experiment/'2a_f0'/(wav.name+'.npy')).is_file() or not (experiment/'2b-f0nsf'/(wav.name+'.npy')).is_file()]
+            if len(rows)-2+len(missing_pitch) != len(all_wavs):
                 state.update(state='failed',reason='training_feature_coverage_incomplete');save_state()
                 raise ValueError('training_feature_coverage_incomplete')
             (experiment/'filelist.txt').write_text('\n'.join(rows),encoding='utf-8')
             config=json.loads((project/'configs/v2/32k.json').read_text())
             config['train']['log_interval']=20
             (experiment/'config.json').write_text(json.dumps(config,indent=2),encoding='utf-8')
-            state.update(state='completed',complete_samples=len(rows)-2);save_state()
+            state.update(state='completed',complete_samples=len(rows)-2,skipped_pitch_unavailable=len(missing_pitch));save_state()
             print('Prepared complete samples:',len(rows)-2,flush=True)
         elif args.stage=='train':
             # Inference-only installs can expose CUDA yet lack the trainer's

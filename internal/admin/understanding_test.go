@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,15 @@ func TestShareCardDescriptionNeverClaimsWatchingOrIncludesCredentials(t *testing
 		t.Fatal("malformed card treated as video")
 	}
 }
+
+func TestSharedVideoReadReasonPreservesPublicMediaFailure(t *testing.T) {
+	for _, code := range []string{"share_media_unavailable", "share_media_download_failed", "share_media_candidates_partial", "share_requires_browser", "share_platform_adapter_required"} {
+		if got := sharedVideoReadReason(errors.New(code)); got != code {
+			t.Fatalf("reason for %q = %q", code, got)
+		}
+	}
+}
+
 func TestBehaviorDefaultsUpgradeWithoutChangingExplicitChoices(t *testing.T) {
 	f := setup(t)
 	f.login()

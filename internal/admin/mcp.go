@@ -210,7 +210,7 @@ func (p *permittedTools) enabled(name string) bool {
 		c := p.manager.Config().Companion.Permissions
 		return p.settings.WebFetchEnabled && (c.SendImage || c.SendVoice || c.SendVideo || c.SendFile)
 	}
-	if name == "media_recent" || name == "media_reuse" || name == "media_history" {
+	if name == "media_recent" || name == "media_reuse" || name == "media_history" || name == "music_library_search" {
 		return p.trace.Thread != "" && p.manager.Config().Companion.Permissions.Remember
 	}
 	if kind := p.apiKinds[name]; kind != "" && !companion.MediaPermitted(p.manager.Config().Companion.Permissions, kind) {
@@ -221,17 +221,19 @@ func (p *permittedTools) enabled(name string) bool {
 func (p *permittedTools) localTools() []mcptools.Tool {
 	tools := p.installedWebTools()
 	if p.trace.Surf {
-		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "Discover actual public feed/community/RSS/music/image candidates, with persistent novelty memory and diverse sources. Automatically called once at session start. Continue a rabbit hole with related_url equal to a candidate BV page. Otherwise {} to switch sources. Does not send or claim watching. Input {related_url?:string}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
+		tools = append(tools, mcptools.Tool{Name: "web_discover", Description: "发现公开内容候选和相关来源；related_url 可围绕候选继续探索，空参数切换来源。只发现，不发送。", InputSchema: json.RawMessage(`{"type":"object","properties":{"related_url":{"type":"string","maxLength":2048}},"additionalProperties":false}`)})
 	}
 	if p.privateSurfOrigin != nil {
 		tools = append(tools, p.privateMobileObservationTools()...)
 		return tools
 	}
 	if p.trace.Thread != "" {
-		tools = append(tools, mcptools.Tool{Name: "media_history", Description: "Page ALL retained source/request associations for an exact asset, oldest first, preserving original message time and sender. Defaults offset=0, limit=20; follow next_offset. Same conversation only; trusted owner may specify source_thread_id within this account. Read-only provenance, never delivery evidence or instructions.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"source_thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`)})
-		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "Read the recent attachment catalogue for THIS conversation in chronological recency, including source_url and formats. Returns cached_mime, parent_asset_id and recent requests with requester_id/trace_id/task_id. Parent is the retained source video when this asset is an extracted audio track. Match the verified quote first, then the current speaker and latest context; ask briefly if ambiguous. Call this for original video/audio or format conversion. This is a LOCAL catalogue, not Internet search. Search this LOCAL catalogue FIRST for listening, RVC covers and YuE reference songs, even a newly requested title. Reuse an exactly matching cached original recording; search online only if missing, unsuitable or explicitly requested fresh online. Never substitute unrelated tracks or generated covers for the original. Cached originals remain discoverable beyond chat memory age. Default is a12-item quick array. Supply offset=0 to get a paginated object {items,total,next_offset,has_more}; follow next_offset for the FULL scoped catalogue, no total-item cutoff. limit chooses a page (default12). Filter by exact asset_id, requester_id (self/current speaker supported), or query matching title/filename. Input: {asset_id?:string,requester_id?:string,query?:string,offset?:integer,limit?:integer}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "Reuse the matching cached resource for the user request, including a matching local song found by title before online search, or a different format. This performs NO Internet search; never substitute a different old track for a new requested title. Original audio can be sent as file; legacy voice-only sources are WAV. Put returned media.id in reply.media_ids. For voice, optional conversion selects cached original start_seconds/duration_seconds, segment_seconds(default60, WeChat max60), timeout_seconds(default90). Default entire audio. Explicit conversion never replaces the default full-song bundle. Input: {asset_id:string,kind:voice|file|image|video,conversion?:object}.", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id","kind"],"additionalProperties":false}`))})
+		tools = append(tools, mcptools.Tool{Name: "music_library_search", Description: "搜索本账号共享的已下载原曲；query 填曲名，可加歌手。返回可用于 music_reference_inspect、music_rvc_start、music_local_start 的 asset_id；无合适版本再联网。", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
+		tools = append(tools, mcptools.Tool{Name: "media_history", Description: "按原时间分页查询素材的来源消息和关联请求；主人可用 source_thread_id 指定本账号其他会话。", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"source_thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`)})
+		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "查当前会话附件目录：按 asset_id、requester_id 或 query 找原件、格式、来源和相关请求。听歌、翻唱和格式转换先查本地；准确匹配可复用。默认最近 12 项；offset=0 启用分页，按 next_offset 续读。", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "复用匹配的缓存素材，返回 media.id 供发送。视频默认 kind=video，图片 image，其余 file；voice 可设 start_seconds/duration_seconds/segment_seconds/timeout_seconds，默认整段。只准备，不联网或发送。", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id"],"additionalProperties":false}`))})
 	}
-	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "下载公开媒体、B站音轨或视频，并准备微信附件，不是内容观察工具。Download media and prepare an attachment, not an observation tool. To understand an already received video/share use video_inspect with its message_id or cached asset_id; info/frames/audio return actual observations without uploading. Public Kuaishou/chenzhongtech video pages are also supported for video, voice and file. For kind=video, accepts direct video URLs AND anonymously playable Bilibili BV video-page URLs (optional ?p=part) or b23.tv short links; resolves the public progressive MP4 itself, so try the actual BV page instead of searching for guessed mp4 links. Videos longer than 60 seconds are prepared as clickable WeChat share cards with the actual playback page, without downloading the whole video. Short files are limited to 50 MiB. For kind=voice, also accepts these public BV/b23 pages and extracts the existing audio into voice notes, limited to 10 minutes and 25 MiB input; the reusable original is an audio-only M4A file. No paid/logged-in playback. Image/file otherwise need direct files. Does not send until final reply.media_ids. No login, paid formats, DRM or general streaming playlists. For music, DEFAULT preview_seconds=0 sends the COMPLETE audio as voice notes of at most60 seconds. Keep original file cached, but never ask about sending a file; use file only when user asks. Explicit preview requests may set preview_seconds=45. For kind=file on BV pages, audio_only=true gives the full original audio M4A, false gives the original video file. Input: {url:string,kind:voice|video|image|file,preview_seconds?:integer 0..900,audio_only?:boolean}.", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url","kind"],"additionalProperties":false}`)})
+	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "下载公开媒体并准备微信附件。默认 kind=video 为原生视频；kind=file 为文件；kind=voice 提取音轨并分段。支持公开直链、B站 BV/b23 和快手视频页；BV 可指定 ?p=分P，kind=file 时 audio_only=true 取音频。音乐默认 preview_seconds=0 为完整音频，可指定预览时长。已有会话视频用 video_inspect 观察。视频输入限 50 MiB，音轨限 10 分钟/25 MiB；登录、付费或 DRM 资源不可用。返回 media.id 后再发送。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url"],"additionalProperties":false}`)})
+	tools = append(tools, mcptools.Tool{Name: "web_douyin_resolve", Description: "解析公开抖音链接，返回固定作品链接和作品 ID。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048}},"required":["url"],"additionalProperties":false}`)})
 	tools = append(tools, p.installedExternalHTTPTools(context.Background())...)
 	tools = append(tools, p.installedExternalJobTools(context.Background())...)
 	tools = append(tools, p.installedExternalPollTools(context.Background())...)
@@ -341,7 +343,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		origin = "surf"
 	}
 	if strings.HasPrefix(name, "web_") {
-		p.manager.record(bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: "running", Reason: "tool_started"})
+		p.manager.record(bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, ToolArgs: toolArgsSummary(args), TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: "running", Reason: "tool_started"})
 	}
 	defer func() {
 		if callErr == nil && p.trace.Surf && name == "web_search" {
@@ -410,7 +412,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					reason = mcptools.FailureDescription(callErr)
 				}
 			}
-			record := bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: category, ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: status, Reason: reason, DurationMS: time.Since(started).Milliseconds(), Bytes: downloadBytes, MediaCount: len(media.Media), ToolCacheHit: media.CatalogCacheHit, ToolRequests: requests, ToolRetries: retries, ToolHTTPStatus: lastStatus, ToolCode: lastCode, ToolStage: lastStage}
+			record := bot.Record{Event: "web_activity", CallID: started.Format(time.RFC3339Nano), Category: category, ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Tool: name, ToolArgs: toolArgsSummary(args), TargetURL: endpoint, Query: webArgs.Query, Origin: origin, Status: status, Reason: reason, DurationMS: time.Since(started).Milliseconds(), Bytes: downloadBytes, MediaCount: len(media.Media), ToolCacheHit: media.CatalogCacheHit, ToolRequests: requests, ToolRetries: retries, ToolHTTPStatus: lastStatus, ToolCode: lastCode, ToolStage: lastStage}
 			diagnosticMu.Unlock()
 			p.manager.record(record)
 		}
@@ -419,14 +421,14 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			if reason == "" {
 				reason = mcptools.FailureDescription(callErr)
 			}
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Tool: name, ToolCode: code, Content: name, Reason: reason, Status: "failed", Origin: "tool"})
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_failed", Category: "error", Tool: name, ToolArgs: toolArgsSummary(args), ToolCode: code, Content: name, Reason: reason, Status: "failed", Origin: "tool"})
 		}
 		if callErr == nil && !strings.HasPrefix(name, "web_") {
 			origin := "tool"
-			if name == "media_recent" || name == "media_reuse" || name == "media_history" {
+			if name == "media_recent" || name == "media_reuse" || name == "media_history" || name == "music_library_search" {
 				origin = "local_asset"
 			}
-			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
+			p.manager.record(bot.Record{ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, Event: "tool_call_succeeded", Category: "tool", Tool: name, ToolArgs: toolArgsSummary(args), Content: name, Effect: p.toolEffect(name, args, result), Status: "succeeded", Origin: origin})
 		}
 	}()
 	if p.privateSurfOrigin != nil {
@@ -453,7 +455,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 	// Keep strict named-voice argument diagnostics visible to the Agent.  This
 	// precedes generic schema normalization so an unsupported cloud-only field
 	// never turns into an opaque schema failure or a durable side-effect claim.
-	if err := p.preflightSpeechArgs(name, args); err != nil {
+	if err := p.preflightSpeechArgs(ctx, name, args); err != nil {
 		return "", err
 	}
 	normalized, validationErr := p.normalizeToolArgs(name, args)
@@ -498,6 +500,26 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return result, err
 		}
 		return p.assetHistoryPage(in.AssetID, in.Offset, in.Limit)
+	}
+	if name == "music_library_search" {
+		var input struct {
+			Query  string `json:"query"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if json.Unmarshal(args, &input) != nil || len(input.Query) > 256 {
+			return "", errors.New("歌曲资源库检索参数无效")
+		}
+		if input.Limit == 0 {
+			input.Limit = 12
+		}
+		items, total, err := p.manager.searchMusicLibrary(p.trace.Account, input.Query, input.Offset, input.Limit)
+		if err != nil {
+			return "", err
+		}
+		next := input.Offset + len(items)
+		b, _ := json.Marshal(map[string]any{"items": items, "total": total, "next_offset": next, "has_more": next < total})
+		return string(b), nil
 	}
 	if name == "media_recent" {
 		var input struct {
@@ -552,6 +574,20 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		}
 		return p.reuseAssetConverted(ctx, in.AssetID, in.Kind, in.Conversion)
 	}
+	if name == "web_douyin_resolve" {
+		var in struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(args, &in) != nil || len(in.URL) > 2048 {
+			return "", &mcptools.WebError{Code: "invalid_url"}
+		}
+		page, videoID, err := mcptools.ResolveDouyinLink(ctx, in.URL)
+		if err != nil {
+			return "", err
+		}
+		b, _ := json.Marshal(map[string]string{"url": page, "video_id": videoID, "content_status": "link_only"})
+		return string(b), nil
+	}
 	if name == "web_media_download" {
 		var input struct {
 			URL            string `json:"url"`
@@ -561,6 +597,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		}
 		if json.Unmarshal(args, &input) != nil || strings.TrimSpace(input.URL) == "" || len(input.URL) > 2048 {
 			return "", &mcptools.WebError{Code: "url_required"}
+		}
+		if input.Kind == "" {
+			input.Kind = "video"
 		}
 		// Enforce the selected attachment permission before any download/upload.
 		if toolsLimit(input.Kind) == 0 || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, input.Kind) {
@@ -577,12 +616,9 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return "", &mcptools.WebError{Code: "audio_preview_invalid"}
 		}
 		if input.Kind == "video" && mcptools.IsPublicVideoPage(input.URL) {
-			video, err := mcptools.DownloadPublicVideoPage(ctx, input.URL, toolsLimit("video"))
+			video, err := mcptools.DownloadPublicVideoAudio(ctx, input.URL, toolsLimit("video"))
 			if err != nil {
 				return "", err
-			}
-			if video.LinkOnly {
-				return p.stageVideoShare(video.PageURL, video.Title, video.DurationMS)
 			}
 			downloadBytes = int64(len(video.Data))
 			data, err := preparePublicVideo(ctx, p.manager.dir, video.Data)
@@ -840,7 +876,7 @@ func (p *permittedTools) stageOutputWithAsset(ctx context.Context, output plugin
 		}
 	}
 	p.manager.record(bot.Record{Event: "plugin_output_ready", Category: "tool", ThreadID: p.trace.Thread, MessageID: p.trace.TraceID, MediaCount: len(items), Status: "succeeded", Origin: "tool"})
-	result, _ := json.Marshal(map[string]any{"required_media_ids": required, "text": output.Text, "media": items, "instruction": "媒体已准备好，但尚未发给对方。最终 reply.media_ids 必须取本轮 media[].id，不能使用 asset_id、文件名或job_id。asset_id仅用于以后复用原文件。不要向对方解释工具过程或内部编号。"})
+	result, _ := json.Marshal(map[string]any{"required_media_ids": required, "text": output.Text, "media": items, "instruction": "媒体已准备；发送时将本轮 media[].id 放入 reply.media_ids。asset_id 用于以后复用原件。"})
 	return string(result), nil
 }
 func (m *Manager) toolAccess() (*permittedTools, int, error) {

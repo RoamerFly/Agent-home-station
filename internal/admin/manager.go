@@ -43,6 +43,7 @@ type sendingRequest = sending.TextRequest
 type sendingReceipt = sending.Receipt
 
 type LogEntry struct {
+	ContentRef             string                   `json:"content_ref,omitempty"`
 	MessageTime            string                   `json:"message_time,omitempty"`
 	SenderName             string                   `json:"sender_name,omitempty"`
 	RelatedMessageID       string                   `json:"related_message_id,omitempty"`
@@ -67,8 +68,18 @@ type LogEntry struct {
 	ModelMaxFormatAttempts int                      `json:"model_max_format_attempts,omitempty"`
 	ModelProtocolCode      string                   `json:"model_protocol_code,omitempty"`
 	ReviewFailure          *companion.ReviewFailure `json:"review_failure,omitempty"`
+	UsageModel             string                   `json:"usage_model,omitempty"`
+	UsagePurpose           string                   `json:"usage_purpose,omitempty"`
+	UsagePriceSource       string                   `json:"usage_price_source,omitempty"`
+	UsageReported          bool                     `json:"usage_reported,omitempty"`
+	UsagePriced            bool                     `json:"usage_priced,omitempty"`
+	InputTokens            int64                    `json:"input_tokens,omitempty"`
+	OutputTokens           int64                    `json:"output_tokens,omitempty"`
+	CacheHitTokens         int64                    `json:"cache_hit_tokens,omitempty"`
+	EstimatedCosts         map[string]float64       `json:"estimated_costs,omitempty"`
 	CallID                 string                   `json:"call_id,omitempty"`
 	Tool                   string                   `json:"tool,omitempty"`
+	ToolArgs               string                   `json:"tool_args,omitempty"`
 	Effect                 string                   `json:"effect,omitempty"`
 	TargetURL              string                   `json:"target_url,omitempty"`
 	Query                  string                   `json:"query,omitempty"`
@@ -105,6 +116,8 @@ type Manager struct {
 	packageRuntimeReady bool
 	managedServices     *pluginruntime.ManagedServices
 	managedServicesOnce sync.Once
+	musicEndpointMu     sync.RWMutex
+	musicEndpoint       string
 	musicIdleMu         sync.Mutex
 	musicIdleTimer      *time.Timer
 	musicIdleGeneration uint64
@@ -112,7 +125,14 @@ type Manager struct {
 	memoryRunnerWG      sync.WaitGroup
 	memoryRunners       map[string]context.CancelFunc
 	memoryRunnersClosed bool
+	compressionMu       sync.Mutex
+	compressionWG       sync.WaitGroup
+	compressionJobs     map[string]*contextCompressionJob
+	compressionClosed   bool
 	memoryServiceMu     sync.Mutex
+	workerMu            sync.RWMutex
+	worker              *bot.Worker
+	surfManualThread    string
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry
@@ -155,6 +175,28 @@ type Manager struct {
 	actions             *wechatapp.ActionLedger
 	mcp                 mcpSettings
 	plugins             *pluginLedger
+	reminderWake        chan struct{}
+	remindersMu         sync.Mutex
+}
+
+func (m *Manager) setWorker(worker *bot.Worker) {
+	m.workerMu.Lock()
+	m.worker = worker
+	m.workerMu.Unlock()
+}
+
+func (m *Manager) clearWorker(worker *bot.Worker) {
+	m.workerMu.Lock()
+	if m.worker == worker {
+		m.worker = nil
+	}
+	m.workerMu.Unlock()
+}
+
+func (m *Manager) currentWorker() *bot.Worker {
+	m.workerMu.RLock()
+	defer m.workerMu.RUnlock()
+	return m.worker
 }
 
 // NewManager constructs a root manager without a native device transport.
@@ -233,11 +275,54 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	if surfErr != nil {
 		return nil, surfErr
 	}
+	surf.applyAutonomy(&c)
+	if err := validate(c); err != nil {
+		return nil, err
+	}
 	agent, err := newAgentControl(dir)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO, reminderWake: make(chan struct{}, 1)}
+	constructionReady := false
+	defer func() {
+		if constructionReady {
+			return
+		}
+		// A manager can fail after the workspace/process/mobile services have
+		// been opened (for example, a corrupt audit or journal).  Release every
+		// owned runtime here so the next startup can acquire the same Windows
+		// locks.  The memory and workspace stores have their own defers below.
+		if m.mobile != nil {
+			_ = m.mobile.Close()
+		}
+		if !m.mobileRetired && m.deviceIO != nil {
+			_ = m.deviceIO.Cleanup()
+		}
+		m.packageMu.Lock()
+		m.packagesClosed = true
+		packages, packageRuntime := m.packages, m.packageRuntime
+		m.packageMu.Unlock()
+		if packageRuntime != nil {
+			_ = packageRuntime.Close()
+		}
+		if packages != nil {
+			_ = packages.Close()
+		}
+		if m.processes != nil {
+			m.processes.Close()
+		}
+	}()
+	if err := m.ensurePersonaDocument(c.Companion); err != nil {
+		return nil, err
+	}
+	if c, err = m.withPersonaDocument(c); err != nil {
+		return nil, err
+	}
+	m.config = c
+	if err := m.loadCompressionJobs(); err != nil {
+		return nil, err
+	}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
@@ -254,15 +339,12 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 		return nil, err
 	}
 	if err = m.configureWorkspaceDirectory(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	if err = m.configureManagedNotes(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	if err = m.initializeWorkspace(); err != nil {
-		m.processes.Close()
 		return nil, err
 	}
 	m.mobile = m.newMobileService()
@@ -271,7 +353,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	// derived media search records. A copied SQLite database may legitimately
 	// arrive before its media-assets manifest during recovery.
 	if assets, err := m.loadAssetsSnapshot(); err == nil && assets != nil {
-		if err = m.indexMemoryAssets(assets); err != nil {
+		if err = m.saveAssets(assets); err != nil {
 			return nil, err
 		}
 		sources := map[string]map[string]companion.MediaMemory{}
@@ -320,8 +402,6 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 	// Recovery diagnostics must append to the loaded journal, never overwrite
 	// existing history while manager construction is still in progress.
 	if err = m.restoreCrossMedia(); err != nil {
-		m.processes.Close()
-		m.mobile.Close()
 		return nil, err
 	}
 	if err := m.surfHistory.importAccepted(m.journal); err != nil {
@@ -349,6 +429,7 @@ func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry
 			}
 		}
 	}
+	constructionReady = true
 	return m, nil
 }
 func (m *Manager) Config() ConfigView {
@@ -415,6 +496,16 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 		next.Companion = previous.Companion
 	}
 	next.Companion = companion.Normalize(next.Companion)
+	// The unified autonomous switch and its conversation targets are owned by
+	// surf.json. A stale full config form must not re-enable or erase them.
+	next.Companion.Permissions.Proactive = previous.Companion.Permissions.Proactive
+	next.Companion.ProactiveThreads = append([]string{}, previous.Companion.ProactiveThreads...)
+	next.Companion.ProactiveRules = append([]companion.ProactiveRule{}, previous.Companion.ProactiveRules...)
+	var personaErr error
+	next, personaErr = m.withPersonaDocument(next)
+	if personaErr != nil {
+		return ConfigView{}, personaErr
+	}
 	if !input.ClearKey && next.APIKey == "" && previous.APIKey != "" {
 		oldURL, oldErr := url.Parse(previous.BaseURL)
 		newURL, newErr := url.Parse(next.BaseURL)
@@ -528,6 +619,7 @@ func (m *Manager) Close() error {
 		packageErr = packages.Close()
 	}
 	m.closeWindowsMusic()
+	m.closeContextCompressions()
 	m.closeMemoryRunners()
 	if m.accounts != nil {
 		m.accounts.close()
@@ -555,11 +647,7 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	if err := writePrivate(keyFile, []byte(c.APIKey)); err != nil {
 		return nil, err
 	}
-	toolTokens := c.MaxTokens
-	if !c.ThinkingEnabled && c.Companion.Enabled && m.agent != nil && m.agent.config().Enabled {
-		toolTokens = 4096
-	}
-	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
+	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: c.MaxTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
 			if err := m.billing.Record(modelForBilling(c), u); err != nil {
 				m.log("usage_record_save_failed")
@@ -664,12 +752,22 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		closedRounds, err := m.closedRoundHistory()
+		if err != nil {
+			m.setState("error")
+			m.log("bot_saved_state_unavailable")
+			return
+		}
+		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTaskReplyReady: m.taskReplyReady, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, ClosedRounds: closedRounds, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record, Usage: func(thread, message string, u deepseek.Usage) {
+			m.recordModelUsage(thread, message, modelForBilling(c), u)
+		}}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")
 			return
 		}
+		m.setWorker(worker)
+		defer m.clearWorker(worker)
 		reminderCtx, cancelReminders := context.WithCancel(ctx)
 		if character, ok := model.(*companion.Engine); ok {
 			memoryCtx, cancelMemory := context.WithCancel(ctx)
@@ -692,6 +790,7 @@ func (m *Manager) start(c Config) {
 		if err != nil {
 			m.setState("error")
 			m.log("bot_stopped_check_connection_or_checkpoint")
+			m.log("bot_runtime_detail_" + botFailureDetail(err))
 			m.log(botFailureReason(err))
 			m.record(bot.Record{Event: "bot_runtime_failed", Category: "error", Origin: "system", Status: "failed", Reason: botFailureReason(err)})
 		}

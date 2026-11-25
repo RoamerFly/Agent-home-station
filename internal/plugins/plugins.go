@@ -52,6 +52,7 @@ type APITool struct {
 	TextPath       string            `json:"text_path,omitempty"`
 	MediaURLPath   string            `json:"media_url_path,omitempty"`
 	MediaKind      string            `json:"media_kind,omitempty"`
+	MediaOrigins   []string          `json:"media_origins,omitempty"`
 	Poll           *PollSpec         `json:"poll,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 }
@@ -154,6 +155,15 @@ func Validate(m Manifest) error {
 		}
 		if (t.MediaURLPath != "" || t.Poll != nil && t.Poll.MediaURLPath != "") && t.MediaKind == "" {
 			return errors.New("media URL requires media kind")
+		}
+		if len(t.MediaOrigins) > 16 {
+			return errors.New("too many external media origins")
+		}
+		for _, raw := range t.MediaOrigins {
+			u, err := url.Parse(raw)
+			if err != nil || validEndpoint(raw, false) != nil || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
+				return errors.New("invalid external media origin")
+			}
 		}
 		if t.Poll != nil {
 			if err := validPoll(t.Poll); err != nil {

@@ -66,6 +66,10 @@ func TestVoiceAgentFindsReadsAndPreparesWithoutExposingControlDirectory(t *testi
 	if !strings.Contains(r, `"total":2`) || !strings.Contains(r, `"has_more":true`) {
 		t.Fatal(r)
 	}
+	r = call("voice_library_list", `{"engine":"gpt-sovits"}`)
+	if !strings.Contains(r, `"total":2`) {
+		t.Fatal("engine filter must accept ordinary lowercase input", r)
+	}
 	r = call("voice_library_read", `{"voice_id":"owner-voice"}`)
 	if !strings.Contains(r, `"project_id":"gpt-sovits"`) || !strings.Contains(r, "gpu=true") {
 		t.Fatal("missing registered GPT-SoVITS inference route", r)
@@ -102,6 +106,34 @@ func TestVoiceAgentFindsReadsAndPreparesWithoutExposingControlDirectory(t *testi
 	r = call("voice_library_prepare", `{"voice_id":"public-voice"}`)
 	if json.Unmarshal([]byte(r), &out) != nil || out.Global || !strings.HasPrefix(out.Directory, p.executionContext().Conversation) {
 		t.Fatal(r)
+	}
+}
+
+func TestVoiceAgentOwnerRecoveryUsesPersistedTaskThread(t *testing.T) {
+	f, p, private, _ := voiceAgentFixture(t)
+	// A recovery may deliver in the owner's private thread while the persisted
+	// task was created from an authorized group.  The source task remains the
+	// authority for private voice access; the current delivery thread must not
+	// hide the owner's catalog.
+	f.manager.mu.Lock()
+	f.manager.config.DirectIDs = []string{"wxid_owner", "room@chatroom"}
+	f.manager.mu.Unlock()
+	c := f.manager.agent.config()
+	c.PrivilegedThreads = []string{"wxid_owner", "room@chatroom"}
+	if err := f.manager.agent.save(c); err != nil {
+		t.Fatal(err)
+	}
+	task := agentTask{ID: "owner-recovery-voice", Account: p.trace.Account, Thread: "room@chatroom", Sender: "wxid_owner", OwnerRequested: true, State: "waiting"}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	p.trace.Thread = "wxid_owner"
+	p.trace.TaskID = task.ID
+	p.trace.TraceID = "recover-" + task.ID
+	p.trace.Sender = "wxid_owner"
+	r, err := p.Call(context.Background(), "voice_library_list", json.RawMessage(`{"query":"owner-voice"}`))
+	if err != nil || !strings.Contains(r, private.ID) {
+		t.Fatal(r, err)
 	}
 }
 
@@ -152,5 +184,25 @@ func TestRoleFolderKeepsVoiceIDsAndOwnerDownloadsStable(t *testing.T) {
 	writePrivate(filepath.Join(root, "catalog.json"), b)
 	if _, err = p.Call(context.Background(), "voice_library_prepare", json.RawMessage(`{"voice_id":"owner-voice"}`)); err == nil {
 		t.Fatal("foreign role path accepted")
+	}
+}
+
+func TestRegisteredVoiceLibraryDirectory(t *testing.T) {
+	f, p, _, _ := voiceAgentFixture(t)
+	old := f.manager.privateVoiceLibrary()
+	target := filepath.Join(t.TempDir(), "tool-models")
+	if err := os.Rename(old, target); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(f.manager.privateWorkspaceFor(f.manager.native.Account()), "voice-library-root")
+	if err := os.WriteFile(marker, []byte(target), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if f.manager.privateVoiceLibrary() != target {
+		t.Fatal("registration ignored")
+	}
+	voices, err := p.accessibleVoices()
+	if err != nil || len(voices) != 2 {
+		t.Fatal("migrated catalogue unavailable", err, len(voices))
 	}
 }

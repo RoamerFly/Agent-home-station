@@ -8,18 +8,25 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"wechat-bot/internal/comfyui"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/fishidentity"
+	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 type syntheticLocalComfy struct {
@@ -27,6 +34,7 @@ type syntheticLocalComfy struct {
 	fish      string
 	prompt    comfyui.JobRef
 	image     comfyui.Image
+	video     comfyui.MP4
 	state     comfyui.State
 	submits   int
 	starts    int
@@ -80,6 +88,21 @@ func (s *syntheticLocalComfy) Status(_ context.Context, ref comfyui.JobRef) (com
 	return comfyui.JobStatus{State: s.state, ImageCount: 2}, nil
 }
 
+func (s *syntheticLocalComfy) VideoStatus(_ context.Context, ref comfyui.JobRef) (comfyui.VideoStatus, error) {
+	if ref != s.prompt || len(s.video.Data) == 0 {
+		return comfyui.VideoStatus{}, errors.New("fixture video unavailable")
+	}
+	return comfyui.VideoStatus{State: s.state, VideoCount: 1}, nil
+}
+
+func (s *syntheticLocalComfy) FetchMP4(_ context.Context, ref comfyui.JobRef) (comfyui.MP4, error) {
+	if ref != s.prompt || s.state != comfyui.Completed || len(s.video.Data) == 0 {
+		return comfyui.MP4{}, errors.New("fixture video unavailable")
+	}
+	s.fetches++
+	return s.video, nil
+}
+
 func (s *syntheticLocalComfy) Cancel(_ context.Context, ref comfyui.JobRef) (bool, error) {
 	if ref != s.prompt {
 		return false, errors.New("cancelled a different prompt")
@@ -126,6 +149,211 @@ func setUpLocalComfyChat(t *testing.T, f *localHomeFixture, backend localComfyBa
 	}
 }
 
+func localComfyFixture(t *testing.T) *localHomeFixture {
+	t.Helper()
+	base := t.TempDir()
+	f := newLocalHomeFixture(t, filepath.Join(base, "host"), filepath.Join(base, "workspace"))
+	code, session := f.request("GET", "/api/session", nil, false)
+	if code != http.StatusOK {
+		t.Fatalf("local session: %d %#v", code, session)
+	}
+	f.csrf, _ = session["csrf"].(string)
+	if code, result := f.request("POST", "/api/local/home", map[string]string{"action": "initialize"}, true); code != http.StatusOK {
+		t.Fatalf("initialize local home: %d %#v", code, result)
+	}
+	return f
+}
+
+func TestWechatComfyWorkflowCatalogUsesWorkstationWithoutMessageSource(t *testing.T) {
+	f := localComfyFixture(t)
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	setUpLocalComfyChat(t, f, &syntheticLocalComfy{root: root, fish: record.FishID})
+	key := filepath.Join(t.TempDir(), "api-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := linuxnative.New(linuxnative.Config{URL: "http://127.0.0.1:1", TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "group-member",
+		TraceID: "synthetic-message", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	adapter := &stationAttachmentTools{native: native, grants: map[string]time.Time{in.Thread: now.Add(-time.Minute)},
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools,
+		projectOwnerAllowed: func(companion.Input) bool { return false }}
+	adapter.SetTrace(in)
+	items, err := adapter.List(t.Context())
+	if err != nil || !slices.ContainsFunc(items, func(tool mcptools.Tool) bool { return tool.Name == localComfyListTool }) {
+		t.Fatalf("application catalog did not expose workstation ComfyUI workflows: %v", err)
+	}
+	out, err := adapter.Call(t.Context(), localComfyListTool, json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(out, "Offline smoke") {
+		t.Fatalf("application did not execute pure workstation catalog: %s %v", out, err)
+	}
+	installed := localProjectToolByID(t, f, localComfyPackage)
+	if code, result := f.request("PUT", "/api/local/project-tools/comfyui", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("workstation disable failed: %d %#v", code, result)
+	}
+	items, _ = adapter.List(t.Context())
+	if slices.ContainsFunc(items, func(tool mcptools.Tool) bool { return tool.Name == localComfyListTool }) {
+		t.Fatal("application retained disabled workstation workflow catalog")
+	}
+	if out, err := adapter.Call(t.Context(), localComfyListTool, json.RawMessage(`{}`)); err == nil || out != "" {
+		t.Fatalf("application called disabled workstation catalog: %s %v", out, err)
+	}
+}
+
+func TestPublicComfyGenerationWithoutApplicationSource(t *testing.T) {
+	f := localComfyFixture(t)
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 48, 24))); err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: record.FishID, image: comfyui.Image{
+		Data: data.Bytes(), SHA256: localComfyDigest(data.Bytes()), Width: 48, Height: 24}}
+	setUpLocalComfyChat(t, f, backend)
+	jobID := strings.Repeat("a", 64)
+	submission, err := f.handler.chat.projectTools.submitPublicComfy(t.Context(), record.FishID, jobID, "smoke",
+		map[string]json.RawMessage{"width": json.RawMessage(`48`)})
+	if err != nil || backend.submits != 1 || submission.Workflow != "smoke" || submission.Binding == "" {
+		t.Fatalf("source-free submit failed: %+v %v calls=%d", submission, err, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	state, product, err := f.handler.chat.projectTools.publicComfyStatus(t.Context(), record.FishID, jobID, submission)
+	if err != nil || state != comfyui.Completed || len(product.Images) != 2 || product.Images[0].SHA256 != backend.image.SHA256 {
+		t.Fatalf("source-free result failed: state=%s images=%d err=%v", state, len(product.Images), err)
+	}
+	if err := f.handler.chat.projectTools.settlePublicComfy(t.Context(), record.FishID, jobID, submission); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWechatComfyImageUsesWorkstationAndApplicationDelivery(t *testing.T) {
+	f := localComfyFixture(t)
+	record, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	var pngBytes bytes.Buffer
+	if err := png.Encode(&pngBytes, image.NewNRGBA(image.Rect(0, 0, 48, 24))); err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: record.FishID, image: comfyui.Image{
+		Data: pngBytes.Bytes(), SHA256: localComfyDigest(pngBytes.Bytes()), Width: 48, Height: 24}}
+	setUpLocalComfyChat(t, f, backend)
+	key := filepath.Join(t.TempDir(), "api-token")
+	if err := os.WriteFile(key, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	uploads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/accounts/synthetic-account/uploads" || r.Method != http.MethodPost {
+			t.Errorf("wrong upload route: %s", r.URL.Path)
+			w.WriteHeader(404)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		defer file.Close()
+		actual, err := io.ReadAll(file)
+		if err != nil || !bytes.Equal(actual, pngBytes.Bytes()) {
+			t.Error("uploaded image differs", err)
+			w.WriteHeader(400)
+			return
+		}
+		uploads++
+		fmt.Fprintf(w, `{"id":"synthetic-upload","name":%q,"byteLength":%d,"sha256":%q}`, header.Filename, len(actual), localComfyDigest(actual))
+	}))
+	defer server.Close()
+	native, err := linuxnative.New(linuxnative.Config{URL: server.URL, TokenFile: key, Account: "synthetic-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := companion.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	in := companion.Input{Channel: "wechat", Account: native.Account(), Thread: "test@chatroom", Sender: "group-member", TraceID: "synthetic-message",
+		Text: "请生成图像", MessageTime: now.Format(time.RFC3339Nano), Mode: "direct", Directed: true}
+	in.Source = &companion.SourceRef{InstanceID: store.SourceInstanceID(), MessageID: in.TraceID, Account: in.Account,
+		Thread: in.Thread, Sender: in.Sender, OccurredAt: in.MessageTime}
+	config := companion.Defaults()
+	config.Permissions.Remember = true
+	if err := store.Observe(in, config, now); err != nil {
+		t.Fatal(err)
+	}
+	in.Source, _ = store.SourceForInput(in)
+	if in.Source == nil {
+		t.Fatal("application source unavailable")
+	}
+	grant := now.Add(-time.Minute)
+	adapter := &stationAttachmentTools{native: native, store: store, dir: t.TempDir(),
+		grants: map[string]time.Time{in.Thread: grant}, replies: map[string]time.Time{in.Thread: grant},
+		blocked: func() bool { return false }, projects: f.handler.chat.projectTools, comfyMu: new(sync.Mutex),
+		projectOwnerAllowed: func(companion.Input) bool { return false }}
+	adapter.SetTrace(in)
+	listed, err := adapter.List(t.Context())
+	want := map[string]bool{localComfyListTool: false, localComfyStartTool: false, localComfyJobTool: false}
+	for _, tool := range listed {
+		if _, ok := want[tool.Name]; ok {
+			want[tool.Name] = true
+		}
+	}
+	if err != nil || !want[localComfyListTool] || !want[localComfyStartTool] || !want[localComfyJobTool] {
+		t.Fatalf("application ComfyUI tools unavailable: %v %v", want, err)
+	}
+	out, err := adapter.Call(t.Context(), localComfyStartTool, json.RawMessage(`{"workflow_id":"smoke","inputs":{"width":48}}`))
+	var started struct {
+		ID    string `json:"job_id"`
+		State string `json:"state"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &started) != nil || started.ID == "" || started.State != "queued" || backend.submits != 1 {
+		t.Fatalf("application did not submit once: %s %v calls=%d", out, err, backend.submits)
+	}
+	backend.state = comfyui.Completed
+	query, _ := json.Marshal(map[string]string{"job_id": started.ID, "action": "status"})
+	out, err = adapter.Call(t.Context(), localComfyJobTool, query)
+	var finished struct {
+		State string                     `json:"state"`
+		Media []companion.GeneratedMedia `json:"media"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &finished) != nil || finished.State != "completed" || len(finished.Media) != 2 {
+		t.Fatalf("application did not collect generated images: %s %v", out, err)
+	}
+	if media, ok := adapter.Media(finished.Media[0].ID); !ok || media.Kind != "image" {
+		t.Fatal("application media handle unavailable")
+	}
+	if _, err := adapter.stageReply(t.Context(), in, "image", finished.Media[0].AssetID); err != nil || uploads != 1 {
+		t.Fatalf("application did not stage verified image: %v uploads=%d", err, uploads)
+	}
+	adapter.replies = nil
+	if _, ok := adapter.Media(finished.Media[0].ID); ok {
+		t.Fatal("revoked application grant still exposes generated media")
+	}
+}
+
+const localComfyFixturePrompt = "运行登记的离线测试工作流"
+
 func requestLocalComfyJob(t *testing.T, f *localHomeFixture, requestID string) string {
 	t.Helper()
 	var jobID string
@@ -155,7 +383,7 @@ func requestLocalComfyJob(t *testing.T, f *localHomeFixture, requestID string) s
 			}
 		}), nil
 	}
-	if code, out := localChatSend(f, requestID, "生成两张离线图像"); code != http.StatusOK || out["status"] != "completed" || jobID == "" {
+	if code, out := localChatSend(f, requestID, localComfyFixturePrompt); code != http.StatusOK || out["status"] != "completed" || jobID == "" {
 		t.Fatalf("ComfyUI submit chat: %d %#v job=%q", code, out, jobID)
 	}
 	return jobID
@@ -185,6 +413,57 @@ func writeLocalComfyChatWorkflow(t *testing.T, root string) {
 	t.Helper()
 	graph := []byte(`{"1":{"class_type":"EmptyImage","inputs":{"width":32,"height":24,"batch_size":2,"color":16711680}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0],"filename_prefix":"owner-prefix"}}}`)
 	writeLocalComfyRegistry(t, root, graph, `[{"id":"width","label":"Width","kind":"integer","minimum":16,"maximum":512,"node":"1","input":"width"}]`)
+}
+
+func TestLocalComfyVideoPublishesDecodedOutput(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("local FFmpeg is needed for the video fixture")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("local FFprobe is needed for the video fixture")
+	}
+	root := t.TempDir()
+	clip := filepath.Join(root, "fixture.mp4")
+	if data, err := exec.CommandContext(t.Context(), "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=48x24:r=8:d=1", "-c:v", "mpeg4", "-threads", "1", clip).CombinedOutput(); err != nil {
+		t.Fatalf("encode local fixture: %v %s", err, data)
+	}
+	video, err := os.ReadFile(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := []byte(`{"1":{"class_type":"EmptyImage","inputs":{"width":48,"height":24,"batch_size":8,"color":255}},"2":{"class_type":"CreateVideo","inputs":{"images":["1",0],"fps":8}},"9":{"class_type":"SaveVideo","inputs":{"video":["2",0],"filename_prefix":"owner-prefix","format":"mp4","codec":"h264"}}}`)
+	writeLocalComfyRegistry(t, root, graph, `[{"id":"width","label":"Width","kind":"integer","minimum":16,"maximum":512,"node":"1","input":"width"}]`)
+	f := localChatFixture(t)
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: fish, video: comfyui.MP4{Data: video, SHA256: localComfyDigest(video)}}
+	setUpLocalComfyChat(t, f, backend)
+	job := requestLocalComfyJob(t, f, "comfy-video-submit")
+	backend.state = comfyui.Completed
+	ids := requestLocalComfyStatus(t, f, "comfy-video-status", job, "status")
+	if len(ids) != 1 || backend.fetches != 1 {
+		t.Fatalf("expected one video artifact, got %v after %d readbacks", ids, backend.fetches)
+	}
+	if !bytes.Equal(localArtifactDownload(t, f, ids[0]), video) {
+		t.Fatal("published artifact does not match the job MP4")
+	}
+	host, err := f.handler.chat.projectTools.forFish(fish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := host.store.Job(t.Context(), job)
+	var receipt localComfyVideoReceipt
+	if err != nil || finished.State != "completed" || json.Unmarshal(finished.Result, &receipt) != nil ||
+		receipt.Kind != "video" || receipt.Width != 48 || receipt.Height != 24 || receipt.Frames != 8 ||
+		receipt.Seconds != 1 || receipt.FPS != 8 || receipt.SHA256 != backend.video.SHA256 {
+		t.Fatalf("unexpected decoded video receipt: %+v, %v", receipt, err)
+	}
+	again := requestLocalComfyStatus(t, f, "comfy-video-status-repeat", job, "status")
+	if len(again) != 1 || again[0] != ids[0] || backend.fetches != 1 {
+		t.Fatal("completed video receipt was not reused")
+	}
 }
 
 func TestLocalComfyRechecksOriginalApplicationMemoryBeforeResult(t *testing.T) {
@@ -244,7 +523,7 @@ func TestLocalComfyChatJobsAndArtifacts(t *testing.T) {
 		t.Fatal("installation or discovery launched ComfyUI")
 	}
 	jobID := requestLocalComfyJob(t, f, "comfy-submit")
-	if code, out := localChatSend(f, "comfy-submit", "生成两张离线图像"); code != http.StatusOK || out["reused"] != true || backend.submits != 1 {
+	if code, out := localChatSend(f, "comfy-submit", localComfyFixturePrompt); code != http.StatusOK || out["reused"] != true || backend.submits != 1 {
 		t.Fatalf("replayed chat resubmitted: %d %#v calls=%d", code, out, backend.submits)
 	}
 	backend.state = comfyui.Completed

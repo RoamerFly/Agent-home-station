@@ -1,5 +1,5 @@
-// Package wechatui carries the approved legacy WeChat UI without a second
-// account runtime or the old global admin session.
+// Package wechatui carries the WeChat workbench template. The application
+// uses workstation public tools without owning their configuration or runtime.
 package wechatui
 
 import (

@@ -314,9 +314,13 @@ def public_search(args, get, bilibili_only=False):
         ("html", "https://search.brave.com/search?" + urllib.parse.urlencode({"q": term})),
     ]
     source, items, readable = indexes[0][1], [], False
+    partial = None
+    # A slow or blocked index should not consume most of an Agent turn. An
+    # explicit timeout remains the caller's choice and is never shortened.
+    request_args = args if "timeout_seconds" in args else {**args, "timeout_seconds": 6}
     selected = 0
     for index, (format_name, url) in enumerate(indexes):
-        page, failure = read_page(get, url, args)
+        page, failure = read_page(get, url, request_args)
         if failure:
             continue
         readable = True
@@ -343,10 +347,22 @@ def public_search(args, get, bilibili_only=False):
             parser = SearchText()
             parser.feed(body.decode("utf8", errors="replace"))
             candidates = parser.results
-        candidates = [item for item in candidates if matches(item)]
-        if candidates:
-            source, items, selected = final, candidates, index
+        matched = [item for item in candidates if matches(item)]
+        if matched:
+            source, items, selected = final, matched, index
             break
+        if bilibili_only and partial is None:
+            terms = ["".join(c for c in term.casefold() if c.isalnum())
+                     for term in query.split() if term.casefold() not in {"原唱", "原曲", "试听", "音频", "下载", "音乐", "歌曲", "mv", "b站", "bilibili"}]
+            related = [item for item in candidates
+                       if re.fullmatch(r"https://(?:www\.)?bilibili\.com/video/BV[A-Za-z0-9]{10}/?(?:\?[^#]*)?", item["url"])
+                       and any(len(term) >= 2 and term in "".join(c for c in item["title"].casefold() if c.isalnum()) for term in terms)]
+            if related:
+                partial = (final, related, index)
+    quality = "exact"
+    if not items and partial is not None:
+        source, items, selected = partial
+        quality = "partial_title_match"
     if not items:
         # A caller can back off/retry only when every permitted public index
         # was unavailable. A successful empty query is actionable as a query
@@ -358,6 +374,7 @@ def public_search(args, get, bilibili_only=False):
     if offset > len(items):
         raise ValueError("offset_outside_results")
     return {"ok": True, "backend": "bilibili" if bilibili_only else "public", "query": query, "source": source, "items": items[offset:end],
+            "match_quality": quality, "requires_candidate_check": quality != "exact",
             "fallback_used": selected > 0 or bilibili_only,
             "requested_count": count, "effective_provider_count": len(items), "requested_limit": limit, "provider_items": len(items), "next_offset": end if end < len(items) else None,
             "provider_page_exhausted": end == len(items), "untrusted_external_content": True}
@@ -409,7 +426,8 @@ def bilibili_search(args, get):
     number, start = divmod(offset, page_size)
     endpoint = "https://api.bilibili.com/x/web-interface/search/type?" + urllib.parse.urlencode(
         {"search_type": "video", "keyword": query.strip(), "page": number + 1, "page_size": page_size})
-    page, failure = read_page(get, endpoint, args)
+    request_args = args if "timeout_seconds" in args else {**args, "timeout_seconds": 6}
+    page, failure = read_page(get, endpoint, request_args)
     if failure:
         return failure
     body, _, final = page
@@ -445,7 +463,7 @@ def search(args, get, route=None, configuration=None):
         result = bilibili_search(args, get)
         if result.get("ok") and (result.get("items") or args.get("offset", 0) > 0):
             return result
-        if not result.get("ok") and result.get("error") not in ("http_status", "bilibili_search_unavailable"):
+        if not result.get("ok") and result.get("error") == "request_cancelled":
             return result
         return public_search({k:v for k,v in args.items() if k != "source"}, get, bilibili_only=True)
     backend = (configuration or {}).get("search_backend", "public")
@@ -571,8 +589,8 @@ class Wire:
                     pass
                 elif method == "tools/call" and initialized:
                     params = req["params"]
-                    context = params.get("_meta", {}).get("wechat/context", {})
-                    if not all(context.get(k) for k in ("account", "thread", "requester", "purpose", "request_key")):
+                    call_id = params.get("_meta", {}).get("station/call_id")
+                    if not isinstance(call_id, str) or len(call_id) != 64:
                         raise ValueError("host_context_required")
                     action = {"web.search": "search", "web.read": "read", "web.discover": "discover"}.get(params["name"])
                     if not action or not isinstance(params.get("arguments"), dict):

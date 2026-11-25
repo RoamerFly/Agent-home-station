@@ -3,16 +3,63 @@ package linuxnative
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"wechat-bot/internal/sending"
 )
+
+func TestNativeReadConnectionsReuseWithoutWriteReuse(t *testing.T) {
+	var mu sync.Mutex
+	readConnections := map[string]bool{}
+	writeConnections := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if r.Method == http.MethodGet {
+			readConnections[r.RemoteAddr] = true
+		} else {
+			writeConnections[r.RemoteAddr] = true
+		}
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	sender := testSender(t, server.URL)
+	for i := 0; i < 32; i++ {
+		response, err := sender.do(t.Context(), http.MethodGet, "/v1/status", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		response, err := sender.do(t.Context(), http.MethodPost, "/v1/sends", []byte(`{}`), "write-once")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(readConnections) != 1 || len(writeConnections) != 2 {
+		t.Fatalf("read connections=%d, write connections=%d", len(readConnections), len(writeConnections))
+	}
+}
 
 func TestQueuedThenAcceptedReturnsExactReceipt(t *testing.T) {
 	var polls atomic.Int32

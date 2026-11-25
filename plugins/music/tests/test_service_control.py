@@ -17,7 +17,7 @@ class ServiceControlTests(unittest.TestCase):
         context = {key: "synthetic" for key in ("account", "thread", "requester", "purpose", "request_key")}
         initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "music.service_control", "arguments": arguments, "_meta": {"wechat/context": context}}}
+            "name": "music.service_control", "arguments": arguments, "_meta": {"station/call_id": "a" * 64}}}
         host = {"jsonrpc": "2.0", "id": "music-model-1"}
         if denied:
             host["error"] = {"code": -32001, "message": "denied"}

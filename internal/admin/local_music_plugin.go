@@ -195,6 +195,11 @@ func (m *Manager) localMusicPluginConnection(ctx context.Context) (string, strin
 	if json.Unmarshal(cfg.Values["local_endpoint"], &endpoint) != nil || json.Unmarshal(cfg.Values["local_token"], &token) != nil || !localMusicEndpoint(endpoint) || strings.TrimSpace(token) == "" {
 		return "", "", toolInputError("music_local_plugin_configuration_required")
 	}
+	m.musicEndpointMu.RLock()
+	if m.musicEndpoint != "" {
+		endpoint = m.musicEndpoint
+	}
+	m.musicEndpointMu.RUnlock()
 	return endpoint, token, nil
 }
 
@@ -360,8 +365,10 @@ func (p *permittedTools) newLocalMusicPluginPolicy(ctx context.Context, method, 
 	}
 	policy := &localMusicPluginPolicy{p: p, store: s, digest: i.Digest, version: i.Package.Version, configRevision: cfg.Revision, post: localMusicHTTP}
 	policy.admin = authority
-	_ = json.Unmarshal(cfg.Values["local_endpoint"], &policy.endpoint)
-	_ = json.Unmarshal(cfg.Values["local_token"], &policy.token)
+	policy.endpoint, policy.token, err = p.manager.localMusicPluginConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
 	grant, _ := json.Marshal(i.Permissions)
 	policy.grants = string(grant)
 	if authority != nil {
@@ -465,9 +472,9 @@ func (p *localMusicPluginPolicy) checkBoundCall(ctx context.Context, j pluginhos
 		if err != nil || epoch != p.invocation.EvidenceEpoch {
 			return errors.New("music_local_evidence_changed")
 		}
-		for id, revision := range p.invocation.SourceVersions {
+		for id := range p.invocation.SourceVersions {
 			ev, e := p.p.manager.memory.ReadEvent(ctx, []string{companion.ScopeID("wechat", p.invocation.Account, p.invocation.Thread)}, id)
-			if e != nil || ev.Revision != revision {
+			if e != nil {
 				return errors.New("music_local_source_changed")
 			}
 			if source := p.p.trace.Source; source != nil && source.EventID == id && (ev.Role != "user" || ev.Sender != p.p.trace.Sender) {

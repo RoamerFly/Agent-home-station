@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"slices"
 	"strconv"
 
 	"wechat-bot/internal/mcptools"
@@ -31,11 +30,7 @@ type externalPollState struct {
 	Arguments json.RawMessage      `json:"arguments"`
 	Initial   *externalPollInitial `json:"initial,omitempty"`
 }
-type externalPollWireResult struct {
-	Observation externalHTTPObservation `json:"observation"`
-	Ticket      plugins.JobTicket       `json:"ticket"`
-	Output      *externalHTTPWireOutput `json:"output,omitempty"`
-}
+type externalPollWireResult = plugins.ExternalPollWireResult
 
 func externalTaskCapability(task agentTask) string {
 	if task.PluginJob != nil && task.PluginJob.PollState != nil {
@@ -121,59 +116,9 @@ func (p *externalHTTPPolicy) pollInitialResponse(ctx context.Context) (plugins.E
 	return plugins.ExternalResponse{ContentType: ref.ContentType, BodyBase64: base64.StdEncoding.EncodeToString(data)}, nil
 }
 func (p *externalHTTPPolicy) pollResultProof(result externalPollWireResult, data []byte, body externalHTTPBlobRef, contentType string) (plugins.Output, error) {
-	denied := errors.New("external_poll_result_changed")
-	old := p.job.task.PluginJob.Ticket
-	if result.Ticket.Tool != old.Tool || result.Ticket.Fingerprint != old.Fingerprint || result.Ticket.RemoteID != "" || result.Observation.ContentType != contentType || result.Ticket.Output.Text != "" || len(result.Ticket.Output.Media) != 0 {
-		return plugins.Output{}, denied
-	}
-	if !externalHTTPIsJSON(data, contentType) {
-		if p.job.phase != "start" || result.Ticket.State != "completed" || result.Output == nil {
-			return plugins.Output{}, denied
-		}
-		return p.materialize(externalHTTPWireResult{Observation: result.Observation, Output: *result.Output}, data, body, contentType)
-	}
-	if result.Observation.BinaryRef != nil {
-		return plugins.Output{}, denied
-	}
-	actual, err := base64.StdEncoding.Strict().DecodeString(result.Observation.BodyBase64)
-	if err != nil || !bytes.Equal(actual, data) {
-		return plugins.Output{}, denied
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	var value any
-	if decoder.Decode(&value) != nil {
-		return plugins.Output{}, denied
-	}
-	status := externalHTTPText(externalHTTPValue(value, p.tool.Poll.StatusPath))[0]
-	state := "waiting"
-	if slices.Contains(p.tool.Poll.FailedValues, status) {
-		state = "failed"
-	} else if slices.Contains(p.tool.Poll.DoneValues, status) {
-		state = "completed"
-	}
-	if result.Ticket.State != state {
-		return plugins.Output{}, denied
-	}
-	if state != "completed" {
-		if result.Output != nil {
-			return plugins.Output{}, denied
-		}
-		return plugins.Output{}, nil
-	}
-	if result.Output == nil {
-		return plugins.Output{}, denied
-	}
-	selected := p.tool
-	if selected.Poll.TextPath != "" {
-		selected.TextPath = selected.Poll.TextPath
-	}
-	if selected.Poll.MediaURLPath != "" {
-		selected.MediaURLPath = selected.Poll.MediaURLPath
-	}
-	proof := &externalHTTPPolicy{tool: selected}
-	return proof.materialize(externalHTTPWireResult{Observation: result.Observation, Output: *result.Output}, data, body, contentType)
+	return plugins.VerifyExternalPollResult(p.tool, p.job.phase, p.job.task.PluginJob.Ticket, result, data, body, contentType)
 }
+
 func (p *externalHTTPPolicy) validatePoll(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	var result externalPollWireResult
 	if musicStrictJSON(raw, &result) != nil || !p.requested || len(p.observed) == 0 {

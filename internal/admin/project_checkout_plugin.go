@@ -26,11 +26,10 @@ type projectCheckoutPluginInput struct {
 	PluginID string `json:"plugin_id"`
 }
 
-// projectCheckoutPluginAllowed deliberately depends on the installed project
-// capability's *write* grant.  A trusted owner with a read-only Agent host
-// cannot turn a package inspection into a writable source tree.
+// projectCheckoutPluginAllowed depends on the installed project's write grant.
+// A read-only host cannot turn package inspection into a writable source tree.
 func (p *permittedTools) projectCheckoutPluginAllowed(ctx context.Context) bool {
-	if !p.privileged() || !p.workspaceExecutionAllowed() {
+	if !p.workspaceExecutionAllowed() {
 		return false
 	}
 	rows, _, installed, err := p.projectPluginCatalog(ctx)
@@ -61,7 +60,7 @@ func checkoutPluginDirectory(id, digest string) (string, error) {
 
 func (p *permittedTools) checkoutPluginSource(ctx context.Context, raw json.RawMessage) (string, error) {
 	if !p.projectCheckoutPluginAllowed(ctx) {
-		return "", toolInputError("project_checkout_requires_owner_workspace_write")
+		return "", toolInputError("project_checkout_requires_workspace_write")
 	}
 	var in projectCheckoutPluginInput
 	if musicStrictJSON(raw, &in) != nil || in.PluginID == "" {

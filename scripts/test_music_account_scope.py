@@ -20,6 +20,18 @@ from process_window import no_console_options
 
 
 class MusicAccountScopeTests(unittest.TestCase):
+    def test_release_wechat_workspace_retains_original_account_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / 'workspaces' / 'wechat'
+            private.mkdir(parents=True)
+            account = 'synthetic-account'
+            digest = hashlib.sha256(account.encode()).hexdigest()
+            (private / 'account.json').write_text(json.dumps({
+                'account_id': account, 'scope': digest,
+                'directory': 'desktop--original',
+            }), encoding='utf-8')
+            self.assertEqual(account_scope(private), digest)
+
     def test_named_directory_retains_server_account_scope_not_display_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             private = Path(tmp)/'pri_workspace/蓝色大肥鱼--example'

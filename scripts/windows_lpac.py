@@ -8,6 +8,7 @@ from ctypes import wintypes as w
 import hashlib
 import os
 from pathlib import Path
+import stat
 import subprocess
 import time
 
@@ -69,6 +70,40 @@ def mount_granted(path, sid, mode):
         kernel.LocalFree(descriptor)
 
 
+def process_working_directory(kernel, directory):
+    cwd = str(Path(directory))
+
+    def fits(value):
+        # CreateProcessW needs room for a trailing separator and NUL.
+        return len(value.rstrip("\\/").encode("utf-16-le")) // 2 <= 258
+
+    if fits(cwd):
+        return cwd
+    extended = "\\\\?\\"
+    path = cwd if cwd.startswith(extended) else (
+        extended + "UNC\\" + cwd[2:] if cwd.startswith("\\\\") else extended + cwd
+    )
+    short_path = kernel.GetShortPathNameW
+    short_path.argtypes = [w.LPCWSTR, w.LPWSTR, w.DWORD]
+    short_path.restype = w.DWORD
+    size = short_path(path, None, 0)
+    if size:
+        buffer = c.create_unicode_buffer(size)
+        written = short_path(path, buffer, size)
+        if 0 < written < size:
+            short = buffer.value
+            if short.startswith(extended + "UNC\\"):
+                short = "\\\\" + short[len(extended + "UNC\\"):]
+            elif short.startswith(extended):
+                short = short[len(extended):]
+            try:
+                if fits(short) and os.path.samefile(path, short):
+                    return short
+            except OSError:
+                pass
+    raise ValueError("windows_working_directory_too_long（当前目录过长且没有可核验的短路径。请使用更短的工作目录。）")
+
+
 def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_runtime=False, speech_runtime=False, environment=None, input_stream=None):
     """Return a process handle, pid and cleanup. Child inherits only stdio.
 
@@ -80,6 +115,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         raise RuntimeError("windows_lpac_unavailable")
     import msvcrt
     k = c.WinDLL("kernel32", use_last_error=True)
+    process_cwd = process_working_directory(k, cwd)
     u = c.WinDLL("userenv", use_last_error=True)
     adv = c.WinDLL("advapi32", use_last_error=True)
     k.GetCurrentProcess.restype = w.HANDLE
@@ -106,12 +142,12 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
     for original in [*writable, *readonly]:
         path = Path(original)
         for parent in [path, *path.parents]:
-            if parent.is_symlink() or parent.is_junction():
+            if parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                 raise RuntimeError("lpac_mount_reparse_point")
     paths = [(str(Path(p).resolve(strict=True)), "M") for p in writable]
     paths += [(str(Path(p).resolve(strict=True)), "RX") for p in readonly]
     for p, _ in paths:
-        if Path(p).parent == Path(p) or Path(p).is_junction() or Path(p).is_symlink():
+        if Path(p).parent == Path(p) or Path(p).lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
             raise RuntimeError("lpac_invalid_mount")
     if type(music_runtime) is not bool or type(speech_runtime) is not bool or music_runtime and speech_runtime:
         raise ValueError("invalid_music_runtime_policy")
@@ -180,9 +216,13 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         # extension modules can resolve their matching VCRuntime/Python DLLs;
         # do not inherit a developer, user, or system-wide Python path.
         managed_python_dir = str(Path(argv[0]).resolve(strict=True).parent)
-        env = {"LOCALAPPDATA":str(Path(writable[0])/"scratch"),"APPDATA":str(Path(writable[0])/"scratch"),"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
+        scratch = str(Path(writable[0]) / "scratch")
+        # An AppContainer can replace TEMP/TMP for nested Windows processes.
+        # Python checks TMPDIR first, keeping temporary files in the same
+        # writable scope even when the child runs from a read-only directory.
+        env = {"LOCALAPPDATA":scratch,"APPDATA":scratch,"USERPROFILE":str(writable[0]),"SystemDrive":os.environ.get("SystemDrive","C:"),"ALLUSERSPROFILE":os.environ.get("ProgramData",r"C:\ProgramData"),"ProgramData":os.environ.get("ProgramData",r"C:\ProgramData"),"SystemRoot": os.environ["SystemRoot"], "WINDIR": os.environ["SystemRoot"],
                "PATH": managed_python_dir + os.pathsep + str(Path(os.environ["SystemRoot"]) / "System32"),
-               "TEMP": str(Path(writable[0]) / "scratch"), "TMP": str(Path(writable[0]) / "scratch")}
+               "TEMP": scratch, "TMP": scratch, "TMPDIR": scratch}
         if environment:
             permitted = {"DOCUMENT_RUNTIME_ROOT"}
             if music_runtime or speech_runtime:
@@ -207,7 +247,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
             raise ValueError("windows_command_line_too_long")
         cmd = c.create_unicode_buffer(line)
         if not k.CreateProcessW(argv[0], cmd, None, None, True, 0x08000000 | 0x80000 | 0x400 | 4,
-                                block, str(cwd), c.byref(si), c.byref(pi)):
+                                block, process_cwd, c.byref(si), c.byref(pi)):
             raise c.WinError(c.get_last_error())
         job=k.CreateJobObjectW(None,None)
         limits=EXTENDED_LIMIT();limits.BasicLimitInformation.LimitFlags=0x2000
@@ -218,6 +258,7 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
         k.ResumeThread(pi.hThread);k.CloseHandle(pi.hThread)
         process = SandboxedProcess(k,pi.hProcess,job,pi.dwProcessId)
         process.package_sid = package_sid
+        process.scratch_sink = Path(env["TMP"]) / ("null-" + str(pi.dwProcessId) + ".tmp")
         return process
     finally:
         os.set_handle_inheritable(handle, False)
@@ -293,6 +334,13 @@ class SandboxedProcess:
         if code.value!=259:
             self.returncode=code.value;self.k.CloseHandle(self.handle);self.handle=None
             self.k.CloseHandle(self.job);self.job=None
+            sink = getattr(self, "scratch_sink", None)
+            if sink is not None and sink.is_file() and not sink.is_symlink():
+                try:
+                    if sink.resolve() == sink.absolute():
+                        sink.unlink()
+                except OSError:
+                    pass
         return self.returncode
     def wait(self,timeout=None):
         started=time.monotonic()

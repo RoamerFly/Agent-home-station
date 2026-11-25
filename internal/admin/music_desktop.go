@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -21,9 +23,22 @@ type windowsMusicConfig struct {
 	Enabled bool   `json:"enabled"`
 	Policy  string `json:"policy"`
 	Python  string `json:"python"`
-	Entry   string `json:"entry"`
-	Media   string `json:"media"`
-	IPC     string `json:"ipc"`
+	// PublicRoot is the single public tool package mounted read-only by the
+	// compatibility bridge. Empty keeps the historical managed workspace root.
+	PublicRoot string `json:"public_root,omitempty"`
+	// SingingVoiceConfig is account/application state and therefore stays in
+	// data even when the public RVC package is outside the workspace.
+	SingingVoiceConfig string `json:"singing_voice_config,omitempty"`
+	Entry              string `json:"entry"`
+	Media              string `json:"media"`
+	IPC                string `json:"ipc"`
+	// ComfyURL optionally points at a separately managed Station Comfy
+	// process. Empty keeps the private child-process behavior.
+	ComfyURL          string `json:"comfy_url,omitempty"`
+	ComfyRegistration string `json:"comfy_registration,omitempty"`
+	// ComfyInput is the shared input folder used by an external Comfy process
+	// for cover references. It is ignored when ComfyURL is empty.
+	ComfyInput string `json:"comfy_input,omitempty"`
 }
 
 const windowsMusicServiceID = "music.local"
@@ -150,9 +165,8 @@ func (m *Manager) reclaimWindowsMusicIdle(generation uint64, timeout time.Durati
 }
 
 func (m *Manager) windowsMusicRegistered() bool {
-	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
-	var profile windowsMusicConfig
-	return err == nil && len(data) <= 16384 && json.Unmarshal(data, &profile) == nil && profile.Enabled && profile.Policy == windowsMusicPolicy
+	_, _, err := m.windowsMusicLaunchConfig()
+	return err == nil
 }
 
 func regularMusicPath(path string, directory bool) error {
@@ -174,6 +188,192 @@ func regularMusicPath(path string, directory bool) error {
 	return nil
 }
 
+func registeredComfyURL(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", toolInputError("windows_music_comfy_url_must_be_loopback")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1024 || port > 65535 {
+		return "", toolInputError("windows_music_comfy_url_port_invalid")
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(port), nil
+}
+
+func registeredComfyInput(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+		return "", toolInputError("windows_music_comfy_input_invalid")
+	}
+	return raw, nil
+}
+
+func registeredMusicPublicRoot(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if err := regularMusicPath(raw, true); err != nil {
+		return "", err
+	}
+	manifest := filepath.Join(raw, "plugin.json")
+	if err := regularMusicPath(manifest, false); err != nil {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil || len(data) > 16384 {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	var value struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(data, &value) != nil || strings.TrimSpace(value.ID) == "" {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	if err := regularMusicPath(filepath.Join(raw, "runtime"), true); err != nil {
+		return "", toolInputError("windows_music_public_package_invalid")
+	}
+	return filepath.Clean(raw), nil
+}
+
+func registeredMusicVoiceConfig(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if err := regularMusicPath(raw, false); err != nil {
+		return "", toolInputError("windows_music_voice_config_invalid")
+	}
+	return filepath.Clean(raw), nil
+}
+
+// A relocated Windows installation may share the packaged CLI Python with
+// other local tools.  Accept only this release-owned executable and verify its
+// pinned bytes; a path in private configuration cannot nominate another host
+// interpreter or turn the music package into an arbitrary process launcher.
+func registeredPortableMusicPython(adminDir, python string) bool {
+	release := filepath.Clean(filepath.Join(adminDir, "..", "..", "..", ".."))
+	if !strings.EqualFold(filepath.Clean(adminDir), filepath.Join(release, "data", "applications", "wechat", "legacy-admin")) ||
+		!strings.EqualFold(filepath.Clean(python), filepath.Join(release, "env", "windows-python-cli", "python.exe")) {
+		return false
+	}
+	var layout struct {
+		Package  string `json:"package"`
+		Platform string `json:"platform"`
+		Layout   struct {
+			Data     string `json:"data"`
+			Runtimes string `json:"runtimes"`
+		} `json:"layout"`
+	}
+	manifest, err := os.ReadFile(filepath.Join(release, "manifest.json"))
+	if err != nil || len(manifest) > 16<<10 || json.Unmarshal(manifest, &layout) != nil ||
+		layout.Package != "agent-home-station" || layout.Platform != "windows-amd64" ||
+		layout.Layout.Data != "data" || layout.Layout.Runtimes != "env" {
+		return false
+	}
+	var runtimeManifest struct {
+		Platform string            `json:"platform"`
+		Files    map[string]string `json:"files"`
+	}
+	runtimeRoot := filepath.Join(release, "env", "windows-python-cli")
+	manifest, err = os.ReadFile(filepath.Join(runtimeRoot, "runtime-manifest.json"))
+	if err != nil || len(manifest) > 16<<10 || json.Unmarshal(manifest, &runtimeManifest) != nil || runtimeManifest.Platform != "windows-x64" {
+		return false
+	}
+	expected, err := hex.DecodeString(runtimeManifest.Files["python.exe"])
+	if err != nil || len(expected) != sha256.Size || regularMusicPath(python, false) != nil {
+		return false
+	}
+	actual, err := os.ReadFile(python)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(actual)
+	return string(digest[:]) == string(expected)
+}
+
+// Validate the same launch resources for status and start, including registrations
+// preserved across a portable upgrade whose original paths no longer exist.
+func (m *Manager) windowsMusicLaunchConfig() (windowsMusicConfig, []byte, error) {
+	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
+	if err != nil {
+		return windowsMusicConfig{}, nil, toolInputError("windows_music_not_installed_or_authorized")
+	}
+	return m.validateWindowsMusicLaunchConfig(data)
+}
+
+func (m *Manager) validateWindowsMusicLaunchConfig(data []byte) (windowsMusicConfig, []byte, error) {
+	var config windowsMusicConfig
+	if len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
+		return config, nil, toolInputError("windows_music_not_installed_or_authorized")
+	}
+	comfyURL, err := registeredComfyURL(config.ComfyURL)
+	if err != nil {
+		return config, nil, err
+	}
+	comfyInput, err := registeredComfyInput(config.ComfyInput)
+	if err != nil {
+		return config, nil, err
+	}
+	public := filepath.Join(m.managedRoot(), "public_workspace")
+	if config.PublicRoot != "" {
+		public, err = registeredMusicPublicRoot(config.PublicRoot)
+		if err != nil {
+			return config, nil, err
+		}
+	}
+	voiceConfig, err := registeredMusicVoiceConfig(config.SingingVoiceConfig)
+	if err != nil {
+		return config, nil, err
+	}
+	// A package root stores its executable runtime under `runtime/`; the
+	// historical managed-workspaces layout used `runtimes/`. Accept the
+	// package layout while retaining the legacy workspace boundary.
+	pythonRootName := "runtimes"
+	if _, statErr := os.Stat(filepath.Join(public, "plugin.json")); statErr == nil {
+		pythonRootName = "runtime"
+	}
+	pythonRoot := filepath.Join(public, pythonRootName) + string(os.PathSeparator)
+	packagePython := strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) && strings.EqualFold(filepath.Base(config.Python), "python.exe")
+	if (!packagePython && !registeredPortableMusicPython(m.dir, config.Python)) || filepath.Base(config.Entry) != "managed_music_service.py" {
+		return config, nil, toolInputError("windows_music_runtime_identity_invalid")
+	}
+	if err := regularMusicPath(config.Python, false); err != nil {
+		return config, nil, toolInputError("windows_music_python_unavailable")
+	}
+	for _, resource := range []struct {
+		path string
+		dir  bool
+	}{{public, true}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
+		if err := regularMusicPath(resource.path, resource.dir); err != nil {
+			return config, nil, err
+		}
+	}
+	if config.ComfyRegistration != "" && (comfyURL == "" || regularMusicPath(config.ComfyRegistration, false) != nil) {
+		return config, nil, toolInputError("windows_music_comfy_registration_invalid")
+	}
+	if comfyInput != "" {
+		if comfyURL == "" {
+			return config, nil, toolInputError("windows_music_comfy_input_requires_url")
+		}
+		if err := regularMusicPath(comfyInput, true); err != nil {
+			return config, nil, err
+		}
+	}
+	// Control code, authentication and IPC leases stay outside inference mounts.
+	for _, path := range []string{config.Entry, config.IPC} {
+		if pathWithin(m.managedRoot(), path) {
+			return config, nil, toolInputError("windows_music_control_inside_agent_workspace")
+		}
+	}
+	config.PublicRoot, config.SingingVoiceConfig = public, voiceConfig
+	config.ComfyURL, config.ComfyInput = comfyURL, comfyInput
+	return config, data, nil
+}
+
 func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if m.draining() {
 		return "", toolInputError("windows_music_start_paused_for_update")
@@ -181,29 +381,14 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
-	var config windowsMusicConfig
-	if err != nil || len(data) > 16384 || json.Unmarshal(data, &config) != nil || !config.Enabled || config.Policy != windowsMusicPolicy {
-		return "", toolInputError("windows_music_not_installed_or_authorized")
+	config, data, err := m.windowsMusicLaunchConfig()
+	if err != nil {
+		return "", err
 	}
-	public := filepath.Join(m.managedRoot(), "public_workspace")
-	pythonRoot := filepath.Join(public, "runtimes") + string(os.PathSeparator)
-	if !strings.HasPrefix(strings.ToLower(config.Python), strings.ToLower(pythonRoot)) || !strings.EqualFold(filepath.Base(config.Python), "python.exe") || filepath.Base(config.Entry) != "managed_music_service.py" {
-		return "", toolInputError("windows_music_runtime_identity_invalid")
-	}
-	for _, resource := range []struct {
-		path string
-		dir  bool
-	}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
-		if err := regularMusicPath(resource.path, resource.dir); err != nil {
-			return "", err
-		}
-	}
-	// Control code, authentication and IPC leases stay outside inference mounts.
-	for _, path := range []string{config.Entry, config.IPC} {
-		if pathWithin(m.managedRoot(), path) {
-			return "", toolInputError("windows_music_control_inside_agent_workspace")
-		}
+	public, voiceConfig := config.PublicRoot, config.SingingVoiceConfig
+	comfyURL, comfyInput := config.ComfyURL, config.ComfyInput
+	if err := m.selectWindowsMusicEndpoint(ctx); err != nil {
+		return "", err
 	}
 	localEndpoint, localToken, err := m.localMusicPluginConnection(ctx)
 	if err != nil {
@@ -241,29 +426,38 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 		if err := checkMusicServiceControl(ctx); err != nil {
 			return err
 		}
-		current, err := os.ReadFile(filepath.Join(m.dir, "windows-music.json"))
-		if err != nil || string(current) != string(data) {
+		_, current, err := m.windowsMusicLaunchConfig()
+		if err != nil {
+			return err
+		}
+		if string(current) != string(data) {
 			return toolInputError("windows_music_registration_changed")
 		}
 		currentAuthority, err := m.musicServiceAuthority(ctx)
 		if err != nil || currentAuthority != authority {
 			return toolInputError("windows_music_plugin_authorization_changed")
 		}
-		for _, resource := range []struct {
-			path string
-			dir  bool
-		}{{config.Python, false}, {config.Entry, false}, {config.Media, true}, {config.IPC, true}} {
-			if err := regularMusicPath(resource.path, resource.dir); err != nil {
-				return err
-			}
-		}
 		return nil
+	}
+	arguments := []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
+		"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"}
+	arguments = append(arguments, "--public-root", public)
+	if voiceConfig != "" {
+		arguments = append(arguments, "--singing-voice-config", voiceConfig)
+	}
+	if config.ComfyRegistration != "" {
+		arguments = append(arguments, "--comfy-registration", config.ComfyRegistration)
+	}
+	if comfyURL != "" {
+		arguments = append(arguments, "--comfy-url", comfyURL)
+		if comfyInput != "" {
+			arguments = append(arguments, "--comfy-input", comfyInput)
+		}
 	}
 	spec := pluginruntime.ManagedServiceSpec{
 		OwnerPlugin: "music",
 		Binding:     binding, Executable: config.Python,
-		Arguments: []string{"-X", "utf8", config.Entry, "--workspace", m.managedRoot(), "--private", private,
-			"--python", config.Python, "--token-file", token, "--ipc", config.IPC, "--bind", "127.0.0.1", "--port", strconv.Itoa(port), "--desktop"},
+		Arguments: arguments,
 		Directory: filepath.Dir(config.Entry),
 		Environment: []string{"SystemRoot=" + os.Getenv("SystemRoot"), "WINDIR=" + os.Getenv("WINDIR"), "SystemDrive=" + os.Getenv("SystemDrive"),
 			"PATH=" + config.Media + string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32"),
@@ -310,6 +504,37 @@ func (m *Manager) startWindowsMusic(ctx context.Context) (string, error) {
 	}
 	m.touchWindowsMusic()
 	return `{"state":"starting_or_active","backend":"windows-native","instruction":"用music_service_status核对模型就绪；启动不代表任务完成。"}`, nil
+}
+
+// The music plugin records a preferred loopback port, but another desktop
+// application may claim it before the music service starts. Keep a process
+// local replacement so every bound music request uses the same live endpoint.
+func (m *Manager) selectWindowsMusicEndpoint(ctx context.Context) error {
+	if m.windowsMusicStatus().Running {
+		return nil
+	}
+	endpoint, _, err := m.localMusicPluginConnection(ctx)
+	if err != nil {
+		return err
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" {
+		return toolInputError("windows_music_requires_loopback_endpoint")
+	}
+	listener, err := net.Listen("tcp", u.Host)
+	if err == nil {
+		return listener.Close()
+	}
+	listener, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return toolInputError("windows_music_no_free_loopback_port")
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	m.musicEndpointMu.Lock()
+	m.musicEndpoint = "http://127.0.0.1:" + strconv.Itoa(port)
+	m.musicEndpointMu.Unlock()
+	return nil
 }
 
 // Only the currently installed, enabled plugin configuration confers launch

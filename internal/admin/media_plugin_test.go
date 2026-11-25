@@ -96,6 +96,40 @@ func mediaJob(p *mediaPluginPolicy) (pluginhost.Job, pluginhost.Capability) {
 	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "media.observe", Context: p.Invocation()}, pluginhost.Capability{ID: "media.observe", Permissions: []string{"artifact.read", "model.invoke"}}
 }
 
+func TestMediaPluginReadsExactLiveStickerBeforeMemoryObservation(t *testing.T) {
+	f, native, initial, ctx := mediaPolicyFixture(t, false)
+	f.manager.config.Companion.Permissions.Remember = true
+	f.manager.config.Companion.Permissions.ObserveGroups = true
+	native.msg.ID, native.msg.ThreadID, native.msg.Type = "live-sticker", "synthetic@chatroom", 47
+	f.manager.config.GroupRules = []GroupRule{{ID: native.msg.ThreadID, Mode: "social"}}
+
+	before, err := f.manager.memory.RecallEpoch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.manager.newMediaPluginPolicy(ctx, native.msg, "describe the sticker", initial.Images(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, capability := mediaJob(p)
+	if err = p.Check(ctx, j, capability); err != nil {
+		t.Fatal(err)
+	}
+	after, err := f.manager.memory.RecallEpoch(ctx)
+	if err != nil || before != after {
+		t.Fatalf("native check changed the in-flight memory snapshot: %q -> %q, %v", before, after, err)
+	}
+	scope := companion.ScopeID("wechat", "test", native.msg.ThreadID)
+	if _, err = f.manager.memory.ReadEvent(ctx, []string{scope}, p.receivedSharePolicy.source.EventID); err == nil {
+		t.Fatal("native check fabricated a stored memory event")
+	}
+
+	native.msg.Body = "replacement card"
+	if err = p.Check(ctx, j, capability); err == nil {
+		t.Fatal("changed native card did not invalidate the observation")
+	}
+}
+
 func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
 	for _, remember := range []bool{false, true} {
 		t.Run(map[bool]string{true: "remembered", false: "ephemeral"}[remember], func(t *testing.T) {

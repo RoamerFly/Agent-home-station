@@ -16,6 +16,17 @@ MODULE = "wechat-bot/"
 PLUGIN_IMPLEMENTATION_PREFIX = MODULE + "plugins/"
 DIRECT_DEPS = {MODULE + "internal/bailian": "speech", MODULE + "internal/mobile": "mobile-control", MODULE + "internal/channels": "share-reader", MODULE + "internal/dev": "development-only"}
 RETAINED_AUTHORITIES = {MODULE + "internal/agenthost": "Core OS isolation, authorized filesystem/process execution and cleanup authority; project interpretation belongs to the installed package."}
+
+
+def sha256_file(path):
+    """Hash a file on Python versions before hashlib.file_digest (3.11)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 SERVICE_MARKERS = {
     "speech": (r"bailian\.New\(", r"speech_synthesize", r"voice_synthesis", r"gpt.?sovits", r"voice_library_"),
     "music": (r"(?<![A-Za-z])YuE(?![A-Za-z])", r"(?<![A-Za-z])RVC(?![A-Za-z])", r"music_(?:local|rvc|service|reference|sampling|resume)"),
@@ -32,14 +43,16 @@ SERVICE_MARKERS = {
 CAPABILITIES = {
     "audio-workshop": {"audio.prepare": (True, {"artifact.read", "artifact.write"})},
     "comfyui": {"comfyui.workflows": (True, {"gpu"}), "comfyui.run": (True, {"artifact.write", "gpu"}), "comfyui.job": (True, {"artifact.write", "gpu"})},
-    "document-workshop": {"document.inspect": (True, {"artifact.read"}), "document.reconstruct": (True, {"artifact.read", "artifact.write"}), "document.export_pdf": (True, {"artifact.read", "artifact.write"}), "document.verify": (True, {"artifact.read", "artifact.write"})},
+    "document-workshop": {"document.inspect": (True, {"artifact.read"}), "document.reconstruct": (True, {"artifact.read", "artifact.write"}), "document.export_pdf": (True, {"artifact.read", "artifact.write"}), "document.verify": (True, {"artifact.read", "artifact.write"}), "document.revise_title": (True, {"artifact.read", "artifact.write"})},
     "external-tools": {"external.http_request": (True, {"network"}), "external.job_request": (True, {"network"}), "external.mcp_request": (True, {"network"}), "external.poll_request": (True, {"network"}), "external.discover": (False, {"network"}), "external.call": (False, {"network"})},
     "media-understanding": {"media.observe": (True, {"artifact.read", "model.invoke"}), "media.transcribe": (True, {"artifact.read", "model.invoke"}), "media.listen": (True, {"artifact.read", "model.invoke"})},
     "mobile-control": {"device.plan": (True, {"model.invoke"}), "device.list": (True, {"device"}), "device.observe": (True, {"device"}), "device.act": (True, {"device"}), "device.record": (True, {"device"}), "device.read_artifact": (True, {"device"}), "device.workflow": (True, {"device", "model.invoke"})},
     "music": {"music.generate": (True, {"model.invoke"}), "music.bridge_request": (True, {"network"}), "music.service_control": (True, {"network"}), "music.prepare": (True, {"network"}), "music.cover": (False, set()), "music.train": (False, set())},
     "project-development": {"project.workspace_read": (True, {"workspace.read"}), "project.workspace_write": (True, {"workspace.write"}), "project.workspace_execute": (True, {"process.execute"})},
     "rvc": {"rvc.convert": (True, {"artifact.read", "artifact.write", "gpu"})},
-    "station-speech": {"station-speech.voices": (True, {"artifact.write", "gpu"}), "station-speech.synthesize": (True, {"artifact.write", "gpu"})},
+    "station-speech": {"station-speech.voices": (True, {"artifact.write", "gpu"}), "station-speech.synthesize": (True, {"artifact.write", "gpu"}), "station-speech.job": (True, {"artifact.write", "gpu"})},
+    "audio-cpp": {"audio-cpp.models": (True, {"model.invoke"}), "audio-cpp.synthesize": (True, {"artifact.write", "model.invoke", "gpu"}), "audio-cpp.transcribe": (True, {"artifact.read", "model.invoke", "gpu"})},
+    "obs-preview": {"obs.preview": (True, {"network"})},
     "yue": {"yue.generate": (True, {"artifact.read", "artifact.write", "gpu"}), "yue.job": (True, {"artifact.read", "artifact.write", "gpu"})},
     "share-reader": {"share.read": (False, set()), "share.resolve_public": (True, {"network"}), "share.resolve_channels": (True, {"network"})},
     "speech": {"speech.synthesize": (True, {"model.invoke"}), "speech.synthesize_named": (True, {"artifact.read", "model.invoke"}), "speech.voices": (False, set()), "speech.train": (False, set())},
@@ -206,7 +219,7 @@ def audit_catalog(root=ROOT):
             if not path.is_file() or path == manifest: continue
             name = path.relative_to(directory).as_posix(); actual.add(name)
             if name not in files: fail("unindexed_package_file"); continue
-            with path.open("rb") as stream: digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            digest = sha256_file(path)
             if digest != files[name]: fail("package_file_digest_mismatch")
         if any(not safe_relative(name) for name in files) or set(files) != actual: fail("package_file_index_invalid")
         ready, entry = status == "ready", runtime.get("entrypoint", "")

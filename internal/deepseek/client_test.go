@@ -57,7 +57,7 @@ func TestCompletionUsesOnlyCurrentPromptAndBoundsTransientRetries(t *testing.T) 
 			client.http = server.Client()
 			answer, err := client.Complete(context.Background(), "current prompt")
 			expectedCalls := 1
-			if tc.status == 429 || tc.name == "null" {
+			if tc.status == 429 || tc.name == "null" || tc.name == "truncated" {
 				expectedCalls = 2
 			}
 			if (err != nil) != tc.wantErr || calls != expectedCalls {

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -30,10 +31,35 @@ func (m *Manager) packageStore() (*pluginhost.Store, error) {
 	m.packages = store
 	return store, nil
 }
+
 func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 	s.pluginMigrationRoutes(mux)
 	s.pluginRuntimeRoute(mux)
 	s.pluginHostActionRoutes(mux)
+	mux.HandleFunc("GET /api/public-tools", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		p := &permittedTools{manager: s.manager}
+		session, err := p.stationToolLogin(r.Context())
+		if err != nil {
+			fail(w, 503, "公共工具由工作站管理，当前暂不可读。")
+			return
+		}
+		raw, err := p.stationToolRequest(r.Context(), session, http.MethodGet, "/api/local/project-tools", nil)
+		var list struct {
+			Tools []stationToolView `json:"tools"`
+		}
+		if err != nil || json.Unmarshal(raw, &list) != nil {
+			fail(w, 503, "公共工具目录暂不可读")
+			return
+		}
+		tools := make([]stationToolView, 0, len(list.Tools))
+		for _, v := range list.Tools {
+			if v.DirectoryPackage {
+				tools = append(tools, v)
+			}
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		respond(w, 200, map[string]any{"tools": tools})
+	}))
 	mux.HandleFunc("GET /api/plugin-packages/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		store, err := s.manager.packageStore()
 		if err != nil {
@@ -119,6 +145,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, result)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/configuration", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if _, shared := s.manager.sharedStationVision(); shared && r.PathValue("id") != mobileDevicePluginID {
+			fail(w, 409, "公共工具配置请在工作站的项目工具页维护。")
+			return
+		}
 		if s.manager.mobileRetired && r.PathValue("id") == mobileDevicePluginID {
 			fail(w, http.StatusGone, "手机控制已停用；不能修改历史工具配置")
 			return
@@ -207,6 +237,7 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 500, "工具存储不可用")
 			return
 		}
+		s.manager.ensureWechatDirectoryTools(r.Context(), store)
 		installed, err := store.List(r.Context())
 		if err != nil {
 			fail(w, 500, "工具登记读取失败")
@@ -239,11 +270,15 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		h, connected, runtimeErr := s.manager.installedPluginRuntime()
 		statuses := map[string]any{}
 		readiness := make(map[string]pluginPackageReadiness, len(installed))
+		backends := make(map[string][]pluginhost.ToolBackendView)
 		for _, item := range installed {
 			if runtimeErr == nil {
 				statuses[item.Package.ID] = h.Status(item.Package.ID)
 			}
 			readiness[item.Package.ID] = pluginReadiness(r.Context(), store, h, item, connected)
+			if views := s.manager.toolBackendViews(r.Context(), store, item.Package.ID); len(views) > 0 {
+				backends[item.Package.ID] = views
+			}
 		}
 		retained := []string{}
 		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && (state.Revision > 0 || hadMobileInstalled) {
@@ -280,7 +315,8 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			"description": "接收会话消息，按账号和会话权限发送文字、图片、语音或视频。",
 			"permissions": []string{"当前账号", "已授权会话"}, "uninstallable": false,
 		})
-		respond(w, 200, map[string]any{"installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "readiness": readiness, "retained_ids": retained, "builtins": builtins})
+		_, shared := s.manager.sharedStationVision()
+		respond(w, 200, map[string]any{"shared_public_tools": shared, "installed": installed, "catalog": official, "runtime_connected": connected, "runtimes": statuses, "readiness": readiness, "backends": backends, "retained_ids": retained, "builtins": builtins})
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/prepare", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -369,6 +405,17 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 500, "工具存储不可用")
 			return
 		}
+		if _, shared := s.manager.sharedStationVision(); shared {
+			prepared, prepareErr := store.Prepared(r.Context(), input.Token)
+			if prepareErr != nil || !legacyWechatPackageUpgrade(prepared.Package.ID) {
+				fail(w, 409, "公共工具安装与更新请在工作站的项目工具页维护。")
+				return
+			}
+			if current, currentErr := store.Installed(r.Context(), prepared.Package.ID); currentErr != nil || current.Removed {
+				fail(w, 409, "该微信工具尚未安装，不能在旧管理端新增安装")
+				return
+			}
+		}
 		if s.manager.mobileRetired {
 			prepared, preparedErr := store.Prepared(r.Context(), input.Token)
 			if preparedErr != nil {
@@ -394,6 +441,17 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 201, installed)
 	}))
+}
+
+// These WeChat calls still execute through the legacy package host. Keep their
+// installed snapshots upgradable while the Station owns all new public tools.
+func legacyWechatPackageUpgrade(id string) bool {
+	switch id {
+	case "document-workshop", "media-understanding", "music", projectPluginID, "rvc", "share-reader", "speech", "web-search", "yue":
+		return true
+	default:
+		return false
+	}
 }
 
 // An uninstalled package cannot supply a UI declaration. The host retains only

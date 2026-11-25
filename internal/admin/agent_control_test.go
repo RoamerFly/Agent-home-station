@@ -2,9 +2,14 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +47,142 @@ func trustedAgent(t *testing.T) (*webFixture, *permittedTools) {
 		t.Fatal(e)
 	}
 	return f, p
+}
+
+type taskOriginNative struct {
+	*fakeNative
+	message linuxnative.Message
+}
+
+func (n *taskOriginNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
+	if id == n.message.ID {
+		return n.message, nil
+	}
+	return linuxnative.Message{}, nil
+}
+
+func TestTaskCanBindVerifiedEarlierRequestAndReuseCompletedWork(t *testing.T) {
+	f, p := trustedAgent(t)
+	p.manager.native = &taskOriginNative{fakeNative: f.native, message: linuxnative.Message{
+		ID: "song-request", AccountID: "test", ThreadID: "wxid_owner", SenderID: "wxid_owner",
+		Direction: "incoming", Type: 1, Body: "请唱卜卦", ServerID: "original-server",
+	}}
+	late := "晚安"
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "later-message", OriginalText: &late, Mode: "direct"})
+	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"song-request"}]}`)
+	args := json.RawMessage(`{"key":"cover","title":"唱卜卦","checkpoint":"核对原成品","state":"waiting","origin_message_id":"song-request"}`)
+	raw, err := p.Call(t.Context(), "agent_task", args)
+	var first struct{ Task agentTask }
+	if err != nil || json.Unmarshal([]byte(raw), &first) != nil || first.Task.OriginTrace != "song-request" || first.Task.RequestedText != "请唱卜卦" || first.Task.QuoteServerID != "original-server" || !slices.Contains(first.Task.SourceMessageIDs, "song-request") || first.Task.Constraints.Source != nil {
+		t.Fatalf("earlier request binding failed: %s %v", raw, err)
+	}
+	raw, err = p.Call(t.Context(), "agent_tasks", json.RawMessage(`{"status":"active","query":"卜卦","limit":120}`))
+	var active struct {
+		Items          []agentTask `json:"items"`
+		RequestedLimit int         `json:"requested_limit"`
+		EffectiveLimit int         `json:"effective_limit"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &active) != nil || len(active.Items) != 1 || active.Items[0].OriginTrace != "song-request" || active.RequestedLimit != 120 || active.EffectiveLimit != 100 {
+		t.Fatalf("active task pagination ignored: %s %v", raw, err)
+	}
+	if err := f.manager.validateTaskSource(first.Task); err != nil {
+		t.Fatalf("verified earlier request cannot continue: %v", err)
+	}
+	first.Task.State = "completed"
+	if err := f.manager.agent.task(first.Task); err != nil {
+		t.Fatal(err)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "even-later-message", OriginalText: &late, Mode: "direct"})
+	p.recordCrossSourceMessages("wxid_owner", `{"items":[{"id":"song-request"}]}`)
+	raw, err = p.Call(t.Context(), "agent_task", args)
+	var existing agentTask
+	if err != nil || json.Unmarshal([]byte(raw), &existing) != nil || existing.ID != first.Task.ID || existing.State != "completed" || len(f.manager.agent.list("test", "wxid_owner")) != 1 {
+		t.Fatalf("completed original was scheduled again: %s %v", raw, err)
+	}
+	raw, err = p.Call(t.Context(), "agent_tasks", json.RawMessage(`{"status":"history","query":"卜卦","limit":120}`))
+	var history struct {
+		Items []struct {
+			Origin string `json:"origin_message_id"`
+		} `json:"items"`
+		RequestedLimit int `json:"requested_limit"`
+		EffectiveLimit int `json:"effective_limit"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &history) != nil || len(history.Items) != 1 || history.Items[0].Origin != "song-request" || history.RequestedLimit != 120 || history.EffectiveLimit != 100 {
+		t.Fatalf("completed work not discoverable: %s %v", raw, err)
+	}
+}
+
+func TestExistingOwnerConversationDiscoversStationComfy(t *testing.T) {
+	_, p := trustedAgent(t)
+	if !p.agentToolEnabled("station_comfy") {
+		t.Fatal("owner conversation cannot discover the workstation ComfyUI bridge")
+	}
+	p.trace.Sender = "another-user"
+	if p.agentToolEnabled("station_comfy") {
+		t.Fatal("non-owner inherited the workstation ComfyUI bridge")
+	}
+}
+
+func TestGroupMemberCanContinueExistingImageTask(t *testing.T) {
+	f, p := trustedAgent(t)
+	f.manager.mu.Lock()
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "room@chatroom", Mode: "mention"})
+	f.manager.config.Companion.Enabled = true
+	f.manager.config.Companion.ProactiveThreads = nil
+	f.manager.mu.Unlock()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "member", TraceID: "image-request", IsGroup: true, Mode: "direct"})
+	if !p.agentToolEnabled("station_comfy") {
+		t.Fatal("group image request cannot discover ComfyUI")
+	}
+	if _, err := p.Call(context.Background(), "agent_task", json.RawMessage(`{"key":"image","title":"居家照","checkpoint":"继续检查作品","state":"waiting","delay_seconds":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	tasks := f.manager.agent.active("test", "room@chatroom")
+	if len(tasks) != 1 {
+		t.Fatal("image task not persisted", tasks)
+	}
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "owner", TraceID: "follow-up", IsGroup: true, Mode: "direct"})
+	update := `{"id":"` + tasks[0].ID + `","checkpoint":"继续核对成品","state":"waiting","delay_seconds":0}`
+	if _, err := p.Call(context.Background(), "agent_task", json.RawMessage(update)); err != nil {
+		t.Fatal("later group message could not continue task", err)
+	}
+	stored, ok := f.manager.agent.lookupTask(tasks[0].ID, "test", "room@chatroom")
+	if !ok || stored.Sender != "member" || stored.State != "waiting" {
+		t.Fatal("task origin was replaced or lost", stored)
+	}
+	claimed, err := f.manager.claimAgentTask(time.Now().Add(time.Second), func(string) bool { return false })
+	if err != nil || claimed == nil || claimed.TaskID != stored.ID || !claimed.Directed {
+		t.Fatal("requested group task did not resume directly", claimed, err)
+	}
+}
+
+func TestStationComfyArtifactStagesWechatImageWithoutSending(t *testing.T) {
+	f, p := trustedAgent(t)
+	native := &fakeTools{fakeNative: f.native}
+	f.manager.native = native
+	f.manager.config.Companion.Permissions.SendImage = true
+	f.manager.config.Companion.Permissions.Remember = true
+	content := []byte("synthetic PNG bytes")
+	hash := sha256.Sum256(content)
+	id := "work-" + strings.Repeat("a", 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/local/artifacts/" + id:
+			_ = json.NewEncoder(w).Encode(map[string]any{"artifact_id": id, "filename": "finished.png", "sha256": hex.EncodeToString(hash[:]), "bytes": len(content), "status": "registered"})
+		case "/api/local/artifacts/" + id + "/download":
+			_, _ = w.Write(content)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	result, err := p.attachStationComfyArtifact(t.Context(), stationToolSession{BaseURL: server.URL}, id)
+	if err != nil || !strings.Contains(result, `"kind":"image"`) || !strings.Contains(result, `"required_media_ids"`) {
+		t.Fatalf("artifact was not staged for WeChat: %v %s", err, result)
+	}
+	if native.submits.Load() != 0 {
+		t.Fatal("staging unexpectedly submitted a WeChat message")
+	}
 }
 
 func TestMusicContinuationWithoutInstalledPluginNeedsReview(t *testing.T) {

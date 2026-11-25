@@ -26,6 +26,19 @@ def document(path, value):
 
 
 class GPTRegistrationTests(unittest.TestCase):
+    def test_windows_separators_rewrite_legacy_public_paths_into_current_package(self):
+        public = Path("C:/portable/public")
+        rewrite = windows._registered_public_rewriter(r"D:\old\public\projects\rvc-upstream", public)
+        self.assertEqual(rewrite(r"D:\old\public\models\voice.pth"),
+                         str(public / "models/voice.pth"))
+        self.assertEqual(rewrite(r"D:\old\public\projects\rvc-upstream"),
+                         str(public / "projects/rvc-upstream"))
+        self.assertEqual(rewrite(r"D:\other\models\voice.pth"), r"D:\other\models\voice.pth")
+
+    def test_legacy_manifest_without_projects_marker_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "legacy_public_root_invalid"):
+            windows._registered_public_rewriter(r"D:\old\public", Path("C:/portable/public"))
+
     def source(self, root):
         source = root / 'source'
         for name in ('api_v2.py', 'GPT_SoVITS/text/chinese2.py',
@@ -172,7 +185,7 @@ class GPTRegistrationTests(unittest.TestCase):
                 self.assertEqual((public / 'models/singer/model.pth').read_text(encoding='utf8'), 'synthetic-rvc-model')
                 self.assertEqual(json.loads((legacy / 'manifests/gpt-sovits.json').read_text(encoding='utf8')), original)
                 self.assert_diagnostic(Path(value['entry']), root)
-                voice = json.loads((public / 'manifests/singing-voice.config').read_text(encoding='utf8'))
+                voice = json.loads((legacy / 'manifests/singing-voice.config').read_text(encoding='utf8'))
                 self.assertEqual(voice['rvc_model_sha256'], hashlib.sha256(b'synthetic-rvc-model').hexdigest())
 
 

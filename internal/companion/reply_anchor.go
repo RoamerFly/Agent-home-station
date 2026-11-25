@@ -68,9 +68,6 @@ func (e *Engine) chooseReplyAnchor(ctx context.Context, in Input, r ReplyContext
 		if err != nil {
 			return MemoryEvent{}, err
 		}
-		if old, ok := r.SourceVersions[id]; ok && old != ev.Revision {
-			return MemoryEvent{}, errors.New("reply_source_revision_changed")
-		}
 		return ev, nil
 	}
 	if r.AnchorEventID != "" {
@@ -82,7 +79,7 @@ func (e *Engine) chooseReplyAnchor(ctx context.Context, in Input, r ReplyContext
 			return MemoryEvent{}, errors.New("reply_anchor_identity_mismatch")
 		}
 		if allowedAnchor(ev) {
-			if strict && (!selected[ev.ID] || r.SourceVersions[ev.ID] != ev.Revision) {
+			if strict && !selected[ev.ID] {
 				return MemoryEvent{}, errors.New("reply_anchor_version_missing")
 			}
 			return ev, nil
@@ -103,7 +100,7 @@ func (e *Engine) chooseReplyAnchor(ctx context.Context, in Input, r ReplyContext
 				return MemoryEvent{}, err
 			}
 			if ev.Trace == r.AnchorMessageID && allowedAnchor(ev) {
-				if strict && (!selected[ev.ID] || r.SourceVersions[ev.ID] != ev.Revision) {
+				if strict && !selected[ev.ID] {
 					return MemoryEvent{}, errors.New("reply_anchor_version_missing")
 				}
 				return ev, nil
@@ -138,13 +135,10 @@ func (e *Engine) replyReferenceEvent(ctx context.Context, in Input, ref *SourceR
 	}
 	scope := ScopeID(in.Channel, in.Account, in.Thread)
 	matches := func(ev MemoryEvent) bool {
-		if ref.Account != "" && ref.Account != in.Account || ref.Thread != "" && ref.Thread != in.Thread || ref.MessageID != "" && ref.MessageID != ev.Trace || ref.Sender != "" && ref.Sender != ev.Sender || ref.Revision > 0 && ref.Revision != ev.Revision {
+		if ref.Account != "" && ref.Account != in.Account || ref.Thread != "" && ref.Thread != in.Thread || ref.MessageID != "" && ref.MessageID != ev.Trace || ref.Sender != "" && ref.Sender != ev.Sender {
 			return false
 		}
 		if ref.InstanceID != "" && (ev.Source == nil || ref.InstanceID != ev.Source.InstanceID) {
-			return false
-		}
-		if ref.ServerID != "" && (ev.Source == nil || ref.ServerID != ev.Source.ServerID) {
 			return false
 		}
 		return ev.Role == "user"

@@ -21,7 +21,7 @@ func TestPublicVideoRemuxDropsExtraTracksAndPreservesDuration(t *testing.T) {
 	source := filepath.Join(dir, "source.f4v")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=8:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-f", "lavfi", "-i", "sine=frequency=880:duration=2", "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-f", "mp4", source)
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=8:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-f", "lavfi", "-i", "sine=frequency=880:duration=2", "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0", "-c:v", "mpeg4", "-threads", "1", "-c:a", "aac", "-f", "mp4", source)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("fixture encoder: %v %.300s", err, out)
 	}

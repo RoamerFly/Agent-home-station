@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 	"wechat-bot/internal/billing"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/deepseek"
 )
 
@@ -18,6 +19,24 @@ type balanceCache struct {
 
 func modelForBilling(c Config) billing.ModelConfig {
 	return billing.ModelConfig{Provider: c.Provider, BaseURL: c.BaseURL, Model: c.Model, APIKey: c.APIKey}
+}
+
+// recordModelUsage attributes an existing provider response to its originating
+// round. The aggregate billing ledger remains the source for account totals;
+// this activity only stores counts and the same configured price estimate.
+func (m *Manager) recordModelUsage(thread, message string, model billing.ModelConfig, u deepseek.Usage) {
+	m.recordModelUsageDetail(thread, message, "", "", model, u)
+}
+
+func (m *Manager) recordModelUsageDetail(thread, message, tool, callID string, model billing.ModelConfig, u deepseek.Usage) {
+	if thread == "" || message == "" {
+		return
+	}
+	costs, priced, source := m.billing.Estimate(model, u)
+	m.record(bot.Record{Event: "model_usage", Category: "system", ThreadID: thread, MessageID: message,
+		Origin: "model", Status: "recorded", Tool: tool, CallID: callID, UsageModel: u.Model, UsagePurpose: u.Purpose,
+		UsageReported: u.Reported, UsagePriced: priced, UsagePriceSource: source,
+		InputTokens: u.Input, OutputTokens: u.Output, CacheHitTokens: u.CacheHit, EstimatedCosts: costs})
 }
 
 type balanceView struct {

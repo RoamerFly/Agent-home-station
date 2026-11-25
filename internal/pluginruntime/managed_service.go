@@ -322,7 +322,9 @@ func pendingManagedServiceJobs(path string) bool {
 		return true
 	}
 	var jobs map[string]*struct {
-		State string `json:"state"`
+		State  string `json:"state"`
+		Engine string `json:"engine"`
+		Reason string `json:"reason"`
 	}
 	if json.Unmarshal(data, &jobs) != nil || jobs == nil {
 		return true
@@ -337,6 +339,13 @@ func pendingManagedServiceJobs(path string) bool {
 		// their durable delivery/recovery path settles.
 		switch strings.ToLower(strings.TrimSpace(job.State)) {
 		case "completed", "failed", "cancelled", "canceled", "stopped", "delivered":
+		case "needs_review":
+			// An interrupted local RVC process has no live provider submission.
+			// Its checkpoint remains durable and resumes only on an explicit call;
+			// it must not pin every future supervisor for the lifetime of the job.
+			if job.Engine != "rvc" || (job.Reason != "bridge_restarted_no_replay" && job.Reason != "station_rvc_stopped_no_replay") {
+				return true
+			}
 		default:
 			return true
 		}

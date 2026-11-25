@@ -151,3 +151,16 @@ func TestAssetLegacyEvidenceBaselineIsEstablishedDuringManagerStartup(t *testing
 		t.Fatal("first post-startup reuse unexpectedly invalidated new decisions", readyEpoch, got)
 	}
 }
+
+func TestNewDocumentLineageDoesNotInvalidateRunningGeneration(t *testing.T) {
+	f, p, _, source := artifactPipelineFixture(t)
+	before, _ := assetEvidenceEpochs(t, f.manager)
+	child, err := f.manager.rememberAssetFormats(p.trace, assetOriginal{Data: []byte("synthetic new document"), MIME: "text/plain", Filename: "result.txt", parentAssetID: source.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := assetEvidenceEpochs(t, f.manager)
+	if child.ParentAssetID != source.ID || before != after {
+		t.Fatalf("new document invalidated running turn: %s %s parent=%s", before, after, child.ParentAssetID)
+	}
+}

@@ -100,7 +100,7 @@ func checkStationMemoryDirection(t *testing.T, f *localHomeFixture, base, origin
 	conversation := host.stationConversation
 	host.stationConversation = func() (*companion.Store, companion.Input, error) { stationReads++; return conversation() }
 	defer func() { host.stationConversation = conversation }()
-	if tools, err := group.List(t.Context()); err != nil || len(tools) != 1 || tools[0].Name != stationWechatCrossToolName || stationReads != 0 || group.cross != nil {
+	if tools, err := group.List(t.Context()); err != nil || !hasTool(tools, stationWechatCrossToolName) || stationReads != 0 || group.cross != nil {
 		t.Fatal("discovery loaded workstation content", tools, stationReads, err)
 	}
 	raw, err := call(group, query)

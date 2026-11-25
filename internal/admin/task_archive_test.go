@@ -1,11 +1,77 @@
 package admin
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 )
+
+func TestReminderListKeepsHistoryOutOfDefaultContextAndCanDeleteIt(t *testing.T) {
+	f, p := trustedAgent(t)
+	id := agentID("compact-reminder-list")
+	task := agentTask{ID: id, Account: p.trace.Account, Thread: p.trace.Thread, Sender: p.trace.Sender, Title: "旧提醒", RequestedText: "喝水", Checkpoint: strings.Repeat("很长的历史记录", 100), State: "completed", Reminder: &reminderSpec{Kind: "notify"}}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	active, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(`{"action":"list"}`))
+	if err != nil || strings.Contains(active, id) {
+		t.Fatal("history entered default reminder context", active, err)
+	}
+	history, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(`{"action":"list","status":"history"}`))
+	if err != nil || !strings.Contains(history, id) || strings.Contains(history, task.Checkpoint) {
+		t.Fatal("history list was not compact", history, err)
+	}
+	deleted, err := p.Call(t.Context(), "agent_reminder", json.RawMessage(`{"action":"delete","id":"`+id+`"}`))
+	if err != nil || !strings.Contains(deleted, id) {
+		t.Fatal("owner could not delete ended reminder", deleted, err)
+	}
+}
+
+func TestDeleteHistoricalReminderRemovesEndedHandoffButKeepsActiveWork(t *testing.T) {
+	f := setup(t)
+	parentID, childID := agentID("ended-reminder"), agentID("ended-handoff")
+	parent := agentTask{ID: parentID, Account: "test", Thread: "filehelper", Sender: "owner", State: "completed", Reminder: &reminderSpec{Kind: "execute", FollowUpTaskID: childID}}
+	child := agentTask{ID: childID, ParentID: parentID, Account: "test", Thread: "filehelper", Sender: "owner", State: "waiting", ReminderDue: true}
+	for _, task := range []agentTask{parent, child} {
+		if err := f.manager.agent.task(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.manager.agent.deleteHistoricalReminder(parentID, "test"); err == nil {
+		t.Fatal("active handoff was deleted")
+	}
+	if _, ok := f.manager.agent.lookupTask(parentID, "test", ""); !ok {
+		t.Fatal("rejected deletion lost the parent")
+	}
+	child.State = "completed"
+	if err := f.manager.agent.task(child); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.agent.retireSettled(); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := f.manager.agent.deleteHistoricalReminder(parentID, "test")
+	if err != nil || len(ids) != 2 {
+		t.Fatal(ids, err)
+	}
+	if _, ok := f.manager.agent.lookupTask(parentID, "test", ""); ok {
+		t.Fatal("deleted reminder still listed")
+	}
+	for _, path := range []string{filepath.Join(f.manager.agent.dir, "reminders", parentID+".json"), filepath.Join(f.manager.agent.dir, "archive", "agent-tasks", agentID(parentID)+".json"), filepath.Join(f.manager.agent.dir, "archive", "agent-tasks", agentID(childID)+".json")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("historical file remains", path, err)
+		}
+	}
+	reloaded, err := newAgentControl(f.dir)
+	if err != nil || len(reloaded.taskHistory("test", "")) != 0 {
+		t.Fatal("deleted reminder returned after restart", err)
+	}
+}
 
 func TestConfirmedTasksLeaveActiveStorageButRetainScopedDeliveryEvidence(t *testing.T) {
 	f := setup(t)

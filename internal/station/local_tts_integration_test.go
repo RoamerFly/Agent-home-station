@@ -3,6 +3,7 @@ package station
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -18,15 +19,110 @@ import (
 )
 
 type syntheticLocalTTS struct {
-	voice   localTTSVoice
-	wav     []byte
-	started chan struct{}
-	wrong   bool
-	calls   atomic.Int32
+	voice          localTTSVoice
+	defaultVoiceID string
+	wav            []byte
+	started        chan struct{}
+	wrong          bool
+	calls          atomic.Int32
 }
 
 func (s *syntheticLocalTTS) Info(context.Context, string) (localTTSDeployment, error) {
-	return localTTSDeployment{Binding: strings.Repeat("b", 64), Voices: []localTTSVoice{s.voice}}, nil
+	return localTTSDeployment{Binding: strings.Repeat("b", 64), Voices: []localTTSVoice{s.voice}, DefaultVoiceID: s.defaultVoiceID}, nil
+}
+
+func TestLocalSpeechChatUsesRegisteredDefault(t *testing.T) {
+	f, backend := newLocalTTSFixture(t)
+	backend.defaultVoiceID = backend.voice.ID
+	var observed string
+	installLocalTTSModel(f, localTTSVoicesTool, map[string]any{}, &observed)
+	if code, _ := localChatSend(f, "speech-default-list", "查看默认声线"); code != 200 ||
+		!strings.Contains(observed, "default_voice_id") || !strings.Contains(observed, backend.voice.ID) {
+		t.Fatalf("default voice wasn't returned: %d %s", code, observed)
+	}
+	args := map[string]any{"text": "A synthetic test.", "speed": 0.8, "text_language": "en"}
+	installLocalTTSModel(f, localTTSStartTool, args, &observed)
+	if code, _ := localChatSend(f, "speech-default-use", "使用默认声线"); code != 200 ||
+		!strings.Contains(observed, backend.voice.Version) || backend.calls.Load() != 1 {
+		t.Fatalf("default voice wasn't synthesized: %d %s", code, observed)
+	}
+	args["voice_id"] = "unregistered-voice"
+	installLocalTTSModel(f, localTTSStartTool, args, &observed)
+	if code, _ := localChatSend(f, "speech-default-explicit-unknown", "使用未知声线"); code != 200 ||
+		!strings.Contains(observed, "指定声线未登记或已撤权") || backend.calls.Load() != 1 {
+		t.Fatalf("incorrect explicit selection was accepted: %d %s", code, observed)
+	}
+}
+
+func TestWechatPublicToolsFollowWorkstationStateWithoutManagement(t *testing.T) {
+	f, _ := newLocalTTSFixture(t)
+	public := newPublicToolFactoryAccess(func(in companion.Input) companion.ToolAccess {
+		store, input, err := f.handler.chat.conversation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.TraceID = in.TraceID
+		tools := f.handler.chat.tools(store, input)
+		tools.projectTools = f.handler.chat.projectTools
+		tools.publicUseOnly = true
+		tools.run = companion.NewGuardedToolRun(func(context.Context) error { return nil })
+		return tools
+	}, func(in companion.Input) bool { return in.Sender == "owner" })
+	public.(interface{ SetTrace(companion.Input) }).SetTrace(companion.Input{Channel: "wechat", Sender: "owner", TraceID: "wechat-public-tool-view"})
+	merged := mergeStationToolAccess(nil, public, nil)
+	listed := func() map[string]bool {
+		items, err := merged.List(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := make(map[string]bool, len(items))
+		for _, item := range items {
+			seen[item.Name] = true
+			if strings.HasPrefix(item.Name, "station_tool_") {
+				t.Fatalf("application exposed workstation management tool %s", item.Name)
+			}
+		}
+		return seen
+	}
+	if !listed()[localTTSVoicesTool] || listed()[localTTSStartTool] {
+		t.Fatal("application public catalog exposed a source-bound synthesis path")
+	}
+	voiceList, err := merged.Call(t.Context(), localTTSVoicesTool, json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(voiceList, "fixture-voice") {
+		t.Fatalf("application could not execute workstation voice list: %s %v", voiceList, err)
+	}
+	installed := localProjectToolByID(t, f, localTTSPackage)
+	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("disable workstation speech: %d %#v", code, out)
+	}
+	if listed()[localTTSVoicesTool] {
+		t.Fatal("application retained workstation speech after it was disabled")
+	}
+	if result, err := merged.Call(t.Context(), localTTSVoicesTool, json.RawMessage(`{}`)); err == nil || result != "" {
+		t.Fatalf("application executed disabled workstation tool: %s %v", result, err)
+	}
+}
+
+func TestPublicSpeechProcessesRequestWithoutApplicationSource(t *testing.T) {
+	f, backend := newLocalTTSFixture(t)
+	backend.defaultVoiceID = backend.voice.ID
+	fish, err := f.handler.home.identity.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	speed := 0.8
+	request := localTTSRequest{Text: "A synthetic test.", Speed: &speed, Language: "en"}
+	result, err := f.handler.chat.projectTools.synthesizePublicSpeech(t.Context(), fish.FishID, request)
+	if err != nil || result.VoiceID != backend.voice.ID || len(result.WAV) == 0 || backend.calls.Load() != 1 {
+		t.Fatalf("public speech did not process request: %#v, %v", result.VoiceID, err)
+	}
+	installed := localProjectToolByID(t, f, localTTSPackage)
+	if code, out := f.request("PUT", "/api/local/project-tools/station-speech", map[string]any{"action": "disable", "revision": localProjectToolRevision(t, installed)}, true); code != http.StatusOK {
+		t.Fatalf("disable workstation speech: %d %#v", code, out)
+	}
+	if _, err := f.handler.chat.projectTools.synthesizePublicSpeech(t.Context(), fish.FishID, request); err == nil || backend.calls.Load() != 1 {
+		t.Fatal("disabled workstation speech was executed")
+	}
 }
 
 func (s *syntheticLocalTTS) Synthesize(ctx context.Context, _ string, binding string, request localTTSRequest) (localTTSResult, error) {

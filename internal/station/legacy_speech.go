@@ -113,7 +113,7 @@ func loadLegacySpeech(ctx context.Context, dataDir, workspaceRoot, optionsFile s
 		return legacySpeechLoaded{}, errors.New("请先接续或初始化本机鱼身份")
 	}
 	file.Close()
-	record, err := fishidentity.New(dataDir).Read()
+	record, err := fishidentity.New(stationAuthorityDir(dataDir)).Read()
 	if err != nil || record.LocalOwner == nil || !record.LocalOwner.HomeAccess {
 		return legacySpeechLoaded{}, errors.New("请先为本机主人开启家目录权限")
 	}
@@ -270,7 +270,7 @@ func ImportLegacySpeech(ctx context.Context, dataDir, workspaceRoot, optionsFile
 		return LegacySpeechPlan{}, errors.New("声线接续来源、运行资源或主人授权已变化，请重新预演")
 	}
 	dataDir = filepath.Clean(dataDir)
-	err = fishidentity.New(dataDir).GuardHome(loaded.Plan.FishID, loaded.Plan.OwnerID, loaded.Plan.OwnerRevision, func(fishidentity.Record) error {
+	err = fishidentity.New(stationAuthorityDir(dataDir)).GuardHome(loaded.Plan.FishID, loaded.Plan.OwnerID, loaded.Plan.OwnerRevision, func(fishidentity.Record) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

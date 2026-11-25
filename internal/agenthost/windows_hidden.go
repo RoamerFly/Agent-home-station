@@ -83,7 +83,9 @@ func runWindowsHidden(ctx context.Context, cfg Config, id, path, command string,
 
 // Fixed broker argv never passes through CMD or PowerShell quoting.
 func runWindowsRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, out io.Writer) error {
-	return runWindowsPolicyRequest(ctx, cfg, id, path, command, argv, "", nil, out, nil)
+	// This is an Agent-owned workspace command, so its stderr is part of
+	// the execution result. Protected plugin callers use a separate policy path.
+	return runWindowsPolicyRequest(ctx, cfg, id, path, command, argv, "", nil, out, out)
 }
 
 func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command string, argv []string, policy string, environment map[string]string, out io.Writer, diagnostic io.Writer) error {
@@ -185,8 +187,8 @@ func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command 
 	go func() { done <- cmd.Wait() }()
 	resultFile := filepath.Join(dir, "result.json")
 	outputFile := filepath.Join(dir, "output.log")
-	// Only the trusted music caller can request a bounded private copy of the
-	// child's stderr. Generic Agent output never receives runtime diagnostics.
+	// The caller chooses whether diagnostics belong in its result. Protected
+	// plugin invocations keep their private diagnostic writer separate.
 	readDiagnostic := func() {
 		if diagnostic == nil {
 			return

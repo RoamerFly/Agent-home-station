@@ -15,7 +15,9 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"wechat-bot/internal/documentmemory"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/plugins"
 	"wechat-bot/internal/workspacefs"
@@ -39,18 +41,27 @@ type ArtifactMaterialized struct {
 // ArtifactPublishRequest names a finished file in the current task output
 // directory.  Path is intentionally a basename, not a filesystem path.
 type ArtifactPublishRequest struct {
-	Path   string
-	Title  string
-	TaskID string
+	parentAssetID string
+	Path          string
+	Title         string
+	TaskID        string
 }
 
 func (p *permittedTools) artifactTools() []mcptools.Tool {
 	if !p.artifactPipelineAllowed() {
 		return nil
 	}
-	tools := []mcptools.Tool{agentTool("artifact_materialize", "Make one verified received attachment available to an authorized installed processor in THIS request. asset_id must come from wechat_file_read/media_recent in this conversation. The host keeps the filesystem location private and copies inputs immutably. It never executes document content or sends a message. Input {asset_id:string,source_message_id?:string,task_id?:string}.", `{"type":"object","properties":{"asset_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["asset_id"],"additionalProperties":false}`)}
+	tools := []mcptools.Tool{agentTool("artifact_materialize", "把本会话已收到的 asset_id 准备给当前任务的文档处理器；来源可从 wechat_file_read 或 media_recent 获取。", `{"type":"object","properties":{"asset_id":{"type":"string","minLength":1,"maxLength":128},"source_message_id":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["asset_id"],"additionalProperties":false}`)}
+	tools = append(tools, documentmemory.Tool("artifact_document_memory"))
+	if p.artifactPipelineAllowed() {
+		tools = append(tools, agentTool("artifact_render_document", "用本机 WPS 渲染生成的 DOCX，返回 PDF、指定页图像及页数，供版式检查；默认第 1 页。", `{"type":"object","properties":{"asset_id":{"type":"string"},"page":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("artifact_workspace", "创建本任务文档脚本目录，返回输入/输出目录、Python/SDK 路径及可复用笔记目录。可按 asset_id 带入附件；用 server_write 编写、server_windows_process 执行，完成后 artifact_publish 登记输出。", `{"type":"object","properties":{"asset_id":{"type":"string"},"source_message_id":{"type":"string"},"task_id":{"type":"string"}},"additionalProperties":false}`))
+	}
+	if p.manager.Config().Behavior.DirectImageInput {
+		tools = append(tools, agentTool("artifact_view_image", "把原图或当前任务输出图片直接交给下一次模型请求。原图用 media_recent 的 asset_id；渲染图用输出目录内的 path。后续比较可再次调用。", `{"type":"object","properties":{"asset_id":{"type":"string"},"source_message_id":{"type":"string"},"path":{"type":"string"}},"additionalProperties":false}`))
+	}
 	if p.manager.Config().Companion.Permissions.SendFile {
-		tools = append(tools, agentTool("artifact_publish", "Register one finished regular file already produced by an authorized processor for THIS task and stage it as a file attachment. path is a processor-reported basename, never a filesystem path. This only prepares reply.media_ids; it does NOT send WeChat. Input {path:string,title?:string,task_id?:string}.", `{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512},"title":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["path"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("artifact_publish", "登记当前任务已生成文件为待发送附件，返回 media.id。path 填输出文件名；视频默认原生视频，需要文件形式时用 media_reuse(kind=file)；登记后仍须发送。", `{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512},"title":{"type":"string","maxLength":512},"task_id":{"type":"string","maxLength":256}},"required":["path"],"additionalProperties":false}`))
 	}
 	return tools
 }
@@ -109,6 +120,16 @@ func sameArtifactRequester(a mediaAsset, sender string) bool {
 	return false
 }
 
+// Private conversations can reuse files the bot itself delivered there.
+func hasSentFileSource(a mediaAsset, source string) bool {
+	for _, origin := range a.Requests {
+		if origin.SentFile && (source == "" || origin.TraceID == source) {
+			return true
+		}
+	}
+	return false
+}
+
 func artifactHasSource(a mediaAsset, id string) bool {
 	if id == "" {
 		return true
@@ -138,9 +159,9 @@ func (p *permittedTools) artifactAsset(id, sourceID string) (mediaAsset, error) 
 		if a.Hash == "" || !artifactHasSource(a, sourceID) {
 			return mediaAsset{}, toolInputError("artifact_source_not_available")
 		}
-		// A reference to someone else's upload must come from the actual
-		// quoted message in this account and conversation, not a model-supplied id.
-		if !sameArtifactRequester(a, p.trace.Sender) {
+		// Members share retained files within the same group. The account and
+		// conversation match above still prevents access across conversations.
+		if !sameArtifactRequester(a, p.trace.Sender) && !strings.HasSuffix(p.trace.Thread, "@chatroom") && !hasSentFileSource(a, sourceID) {
 			quote := p.trace.QuotedSource
 			if quote == nil || quote.MessageID == "" || quote.Account != p.trace.Account || quote.Thread != p.trace.Thread || (sourceID != "" && sourceID != quote.MessageID) || !artifactHasSource(a, quote.MessageID) {
 				return mediaAsset{}, toolInputError("artifact_requester_not_authorized")
@@ -286,7 +307,11 @@ func (p *permittedTools) PublishArtifactForTask(ctx context.Context, in Artifact
 	if typ == "" {
 		typ = "application/octet-stream"
 	}
-	result, err := p.stageOutputWithAsset(ctx, plugins.Output{Text: "成品文件已准备，尚未发送。", Media: []plugins.MediaResult{{Kind: "file", Data: data, MIMEType: typ, Filename: filename}}}, &assetOriginal{Data: data, MIME: typ, Filename: filename})
+	kind := "file"
+	if strings.HasPrefix(typ, "video/") {
+		kind = "video"
+	}
+	result, err := p.stageOutputWithAsset(ctx, plugins.Output{Text: "成品附件已准备，尚未发送。", Media: []plugins.MediaResult{{Kind: kind, Data: data, MIMEType: typ, Filename: filename}}}, &assetOriginal{Data: data, MIME: typ, Filename: filename, parentAssetID: in.parentAssetID})
 	if err != nil {
 		return "", err
 	}
@@ -295,6 +320,7 @@ func (p *permittedTools) PublishArtifactForTask(ctx context.Context, in Artifact
 		return "", errors.New("artifact_publish_result_invalid")
 	}
 	out["task_id"], out["path"], out["sha256"], out["staged_only"] = task, name, digest, true
+	out["document_memory_instruction"] = "若为文档成品，请用artifact_document_memory保存简短处理摘要、要求及原件/上一版素材编号，方便后续修改。"
 	b, _ := json.Marshal(out)
 	return string(b), nil
 }
@@ -316,6 +342,14 @@ func (p *permittedTools) callArtifact(ctx context.Context, name string, raw json
 		return "", toolInputError("artifact_pipeline_not_authorized")
 	}
 	switch name {
+	case "artifact_document_memory":
+		return p.documentMemory(ctx, raw)
+	case "artifact_render_document":
+		return p.renderArtifactDocument(ctx, raw)
+	case "artifact_view_image":
+		return p.viewArtifactImage(ctx, raw)
+	case "artifact_workspace":
+		return p.artifactWorkspace(ctx, raw)
 	case "artifact_materialize":
 		return p.materializeArtifact(ctx, raw)
 	case "artifact_publish":
@@ -323,4 +357,66 @@ func (p *permittedTools) callArtifact(ctx context.Context, name string, raw json
 	default:
 		return "", toolInputError("unknown_artifact_tool")
 	}
+}
+
+func (p *permittedTools) artifactWorkspace(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !p.artifactPipelineAllowed() {
+		return "", toolInputError("artifact_workspace_not_authorized")
+	}
+	var in struct {
+		Asset  string `json:"asset_id"`
+		Source string `json:"source_message_id"`
+		Task   string `json:"task_id"`
+	}
+	if json.Unmarshal(raw, &in) != nil {
+		return "", toolInputError("artifact_workspace_arguments_invalid")
+	}
+	task, err := p.artifactTaskKey(in.Task)
+	if err != nil {
+		return "", err
+	}
+	input, output, err := p.artifactTaskPaths(task)
+	if err != nil {
+		return "", err
+	}
+	result := map[string]any{"task_id": task, "input_dir": input, "output_dir": output, "script_dir": filepath.Dir(output), "execution_enabled": p.manager.agent.config().Host.Mode == "full", "publish_tool": "artifact_publish", "instruction": "Write a script, execute it with server_windows_process, read stdout/stderr and exit code, inspect the generated file, then artifact_publish using the output basename. Never claim visual fidelity without rendered page inspection."}
+	result["learning_dir"] = filepath.Join(p.executionContext().Conversation, "learning")
+	result["learning_instruction"] = "学习写作方式等可复用知识时，自行在learning_dir下按主题创建Markdown和索引；server_write会创建所需父目录。该目录在同会话各任务间稳定。后续先server_list/search/read按需查笔记，修改现有文件用server_edit。记录来源素材编号、适用场景及可复用规律，具体姓名/证号不是通用写作规则。脚本目录保持原位置。"
+	// Python's embedded runtime may lack Windows long-path manifest support.
+	// Keep canonical paths for host tools; expose extended paths for script I/O.
+	if runtime.GOOS == "windows" {
+		result["python_paths"] = map[string]string{"input_dir": `\\?\` + input, "output_dir": `\\?\` + output, "script_dir": `\\?\` + filepath.Dir(output)}
+		result["windows_path_note"] = "Use python_paths for Python file I/O and the script argv path; use canonical paths above for server_write and process cwd. Windows embedded Python may not open paths longer than 260 characters without the extended prefix."
+	}
+	if in.Asset != "" {
+		a, e := p.MaterializeArtifactForTask(ctx, in.Asset, in.Source, in.Task)
+		if e != nil {
+			return "", e
+		}
+		result["input_path"] = a.InputPath
+		result["source_sha256"] = a.SHA256
+	}
+	options, e := runtimeDeploymentOptions()
+	if e == nil {
+		result["python"] = options.Python
+		scriptPath := filepath.Join(filepath.Dir(output), "generate.py")
+		if runtime.GOOS == "windows" {
+			scriptPath = `\\?\` + scriptPath
+		}
+		result["script_execution"] = map[string]any{"tool": "server_windows_process", "arguments": map[string]any{"action": "start", "path": filepath.Dir(output), "argv": []string{options.Python, "-I", scriptPath}, "request_key": "generate-" + task}, "script_io": "Use pathlib.Path(__file__).parent / 'output' inside the script; __file__ preserves the Windows extended path. Use argv rather than a shell command for Python."}
+
+		if options.DocumentRuntimeRoot != "" {
+			result["python_packages"] = filepath.Join(options.DocumentRuntimeRoot, "python-packages")
+			result["fonts_dir"] = filepath.Join(options.DocumentRuntimeRoot, "fonts")
+		}
+	}
+	if store, e := p.manager.packageStore(); e == nil {
+		if installed, e := store.Installed(ctx, documentWorkshopPluginID); e == nil && installed.Enabled && !installed.Removed {
+			if path, e := store.PackageDirectory(installed.Digest); e == nil {
+				result["document_sdk"] = filepath.Join(path, "runtime")
+			}
+		}
+	}
+	b, err := json.Marshal(result)
+	return string(b), err
 }

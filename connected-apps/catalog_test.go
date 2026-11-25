@@ -61,6 +61,33 @@ func TestOfficialAppSource(t *testing.T) {
 	}
 }
 
+func TestWechatSourceAcceptsSeparatelyVerifiedDesktopRuntime(t *testing.T) {
+	contract, err := Lookup("wechat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("wechat")); err != nil {
+		t.Fatal(err)
+	}
+	runtime := filepath.Join(dir, "runtime", "windows-x64")
+	if err := os.Mkdir(runtime, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtime, "wx.exe"), []byte("synthetic runtime"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySource(dir, contract); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runtime", "unexpected.txt"), []byte("unindexed source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySource(dir, contract); err == nil {
+		t.Fatal("the native directory exception must not apply to other source files")
+	}
+}
+
 func TestBilibiliSourceSeparatesPublicReadsAndPublication(t *testing.T) {
 	contract, err := Lookup("bilibili")
 	if err != nil {

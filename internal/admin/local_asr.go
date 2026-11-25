@@ -18,6 +18,9 @@ func (m *Manager) localASRStatus() map[string]any {
 		"message":   "本地语音识别尚未通过媒体理解工具登记",
 	}
 	ctx := context.Background()
+	if station := m.readyStationASR(ctx); station != nil {
+		return map[string]any{"available": true, "backend": "station", "id": "station-audio", "resource_version": station.version}
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		state["message"] = "媒体工具存储不可用"

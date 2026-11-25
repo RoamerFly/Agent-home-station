@@ -114,3 +114,53 @@ func TestUnboundLegacyImportRequiresExactNativeMetadataAndNoBlocks(t *testing.T)
 		t.Fatal("clear boundary bypassed by legacy import")
 	}
 }
+
+func TestReconcileOldAutomaticLocalRowReuseWithVerifiedNativeIdentity(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	in.TraceID = "reused-native-row"
+	in.Sender = "earlier-sender"
+	in.Text = "earlier card"
+	in.MessageTime = now.Add(-17 * 24 * time.Hour).Format(time.RFC3339)
+	in.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID}
+	if err := s.Observe(in, c, now); err != nil {
+		t.Fatal(err)
+	}
+	current := in
+	current.Sender = "current-sender"
+	current.Text = "current card"
+	current.MessageTime = now.Format(time.RFC3339)
+	current.Source = &SourceRef{InstanceID: s.SourceInstanceID(), MessageID: in.TraceID, ServerID: "current-platform-id"}
+	if err := s.Observe(current, c, now); err != nil {
+		t.Fatal(err)
+	}
+	id := ScopeID(in.Channel, in.Account, in.Thread)
+	if err := s.scopeTransaction(id, func(data *persisted) error {
+		sc := data.Scopes[id]
+		for i := range sc.Messages {
+			if sc.Messages[i].Role == "user" && sc.Messages[i].TraceID == in.TraceID {
+				markSourceConflict(&sc.Messages[i])
+			}
+		}
+		data.Scopes[id] = sc
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.SourceForInput(current); ok {
+		t.Fatal("fixture retained an unconflicted source")
+	}
+	got, restored, err := s.ReconcileLegacySource(t.Context(), current)
+	if err != nil || !restored || got == nil || got.Integrity != "verified_import" {
+		t.Fatal(got, restored, err)
+	}
+	if _, ok := s.SourceForInput(current); !ok {
+		t.Fatal("exact current source did not recover")
+	}
+	if _, ok := s.SourceForInput(in); ok {
+		t.Fatal("older conflicted record was implicitly restored")
+	}
+	if _, restored, err := s.ReconcileLegacySource(t.Context(), current); err != nil || restored {
+		t.Fatal("reconciliation was not idempotent", restored, err)
+	}
+}

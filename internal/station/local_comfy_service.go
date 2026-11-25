@@ -97,6 +97,8 @@ type localComfyRegistration struct {
 	Manifest      string `json:"manifest"`
 	Models        string `json:"models"`
 	Workflows     string `json:"workflows"`
+	CustomNodes   string `json:"custom_nodes,omitempty"`
+	ModelLibrary  string `json:"model_library,omitempty"`
 	Port          int    `json:"port"`
 	IdleSeconds   int    `json:"idle_seconds,omitempty"`
 	Device        string `json:"device"`
@@ -110,6 +112,7 @@ type localComfyManifest struct {
 }
 
 type localComfyService struct {
+	catalog      string
 	dataDir      string
 	editableRoot string
 	services     pluginruntime.ManagedServices
@@ -143,8 +146,10 @@ type localComfyManagedSpec struct {
 	Timeout     time.Duration
 }
 
-func newLocalComfyService(dataDir, workspace string) localComfyBackend {
-	return newLocalComfyServiceAt(dataDir, workspace)
+func newLocalComfyService(dataDir, workspace string, catalog string) localComfyBackend {
+	service := newLocalComfyServiceAt(dataDir, workspace)
+	service.catalog = catalog
+	return service
 }
 
 // newLocalComfyServiceAt keeps tests independent of the packed executable.
@@ -255,6 +260,11 @@ func (s *localComfyService) start(ctx context.Context, fish, expectedBinding str
 	private, err := s.ensurePrivateScope(fish)
 	if err != nil {
 		return err
+	}
+	if registration.ModelLibrary != "" {
+		if err := writeLocalComfyModelLibrary(private, registration.ModelLibrary); err != nil {
+			return err
+		}
 	}
 	if !s.services.Status(localComfyServiceID(fish)).Running {
 		if err := s.resetStaleJournal(private); err != nil {
@@ -385,7 +395,14 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	if err := ctx.Err(); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
-	data, err := readLocalComputeRegistration(filepath.Join(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+	data, portable, err := portableRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), s.catalog, "comfyui", s.editableRoot, localComfyMaxManifest)
+	if err != nil && portable == "" {
+		// Preserve the existing public error codes for private registrations.
+		_, legacyErr := readLocalComputeRegistration(stationToolRegistrationPath(s.dataDir, localComfyRegistrationFile), "station_comfyui_", localComfyMaxManifest)
+		if legacyErr != nil {
+			err = legacyErr
+		}
+	}
 	if err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
 	}
@@ -396,6 +413,11 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 	}
 	if !registration.Enabled {
 		return localComfyRegistration{}, localComfyManifest{}, errors.New("station_comfyui_not_installed_or_authorized")
+	}
+	if portable != "" {
+		if err := resolvePortablePaths(portable, &registration.Runtime, &registration.Models, &registration.Workflows); err != nil {
+			return localComfyRegistration{}, localComfyManifest{}, err
+		}
 	}
 	if err := registration.validate(s.dataDir, s.editableRoot); err != nil {
 		return localComfyRegistration{}, localComfyManifest{}, err
@@ -408,7 +430,7 @@ func (s *localComfyService) loadRegistration(ctx context.Context) (localComfyReg
 }
 
 func localComfyRegistrationFields(fields map[string]json.RawMessage) bool {
-	allowed := map[string]bool{"schema_version": true, "enabled": true, "runtime": true, "python": true, "entry": true, "frontend": true, "manifest": true, "models": true, "workflows": true, "port": true, "idle_seconds": true, "device": true, "cuda_device": true}
+	allowed := map[string]bool{"schema_version": true, "enabled": true, "runtime": true, "python": true, "entry": true, "frontend": true, "manifest": true, "models": true, "workflows": true, "custom_nodes": true, "model_library": true, "port": true, "idle_seconds": true, "device": true, "cuda_device": true}
 	for name := range fields {
 		if !allowed[name] {
 			return false
@@ -426,7 +448,16 @@ func (r localComfyRegistration) validate(dataDir, editableRoot string) error {
 	if r.Port < 1024 || r.Port > 65535 || r.IdleSeconds < 0 || int64(r.IdleSeconds) > localComfyMaxIdleSeconds || !localComfyServiceSafeDirectory(r.Runtime) || !localComfyServiceSafeDirectory(r.Models) || !localComfyServiceSafeDirectory(r.Workflows) {
 		return errors.New("station_comfyui_registration_invalid")
 	}
-	if localComfyInside(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || localComfyPathsOverlap(r.Workflows, dataDir) || localComfyPathsOverlap(r.Workflows, editableRoot) || localComfyPathsOverlap(r.manifestPath(), editableRoot) {
+	managedComfy := filepath.Join(dataDir, "resources", "comfyui")
+	managedWorkflows := filepath.Join(managedComfy, "workflows")
+	managedNodes := filepath.Join(managedComfy, "custom_nodes")
+	if r.CustomNodes != "" && (r.CustomNodes != managedNodes || !localComfyServiceSafeDirectory(r.CustomNodes)) {
+		return errors.New("station_comfyui_custom_nodes_invalid")
+	}
+	if r.ModelLibrary != "" && (!localComfyServiceSafeDirectory(r.ModelLibrary) || localComfyPathsOverlap(r.ModelLibrary, dataDir) || localComfyPathsOverlap(r.ModelLibrary, editableRoot)) {
+		return errors.New("station_comfyui_model_library_invalid")
+	}
+	if localComfyInside(dataDir, editableRoot) || localComfyPathsOverlap(r.Runtime, dataDir) || localComfyPathsOverlap(r.Runtime, editableRoot) || localComfyPathsOverlap(r.Models, dataDir) || localComfyPathsOverlap(r.Models, editableRoot) || (localComfyPathsOverlap(r.Workflows, dataDir) && r.Workflows != managedWorkflows) || localComfyPathsOverlap(r.Workflows, editableRoot) || localComfyPathsOverlap(r.manifestPath(), editableRoot) {
 		return errors.New("station_comfyui_scope_overlaps_agent_home")
 	}
 	for _, relative := range []string{r.Python, r.Entry, r.Frontend} {
@@ -531,11 +562,40 @@ func localComfyFileMatches(path, want string) bool {
 }
 
 func localComfyArguments(r localComfyRegistration, entry, frontend, private string) []string {
-	args := []string{"-s", "-B", entry, "--listen", "127.0.0.1", "--port", strconv.Itoa(r.Port), "--disable-auto-launch", "--disable-all-custom-nodes", "--disable-api-nodes", "--disable-metadata", "--base-directory", private, "--user-directory", filepath.Join(private, "user"), "--models-directory", r.Models, "--input-directory", filepath.Join(private, "input"), "--output-directory", filepath.Join(private, "output"), "--temp-directory", filepath.Join(private, "temp"), "--front-end-root", frontend, "--database-url", "sqlite:///:memory:"}
+	base := private
+	if r.CustomNodes != "" {
+		base = filepath.Dir(r.CustomNodes)
+	}
+	args := []string{"-s", "-B", entry, "--listen", "127.0.0.1", "--port", strconv.Itoa(r.Port), "--disable-auto-launch", "--disable-api-nodes", "--disable-metadata", "--base-directory", base, "--user-directory", filepath.Join(private, "user"), "--models-directory", r.Models, "--input-directory", filepath.Join(private, "input"), "--output-directory", filepath.Join(private, "output"), "--temp-directory", filepath.Join(private, "temp"), "--front-end-root", frontend, "--database-url", "sqlite:///:memory:"}
+	if r.ModelLibrary != "" {
+		args = append(args, "--extra-model-paths-config", filepath.Join(private, "model-library.yaml"))
+	}
+	if r.CustomNodes == "" {
+		args = append(args, "--disable-all-custom-nodes")
+	}
 	if r.Device == "cpu" {
 		return append(args, "--cpu")
 	}
 	return append(args, "--cuda-device", strconv.Itoa(r.CUDADevice))
+}
+
+func writeLocalComfyModelLibrary(private, root string) error {
+	// The configured external directory is read-only to ComfyUI. Its nested
+	// image/video model categories are registered without copying large weights.
+	if !localComfyServiceSafeDirectory(root) || strings.ContainsAny(root, "\r\n\x00\"'") {
+		return errors.New("station_comfyui_model_library_invalid")
+	}
+	var b strings.Builder
+	b.WriteString("station_external:\n  base_path: \"")
+	b.WriteString(strings.ReplaceAll(root, "\\", "/"))
+	b.WriteString("\"\n")
+	for _, category := range []string{"checkpoints", "clip", "clip_vision", "diffusion_models", "loras", "text_encoders", "vae", "controlnet", "upscale_models"} {
+		b.WriteString("  " + category + ": |\n    image/" + category + "\n    video/" + category + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(private, "model-library.yaml"), []byte(b.String()), 0600); err != nil {
+		return errors.New("station_comfyui_model_library_unavailable")
+	}
+	return nil
 }
 
 func localComfyEnvironment(r localComfyRegistration, private string) []string {
@@ -632,6 +692,8 @@ type localComfyLeasedClient struct {
 	binding string
 }
 
+var _ localComfyVideoClient = (*localComfyLeasedClient)(nil)
+
 // Both controlled ComfyUI deployments use the same submission/settlement
 // lease. The registration verifier differs, but a submitted or uncertain job
 // must keep either process warm until the host has durably settled it.
@@ -661,6 +723,18 @@ func (c *localComfyLeasedClient) Status(ctx context.Context, ref comfyui.JobRef)
 		c.observe(ref, status.State)
 	}
 	return status, err
+}
+
+func (c *localComfyLeasedClient) VideoStatus(ctx context.Context, ref comfyui.JobRef) (comfyui.VideoStatus, error) {
+	status, err := c.client.VideoStatus(ctx, ref)
+	if err == nil {
+		c.observe(ref, status.State)
+	}
+	return status, err
+}
+
+func (c *localComfyLeasedClient) FetchMP4(ctx context.Context, ref comfyui.JobRef) (comfyui.MP4, error) {
+	return c.client.FetchMP4(ctx, ref)
 }
 
 func (c *localComfyLeasedClient) observe(ref comfyui.JobRef, remote comfyui.State) {
@@ -784,11 +858,29 @@ func localComfyBinding(registration localComfyRegistration, manifest localComfyM
 		files = append(files, name+":"+digest)
 	}
 	sort.Strings(files)
+	if registration.ModelLibrary != "" {
+		value, _ := json.Marshal(struct {
+			Schema, Port, CUDADevice                                                               int
+			Runtime, Python, Entry, Frontend, Models, Workflows, CustomNodes, ModelLibrary, Device string
+			Files                                                                                  []string
+		}{registration.SchemaVersion, registration.Port, registration.CUDADevice, registration.Runtime, registration.Python, registration.Entry, registration.Frontend, registration.Models, registration.Workflows, registration.CustomNodes, registration.ModelLibrary, registration.Device, files})
+		sum := sha256.Sum256(value)
+		return hex.EncodeToString(sum[:])
+	}
+	if registration.CustomNodes == "" {
+		legacy, _ := json.Marshal(struct {
+			Schema, Port, CUDADevice                                    int
+			Runtime, Python, Entry, Frontend, Models, Workflows, Device string
+			Files                                                       []string
+		}{registration.SchemaVersion, registration.Port, registration.CUDADevice, registration.Runtime, registration.Python, registration.Entry, registration.Frontend, registration.Models, registration.Workflows, registration.Device, files})
+		sum := sha256.Sum256(legacy)
+		return hex.EncodeToString(sum[:])
+	}
 	value, _ := json.Marshal(struct {
-		Schema, Port, CUDADevice                                    int
-		Runtime, Python, Entry, Frontend, Models, Workflows, Device string
-		Files                                                       []string
-	}{registration.SchemaVersion, registration.Port, registration.CUDADevice, registration.Runtime, registration.Python, registration.Entry, registration.Frontend, registration.Models, registration.Workflows, registration.Device, files})
+		Schema, Port, CUDADevice                                                 int
+		Runtime, Python, Entry, Frontend, Models, Workflows, CustomNodes, Device string
+		Files                                                                    []string
+	}{registration.SchemaVersion, registration.Port, registration.CUDADevice, registration.Runtime, registration.Python, registration.Entry, registration.Frontend, registration.Models, registration.Workflows, registration.CustomNodes, registration.Device, files})
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
 }

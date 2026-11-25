@@ -801,6 +801,65 @@ func (stationShareTestExecutor) Call(ctx context.Context, _ pluginhost.Invocatio
 	return json.Marshal(map[string]any{"ok": true, "platform": "channels", "source_url": link, "object_id": "12345", "title": "", "author": "", "private_media_locators": []string{packet.Data.Feed["videoUrl"]}, "private_decode_key": packet.Data.Feed["decodeKey"], "coverage": "media_locator_only", "video_observed": false, "media_downloaded": false, "untrusted_external_content": true})
 }
 
+func TestPublicGroupVideoEvidenceUsesActualCoverage(t *testing.T) {
+	if short, long := stationGroupShareFrameStep(4), stationGroupShareFrameStep(6000); short != 1 || long != 1000 {
+		t.Fatalf("unexpected sampling steps for short and long videos: %d, %d", short, long)
+	}
+	audio := (stationGroupShareAudio{End: 240, Text: "first four minutes"}).observation()
+	frames := (stationGroupShareFrames{Times: []float64{0, 30, 60, 90, 120, 150}, Text: "six inspected frames"}).observation()
+	if !strings.Contains(audio.Range, "0.000–240.000") || strings.Contains(audio.Range, "完整") || !strings.Contains(frames.Range, "150.000秒") {
+		t.Fatalf("unexpected audio or visual coverage: %q, %q", audio.Range, frames.Range)
+	}
+	rangeLabel, _ := stationGroupShareEvidenceText([]companion.ObservationPart{frames})
+	if rangeLabel != frames.Range || strings.Contains(rangeLabel, "音轨") {
+		t.Fatalf("one successful modality was presented as audio and visuals: %q", rangeLabel)
+	}
+}
+
+func TestPublicGroupShareImageEvidenceRequiresCurrentVisualGrant(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL32QAAAABJRU5ErkJggg==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked := errors.New("fixture source revoked")
+	var calls int
+	var changeDuringObservation bool
+	var originErr error
+	checkSource := func() error { return originErr }
+	tools := stationAttachmentTools{localVision: stationLocalVision{
+		version: func(context.Context) (string, error) { return "fixture-image-route", nil },
+		observe: func(_ context.Context, _ string, _ string, images []deepseek.Image, _ int, _ func() error) (string, error) {
+			calls++
+			if len(images) != 1 || images[0].MIME != "image/png" || !bytes.Equal(images[0].Data, png) {
+				t.Fatal("the observer did not receive the downloaded image")
+			}
+			if changeDuringObservation {
+				originErr = revoked
+			}
+			return "fixture single-image observation", nil
+		},
+	}}
+	read := func(data []byte) (companion.MediaObservationEvidence, error) {
+		return tools.observePublicGroupShareImage(t.Context(), "fixture-card", data, checkSource)
+	}
+	if evidence, err := read(png); err == nil || len(evidence.Parts) != 0 || calls != 0 {
+		t.Fatal("vision disabled did not prevent image observation")
+	}
+	tools.stationImageVision = true
+	if evidence, err := read([]byte("<html>not an image</html>")); err == nil || len(evidence.Parts) != 0 || calls != 0 {
+		t.Fatal("non-image response reached the observer")
+	}
+	evidence, err := read(png)
+	if err != nil || calls != 1 || len(evidence.Parts) != 1 || !companion.HasFirsthandObservation(evidence.Parts) ||
+		evidence.Parts[0].Kind != companion.ObservationVisualFrames || !strings.Contains(evidence.ObservedRange, "第 1 张画面") {
+		t.Fatalf("single-image evidence: %#v %v", evidence, err)
+	}
+	changeDuringObservation = true
+	if evidence, err = read(png); !errors.Is(err, revoked) || len(evidence.Parts) != 0 || calls != 2 {
+		t.Fatal("source revision during observation was not enforced")
+	}
+}
+
 func TestStationVideoDecoderUnavailable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := mediadecode.Probe(t.Context(), "irrelevant.mp4")

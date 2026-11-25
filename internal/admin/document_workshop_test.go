@@ -86,7 +86,7 @@ func TestDocumentWorkshopPolicyBindsOnlyHostMaterializedPaths(t *testing.T) {
 			ID   string `json:"artifact_id"`
 		}
 	}
-	if err := json.Unmarshal(metadata["wechat/document"], &doc); err != nil || len(doc.Inputs) != 1 || doc.Output != policy.materialized[0].OutputDir || doc.Inputs[0].ID != asset.ID || doc.Inputs[0].Path != policy.materialized[0].InputPath {
+	if err := json.Unmarshal(metadata["wechat/document"], &doc); err != nil || len(doc.Inputs) != 1 || doc.Output != documentProcessPath(policy.materialized[0].OutputDir) || doc.Inputs[0].ID != asset.ID || doc.Inputs[0].Path != documentProcessPath(policy.materialized[0].InputPath) {
 		t.Fatalf("document metadata lost task-scoped binding: %+v (%v)", doc, err)
 	}
 }

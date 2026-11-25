@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "project-development",
   "name": "项目开发",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -27,7 +27,7 @@
     "PERMISSIONS.md": "6a4e61ba6e016f6b80bdaff848378ad2b9ee87bea5460103abf84edea25d7a6f",
     "README.md": "b63e7c731e65784f30f9a847d638b0c088ac8af259015f3863abab812ea0b3d9",
     "runtime/catalog.json": "97b801bc8716cfa4264159aaf6342468f675717e1dc9672ab5db7ac00f16e8fd",
-    "runtime/main.py": "e5935a65b4a4a7791293ceaef7034cc37dece213106dd252613f347ef745ac73",
+    "runtime/main.py": "ca6fe74d6557dcee82d366c4b3f359032aa19827b71fef3335d3e0411d7f6884",
     "runtime/README.md": "56b2d7d64a80427ada4cb7367140600605b3e9a3f68d447f5ec6949aa4d69b73",
     "tests/fixtures/scope.json": "a2aa5d112b4ad9b62a3f1a77125fc413b67c01d4890144cf7098c81d2100c27b",
     "tests/test_runtime.py": "555f89c07f5ebfe0ba1ae3bccaedfe5273426a1d7d9786c50fb0ee78951b6df4",
@@ -40,6 +40,8 @@
     "dev/repair-acceptance/repair_file_flags_linux.go.in": "22b272295ca94ee73805359a6f9585bdd7ce6a22d78677c4a6c0c26431d1260a",
     "dev/repair-acceptance/repair_file_flags_other.go.in": "53da68db4ba6aef300ba68304271699e31affd160725e13c96f2cafc0d876940",
     "dev/repair-acceptance/repair_file_linux_test.go.in": "18d532bcb94143744829d8ce48b795fe7901874c020c74173308d3c733b1f288",
-    "dev/repair-acceptance/run_contract.py": "75ac0edb7bacbba4b36a12d8629fc6df9684c2f33691d3b6f9c03d4b82721fb9"
-  }
+    "dev/repair-acceptance/run_contract.py": "75ac0edb7bacbba4b36a12d8629fc6df9684c2f33691d3b6f9c03d4b82721fb9",
+    "run-tool.ps1": "7436f94c4913b173eb7ab8a2c8df8aff4f66eb4a8a21c083aaabd5a1dd6f2291"
+  },
+  "call_metadata": "opaque-v1"
 }

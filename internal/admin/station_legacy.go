@@ -55,21 +55,25 @@ func PrepareStationLegacyData(legacyDir, modelFile, workerDir string) error {
 	}
 	configPath := filepath.Join(legacyDir, "config.json")
 	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
-		model, err := readStationLegacyModel(modelFile)
-		if err != nil {
-			return err
+		model, modelErr := readStationLegacyModel(modelFile)
+		if modelErr != nil && !errors.Is(modelErr, os.ErrNotExist) {
+			return modelErr
 		}
-		policy, err := readStationLegacyPolicy(filepath.Join(workerDir, "worker.json"))
-		if err != nil {
-			return err
+		policy, policyErr := readStationLegacyPolicy(filepath.Join(workerDir, "worker.json"))
+		if policyErr != nil && !errors.Is(policyErr, os.ErrNotExist) {
+			return policyErr
 		}
-		config := stationLegacyConfig(model, policy)
-		data, err := json.MarshalIndent(config, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := writePrivate(configPath, data); err != nil {
-			return err
+		// A fresh install has no account policy or model yet. Let the console
+		// use its own disabled defaults until the owner connects an account.
+		if modelErr == nil && policyErr == nil {
+			config := stationLegacyConfig(model, policy)
+			data, err := json.MarshalIndent(config, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := writePrivate(configPath, data); err != nil {
+				return err
+			}
 		}
 	} else if err != nil {
 		return err
@@ -96,6 +100,9 @@ func PrepareStationLegacyData(legacyDir, modelFile, workerDir string) error {
 func readStationLegacyModel(path string) (stationLegacyModel, error) {
 	var model stationLegacyModel
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return model, os.ErrNotExist
+	}
 	if err != nil || json.Unmarshal(data, &model) != nil || model.BaseURL == "" || model.Model == "" || model.APIKey == "" && model.KeyConfigured {
 		return model, errors.New("station legacy model configuration unavailable")
 	}
@@ -105,6 +112,9 @@ func readStationLegacyModel(path string) (stationLegacyModel, error) {
 func readStationLegacyPolicy(path string) (stationLegacyWorkerPolicy, error) {
 	var policy stationLegacyWorkerPolicy
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return policy, os.ErrNotExist
+	}
 	if err != nil || json.Unmarshal(data, &policy) != nil || policy.ReplyGrants == nil {
 		return policy, errors.New("station legacy worker policy unavailable")
 	}
@@ -150,7 +160,9 @@ func copyTreeIfMissing(source, destination string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, err := os.Stat(source); err != nil {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
 		return err
 	}
 	if err := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {

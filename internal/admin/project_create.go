@@ -32,9 +32,6 @@ func (p *permittedTools) mediateWorkspaceDirectory(ctx context.Context, raw json
 	x := p.executionContext()
 	base := x.Conversation
 	if in.Shared {
-		if !p.privileged() {
-			return nil, toolInputError("shared workspace requires trusted owner")
-		}
 		base = x.Public
 	}
 	dir := filepath.Join(base, "projects", in.Name)

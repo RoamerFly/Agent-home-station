@@ -119,6 +119,10 @@ func TestNativeQuotedTextPreservesOwnLiteralAndSeparateQuotedAuthor(t *testing.T
 	if !ok || q["sender"] != original.SenderID || q["message_id"] != original.ID {
 		t.Fatal("first context lost separate quote author", model.current)
 	}
+	quoted, ok := model.current["quoted_message_evidence"].(map[string]any)
+	if !ok || quoted["text"] != original.Body || quoted["message_sender_id"] != original.SenderID {
+		t.Fatal("original from the native quote was unavailable before any stored copy existed")
+	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: m.ThreadID}
 	scope := c.Store.Context(in, c.Config, time.Now())
 	for _, turn := range scope.Messages {
@@ -218,6 +222,92 @@ func TestQuotedShareRetainsExactSourceWithoutNeedingCachedAsset(t *testing.T) {
 		if quotedSourceURL(bad) != "" {
 			t.Fatal("unsafe quoted source", bad)
 		}
+	}
+}
+
+func TestQuotedShareSelectsOriginalForAnalysisAndMediaProvenance(t *testing.T) {
+	w, _, c, _ := mediaWorker(t)
+	type57 := 57
+	current := fixtureMessage("quoted-share-request", "room@chatroom", "总结一下这个视频", "incoming")
+	current.Type, current.AppMessageType = 49, &type57
+	current.SenderID, current.ServerID = "requester", "request-server"
+	current.Quote = &linuxnative.QuoteReference{ServerID: "share-server", Type: 49}
+	original := fixtureMessage("original-share", current.ThreadID, "", "incoming")
+	original.Type, original.ServerID, original.SenderID = 49, "share-server", "share-sender"
+	original.Link = &linuxnative.LinkCard{Title: "公开视频", Description: "卡片简介", URL: "https://v.kuaishou.com/example"}
+	w.source = &quotedTestSource{fakeSource: &fakeSource{}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: current.ID, ThreadID: current.ThreadID, State: "resolved", Message: &original}}
+	if got := w.readQuoteContext(context.Background(), &current); got == "" || current.ResolvedQuote == nil {
+		t.Fatal("quote was not resolved", got)
+	}
+	analysis, ok := quotedAnalysisMessage(current)
+	if !ok || analysis.ID != original.ID || analysis.Link == nil || analysis.Link.URL != original.Link.URL {
+		t.Fatalf("quoted share was not selected as analysis target: ok=%v analysis=%+v", ok, analysis)
+	}
+	engine, err := companion.New(c.Config, c.Store, &quotedLiteralModel{}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := companion.Input{Channel: "wechat", Account: "test", Thread: current.ThreadID, Sender: current.SenderID, TraceID: current.ID, MessageTime: current.CreatedAt}
+	bindInputSource(&input, current, engine)
+	if len(input.IncomingMedia) != 1 || input.IncomingMedia[0].Source.MessageID != original.ID || input.IncomingMedia[0].Kind != "share" {
+		t.Fatalf("quoted share media provenance lost: %+v", input.IncomingMedia)
+	}
+}
+
+func TestQuotedNativeVideoPreservesCurrentLiteralAndChecksOriginalPermission(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		enabled bool
+		foreign bool
+	}{
+		{name: "readable", enabled: true},
+		{name: "video disabled"},
+		{name: "different conversation", enabled: true, foreign: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			w, _, base, _ := mediaWorker(t)
+			model := &quotedLiteralModel{}
+			engine, err := companion.New(base.Config, base.Store, model, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine.Config.QuietStart, engine.Config.QuietEnd = "00:00", "00:00"
+			w.model, w.config.Channel = engine, "wechat"
+			w.config.GroupRules = map[string]GroupRule{"room@chatroom": {Mode: "all"}}
+			w.config.Options.ReadVideos = scenario.enabled
+			observer := &typedCountingObservationAnalyzer{}
+			w.config.Analyzer = observer
+			current := fixtureMessage("quote-request", "room@chatroom", "画面有什么？", "incoming")
+			current.Type, current.SenderID = 49, "quoting-member"
+			current.Quote = &linuxnative.QuoteReference{ServerID: "777", Type: 43}
+			original := fixtureMessage("quoted-native-video", current.ThreadID, "", "incoming")
+			original.Type, original.ServerID, original.SenderID = 43, "777", "original-uploader"
+			if scenario.foreign {
+				original.ThreadID = "foreign@chatroom"
+			}
+			w.source = &quotedTestSource{fakeSource: &fakeSource{messages: map[string]linuxnative.Message{current.ID: current}}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: current.ID, ThreadID: current.ThreadID, State: "resolved", Message: &original}}
+			w.handle(t.Context(), fixtureEvent("1", current.ID, current.ThreadID, "incoming", "wechat"))
+			if w.persistErr != nil || model.current["text"] != current.Body || requestActorFromPacket(model.current) != current.SenderID {
+				t.Fatal("current quoted request was lost or rewritten", w.persistErr, model.current)
+			}
+			parts := strings.Join(model.contents, "\n")
+			if scenario.enabled && !scenario.foreign {
+				if observer.calls.Load() != 1 || !strings.Contains(parts, "实际帧内容："+original.ID) || !strings.Contains(parts, companion.ObservationVisualFrames) {
+					t.Fatal("exact original video observation was not available to the model")
+				}
+				obs, _ := model.current["media_observations"].([]any)
+				if len(obs) != 1 {
+					t.Fatal("wrong number of media sources", obs)
+				}
+				media := obs[0].(map[string]any)
+				source := media["source"].(map[string]any)
+				if source["message_id"] != original.ID || media["uploader_id"] != original.SenderID {
+					t.Fatal("video evidence attributed to the quoting user", media)
+				}
+			} else if observer.calls.Load() != 0 || strings.Contains(parts, "实际帧内容：") {
+				t.Fatal("video permission or conversation boundary bypassed")
+			}
+		})
 	}
 }
 

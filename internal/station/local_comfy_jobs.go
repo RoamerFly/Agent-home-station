@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"wechat-bot/internal/comfyui"
+	"wechat-bot/internal/mediadecode"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/workspacefs"
 )
@@ -59,7 +60,7 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	}
 	if !job.CancelRequested {
 		e.deployment, err = e.tool.projectTools.comfy.Info(ctx, g.FishID)
-		if err != nil || e.checkWorkflow(args) != nil {
+		if err != nil || e.checkWorkflow(ctx, args) != nil {
 			view := comfyJobView(job)
 			view["state"], view["reason"] = "needs_review", "deployment_or_workflow_changed"
 			return localProcessJSON(view)
@@ -76,11 +77,11 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 				return err
 			}
 		}
-		state, err := client.Status(ctx, ref)
+		state, count, err := localComfyOutputStatus(ctx, client, ref, args.VideoOutput)
 		if err != nil {
 			return err
 		}
-		view, err = e.reconcile(ctx, client, job, args, ref, state)
+		view, err = e.reconcile(ctx, client, job, args, ref, state, count)
 		if err == nil {
 			switch view["state"] {
 			case "completed", "failed", "cancelled", "artifact_unavailable":
@@ -101,8 +102,26 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	return localProcessJSON(view)
 }
 
-func (e localComfyInvocation) reconcile(ctx context.Context, client localComfyClient, job pluginhost.Job, args localComfyJobInput, ref comfyui.JobRef, remote comfyui.JobStatus) (map[string]any, error) {
-	if remote.State != comfyui.Unknown && job.RemoteID == "" {
+type localComfyVideoClient interface {
+	VideoStatus(context.Context, comfyui.JobRef) (comfyui.VideoStatus, error)
+	FetchMP4(context.Context, comfyui.JobRef) (comfyui.MP4, error)
+}
+
+func localComfyOutputStatus(ctx context.Context, client localComfyClient, ref comfyui.JobRef, video bool) (comfyui.State, int, error) {
+	if video {
+		backend, ok := client.(localComfyVideoClient)
+		if !ok {
+			return comfyui.Unknown, 0, errors.New("ComfyUI 视频结果接口不可用")
+		}
+		status, err := backend.VideoStatus(ctx, ref)
+		return status.State, status.VideoCount, err
+	}
+	status, err := client.Status(ctx, ref)
+	return status.State, status.ImageCount, err
+}
+
+func (e localComfyInvocation) reconcile(ctx context.Context, client localComfyClient, job pluginhost.Job, args localComfyJobInput, ref comfyui.JobRef, state comfyui.State, count int) (map[string]any, error) {
+	if state != comfyui.Unknown && job.RemoteID == "" {
 		next, err := e.host.store.AcknowledgeJob(ctx, job.ID, job.Revision, ref.ID)
 		if err != nil {
 			return nil, err
@@ -110,17 +129,23 @@ func (e localComfyInvocation) reconcile(ctx context.Context, client localComfyCl
 		job = next
 	}
 	if job.CancelRequested {
-		return e.cancelComfyJob(ctx, client, job, ref, remote.State)
+		return e.cancelComfyJob(ctx, client, job, ref, state, args.VideoOutput)
 	}
 	if err := e.checkSource(ctx, args); err != nil {
 		return nil, err
 	}
-	switch remote.State {
+	switch state {
 	case comfyui.Completed:
-		if remote.ImageCount < 1 || remote.ImageCount > localComfyImageLimit {
+		if args.VideoOutput {
+			if count != 1 {
+				return comfyJobView(e.failComfyJob(ctx, job, "approved_mp4_output_count_invalid")), nil
+			}
+			return e.publishComfyVideo(ctx, client, job, args, ref)
+		}
+		if count < 1 || count > localComfyImageLimit {
 			return comfyJobView(e.failComfyJob(ctx, job, "approved_png_output_count_invalid")), nil
 		}
-		return e.publishComfyImages(ctx, client, job, args, ref, remote.ImageCount)
+		return e.publishComfyImages(ctx, client, job, args, ref, count)
 	case comfyui.Failed:
 		return comfyJobView(e.failComfyJob(ctx, job, "workflow_execution_failed")), nil
 	case comfyui.Cancelled:
@@ -132,26 +157,26 @@ func (e localComfyInvocation) reconcile(ctx context.Context, client localComfyCl
 		return view, nil
 	default:
 		view := comfyJobView(job)
-		view["backend_state"] = remote.State
+		view["backend_state"] = state
 		return view, nil
 	}
 }
 
-func (e localComfyInvocation) cancelComfyJob(ctx context.Context, client localComfyClient, job pluginhost.Job, ref comfyui.JobRef, state comfyui.State) (map[string]any, error) {
+func (e localComfyInvocation) cancelComfyJob(ctx context.Context, client localComfyClient, job pluginhost.Job, ref comfyui.JobRef, state comfyui.State, video bool) (map[string]any, error) {
 	if state == comfyui.Pending || state == comfyui.Running {
 		dispatched, err := client.Cancel(ctx, ref)
 		if err != nil {
 			return nil, err
 		}
-		next, err := client.Status(ctx, ref)
+		next, _, err := localComfyOutputStatus(ctx, client, ref, video)
 		if err != nil {
 			return nil, err
 		}
 		// Removing a queued item from ComfyUI leaves no history entry.
-		if dispatched && next.State == comfyui.Unknown {
+		if dispatched && next == comfyui.Unknown {
 			state = comfyui.Cancelled
 		} else {
-			state = next.State
+			state = next
 		}
 	}
 	switch state {
@@ -196,6 +221,10 @@ func (e localComfyInvocation) finishedView(job pluginhost.Job) map[string]any {
 	view["artifacts"] = artifacts
 	if len(artifacts) == 1 {
 		view["artifact_id"] = job.Artifacts[0]
+		var output localComfyVideoReceipt
+		if json.Unmarshal(job.Result, &output) == nil && output.Kind == "video" {
+			view["video"] = output
+		}
 	}
 	return view
 }
@@ -226,22 +255,7 @@ func (e localComfyInvocation) publishComfyImages(ctx context.Context, client loc
 			return nil, err
 		}
 		name := fmt.Sprintf("comfy-%02d.png", index+1)
-		if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return nil, err
-		}
-		n, err := file.Write(img.Data)
-		if err == nil && n != len(img.Data) {
-			err = io.ErrShortWrite
-		}
-		if err == nil {
-			err = file.Sync()
-		}
-		if err = errors.Join(err, file.Close()); err != nil {
-			_ = root.Remove(name)
+		if err := stageComfyOutput(root, name, img.Data); err != nil {
 			return nil, err
 		}
 		input := localArtifactInput{Key: job.ID, Expected: img.SHA256, project: localComfyPackage}
@@ -256,7 +270,7 @@ func (e localComfyInvocation) publishComfyImages(ctx context.Context, client loc
 	if err := e.checkSource(ctx, args); err != nil {
 		return nil, err
 	}
-	if err := e.checkWorkflow(args); err != nil {
+	if err := e.checkWorkflow(ctx, args); err != nil {
 		return nil, err
 	}
 	receipt, _ := json.Marshal(map[string]any{"workflow_id": args.Workflow, "images": evidence})
@@ -265,4 +279,108 @@ func (e localComfyInvocation) publishComfyImages(ctx context.Context, client loc
 		return nil, err
 	}
 	return e.finishedView(next), nil
+}
+
+type localComfyVideoReceipt struct {
+	Workflow string  `json:"workflow_id"`
+	Kind     string  `json:"output_kind"`
+	SHA256   string  `json:"sha256"`
+	Width    int     `json:"width"`
+	Height   int     `json:"height"`
+	Frames   int     `json:"frame_count,omitempty"`
+	Seconds  float64 `json:"duration_seconds"`
+	FPS      float64 `json:"fps,omitempty"`
+}
+
+func (e localComfyInvocation) publishComfyVideo(ctx context.Context, client localComfyClient, job pluginhost.Job, args localComfyJobInput, ref comfyui.JobRef) (map[string]any, error) {
+	backend, ok := client.(localComfyVideoClient)
+	if !ok {
+		return nil, errors.New("ComfyUI 视频结果接口不可用")
+	}
+	video, err := backend.FetchMP4(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	// The deterministic staging path is part of the artifact identity. Two
+	// status queries must not replace each other's MP4 or decoder output.
+	e.host.comfyVideoPublish.Lock()
+	defer e.host.comfyVideoPublish.Unlock()
+	current, err := e.host.store.Job(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	if current.Recovery() == "terminal" {
+		return e.finishedView(current), nil
+	}
+	if current.Revision != job.Revision {
+		return nil, errors.New("ComfyUI 视频任务状态已变化，请重新查询")
+	}
+	dir := filepath.Join(e.tool.projectTools.home.dataDir, "comfyui-output-stage", job.ID)
+	root, err := workspacefs.EnsurePath(dir)
+	if err != nil {
+		return nil, err
+	}
+	const name = "comfy-video.mp4"
+	defer func() {
+		_ = root.Remove("frame-000001.jpg")
+		_ = root.Remove(name)
+		_ = root.Close()
+		_ = os.Remove(dir)
+	}()
+	if err := stageComfyOutput(root, name, video.Data); err != nil {
+		return nil, err
+	}
+	file := filepath.Join(dir, name)
+	meta, err := mediadecode.Probe(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Width < 1 || meta.Height < 1 || !localComfyFinite(meta.FPS) || meta.FPS <= 0 {
+		return nil, errors.New("ComfyUI 输出的视频尺寸或帧率无效")
+	}
+	frames, _, err := mediadecode.ExtractFramesSized(ctx, file, dir, 0, 1, 1, 64)
+	if err != nil || len(frames) != 1 {
+		return nil, errors.New("ComfyUI 输出的视频无法解码")
+	}
+	if err := e.checkSource(ctx, args); err != nil {
+		return nil, err
+	}
+	if err := e.checkWorkflow(ctx, args); err != nil {
+		return nil, err
+	}
+	input := localArtifactInput{Key: job.ID, Expected: video.SHA256, project: localComfyPackage}
+	artifact, err := e.tool.access.home.artifacts.publishFile(ctx, input, args.Origin, e.tool.access, e.grant, file, nil)
+	if err != nil {
+		return nil, err
+	}
+	receipt, _ := json.Marshal(localComfyVideoReceipt{
+		Workflow: args.Workflow, Kind: "video", SHA256: video.SHA256, Width: meta.Width, Height: meta.Height,
+		Frames: meta.Frames, Seconds: meta.Seconds, FPS: meta.FPS,
+	})
+	next, err := e.host.store.CompleteJob(ctx, job.ID, job.Revision, []string{artifact.ID}, receipt)
+	if err != nil {
+		return nil, err
+	}
+	return e.finishedView(next), nil
+}
+
+func stageComfyOutput(root *os.Root, name string, data []byte) error {
+	if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	n, err := file.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if err = errors.Join(err, file.Close()); err != nil {
+		_ = root.Remove(name)
+	}
+	return err
 }

@@ -179,12 +179,16 @@ func applicationPersonaPolicy(main string, app localAppPersona) string {
 // only an unchanged, source-verified import. Owner edits always take precedence.
 // Write the app copy first so interruption cannot lose the existing character.
 func migrateLegacyAppPersona(dir string) error {
-	release, err := hostfile.Lock(filepath.Join(dir, ".legacy-app-persona-migration.lock"))
+	lockRoot := dir
+	if structuredDataRoot(dir) && directoryExists(filepath.Join(dir, "main_setting")) {
+		lockRoot = filepath.Join(dir, "main_setting")
+	}
+	release, err := hostfile.Lock(filepath.Join(lockRoot, ".legacy-app-persona-migration.lock"))
 	if err != nil {
 		return err
 	}
 	defer release()
-	root, err := workspacefs.OpenPath(dir)
+	root, err := workspacefs.OpenPath(stationAuthorityDir(dir))
 	if err != nil {
 		return err
 	}

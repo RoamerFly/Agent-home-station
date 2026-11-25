@@ -3,7 +3,7 @@ param([Parameter(Mandatory=$true)][string]$PackageDirectory)
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path -LiteralPath $PackageDirectory).ProviderPath
 $runner = Join-Path $package 'DesktopTests.exe'
-$station = Join-Path $package 'agent-home-station-server.exe'
+$station = Join-Path $package 'data\main_setting\runtime\agent-home-station-server.exe'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf) -or -not (Test-Path -LiteralPath $station -PathType Leaf)) {
     throw 'Build the Windows LocalStation package with -Test before the rehearsal.'
 }

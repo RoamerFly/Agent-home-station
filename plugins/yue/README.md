@@ -4,7 +4,7 @@
 
 ## 依赖与安装
 
-安装本工具包不复制 YuE、模型、权重、Python、GPU 驱动、样例工程、工作流或服务地址。Windows 站点管理员可先安装工具包，再将已经审核的官方本机 YuE 安装登记给宿主。宿主保存版本与模板固定信息，并按任务直接调用本机适配器。
+源码目录不提交第三方运行时、模型或权重。本机安装包的 `runtime/engine` 包含独立的 ComfyUI 与 YuE2 节点、Python；本包 `models`、`workflows` 和 `runtime/media/ffmpeg.exe` 提供作曲所需的本地资源。可在本包目录运行 `./run-service.ps1 -Help` 检查入口，或运行 `./run-service.ps1` 独立启动。GPU 驱动仍由系统提供。
 
 `runtime/managed-service.json` 是协议声明，不是启动脚本。工具显示“本机后端未就绪”（`yue_backend_not_configured`）时，表示尚未完成宿主登记；安装状态不等于可以启动后端。
 

@@ -54,7 +54,14 @@ func NewHandler(manager *Manager, password, origin string) (http.Handler, error)
 }
 
 func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handler, error) {
-	s := &Server{manager: manager, auth: auth, autoLogin: os.Getenv("WECHAT_LEGACY_AUTOLOGIN") == "1"}
+	autoLogin := os.Getenv("WECHAT_LEGACY_AUTOLOGIN") == "1"
+	for _, arg := range os.Args[1:] {
+		if arg == "--desktop" {
+			autoLogin = true
+			break
+		}
+	}
+	s := &Server{manager: manager, auth: auth, autoLogin: autoLogin}
 	if root {
 		var err error
 		s.accounts, err = newAccountRegistry(s)
@@ -75,22 +82,32 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		station.RegisterLegacyHomeRoutes(s.auth, mux, manager.fish, manager.managedRoot(), manager.dir)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]bool{"ok": true}) })
+	mux.HandleFunc("GET /api/startup/diagnostics", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		respond(w, 200, s.manager.startupDiagnostics())
+	}))
 	if root {
 		mux.HandleFunc("POST /api/login", auth.Login)
 		mux.HandleFunc("POST /api/logout", auth.Protect(auth.Logout))
 		mux.HandleFunc("POST /api/password", auth.Protect(s.changePassword))
-		mux.HandleFunc("GET /api/session", auth.Protect(auth.Status))
+		mux.HandleFunc("GET /api/session", s.sessionStatus)
 	}
 	mux.HandleFunc("GET /api/config", s.protected(func(w http.ResponseWriter, r *http.Request) { respond(w, 200, s.manager.Config()) }))
 	mux.HandleFunc("POST /api/config", s.protected(s.saveConfig))
+	mux.HandleFunc("GET /api/persona-document", s.protected(s.getPersonaDocument))
+	mux.HandleFunc("POST /api/persona-document", s.protected(s.savePersonaDocument))
 	mux.HandleFunc("GET /api/status", s.protected(s.status))
 	mux.HandleFunc("GET /api/logs", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("date") {
 			s.logsByDate(w, r)
 			return
 		}
-		respond(w, 200, map[string]any{"items": s.manager.displayLogs(r.Context())})
+		items := s.manager.displayLogs(r.Context())
+		inbox, plans, loaded := s.logRuntimeStates()
+		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "plan_states": plans, "inbox_loaded": loaded})
 	}))
+	mux.HandleFunc("POST /api/logs/round/manual-complete", s.protected(s.manualRoundCompletion))
+	mux.HandleFunc("POST /api/logs/round/close", s.protected(s.manualRoundClose))
+	mux.HandleFunc("POST /api/logs/round/process", s.protected(s.manualRoundProcess))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))
 	mux.HandleFunc("POST /api/bot/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, false) }))
 	mux.HandleFunc("POST /api/model/test", s.protected(s.testModel))
@@ -146,7 +163,12 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			return
 		}
 		name := r.URL.Path
-		if s.autoLogin && name == "/" && r.URL.Query().Get("from_station") == "1" {
+		// Desktop mode is already restricted to the loopback listener. Start the
+		// legacy console with its local handoff session directly so users go to
+		// the WeChat account page instead of seeing a second administrator
+		// password form. AutoLogin rechecks the host/origin boundary and the
+		// protected API still requires the same-origin CSRF token.
+		if s.autoLogin && name == "/" {
 			s.auth.AutoLogin(w, r)
 		}
 		if stationui.ServeLegacy(w, r, name) {
@@ -260,7 +282,7 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		}
 		_, _ = w.Write(data)
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -271,7 +293,11 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 		} else {
 			mux.ServeHTTP(w, r)
 		}
-	}), nil
+	})
+	if s.autoLogin {
+		return websession.GuardHost(handler, ""), nil
+	}
+	return handler, nil
 }
 
 func respond(w http.ResponseWriter, status int, value any)   { websession.Respond(w, status, value) }
@@ -282,6 +308,16 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 
 func (s *Server) session(r *http.Request) (string, websession.Session, bool) { return s.auth.Lookup(r) }
 func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc           { return s.auth.Protect(next) }
+
+func (s *Server) sessionStatus(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.auth.Lookup(r); !ok && s.autoLogin && s.auth.AutoLogin(w, r) {
+		// Reopening the console or restarting its local service needs no
+		// password form. Protected mutations still require this session's CSRF.
+		respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": w.Header().Get("X-CSRF-Token")})
+		return
+	}
+	s.auth.Status(w, r)
+}
 
 func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var input ConfigInput

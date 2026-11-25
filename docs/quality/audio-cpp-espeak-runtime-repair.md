@@ -1,0 +1,9 @@
+# Windows audio.cpp Kokoro phonemizer repair
+
+The installed Kokoro 82M model previously failed real CPU synthesis with `Could not load eSpeak-ng`. SenseVoice ASR did not require that dependency, so a successful ASR call could not establish TTS availability.
+
+The Windows workstation now accepts an owner registration with `phonemizer.library`, `phonemizer.library_sha256`, and `phonemizer.data`. Before starting the managed audio.cpp server it checks the DLL name and digest, its adjacent `espeak-ng-data` directory and core data files. Only that managed child receives the DLL directory at the front of `PATH` and `ESPEAK_DATA_PATH`; other processes and global Windows settings are unchanged. The registration bytes remain part of the existing service binding.
+
+The local runtime used for this acceptance came from the [official eSpeak-ng 1.52.0 release](https://github.com/espeak-ng/espeak-ng/releases/tag/1.52.0). The MSI SHA-256 is `7f673c709ea5dd579d3b5ebb98688cc575328a6ab7438d2bc405b88cedaeafb9`, matching the [Microsoft winget manifest](https://github.com/microsoft/winget-pkgs/blob/master/manifests/e/eSpeak-NG/eSpeak-NG/1.52.0/eSpeak-NG.eSpeak-NG.installer.yaml). Its extracted `libespeak-ng.dll` SHA-256 is `e737572df0a35a32b7bd444537c661c1c916b13b0b91351030c7f1d531307beb`. The DLL and 441 eSpeak data files live under the local release `env/windows-espeak-ng`; they and the installer are not Git artifacts. The owner registration is private data and must not be committed.
+
+Validation uses a disposable owner data root, the installed audio.cpp server and pinned formal model files. Kokoro generated an actual 24 kHz, 3.88 second WAV; SenseVoice transcribed that same WAV. This proves the native server and both models, not chat delivery or phone playback. The remaining acceptance step is to update the formal owner registration after deployment and invoke the current workstation chat tool with an immutable artifact, without sending to WeChat.

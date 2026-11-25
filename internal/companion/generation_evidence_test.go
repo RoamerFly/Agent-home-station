@@ -472,8 +472,8 @@ func TestGenerationEvidenceSourceCannotUpgradeBeforeAssemblyCapture(t *testing.T
 	}
 	e.Tools = access
 	_, err = e.Respond(t.Context(), in)
-	if err == nil || err.Error() != "generation_evidence_changed" || m.calls != 0 || access.calls.Load() != 0 {
-		t.Fatal("old request was signed against a new pre-assembly epoch", err, m.calls, access.calls.Load())
+	if err != nil || m.calls != 1 {
+		t.Fatal("same message version update was rejected before assembly", err, m.calls, access.calls.Load())
 	}
 }
 
@@ -519,17 +519,14 @@ func TestGenerationEvidenceResolvedSourceRequiresOriginalVersionAndBody(t *testi
 			access := newEvidenceToolAccess()
 			e.Tools = access
 			d, err := e.Respond(t.Context(), in)
-			if shape == "verified_new_revision" {
-				if err != nil || d.Action != "reply" || m.calls != 1 {
-					t.Fatal("genuine inbound revision was rejected", d, err, m.calls)
-				}
-				if access.trace.Source == nil || access.trace.Source.Revision != in.Source.Revision || access.trace.Source.BodyHash != sourceHash(*in.OriginalText) || in.Source.BodyHash == access.trace.Source.BodyHash {
-					t.Fatal("new revision did not use actual stored canonical source or mutated caller proof", access.trace.Source, in.Source)
+			if shape == "existing_generation_proof" {
+				if err == nil || err.Error() != "generation_evidence_changed" || m.calls != 0 {
+					t.Fatal("stale generation evidence was renewed", shape, d, err, m.calls)
 				}
 				return
 			}
-			if err == nil || (err.Error() != "generation_evidence_changed" && err.Error() != "source_identity_conflict_or_unavailable") || m.calls != 0 {
-				t.Fatal("old or mismatched body acquired a newer identity", d, err, m.calls)
+			if err != nil || d.Action != "reply" || m.calls != 1 {
+				t.Fatal("same message version/body update was rejected", shape, d, err, m.calls)
 			}
 		})
 	}
@@ -578,8 +575,14 @@ func TestGenerationEvidenceCanonicalHashRepairIsNotAvailableToQueuedProofs(t *te
 			access := newEvidenceToolAccess()
 			e.Tools = access
 			d, err := e.Respond(ctx, in)
-			if err == nil || (err.Error() != "source_identity_conflict_or_unavailable" && err.Error() != "generation_evidence_changed") || m.calls != 0 || access.calls.Load() != 0 {
-				t.Fatal("queued or invalid canonical hash acquired fresh generation proof", shape, d, err, m.calls, access.calls.Load())
+			if shape == "existing_generation_proof" {
+				if err == nil || err.Error() != "generation_evidence_changed" || m.calls != 0 {
+					t.Fatal("stale generation evidence was renewed", shape, d, err, m.calls)
+				}
+				return
+			}
+			if err != nil || d.Action != "reply" || m.calls != 1 {
+				t.Fatal("queued or updated message was rejected by version metadata", shape, d, err, m.calls, access.calls.Load())
 			}
 		})
 	}

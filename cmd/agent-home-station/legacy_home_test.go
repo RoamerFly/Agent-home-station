@@ -19,7 +19,7 @@ func TestLegacyHomeCommandImportsSelectedProjectWithoutStartingServices(t *testi
 			t.Fatal(err)
 		}
 	}
-	identity, err := fishidentity.New(dataDir).InitializeLocal()
+	_, err := fishidentity.New(dataDir).InitializeLocal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,9 @@ func TestLegacyHomeCommandImportsSelectedProjectWithoutStartingServices(t *testi
 	if json.Unmarshal(output.Bytes(), &plan) != nil || plan.Status != "applied" {
 		t.Fatal("project import status missing")
 	}
-	target := filepath.Join(workspace, "fish_home", identity.FishID, "home", "projects", "old-project", "tool.py")
+	// The current home layout keeps the single local fish directly under the
+	// workspace. Legacy fish_home/<id>/home remains a migration source only.
+	target := filepath.Join(workspace, "home", "projects", "old-project", "tool.py")
 	content, err := os.ReadFile(target)
 	if err != nil || string(content) != original {
 		t.Fatal("selected project content changed", err)

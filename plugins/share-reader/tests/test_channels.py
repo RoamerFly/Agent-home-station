@@ -170,7 +170,7 @@ class ChannelsTests(unittest.TestCase):
         context={"account":"synthetic-account","thread":"synthetic-thread","requester":"synthetic-user","purpose":"share","request_key":"synthetic-key"}
         requests=[
             {"jsonrpc":"2.0","id":"init","method":"initialize","params":{}},
-            {"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"share.resolve_channels","arguments":{"object_id":"12345","nonce_id":"bound"},"_meta":{"wechat/context":context}}},
+            {"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"share.resolve_channels","arguments":{"object_id":"12345","nonce_id":"bound"},"_meta":{"station/call_id":"a" * 64}}},
             {"jsonrpc":"2.0","id":"share-read-1","result":{"source_url":SOURCE,"feed":{"code":0,"data":{"object":{"id":"12345","contact":{"nickname":"作者"},"objectDesc":{"description":"标题","media":[{"url":"https://media.example/video.mp4","decodeKey":"9"}]}}}}}},
         ]
         incoming=io.StringIO("".join(json.dumps(value,ensure_ascii=False)+"\n" for value in requests))

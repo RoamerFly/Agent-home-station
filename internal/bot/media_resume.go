@@ -12,6 +12,9 @@ import (
 // native resume-only endpoint. Neither a crash nor a missing lookup permits a
 // generic Submit/Retry of the original full audio.
 func (w *Worker) submitMissingMedia(ctx context.Context, native resumeMissingMediaNative, d *mediaDelivery) string {
+	if w.inputRoundClosed(d.Input) || w.roundClosed(d.Input.Thread, d.Trace) {
+		return "round_manually_closed"
+	}
 	if d.State != "resume_prepared" || d.ResumeOriginID == "" {
 		return "media_resume_receipt_pending"
 	}

@@ -24,11 +24,12 @@ func TestBackgroundReasoningYieldsToNewPrivateQuestionWithoutLosingInbox(t *test
 	w.enableGenerations()
 	defer w.closeGenerations()
 	done := ""
-	w.config.AgentTaskDone = func(in companion.Input, state string) {
+	w.config.AgentTaskDone = func(in companion.Input, state string) error {
 		if in.TaskID != "saved-process" {
 			t.Error(in)
 		}
 		done = state
+		return nil
 	}
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "process-result", TaskID: "saved-process", Mode: "direct", Text: "Inspect original process output"}
 	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
@@ -93,7 +94,7 @@ func TestBackgroundYieldWaitsForActualToolBoundaryWithoutReplay(t *testing.T) {
 	w.enableGenerations()
 	defer w.closeGenerations()
 	done := ""
-	w.config.AgentTaskDone = func(_ companion.Input, state string) { done = state }
+	w.config.AgentTaskDone = func(_ companion.Input, state string) error { done = state; return nil }
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", Sender: "person", TraceID: "old-task", TaskID: "saved-task", Mode: "direct", Text: "saved repair"}
 	w.startSyntheticGeneration(t, context.Background(), c, in, nil)
 	pumpGeneration(t, w, func() bool {
@@ -132,6 +133,47 @@ func TestUndirectedMessageDoesNotYieldBackgroundTask(t *testing.T) {
 		t.Fatal("ineligible event interrupted saved task")
 	}
 	delete(w.generation.jobs, "filehelper")
+}
+
+func TestBackgroundTaskDoesNotYieldToItsOriginMessage(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent"}`, nil
+	}))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	cancelled := false
+	job := &generationJob{input: companion.Input{Thread: "room@chatroom", TaskID: "saved-task", OriginTraceID: "origin-message", TraceID: "task-run"}, engine: c, cancel: func() { cancelled = true }}
+	w.generation.jobs[job.input.Thread] = job
+	origin := fixtureMessage("origin-message", job.input.Thread, "原始请求", "incoming")
+	origin.SenderID = "person"
+	w.noticeGenerationMessage(origin, true)
+	if cancelled || job.yieldRequested {
+		t.Fatal("persistent task was interrupted by its own origin message")
+	}
+}
+
+func TestBackgroundTaskDoesNotYieldSameMessageAfterContinuationRestart(t *testing.T) {
+	w, c, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent"}`, nil
+	}))
+	w.enableGenerations()
+	defer w.closeGenerations()
+	message := fixtureMessage("foreground", "room@chatroom", "继续处理", "incoming")
+	message.SenderID = "person"
+	firstCancelled := false
+	first := &generationJob{input: companion.Input{Thread: message.ThreadID, TaskID: "saved-task", TraceID: "task-run-1"}, engine: c, cancel: func() { firstCancelled = true }}
+	w.generation.jobs[message.ThreadID] = first
+	w.noticeGenerationMessage(message, true)
+	if !firstCancelled || !first.yieldRequested {
+		t.Fatal("first foreground message did not yield the persistent task")
+	}
+	secondCancelled := false
+	second := &generationJob{input: companion.Input{Thread: message.ThreadID, TaskID: "saved-task", TraceID: "task-run-2"}, engine: c, cancel: func() { secondCancelled = true }}
+	w.generation.jobs[message.ThreadID] = second
+	w.noticeGenerationMessage(message, true)
+	if secondCancelled || second.yieldRequested {
+		t.Fatal("same unconsumed message repeatedly cancelled a restarted continuation")
+	}
 }
 
 func TestDirectedBackgroundTaskMaySendModelAuthoredProgress(t *testing.T) {

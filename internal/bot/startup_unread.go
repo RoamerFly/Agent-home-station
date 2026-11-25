@@ -150,14 +150,25 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(m.ID, "skipped")
 			continue
 		}
+		if m.IsPassiveNotice() {
+			w.queuePhase(m.ID, "skipped")
+			continue
+		}
 		if m.Direction != "incoming" && !(thread == "filehelper" && m.Direction == "outgoing") {
 			w.queuePhase(m.ID, "completed")
 			continue
 		}
 		working := m
-		isMedia := m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText()
+		cardLabel, _ := m.CardContext()
+		isMedia := cardLabel == "" && (m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText())
 		onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(m)
 		body := messageSummary(m)
+		if cardLabel != "" {
+			working.Type, working.Body = 1, cardLabel
+			if !strings.HasSuffix(thread, "@chatroom") {
+				working.Body = w.config.Prefix + working.Body
+			}
+		}
 		original := ""
 		if m.Type == 1 {
 			original = m.Body
@@ -226,7 +237,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	}
 	// Use a real source message for routing/authorization. Other speakers remain
 	// contextual data, never aliases for the anchor's authenticated sender.
-	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
+	in := companion.Input{ReplayNonce: w.replayNonce(anchor.ID), Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
 		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。", GroupShareSummary: preferredShares[anchor.ID]}
 	if live != nil {
 		for i := range unread {
@@ -345,10 +356,14 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 			return err
 		}
 		if err != nil && in.IsGroup {
-			if w.hasScopedMedia(linuxnative.Message{Type: 43}) && independentGroupTextRequest(in, *event) {
+			if independentGroupTextRequest(in, *event) {
 				event.MediaReadFailed = true
-				report(Record{Event: "background_video_read_failed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
-					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: "背景视频未读到内容，继续独立文字请求。"})
+				name, detail := "background_video_read_failed", "背景视频未读到内容，继续独立文字请求。"
+				if event.Source.MessageType == 47 {
+					name, detail = "background_sticker_read_failed", "背景表情包未读到画面，继续独立文字请求。"
+				}
+				report(Record{Event: name, Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
+					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: detail})
 				continue
 			}
 			return &groupObservationFailure{reason: observationReason(err), messageID: id}
@@ -369,11 +384,20 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 	return nil
 }
 
-// A different sender's ordinary video can remain background for a verified
-// text request. Keep the existing failure policy when it is the actual target,
-// shares the requester, or is explicitly referenced anywhere in this batch.
+// An unrelated video, share card or sticker can remain background for a verified text
+// request. Keep the existing failure policy when it is the actual target or
+// is explicitly referenced anywhere in this batch. A share from the same
+// sender is allowed when a later message is the explicit text request; this
+// prevents one unreadable card from blocking an independent song/voice task.
 func independentGroupTextRequest(in *companion.Input, media companion.ConversationEvent) bool {
-	if !in.Directed || media.Source == nil || media.Source.MessageType != 43 || media.MessageID == in.TraceID || media.Sender == "" || media.Sender == in.Sender {
+	if !in.Directed || media.Source == nil || media.MessageID == in.TraceID || media.Sender == "" {
+		return false
+	}
+	background := media.Source.MessageType == 43 || media.Source.MessageType == 49 || media.Source.MessageType == 47
+	if !background {
+		return false
+	}
+	if media.Source.MessageType == 43 && media.Sender == in.Sender {
 		return false
 	}
 	anchorText := false
