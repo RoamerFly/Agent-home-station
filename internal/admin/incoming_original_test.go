@@ -3,6 +3,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +56,59 @@ func TestIncomingOriginalRetainsSourceAndRequiresExplicitVoiceEnrollment(t *test
 	again, cached, err := (mediaUnderstanding{manager: f.manager}).rememberIncomingOriginal(t.Context(), native.message, "voice", 8<<20)
 	if err != nil || again.ID != asset.ID || string(cached) != string(data) || native.downloads != 1 {
 		t.Fatal("same incoming original was downloaded again", err, native.downloads)
+	}
+}
+
+func TestReceivedVoiceReusesSuccessfulTranscriptAndRetainsBothSources(t *testing.T) {
+	f, p, native := forwardFixture(t)
+	a := mediaUnderstanding{manager: f.manager}
+	native.message = linuxnative.Message{ID: "voice-first", AccountID: "test", ThreadID: p.trace.Thread, SenderID: p.trace.Sender, Type: 34, Direction: "incoming", CreatedAt: "2026-11-25T01:00:00Z"}
+	first, _, err := a.rememberIncomingOriginal(t.Context(), native.message, "voice", 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	text, cached, err := a.transcribeReceivedVoice(first.Hash, func() (string, error) {
+		calls++
+		return "synthetic spoken words", nil
+	})
+	if err != nil || cached || text != "synthetic spoken words" || calls != 1 {
+		t.Fatal("first successful transcription was not recorded", text, cached, err, calls)
+	}
+	path := filepath.Join(f.manager.messageMediaRoot(), "observations", "voices-"+first.Hash+".json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("successful transcription was not saved in the WeChat workspace", err)
+	}
+
+	native.message.ID = "voice-second"
+	native.message.CreatedAt = "2026-11-25T01:01:00Z"
+	second, _, err := a.rememberIncomingOriginal(t.Context(), native.message, "voice", 8<<20)
+	if err != nil || second.ID != first.ID || second.Hash != first.Hash || native.downloads != 2 {
+		t.Fatal("second message was not independently read and verified", err, native.downloads)
+	}
+	if len(second.Requests) != 2 || second.Requests[0].TraceID != "voice-first" || second.Requests[1].TraceID != "voice-second" {
+		t.Fatalf("the reused asset lost a message source: %+v", second.Requests)
+	}
+	text, cached, err = a.transcribeReceivedVoice(second.Hash, func() (string, error) {
+		calls++
+		return "", errors.New("the expensive recognizer should not run twice")
+	})
+	if err != nil || !cached || text != "synthetic spoken words" || calls != 1 {
+		t.Fatal("same original did not reuse its verified transcript", text, cached, err, calls)
+	}
+
+	for _, failure := range []struct {
+		hash string
+		text string
+		err  error
+	}{
+		{strings.Repeat("a", 64), "", errors.New("recognizer unavailable")},
+		{strings.Repeat("b", 64), "", nil},
+	} {
+		_, _, _ = a.transcribeReceivedVoice(failure.hash, func() (string, error) { return failure.text, failure.err })
+		if _, ok := f.manager.readMessageObservation("voices", failure.hash); ok {
+			t.Fatal("failed or empty transcription was cached", failure.hash)
+		}
 	}
 }
 

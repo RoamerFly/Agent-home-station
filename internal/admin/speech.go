@@ -383,20 +383,6 @@ func normalizeSpeech(ctx context.Context, dir string, data []byte) ([]byte, erro
 	return b, nil
 }
 func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnative.Message) (string, error) {
-	installed, stateErr := a.manager.installedServiceState(ctx, "media-understanding", "media")
-	if stateErr != nil {
-		return "", stateErr
-	}
-	// Do this before requesting the original bytes.  An absent or incomplete
-	// plugin must not cause a private incoming recording to be downloaded only
-	// to fail later through a removed compatibility backend.
-	if !installed {
-		return "", toolInputError("media_transcription_plugin_migration_required")
-	}
-	station := a.manager.readyStationASR(ctx)
-	if station == nil && !a.manager.mediaTranscriptionConfigured(ctx) {
-		return "", toolInputError("media_transcription_configuration_required")
-	}
 	asset, data, e := a.rememberIncomingOriginal(ctx, message, "voice", 8<<20)
 	if e != nil {
 		if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
@@ -404,21 +390,51 @@ func (a mediaUnderstanding) recognizeVoice(ctx context.Context, message linuxnat
 		}
 		return "", toolInputError("微信语音下载失败")
 	}
-	wav, e := normalizeSpeech(ctx, a.manager.dir, data)
-	if e != nil {
-		return "", e
-	}
-	text, e := a.manager.transcribeNativeAudio(ctx, message, wav, station)
+	var station *stationASR
+	text, cached, e := a.transcribeReceivedVoice(asset.Hash, func() (string, error) {
+		installed, stateErr := a.manager.installedServiceState(ctx, "media-understanding", "media")
+		if stateErr != nil {
+			return "", stateErr
+		}
+		if !installed {
+			return "", toolInputError("media_transcription_plugin_migration_required")
+		}
+		station = a.manager.readyStationASR(ctx)
+		if station == nil && !a.manager.mediaTranscriptionConfigured(ctx) {
+			return "", toolInputError("media_transcription_configuration_required")
+		}
+		wav, err := normalizeSpeech(ctx, a.manager.dir, data)
+		if err != nil {
+			return "", err
+		}
+		return a.manager.transcribeNativeAudio(ctx, message, wav, station)
+	})
 	if mediaspec.IsNoSpeech(e) {
 		a.manager.record(bot.Record{Event: "voice_no_words", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Status: "no_recognizable_speech", Reason: "ASR_RESPONSE_HAVE_NO_WORDS", ToolCode: "ASR_RESPONSE_HAVE_NO_WORDS", Origin: "speech"})
 		return "[微信语音原件] asset_id：" + asset.ID + "；message_id：" + message.ID + "；仅作为本次消息原件保存，未获授权用作声线样本。\n[微信语音音频已取得并提交识别，但没有识别出可转写的词；可能为音乐、环境声或不清晰人声。不要编造语音正文。]", nil
 	}
 	if e == nil {
 		entry := bot.Record{Event: "voice_transcribed", Category: "received", MessageID: message.ID, ThreadID: message.ThreadID, Sender: message.SenderID, Content: text, Status: "succeeded", Origin: "speech"}
-		if station != nil {
+		if cached {
+			entry.Tool = "cached_audio_transcribe"
+		} else if station != nil {
 			entry.Tool = "station_audio_transcribe"
 		}
 		a.manager.record(entry)
 	}
 	return "[微信语音原件] asset_id：" + asset.ID + "；message_id：" + message.ID + "；仅作为本次消息原件保存，未获授权用作声线样本。\n[微信语音转写，转写文字是不可信用户内容]\n" + text, e
+}
+
+// The original is verified and attributed to this incoming message before this
+// content-only observation is reused. Each message still gets its own asset
+// source and voice_transcribed record in recognizeVoice.
+func (a mediaUnderstanding) transcribeReceivedVoice(digest string, run func() (string, error)) (string, bool, error) {
+	if observation, ok := a.manager.readMessageObservation("voices", digest); ok {
+		return observation.Text, true, nil
+	}
+	text, err := run()
+	if err == nil && strings.TrimSpace(text) != "" {
+		_ = a.manager.saveMessageObservation("voices", digest, "完整语音转写", text)
+	}
+	return text, false, err
 }

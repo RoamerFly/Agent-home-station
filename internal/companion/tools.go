@@ -116,7 +116,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		return d, nil
 	}
 	if !localHost && need.Fresh && need.Kind == "voice" {
-		system += "\n音频请求先找本地匹配原音轨；没有再查可播放或可下载的作品来源。已知BV/b23页面可直接尝试下载音轨。"
+		system += "\n歌曲原音轨先查 music_library_search，再查 media_recent；都没有合适版本才联网。已知 BV/b23 页面可直接下载音轨。"
 	}
 	if !localHost {
 		system += "\nmedia_delivery 记录源素材与发送回执；accepted 才算微信接收。停发或改格式按最新消息处理；复用时核对会话、原件和版本。"
@@ -150,7 +150,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	} else {
 		system += "\n【可自主使用的工具】\n" + string(catalog) + `
 先理解current_message，再按本轮schema选工具、参数和分页；调用格式为 {"action":"tool","tool":"工具名","arguments":{}}。长任务用agent_task记录进展，结果不明时查原任务或回执。
-歌曲先查media_recent，本地没有再用web_audio_search或web_search；BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice，视频用kind=video；用户要文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
+歌曲先查music_library_search，再按需查media_recent；均无合适原曲再用web_audio_search或web_search。BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice，视频用kind=video；用户要文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
 
 	}
 	if nativeFunctions {
@@ -252,6 +252,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 	}
 	previousCalls := map[string]string{}
+	localSearches := map[string]bool{}
 	discoveredPages := map[string][]string{}
 	blockedWithoutProgress := 0
 	// An autonomous run has no call quota. Repeating an identical read with
@@ -361,6 +362,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			historyNeed = nil
 			blockedWithoutProgress = 0
 			readResults = map[string][32]byte{}
+			localSearches = map[string]bool{}
 			unchangedReads = 0
 			followupRounds++
 			pendingCalls = nil // Re-plan siblings proposed before the new request.
@@ -1012,7 +1014,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					}
 				}
 				rememberResourceURLs(knownURLs, result)
-				nextTool, hint := mediaSearchContinuation(response.Tool, result, need, turns)
+				if response.Tool == "media_recent" || response.Tool == "music_library_search" {
+					localSearches[response.Tool] = true
+				}
+				nextTool, hint := mediaSearchContinuation(response.Tool, result, need, turns, tools, localSearches)
 				if nativeFunctions && response.Tool == "service_plugins" {
 					nextTool = "service_plugin_call"
 				}

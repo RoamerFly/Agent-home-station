@@ -616,11 +616,13 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			return "", &mcptools.WebError{Code: "audio_preview_invalid"}
 		}
 		if input.Kind == "video" && mcptools.IsPublicVideoPage(input.URL) {
-			video, err := mcptools.DownloadPublicVideoAudio(ctx, input.URL, toolsLimit("video"))
+			video, cached, err := p.publicVideoWithCache(ctx, input.URL, toolsLimit("video"))
 			if err != nil {
 				return "", err
 			}
-			downloadBytes = int64(len(video.Data))
+			if !cached {
+				downloadBytes = int64(len(video.Data))
+			}
 			data, err := preparePublicVideo(ctx, p.manager.dir, video.Data)
 			if err != nil {
 				return "", err
@@ -629,14 +631,16 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			if !safeMediaFilename(filename) {
 				filename = "public-video.mp4"
 			}
-			return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已取得公开可播放的视频文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "video", Data: data, MIMEType: "video/mp4", Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: filename})
+			return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已取得公开可播放的视频文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "video", Data: data, MIMEType: "video/mp4", Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: filename})
 		}
 		if (input.Kind == "voice" || input.Kind == "file") && mcptools.IsPublicVideoPage(input.URL) {
-			video, err := mcptools.DownloadPublicVideoAudio(ctx, input.URL, toolsLimit(input.Kind))
+			video, cached, err := p.publicVideoWithCache(ctx, input.URL, toolsLimit(input.Kind))
 			if err != nil {
 				return "", err
 			}
-			downloadBytes = int64(len(video.Data))
+			if !cached {
+				downloadBytes = int64(len(video.Data))
+			}
 			audioOnly := input.Kind == "voice"
 			if input.AudioOnly != nil {
 				audioOnly = *input.AudioOnly
@@ -646,7 +650,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				if !safeMediaFilename(filename) {
 					filename = "public-video.mp4"
 				}
-				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "原视频文件已取得，尚未发送。", Media: []plugins.MediaResult{{Kind: "file", Data: video.Data, MIMEType: video.ContentType, Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: filename})
+				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "原视频文件已取得，尚未发送。", Media: []plugins.MediaResult{{Kind: "file", Data: video.Data, MIMEType: video.ContentType, Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: filename})
 			}
 			audio, err := extractPublicAudioFile(ctx, p.manager.dir, video.Data)
 			if err != nil {
@@ -657,7 +661,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				filename = "public-audio.m4a"
 			}
 			if input.Kind == "file" {
-				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
+				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: video.Title + ".mp4"}})
 			}
 			output, err := preparePublicAudioPreview(ctx, p.manager.dir, audio, preview)
 			if err != nil {
@@ -673,18 +677,23 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					output.Media[i].Filename = name
 				}
 			}
-			return p.stageOutputWithAsset(ctx, output, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, Filename: video.Title + ".mp4"}})
+			return p.stageOutputWithAsset(ctx, output, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: video.Title + ".mp4"}})
 		}
-		data, typ, err := mcptools.GetPublicMedia(ctx, strings.TrimSpace(input.URL), toolsLimit(input.Kind))
-		if err != nil {
-			return "", err
+		cachedAsset, data, cached := p.manager.cachedWebMedia(p.trace, input.URL, input.Kind, false, toolsLimit(input.Kind))
+		typ := cachedAsset.MIME
+		var err error
+		if !cached {
+			data, typ, err = mcptools.GetPublicMedia(ctx, strings.TrimSpace(input.URL), toolsLimit(input.Kind))
+			if err != nil {
+				return "", err
+			}
+			downloadBytes = int64(len(data))
 		}
-		downloadBytes = int64(len(data))
 		typ, err = mcptools.ValidateMediaType(input.Kind, typ, data)
 		if err != nil {
 			return "", err
 		}
-		original := &assetOriginal{Data: data, MIME: typ, URL: input.URL}
+		original := &assetOriginal{Data: data, MIME: typ, URL: input.URL, RequestURL: input.URL}
 		if input.Kind == "video" {
 			seconds, probeErr := publicVideoDuration(ctx, p.manager.dir, data)
 			if probeErr != nil {

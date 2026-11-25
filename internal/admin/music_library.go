@@ -9,12 +9,32 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // The resource library contains public recordings downloaded by this account.
 // Conversation identifiers and request history never leave the private index.
 func librarySong(a mediaAsset, account string) bool {
 	return a.Account == account && a.Hash != "" && a.URL != "" && a.Music == nil && strings.HasPrefix(a.MIME, "audio/")
+}
+
+func musicLibraryMatches(a mediaAsset, query string) bool {
+	parts := func(value string) []string {
+		return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		})
+	}
+	terms := parts(query)
+	if len(terms) == 0 {
+		return false
+	}
+	name := strings.Join(parts(a.Title+" "+a.Filename), "")
+	for _, term := range terms {
+		if !strings.Contains(name, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) musicLibraryDirectory(account string) string {
@@ -64,7 +84,7 @@ func (m *Manager) searchMusicLibrary(account, query string, offset, limit int) (
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Updated.After(items[j].Updated) })
 	rows := []map[string]any{}
 	for _, a := range items {
-		if !librarySong(a, account) || !strings.Contains(strings.ToLower(a.Title+" "+a.Filename), strings.ToLower(query)) {
+		if !librarySong(a, account) || !musicLibraryMatches(a, query) {
 			continue
 		}
 		if err := m.materializeLibrarySong(a); err != nil {

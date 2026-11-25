@@ -153,6 +153,20 @@ func (a mediaUnderstanding) Analyze(ctx context.Context, m linuxnative.Message) 
 		return "", errors.New("incoming_media_download_failed")
 	}
 	if m.Type == 43 {
+		// Attribute this verified download to the current message before a
+		// content-only observation can be reused by another message.
+		asset, cacheErr := a.manager.rememberAssetFormats(companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID, TraceID: m.ID, Sender: m.SenderID, Text: "收到的视频原件", MessageTime: m.CreatedAt}, assetOriginal{InboundMessage: &m, Data: data, MIME: "video/mp4", Filename: "收到的视频.mp4"}, nil)
+		if cacheErr == nil {
+			if _, cacheErr = a.manager.cachedAssetData(asset); cacheErr == nil {
+				observation, err := a.observeCachedIncomingVideo(ctx, m, data, asset, videoVariant)
+				if err == nil && videoVariant == linuxnative.VideoCDNRendition {
+					observation = "[来源：微信 CDN 交付的可播放版本，字节与卡片声明的原件不同。]\n" + observation
+				}
+				return observation, err
+			}
+		}
+		// Cache storage failure does not prevent an otherwise readable video
+		// from being observed in the current message.
 		sample, err := sampleVideo(ctx, a.manager.dir, data)
 		if err != nil && (sample.Seconds == 0 || ctx.Err() != nil) {
 			return "", err
