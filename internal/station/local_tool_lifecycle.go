@@ -25,6 +25,13 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 			if pending || s.isActive(id) || host.controller.Status(id).ActiveCalls > 0 {
 				return errors.New("工具正在处理任务，请完成后再停止或重启")
 			}
+			backendBusy, checkErr := s.projectBackendBusy(ctx, host.store.Account(), id)
+			if checkErr != nil {
+				return checkErr
+			}
+			if backendBusy {
+				return errors.New("工具正在处理任务，请完成后再停止或重启")
+			}
 		}
 		switch id {
 		case localRVCPackage:
@@ -154,7 +161,7 @@ func compactProjectToolStatus(views []localProjectToolView) []map[string]any {
 		summaries = append(summaries, map[string]any{
 			"id": view.ID, "name": view.Name, "installed": view.Installed,
 			"enabled": view.Enabled, "state": view.State,
-			"runtime_ready": view.RuntimeReady, "reason": view.Reason,
+			"runtime_ready": view.RuntimeReady, "busy": view.Busy, "reason": view.Reason,
 		})
 	}
 	return summaries

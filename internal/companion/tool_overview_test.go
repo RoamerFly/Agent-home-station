@@ -157,10 +157,15 @@ func TestNativeToolOverviewUsesGrantedCatalogWithoutIndividualToolCalls(t *testi
 		t.Fatal(err)
 	}
 	e.Tools, e.MaxToolCalls = access, 2
-	if _, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "有哪些工具可用", Preview: true}); err != nil {
+	var events []ToolDiagnostic
+	ctx := WithToolObserver(t.Context(), func(d ToolDiagnostic) { events = append(events, d) })
+	if _, err := e.Respond(ctx, Input{Mode: "direct", Text: "有哪些工具可用", Preview: true}); err != nil {
 		t.Fatal(err)
 	}
 	if access.calls != 0 || model.steps != 2 {
 		t.Fatalf("overview made host calls=%d model turns=%d", access.calls, model.steps)
+	}
+	if len(events) != 2 || events[0].Event != "tool_started" || events[1].Event != "tool_completed" || events[1].Tool != "tool_overview" || events[1].Status != "succeeded" || events[0].CallID == "" || events[0].CallID != events[1].CallID {
+		t.Fatalf("overview missing one observed terminal call: %#v", events)
 	}
 }

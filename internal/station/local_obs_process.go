@@ -111,6 +111,9 @@ func (s *localProjectTools) ensureOBSProcess(ctx context.Context, port int, pass
 	}
 }
 func (s *localProjectTools) stopOBSProcess(ctx context.Context) error {
+	if err := s.obsProcesses.StopOwner(ctx, localOBSPackage); err != nil {
+		return err
+	}
 	s.obs.stop()
-	return s.obsProcesses.Stop(ctx, "preview")
+	return nil
 }

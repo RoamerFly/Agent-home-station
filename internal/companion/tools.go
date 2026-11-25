@@ -29,6 +29,7 @@ type surfReviewer interface {
 const nativeToolDiscoveryPolicy = "从本轮schema选工具；问工具清单先用tool_overview，需具体参数再用discover_tools。按错误修正参数或来源，复用已有结果。"
 
 func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string]string) (decision Decision, runErr error) {
+	ctx = withContextMetricRun(ctx)
 	ctx, automaticReasoning, reasoningErr := e.taskReasoningContext(ctx)
 	if reasoningErr != nil {
 		return Decision{}, reasoningErr
@@ -219,6 +220,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	lastFailure := ""
 	backgroundScheduled := false
 	contextReported := false
+	modelRound := 0 // Only actual decision requests; pending native batch calls use the same response.
 	requiredMediaIDs := []string{}
 	musicDelivery := false
 	for _, turn := range turns {
@@ -401,9 +403,6 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err != nil {
 				return Decision{}, err
 			}
-			if err := e.Store.recordContextMetrics(ctx, system+budget, modelTurns, catalogBytes); err != nil && e.ToolLog != nil {
-				e.ToolLog("context_metrics_write_failed")
-			}
 			if !contextReported {
 				e.reportContext(system+budget, modelTurns, activeTools)
 				contextReported = true
@@ -411,12 +410,15 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err := e.validateGenerationSources(ctx); err != nil {
 				return Decision{}, err
 			}
-			e.capturePreparedContext(system+budget, modelTurns, activeTools)
-			answer, err = native.ChatFunctions(e.modelRequestContext(ctx, callEvidence), system+budget, modelTurns, activeTools)
-		} else {
-			if err := e.Store.recordContextMetrics(ctx, system, modelTurns, nil); err != nil && e.ToolLog != nil {
+			modelRound++
+			metricID, metricErr := e.Store.recordContextMetricsRound(ctx, system+budget, modelTurns, catalogBytes, modelRound)
+			if metricErr != nil && e.ToolLog != nil {
 				e.ToolLog("context_metrics_write_failed")
 			}
+			e.capturePreparedContext(system+budget, modelTurns, activeTools)
+			modelCtx := e.withContextMetricUsage(e.modelRequestContext(ctx, callEvidence), metricID)
+			answer, err = native.ChatFunctions(modelCtx, system+budget, modelTurns, activeTools)
+		} else {
 			if !contextReported {
 				e.reportContext(system, modelTurns, nil)
 				contextReported = true
@@ -424,8 +426,14 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err := e.validateGenerationSources(ctx); err != nil {
 				return Decision{}, err
 			}
+			modelRound++
+			metricID, metricErr := e.Store.recordContextMetricsRound(ctx, system, modelTurns, nil, modelRound)
+			if metricErr != nil && e.ToolLog != nil {
+				e.ToolLog("context_metrics_write_failed")
+			}
 			e.capturePreparedContext(system, modelTurns, nil)
-			answer, err = e.model.Chat(e.modelRequestContext(ctx, callEvidence), system, modelTurns)
+			modelCtx := e.withContextMetricUsage(e.modelRequestContext(ctx, callEvidence), metricID)
+			answer, err = e.model.Chat(modelCtx, system, modelTurns)
 		}
 		if err != nil {
 			return Decision{}, err
@@ -829,7 +837,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					return string(b), nil
 				})
 			} else if nativeFunctions && response.Tool == "tool_overview" {
-				result, callErr = e.toolOverview(toolCtx, tools, args)
+				result, callErr = observedToolCall(toolCtx, func(callCtx context.Context) (string, error) {
+					return e.toolOverview(callCtx, tools, args)
+				})
 			} else if nativeFunctions && response.Tool == "discover_tools" {
 				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
 				invocation.attempt++

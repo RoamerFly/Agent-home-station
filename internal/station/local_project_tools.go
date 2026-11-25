@@ -74,6 +74,7 @@ type localProjectToolView struct {
 	Name               string                       `json:"name"`
 	CatalogAvailable   bool                         `json:"catalog_available"`
 	RuntimeReady       bool                         `json:"runtime_ready"`
+	Busy               bool                         `json:"busy"`
 	PDFReady           bool                         `json:"pdf_ready"`
 	UpdateAvailable    bool                         `json:"update_available"`
 	Installed          bool                         `json:"installed"`
@@ -404,12 +405,13 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != targetDigest
 	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
+	view.Busy = backendBusy || s.isActive(id)
 	switch {
 	case !item.Enabled:
 		view.State = "disabled"
 	case !view.RuntimeReady:
 		view.State = "runtime_missing"
-	case backendBusy || backendRunning || s.isActive(id):
+	case view.Busy || backendRunning:
 		view.State = "running"
 	default:
 		view.State = host.controller.Status(view.ID).State

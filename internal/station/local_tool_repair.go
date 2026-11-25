@@ -14,6 +14,9 @@ func (s *localProjectTools) ensureProjectToolReady(ctx context.Context, host *lo
 	if !view.Enabled {
 		return "disabled", nil
 	}
+	if view.Busy {
+		return "busy", nil
+	}
 	if !view.RuntimeReady || view.State == "not_available" {
 		return "needs_configuration", nil
 	}
@@ -44,6 +47,12 @@ func (s *localProjectTools) ensureProjectToolReady(ctx context.Context, host *lo
 	}
 	if err := start(); err == nil {
 		return "ready", nil
+	} else if projectToolBusyError(err) {
+		return "busy", nil
+	} else if busy, checkErr := s.projectBackendBusy(ctx, host.store.Account(), view.ID); checkErr != nil {
+		return "failed", err
+	} else if busy {
+		return "busy", nil
 	} else if !repair || view.State != "running" {
 		return "failed", err
 	}
@@ -56,13 +65,26 @@ func (s *localProjectTools) ensureProjectToolReady(ctx context.Context, host *lo
 	if busy || s.isActive(view.ID) || host.controller.Status(view.ID).ActiveCalls > 0 {
 		return "busy", nil
 	}
+	backendBusy, err := s.projectBackendBusy(ctx, host.store.Account(), view.ID)
+	if err != nil {
+		return "failed", err
+	}
+	if backendBusy {
+		return "busy", nil
+	}
 	switch view.ID {
 	case localRVCPackage, localYuEPackage, localComfyPackage, localAudioCppPackage, localOBSPackage:
 		if err := s.changeLifecycle(ctx, host, view.ID, view.Revision, "restart", true); err != nil {
+			if projectToolBusyError(err) {
+				return "busy", nil
+			}
 			return "failed", err
 		}
 	default:
 		if err := host.controller.StopIdleSession(ctx, view.ID, view.Revision); err != nil {
+			if projectToolBusyError(err) {
+				return "busy", nil
+			}
 			return "failed", err
 		}
 		if err := host.controller.EnsureStarted(ctx, view.ID, view.Revision); err != nil {
@@ -73,6 +95,48 @@ func (s *localProjectTools) ensureProjectToolReady(ctx context.Context, host *lo
 		return "failed", ctx.Err()
 	}
 	return "restarted", nil
+}
+
+func projectToolBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Error() {
+	case "managed_service_owner_busy", "tool_busy_wait_for_completion", "工具正在处理任务，请完成后再停止或重启":
+		return true
+	default:
+		return false
+	}
+}
+
+// Info exposes the independent managed process's current lease state. The
+// controller only tracks plugin calls, so its ActiveCalls alone is insufficient.
+func (s *localProjectTools) projectBackendBusy(ctx context.Context, fish, id string) (bool, error) {
+	switch id {
+	case localRVCPackage:
+		if s.rvc != nil {
+			info, err := s.rvc.Info(ctx, fish)
+			return info.Busy, err
+		}
+	case localYuEPackage:
+		if s.yue != nil {
+			info, err := s.yue.Info(ctx, fish)
+			return info.Busy, err
+		}
+	case localComfyPackage:
+		if s.comfy != nil {
+			info, err := s.comfy.Info(ctx, fish)
+			return info.Busy, err
+		}
+	case localAudioCppPackage:
+		if s.audio != nil {
+			info, err := s.audio.Info(ctx, fish)
+			return info.Busy, err
+		}
+	case localOBSPackage:
+		return s.obs.status(localOBSView{Enabled: true}).Active || s.obsProcesses.Status("preview").Busy, nil
+	}
+	return false, nil
 }
 
 func projectToolRepairResult(view localProjectToolView, state string, recoverErr error) map[string]any {
