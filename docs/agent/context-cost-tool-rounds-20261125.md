@@ -26,3 +26,21 @@ python scripts/probe_tool_rounds.py --source-root ../cost-eefe7cf6 --output temp
 ```
 
 `--verify-current` 要求每个场景成功，且每次工具反馈都有对应的完成终态。历史比较省略该参数，以便保留旧版缺能力或缺终态的事实。首轮七场景仍使用 [首轮固定回放](context-cost-fixed-replay-20261125.md)。
+
+## 真实模型隔离验收
+
+2026-11-25 在已部署源码 `25a3483b` 上，另用 `internal/admin/tool_overview_live_acceptance_test.go` 调用正式配置的模型服务。输入是合成管理员私聊与合成来源，记忆在临时数据库中；工具目录由 Admin 当前授权逻辑生成，服务状态由假后端返回。该测试不连接微信发送器，也不调用外部工具后端。测试只输出动作、终态及用量，不保存回复正文、私聊记录或密钥。
+
+| 提供商请求 / 用量已报告 | 提供商输入 / 输出 token | 模型动作 | 工具终态 | 最终决策 | 外部工具调用 |
+| ---: | ---: | --- | --- | --- | ---: |
+| 2 / 2 | 6,727 / 275 | `tool_overview` → 自然文本 | `tool_overview=tool_completed` × 1 | `reply`，成功 | 0 |
+
+本次普通私聊自动回复没有额外的复核模型调用。早期同夹具试验缺少合成消息来源，最终绑定报 `reply_anchor_not_grounded` 或 `reply_source_proof_missing`；补齐来源后，本地假模型和上述真实模型回放均通过。该试验验证了真实模型在这一合成请求中选用概览入口，但不验证真实微信消息的接收、服务状态真实性或发送签收。旧版正式私聊记录为 6 次模型请求、8 次工具终态、输入 107,743 token；它有不同的真实历史和配置，不能与这里的 6,727 token 直接计算节省百分比。相同夹具的源码前后成本比较仍以上表合成多轮回放为准，人民币费用只以工作站实际供应商用量和已配置单价账本为准。
+
+显式设置配置目录才会进行付费模型请求；未设置时该用例跳过。本地合成来源回放无需提供商。
+
+```powershell
+$env:AHS_LIVE_OVERVIEW_CONFIG='E:\Agent\agent-home-workstation\dist\release\data\applications\wechat\legacy-admin'
+go test ./internal/admin -run '^TestIsolatedLiveToolOverview$' -count=1 -v
+go test ./internal/admin -run '^TestIsolatedOverviewPlainReply$' -count=1 -v
+```
