@@ -244,7 +244,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 	if len(p.Updates) > 0 {
 		p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "queued"
 	}
-	if in.QuoteServerID != "" && (in.Directed && w.config.Options.QuoteReplies || in.QuoteSharedMessage) {
+	if in.QuoteServerID != "" && in.TraceID != "" {
 		p.Quote = replyQuote(in)
 	}
 	p.Trace = in.TraceID

@@ -58,7 +58,7 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 		r.ReplyContexts = append([]companion.ReplyContext(nil), followup[0].ReplyContexts...)
 		r.WakeAfterSeconds, r.WaitForReply, r.WakeReason = followup[0].WakeAfterSeconds, followup[0].WaitForReply, followup[0].WakeReason
 	}
-	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
+	if in.QuoteServerID != "" && in.TraceID != "" {
 		r.Quote = replyQuote(in)
 	}
 	w.runtime.MediaReplies = append(w.runtime.MediaReplies, r)

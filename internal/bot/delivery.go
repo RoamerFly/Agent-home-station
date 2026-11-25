@@ -165,7 +165,7 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
 	d.Key = "bot-" + messageHash(input.Thread + "|" + input.TraceID + fmt.Sprint(bubble))[:48]
-	if bubble <= 0 && (w.config.Options.QuoteReplies && input.Directed || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && input.QuoteServerID != "" && input.TraceID != "" {
+	if input.QuoteServerID != "" && input.TraceID != "" && (w.config.Options.QuoteReplies || input.QuoteSharedMessage || input.ReplyContext != nil && input.ReplyContext.QuoteRequired) && !w.priorReplyToOriginal(input) {
 		d.Quote = replyQuote(input)
 	}
 	w.runtime.Deliveries = append(w.runtime.Deliveries, d)
@@ -213,6 +213,11 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			d.State, d.Next, d.Reason = "prepared", gate, "delivery_pacing"
 			w.persistErr = w.saveRuntime()
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_pacing"}
+		}
+		// A prepared intent has not sent anything yet. If another segment
+		// reached native submission first, this one must relinquish the quote.
+		if d.Quote != nil && d.SubmittedText == "" && d.ID == "" && w.priorReplyToOriginal(d.Input) {
+			d.Quote = nil
 		}
 		previousState, previousText := d.State, d.SubmittedText
 		d.State = "submitting"
@@ -361,6 +366,22 @@ func replyQuote(in companion.Input) *linuxnative.ToolQuote {
 		id = in.TraceID
 	}
 	return &linuxnative.ToolQuote{MessageID: id, ServerID: in.QuoteServerID}
+}
+
+// A progress note, a media caption and later text bubbles can all belong to
+// one original message. Claim its quote for the first durable text intent;
+// later intents must not quote the same message again, even after a restart.
+func (w *Worker) priorReplyToOriginal(in companion.Input) bool {
+	target := replyQuote(in).MessageID
+	for _, old := range w.runtime.Deliveries {
+		if old == nil || old.Thread != in.Thread || replyQuote(old.Input).MessageID != target {
+			continue
+		}
+		if old.SubmittedText != "" || old.ID != "" || old.ServerID != "" || old.State == "accepted" {
+			return true
+		}
+	}
+	return false
 }
 
 // Each inconclusive receipt observation doubles its wait, with jitter. After
