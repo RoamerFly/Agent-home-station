@@ -18,12 +18,17 @@ func (p *permittedTools) ToolOverview(ctx context.Context) (map[string]any, erro
 	overview := map[string]any{}
 	if runtime.GOOS == "windows" && p.manager.windowsMusicRegistered() {
 		status := p.manager.windowsMusicStatus()
-		overview["music_bridge"] = map[string]any{
+		bridge := map[string]any{
 			"registered":         true,
 			"supervisor_running": status.Running,
 			"backend_probed":     false,
-			"start_tool":         "music_service_start",
 		}
+		if p.privileged() || p.workspaceExecutionAllowed() {
+			bridge["start_tool"] = "station_tool_manage"
+			bridge["start_action"] = "ensure_ready"
+			bridge["tool_id"] = "music-bridge"
+		}
+		overview["music_bridge"] = bridge
 	}
 	if p.manager.agent != nil {
 		host := p.manager.agent.config().Host

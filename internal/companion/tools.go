@@ -127,12 +127,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	// Previously baseSystem was captured before resource guidance was appended.
 	baseSystem := system
 	activeTools := []mcptools.Tool{}
+	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
 	if nativeFunctions {
 		for _, t := range tools {
 			// Keep an ordinary turn small.  History retrieval and reading retained
 			// outputs are the only common primitives; all execution, project and
 			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -370,6 +371,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		turns = e.refreshMemoryPackets(ctx, turns)
 		turns = compactActionTurns(system, turns)
 		modelTurns := historyNeed.contextForModel(turns)
+		if nativeFunctions {
+			modelTurns = compactNativeModelEvidence(modelTurns)
+		}
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
 		// This first pass is shared by native and plain Chat paths. Provider
