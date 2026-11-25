@@ -604,7 +604,7 @@ if($LocalStation -and ($WithWeChatApp -or $WithDocumentWorkshop -or $WithAudioWo
   if($LASTEXITCODE -ne 0){throw 'Project-local native document runtime preparation failed.'}
  }
 }
-if($LocalStation -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
+if($LocalStation -and -not $Portable -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_public_tool_runtimes.py') --release $OutputDirectory
  if($LASTEXITCODE -ne 0){throw 'Standalone public tool Python preparation failed.'}
 }
@@ -641,6 +641,10 @@ if($Portable){
  $resourceArgs=@{OutputDirectory=(Join-Path $OutputDirectory 'env');MediaDirectory=$MediaDirectory;DocumentPythonPackagesDirectory=$DocumentPythonPackagesDirectory;DocumentTesseractDirectory=$DocumentTesseractDirectory;DocumentFontsDirectory=$DocumentFontsDirectory;DocumentPDFiumWheel=$DocumentPDFiumWheel}
  & (Join-Path $PSScriptRoot 'Prepare-WindowsResources.ps1') @resourceArgs
  if($LASTEXITCODE -ne 0){throw 'Windows runtime resources build failed.'}
+ if($LocalStation -and (Test-Path -LiteralPath (Join-Path $OutputDirectory 'publictools') -PathType Container)){
+  & python -X utf8 (Join-Path $PSScriptRoot 'prepare_public_tool_runtimes.py') --release $OutputDirectory
+  if($LASTEXITCODE -ne 0){throw 'Standalone public tool Python preparation failed.'}
+ }
   if($LocalStation){
   Copy-Item -LiteralPath (Join-Path $workspace 'desktop\windows\STATION-PORTABLE-README.txt') -Destination (Join-Path $OutputDirectory 'README.txt')
   Write-PortableReleaseManifest $OutputDirectory
