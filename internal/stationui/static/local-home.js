@@ -3529,7 +3529,7 @@
     const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
     const contextAction = memoryButton("让 Agent 读取此作品音画", "button compact secondary", () => {
       if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
-      const draft = `请只针对我在抖音发布的作品 ${selectedWorkID} 建立评论回复上下文。先核对当前创作者账号和此作品的标题、简介，再用获准的抖音观察工具逐页读取整段视频音轨转写和覆盖全时长的画面采样，直到两个字段各自没有续页。保留时间戳、媒体哈希、实际覆盖范围与缺口，整理此作品的内容摘要供通知驱动的评论执行回合使用。画面采样不要称为逐帧理解；不要点赞、评论或投稿。若作品归属、授权或任一页无法核实，请报告停在哪里。`;
+      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 locate 逐页核对当前创作者账号、本人作品及标题简介，取得该作品的临时 content_id。随后用 prepare 按页读取音轨（每次 audio_pages=1），再明确指定 audio_pages=0、visual_pages=1 按页采样画面，依据返回的进度续办，直到 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；重新 locate 后，未完成字段可能从首段重读。最后用 context 逐页读取已保存证据，整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
       handoffDouyinWorkbenchChat(draft, feedback);
     });
     contextAction.hidden = true;

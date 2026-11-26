@@ -77,6 +77,22 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	if err != nil || len(next["rounds"].([]any)) != 1 || next["rounds"].([]any)[0].(map[string]any)["work_id"] != workID {
 		t.Fatalf("notice continuation escaped work: %v %v", next, err)
 	}
+	exact, err := call(tools, map[string]any{"action": "notice", "date": day, "notice_id": "round-tool-1"})
+	if err != nil || exact["date"] != day || exact["reply_eligible"] != false ||
+		exact["notice"].(map[string]any)["notice_id"] != "round-tool-1" ||
+		exact["notice"].(map[string]any)["work_id"] != workID ||
+		exact["notice"].(map[string]any)["reply_eligible"] != false || exact["creator_account"] != nil {
+		t.Fatalf("single notice lookup escaped its evidence boundary: %v %v", exact, err)
+	}
+	for _, args := range []map[string]any{
+		{"action": "notice", "date": day, "notice_id": "missing"},
+		{"action": "notice", "date": "2024-01-01", "notice_id": "round-tool-1"},
+		{"action": "notice", "date": day, "notice_id": "round-tool-1", "before": "1"},
+	} {
+		if value, err := call(tools, args); err == nil || value != nil {
+			t.Fatalf("invalid exact notice lookup succeeded: %v %v", value, err)
+		}
+	}
 	unverified, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID})
 	if err != nil || unverified["ownership"] != "unverified" || unverified["creator_text"] != nil {
 		t.Fatalf("unverified work disclosed context: %v %v", unverified, err)

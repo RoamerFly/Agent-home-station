@@ -20,25 +20,32 @@ import (
 
 const localDouyinRoundsToolName = "douyin_rounds"
 
-// The tool never changes notice read state or submits a comment. Only locate
-// may read the current creator works list; the other actions use saved data.
+// The tool never changes notice read state or submits a comment. Locate reads
+// the current creator works list; prepare reads bounded audio/visual evidence
+// only for a saved notice's independently verified own work.
 func localDouyinRoundsTool() mcptools.Tool {
 	return mcptools.NewTool(localDouyinRoundsToolName,
-		"只读查询抖音执行回合。works 按 date 列作品组，以 next_cursor 续页；notices 必须指定 work_id，以 next_before 在该作品内续页；context 按 next_offset 读已保存的简介、音轨与采样画面。locate 仅为已有通知的 work_id 从当前创作者作品列表逐页寻找本人作品，找到后返回临时 content_id 和可观察字段；不读评论、音画或调用视觉模型。locate 首次省略 resume，后续传 resume=true 和相同 page_size；每次 pages 控制最多处理的列表页数，未完成继续调用。所有动作均不回复或投稿，reply_eligible=false。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["works","notices","context","locate"]},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"work_id":{"type":"string","pattern":"^([1-9][0-9]{0,19})?$"},"limit":{"type":"integer","minimum":1,"maximum":1000},"cursor":{"type":"string","minLength":1,"maxLength":256},"before":{"type":"string","pattern":"^[1-9][0-9]*$"},"offset":{"type":"integer","minimum":0},"pages":{"type":"integer","minimum":1,"maximum":1000},"page_size":{"type":"integer","minimum":1,"maximum":1000},"resume":{"type":"boolean"}},"required":["action","date"],"additionalProperties":false}`)
+		"只读查询抖音执行回合。works 按 date 列作品组，以 next_cursor 续页；notices 必须指定 work_id，以 next_before 在该作品内续页；notice 按 notice_id 精确读取一条已保存通知及其未核实候选，不能据此回复；context 按 next_offset 读已保存的简介、音轨与采样画面。locate 为已有通知的 work_id 逐页寻找本人作品，返回临时 content_id；续办时传 resume=true 和相同 page_size。prepare 仅对该通知的本人作品及临时 content_id 读取音轨/采样画面；audio_pages、visual_pages 限定本次页数，audio_seconds、visual_frames 控制每页精度。默认只读一页音轨；须显式指定 visual_pages 才会调用视觉模型，可设 audio_pages=0 专读画面。同一媒体 SHA 已完整的字段跳过以免重复模型调用。按 context_complete 判断音画是否都已留存，再用 context 分页读取证据；已保存的完整性不代表重新核实当前平台原件。所有动作均不回复或投稿，reply_eligible=false。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["works","notices","notice","context","locate","prepare"]},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"work_id":{"type":"string","pattern":"^([1-9][0-9]{0,19})?$"},"notice_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":1000},"cursor":{"type":"string","minLength":1,"maxLength":256},"before":{"type":"string","pattern":"^[1-9][0-9]*$"},"offset":{"type":"integer","minimum":0},"pages":{"type":"integer","minimum":1,"maximum":1000},"page_size":{"type":"integer","minimum":1,"maximum":1000},"resume":{"type":"boolean"},"content_id":{"type":"string","minLength":1,"maxLength":256},"audio_pages":{"type":"integer","minimum":0,"maximum":1000},"visual_pages":{"type":"integer","minimum":0,"maximum":1000},"audio_seconds":{"type":"integer","minimum":1,"maximum":240},"visual_frames":{"type":"integer","minimum":1,"maximum":12}},"required":["action","date"],"additionalProperties":false}`)
 }
 
 type localDouyinRoundsInput struct {
-	Action   string `json:"action"`
-	Date     string `json:"date"`
-	WorkID   string `json:"work_id"`
-	Limit    int    `json:"limit"`
-	Cursor   string `json:"cursor"`
-	Before   string `json:"before"`
-	Offset   int    `json:"offset"`
-	Pages    int    `json:"pages"`
-	PageSize int    `json:"page_size"`
-	Resume   bool   `json:"resume"`
+	Action       string `json:"action"`
+	Date         string `json:"date"`
+	WorkID       string `json:"work_id"`
+	NoticeID     string `json:"notice_id"`
+	Limit        int    `json:"limit"`
+	Cursor       string `json:"cursor"`
+	Before       string `json:"before"`
+	Offset       int    `json:"offset"`
+	Pages        int    `json:"pages"`
+	PageSize     int    `json:"page_size"`
+	Resume       bool   `json:"resume"`
+	ContentID    string `json:"content_id"`
+	AudioPages   int    `json:"audio_pages"`
+	VisualPages  int    `json:"visual_pages"`
+	AudioSeconds int    `json:"audio_seconds"`
+	VisualFrames int    `json:"visual_frames"`
 }
 
 // The source proof tracks authorization and ownership, not a memory-generation
@@ -89,6 +96,12 @@ func parseLocalDouyinRoundsInput(raw json.RawMessage) (localDouyinRoundsInput, i
 				return in, 0, mcptools.ArgumentError("$.before", "通知续页位置无效")
 			}
 		}
+	case "notice":
+		delete(allowed, "limit")
+		allowed["notice_id"] = true
+		if !validLocalDouyinExecutionNoticeID(in.NoticeID) {
+			return in, 0, mcptools.ArgumentError("$.notice_id", "请指定有效的已保存通知编号")
+		}
 	case "context":
 		allowed["work_id"], allowed["offset"] = true, true
 		if !validLocalDouyinCommentID(in.WorkID) {
@@ -115,8 +128,44 @@ func parseLocalDouyinRoundsInput(raw json.RawMessage) (localDouyinRoundsInput, i
 		if in.PageSize == 0 {
 			in.PageSize = 20
 		}
+	case "prepare":
+		delete(allowed, "limit")
+		for _, name := range []string{"work_id", "content_id", "audio_pages", "visual_pages", "audio_seconds", "visual_frames"} {
+			allowed[name] = true
+		}
+		if !validLocalDouyinCommentID(in.WorkID) {
+			return in, 0, mcptools.ArgumentError("$.work_id", "请指定通知中已有的有效作品编号")
+		}
+		if !strings.HasPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix) ||
+			len(in.ContentID) > 256 || !validLocalDouyinWebID(strings.TrimPrefix(in.ContentID, douyinapp.WebCreatorWorkPrefix)) {
+			return in, 0, mcptools.ArgumentError("$.content_id", "请使用 locate 返回的当前临时作品入口")
+		}
+		if _, ok := fields["audio_pages"]; ok && (in.AudioPages < 0 || in.AudioPages > 1000) {
+			return in, 0, mcptools.ArgumentError("$.audio_pages", "本次音轨页数须为 0–1000；超出时间预算时可续办")
+		}
+		if _, ok := fields["visual_pages"]; ok && (in.VisualPages < 0 || in.VisualPages > 1000) {
+			return in, 0, mcptools.ArgumentError("$.visual_pages", "本次画面页数须为 0–1000；超出时间预算时可续办")
+		}
+		if _, ok := fields["audio_pages"]; !ok {
+			in.AudioPages = 1
+		}
+		if in.AudioPages == 0 && in.VisualPages == 0 {
+			return in, 0, mcptools.ArgumentError("$.audio_pages", "音轨和画面页数不能同时为 0")
+		}
+		if _, ok := fields["audio_seconds"]; ok && (in.AudioSeconds < 1 || in.AudioSeconds > 240) {
+			return in, 0, mcptools.ArgumentError("$.audio_seconds", "音轨每页须读取 1–240 秒")
+		}
+		if _, ok := fields["visual_frames"]; ok && (in.VisualFrames < 1 || in.VisualFrames > 12) {
+			return in, 0, mcptools.ArgumentError("$.visual_frames", "画面每页须读取 1–12 帧")
+		}
+		if in.AudioSeconds == 0 {
+			in.AudioSeconds = 60
+		}
+		if in.VisualFrames == 0 {
+			in.VisualFrames = 6
+		}
 	default:
-		return in, 0, mcptools.ArgumentError("$.action", "请选择 works、notices、context 或 locate")
+		return in, 0, mcptools.ArgumentError("$.action", "请选择 works、notices、notice、context、locate 或 prepare")
 	}
 	for field := range fields {
 		if !allowed[field] {
@@ -148,6 +197,15 @@ type localDouyinRoundLocateResult struct {
 	ContentID      string                     `json:"content_id,omitempty"`
 	Fields         []apphost.ObservationField `json:"fields,omitempty"`
 	ReplyEligible  bool                       `json:"reply_eligible"`
+}
+
+// An exact notice lookup stays scoped to the saved observation day and omits
+// the private creator-account digest. Candidate IDs are never reply proof.
+type localDouyinRoundNoticeResult struct {
+	Date          string                    `json:"date"`
+	Notice        localDouyinExecutionRound `json:"notice"`
+	Coverage      string                    `json:"coverage"`
+	ReplyEligible bool                      `json:"reply_eligible"`
 }
 
 func (t *localToolSet) locateDouyinRoundWork(ctx context.Context, m *localDouyinWebLogin, record localDouyinWebRecord,
@@ -296,6 +354,15 @@ func (t *localToolSet) callDouyinRounds(ctx context.Context, raw json.RawMessage
 		out, err = m.listExecutionWorkGroups(ctx, scope, in.Date, in.Limit, in.Cursor)
 	case "notices":
 		out, err = m.listExecutionRoundsForWork(ctx, scope, in.Date, before, in.Limit, &in.WorkID)
+	case "notice":
+		var evidence localDouyinExecutionNoticeEvidence
+		var found bool
+		evidence, found, err = m.readExecutionNotice(ctx, scope, in.NoticeID)
+		if err == nil && (!found || evidence.observedDate != in.Date) {
+			return "", mcptools.ArgumentError("$.notice_id", "所选日期没有该编号的已保存互动通知")
+		}
+		out = localDouyinRoundNoticeResult{Date: in.Date, Notice: evidence.round,
+			Coverage: "仅已保存通知及未核实候选；未建立目标评论与直接父评论关系", ReplyEligible: false}
 	case "context":
 		var result localDouyinExecutionWorkContext
 		result, err = m.executionWorkContext(ctx, scope, record, t.access.fishID, t.access.ownerID,
@@ -314,6 +381,10 @@ func (t *localToolSet) callDouyinRounds(ctx context.Context, raw json.RawMessage
 	case "locate":
 		var result localDouyinRoundLocateResult
 		result, contextProof, err = t.locateDouyinRoundWork(ctx, m, record, scope, in, proof)
+		out = result
+	case "prepare":
+		var result localDouyinRoundPrepareResult
+		result, contextProof, err = t.prepareDouyinRoundWork(ctx, m, record, scope, in, proof)
 		out = result
 	}
 	if err != nil {
