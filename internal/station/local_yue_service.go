@@ -151,8 +151,11 @@ func (s *localYuEService) Use(ctx context.Context, fish, binding string, start b
 }
 
 func (s *localYuEService) Stop(ctx context.Context) error {
+	if err := s.managed.services.StopOwner(ctx, localYuEServiceOwner); err != nil {
+		return err
+	}
 	s.managed.cancelAllIdle()
-	return s.managed.services.StopOwner(ctx, localYuEServiceOwner)
+	return nil
 }
 func (s *localYuEService) Close(ctx context.Context) error {
 	return s.managed.Close(ctx)

@@ -102,9 +102,11 @@ func TestReadTurnMediaOnlyReadsCurrentQuoteOrUnreadAndReusesCache(t *testing.T) 
 	current.Type, current.SenderID = 3, "alice"
 	unread := fixtureMessage("unread-image", room, "", "incoming")
 	unread.Type, unread.SenderID = 3, "bob"
+	previous := fixtureMessage("previous-image", room, "", "incoming")
+	previous.Type, previous.SenderID = 3, "carol"
 	foreign := fixtureMessage("foreign-image", "other@chatroom", "", "incoming")
 	foreign.Type = 3
-	w.source = &fakeSource{messages: map[string]linuxnative.Message{current.ID: current, unread.ID: unread, foreign.ID: foreign}}
+	w.source = &fakeSource{messages: map[string]linuxnative.Message{current.ID: current, unread.ID: unread, previous.ID: previous, foreign.ID: foreign}}
 
 	observe := func(m linuxnative.Message) companion.SourceRef {
 		t.Helper()
@@ -122,6 +124,7 @@ func TestReadTurnMediaOnlyReadsCurrentQuoteOrUnreadAndReusesCache(t *testing.T) 
 	}
 	currentRef := observe(current)
 	unreadRef := observe(unread)
+	_ = observe(previous)
 	base := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: room, Sender: current.SenderID, TraceID: current.ID, MessageTime: current.CreatedAt}
 
 	got, err := w.readTurnMedia(t.Context(), base, nil)
@@ -145,8 +148,36 @@ func TestReadTurnMediaOnlyReadsCurrentQuoteOrUnreadAndReusesCache(t *testing.T) 
 	if got, err = w.readTurnMedia(t.Context(), unreadInput, json.RawMessage(`{"message_id":"unread-image"}`)); err != nil || !strings.Contains(got, "实际读取：unread-image") || analyzer.calls.Load() != 2 {
 		t.Fatalf("unread source = %q, %v, calls=%d", got, err, analyzer.calls.Load())
 	}
-	if _, err = w.readTurnMedia(t.Context(), base, json.RawMessage(`{"message_id":"foreign-image"}`)); err == nil || !strings.Contains(err.Error(), "not_authorized") || analyzer.calls.Load() != 2 {
+	groupInput := base
+	groupInput.IsGroup = true
+	if got, err = w.readTurnMedia(t.Context(), groupInput, json.RawMessage(`{"message_id":"previous-image"}`)); err != nil || !strings.Contains(got, "实际读取：previous-image") || analyzer.calls.Load() != 3 {
+		t.Fatalf("prior group source = %q, %v, calls=%d", got, err, analyzer.calls.Load())
+	}
+	if _, err = w.readTurnMedia(t.Context(), groupInput, json.RawMessage(`{"message_id":"foreign-image"}`)); err == nil || !strings.Contains(err.Error(), "not_authorized") || analyzer.calls.Load() != 3 {
 		t.Fatalf("foreign source escaped the read range: %v calls=%d", err, analyzer.calls.Load())
+	}
+}
+
+func TestReadTurnMediaSupportsCurrentVoice(t *testing.T) {
+	w, e, _ := backgroundWorker(t, generationModelFunc(func(context.Context, string, []map[string]string) (string, error) {
+		return `{"action":"silent"}`, nil
+	}))
+	analyzer := &countingObservationAnalyzer{}
+	w.config.Analyzer = analyzer
+	room := "voice@chatroom"
+	w.allowed[room] = true
+	voice := fixtureMessage("current-voice", room, "", "incoming")
+	voice.Type, voice.SenderID = 34, "alice"
+	w.source = &fakeSource{messages: map[string]linuxnative.Message{voice.ID: voice}}
+	original := ""
+	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: room, Sender: voice.SenderID, TraceID: voice.ID, MessageTime: voice.CreatedAt, Text: messageSummary(voice), OriginalText: &original}
+	bindInputSource(&in, voice, e)
+	if err := e.Store.Observe(in, e.Config, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.readTurnMedia(t.Context(), in, nil)
+	if err != nil || !strings.Contains(got, "实际读取：current-voice") || analyzer.calls.Load() != 1 {
+		t.Fatalf("voice media = %q, %v, calls=%d", got, err, analyzer.calls.Load())
 	}
 }
 

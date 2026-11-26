@@ -43,10 +43,18 @@ func (s *localProjectTools) fileRoots() []toolFileRoot {
 	data := s.home.dataDir
 	roots := []toolFileRoot{
 		{stationPublicToolsDir(data), "工作站公共工具"},
-		{filepath.Join(data, "workspace", "home"), "工作站工作区"},
-		{filepath.Join(data, "applications", "wechat", "legacy-admin", "managed-workspaces"), "微信工具工作区（历史请求来源未记录）"},
-		{filepath.Join(data, "applications", "wechat", "legacy-admin", "workspace"), "微信请求素材与产物"},
 	}
+	legacyHome := filepath.Join(data, "workspace", "home")
+	if filepath.IsAbs(s.home.root) {
+		roots = append(roots, toolFileRoot{filepath.Join(s.home.root, "home"), "工作站工作区"})
+	}
+	if !filepath.IsAbs(s.home.root) || !strings.EqualFold(filepath.Clean(filepath.Join(s.home.root, "home")), filepath.Clean(legacyHome)) {
+		roots = append(roots, toolFileRoot{legacyHome, "工作站旧工作区"})
+	}
+	roots = append(roots,
+		toolFileRoot{filepath.Join(data, "applications", "wechat", "legacy-admin", "managed-workspaces"), "微信工具工作区（历史请求来源未记录）"},
+		toolFileRoot{filepath.Join(data, "applications", "wechat", "legacy-admin", "workspace"), "微信请求素材与产物"},
+	)
 	toolData := stationToolDataDir(data, "")
 	if filepath.Clean(toolData) != filepath.Clean(stationPublicToolsDir(data)) {
 		roots = append(roots, toolFileRoot{toolData, "公共工具运行数据"})

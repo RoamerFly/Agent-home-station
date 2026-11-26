@@ -73,6 +73,25 @@ func TestDeleteHistoricalReminderRemovesEndedHandoffButKeepsActiveWork(t *testin
 	}
 }
 
+func TestDeleteCancelledReminderWithUnconfirmedDelivery(t *testing.T) {
+	f := setup(t)
+	id := agentID("cancelled-reminder-with-old-receipt")
+	task := agentTask{ID: id, Account: "test", Thread: "filehelper", Sender: "owner", State: "cancelled", Reminder: &reminderSpec{Kind: "notify"}, PendingOperations: []string{"old-send"}, Delivery: &bot.TaskDelivery{State: "unknown", Expected: 1}}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.agent.retireSettled(); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := f.manager.agent.deleteHistoricalReminder(id, "test")
+	if err != nil || len(ids) != 1 || ids[0] != id {
+		t.Fatal("cancelled reminder could not be deleted", ids, err)
+	}
+	if _, found := f.manager.agent.lookupTask(id, "test", ""); found {
+		t.Fatal("deleted cancelled reminder returned")
+	}
+}
+
 func TestConfirmedTasksLeaveActiveStorageButRetainScopedDeliveryEvidence(t *testing.T) {
 	f := setup(t)
 	task := agentTask{ID: "fixture-completed", Account: "test", Thread: "filehelper", Sender: "owner", State: "waiting_delivery", Updated: time.Now()}

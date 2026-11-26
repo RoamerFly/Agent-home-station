@@ -30,3 +30,26 @@ func TestLocalConversationPolicyKeepsSourcesWithoutApplicationProtocols(t *testi
 	}
 	t.Logf("policy conservative estimate: local=%d connected=%d", EstimateTokens(local), EstimateTokens(connected))
 }
+
+func TestPolicyOmitsEmptyOptionalSectionsAndKeepsConfiguredContent(t *testing.T) {
+	c := Defaults()
+	c.PersonaDocument = false
+	c.Appearance, c.Relationship = "", ""
+	e := &Engine{Config: c, system: "base"}
+	plain := e.policy(Input{Channel: "wechat"})
+	for _, empty := range []string{"本群补充设定：", "可用图片素材（素材描述）：[]", "外观设定：\n", "相处方式：\n"} {
+		if strings.Contains(plain, empty) {
+			t.Fatalf("empty section reached model policy: %q", empty)
+		}
+	}
+	if !strings.Contains(plain, "允许文字回复：") || !strings.Contains(plain, "人物设定："+c.Persona) {
+		t.Fatal("required policy content was removed")
+	}
+	e.Images = []ImageAsset{{ID: "fixture-image", Title: "合成图"}}
+	c.Permissions.SendImage = true
+	e.Config = c
+	withContent := e.policy(Input{Channel: "wechat", PersonaOverride: "合成群设定"})
+	if !strings.Contains(withContent, "本群补充设定：合成群设定") || !strings.Contains(withContent, "fixture-image") {
+		t.Fatal("configured group setting or image asset was removed")
+	}
+}

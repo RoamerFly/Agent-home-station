@@ -11,7 +11,6 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"path/filepath"
 
 	"wechat-bot/internal/workspacefs"
 )
@@ -77,7 +76,7 @@ func stationPrepareImageOCRInput(ctx context.Context, in stationDocumentInput, d
 	for _, region := range regions {
 		erase(region.rectangle())
 	}
-	dir := filepath.Join(dataDir, "project-tool-tasks")
+	dir := stationProjectToolTasksDir(dataDir)
 	root, err := workspacefs.EnsurePath(dir)
 	if err != nil {
 		return in, empty, noop, errors.New("无法准备本机 OCR 临时目录")

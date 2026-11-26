@@ -259,6 +259,9 @@ func (s *localRVCService) call(ctx context.Context, fish, binding, method, path,
 }
 
 func (s *localRVCService) Stop(ctx context.Context) error {
+	if err := s.services.StopOwner(ctx, localRVCServiceOwner); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	for id, timer := range s.timers {
 		timer.Stop()
@@ -267,7 +270,7 @@ func (s *localRVCService) Stop(ctx context.Context) error {
 		delete(s.ready, id)
 	}
 	s.mu.Unlock()
-	return s.services.StopOwner(ctx, localRVCServiceOwner)
+	return nil
 }
 
 func (s *localRVCService) Close(ctx context.Context) error {

@@ -459,10 +459,6 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			cancel()
 			if analysisErr != nil {
 				mediaObservationState = "incomplete"
-				if strings.HasSuffix(message.ThreadID, "@chatroom") {
-					w.stopUnreadableTurn(companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, TraceID: message.ID}, analysisErr)
-					return
-				}
 				if ctx.Err() != nil {
 					return
 				}

@@ -183,21 +183,26 @@ type agentTask struct {
 	// conversation whose material was actually read, and DeliveryThread is the
 	// conversation where the result belongs. Thread remains the legacy
 	// execution/delivery key so older persisted tasks continue to work.
-	RequestThread    string    `json:"request_thread,omitempty"`
-	SourceThread     string    `json:"source_thread,omitempty"`
-	SourceMessageIDs []string  `json:"source_message_ids,omitempty"`
-	DeliveryThread   string    `json:"delivery_thread,omitempty"`
-	ID               string    `json:"id"`
-	Account          string    `json:"account"`
-	Thread           string    `json:"thread"`
-	Sender           string    `json:"sender"`
-	Title            string    `json:"title"`
-	Checkpoint       string    `json:"checkpoint"`
-	State            string    `json:"state"`
-	Next             time.Time `json:"next"`
-	Updated          time.Time `json:"updated"`
-	Runs             int       `json:"runs"`
-	LastResult       string    `json:"last_result,omitempty"`
+	RequestThread          string    `json:"request_thread,omitempty"`
+	SourceThread           string    `json:"source_thread,omitempty"`
+	SourceMessageIDs       []string  `json:"source_message_ids,omitempty"`
+	DeliveryThread         string    `json:"delivery_thread,omitempty"`
+	ID                     string    `json:"id"`
+	Account                string    `json:"account"`
+	Thread                 string    `json:"thread"`
+	Sender                 string    `json:"sender"`
+	Title                  string    `json:"title"`
+	Checkpoint             string    `json:"checkpoint"`
+	State                  string    `json:"state"`
+	Next                   time.Time `json:"next"`
+	Updated                time.Time `json:"updated"`
+	Runs                   int       `json:"runs"`
+	LastResult             string    `json:"last_result,omitempty"`
+	NoProgressKey          string    `json:"no_progress_key,omitempty"`
+	NoProgressRuns         int       `json:"no_progress_runs,omitempty"`
+	NoProgressObservedRun  int       `json:"no_progress_observed_run,omitempty"`
+	CrossThreadChildWait   bool      `json:"cross_thread_child_wait,omitempty"`
+	CrossThreadChildFailed bool      `json:"cross_thread_child_failed,omitempty"`
 	// Model recovery checkpoints are created only after a completed, read-only
 	// tool result.  They let a retryable model request continue the same task
 	// without rerunning the tool or widening its original authority.
@@ -542,6 +547,116 @@ func agentID(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
+
+const repeatedNoProgressLimit = 3
+
+// Count repeated, identical outcomes only when no durable work or delivery is
+// waiting elsewhere. A changed checkpoint or a new tool result starts a new
+// streak; retry timestamps and duplicate observations do not count as progress.
+func (t *agentTask) stopRepeatedNoProgress(outcome string) bool {
+	if t.resultKind() != "" || t.DeliveryJob != "" || t.Delivery != nil && t.Delivery.State != "accepted" || len(t.PendingOperations) > 0 || t.CrossThreadChildWait {
+		return false
+	}
+	if t.NoProgressRuns > 0 && t.NoProgressObservedRun == t.Runs {
+		return false
+	}
+	actions := make([]string, 0, len(t.Actions))
+	seen := make(map[string]bool, len(t.Actions))
+	for _, action := range t.Actions {
+		if action.Tool == "agent_task" || strings.HasPrefix(action.Tool, "wechat_send_") || action.Tool == "wechat_operation_status" {
+			// Repeated scheduling and accepted progress messages are not
+			// progress on the underlying request.
+			continue
+		}
+		result := action.Result
+		if action.State == "failed" && action.ErrorCode != "" {
+			result = ""
+		}
+		value, _ := json.Marshal([]string{action.Tool, action.State, action.ErrorCode, result})
+		if !seen[string(value)] {
+			seen[string(value)] = true
+			actions = append(actions, string(value))
+		}
+	}
+	sort.Strings(actions)
+	evidence, _ := json.Marshal([]any{outcome, t.Goal, t.Checkpoint, t.RequestedText, t.SourceMessageIDs, t.DeliveryJob, actions})
+	key := agentID("no-progress", string(evidence))
+	if key == t.NoProgressKey {
+		t.NoProgressRuns++
+	} else {
+		t.NoProgressKey, t.NoProgressRuns = key, 1
+	}
+	t.NoProgressObservedRun = t.Runs
+	if t.NoProgressRuns < repeatedNoProgressLimit {
+		return false
+	}
+	t.State = "stopped"
+	t.Next = time.Time{}
+	t.LastResult = "同一结果连续出现且没有新检查点或产物，已停止自动续办；原执行记录保留，可通过新消息明确要求继续"
+	return true
+}
+
+type crossThreadChildState struct {
+	found, pending, failed bool
+	id                     string
+}
+
+func (a *agentControl) crossThreadChildren(parent agentTask) crossThreadChildState {
+	var state crossThreadChildState
+	for _, child := range a.children(parent.Account, parent.ID) {
+		if child.ParentID != parent.ID || child.Thread == parent.Thread {
+			continue
+		}
+		state.found = true
+		if state.id == "" {
+			state.id = child.ID
+		}
+		if unfinishedExecutionTask(child.State) {
+			state.pending = true
+		} else if child.State != "completed" {
+			state.failed = true
+		}
+	}
+	return state
+}
+
+func settleCrossThreadParent(t *agentTask, children crossThreadChildState) {
+	if children.pending {
+		t.CrossThreadChildWait = true
+		if t.Delivery == nil || t.Delivery.State != "failed" && t.Delivery.State != "partial_failed" && t.Delivery.State != "needs_review" {
+			t.State = "waiting"
+		}
+		t.Next = time.Time{}
+		if t.Delivery == nil || t.Delivery.State != "failed" && t.Delivery.State != "partial_failed" && t.Delivery.State != "needs_review" {
+			t.LastResult = "跨会话子任务正在处理；后续结果见子任务 " + children.id
+		}
+		return
+	}
+	t.CrossThreadChildWait = false
+	t.CrossThreadChildFailed = children.failed
+	t.Next = time.Time{}
+	if t.Delivery != nil && (t.Delivery.State == "failed" || t.Delivery.State == "partial_failed" || t.Delivery.State == "needs_review") {
+		t.LastResult += "；跨会话子任务已结束，详情见子任务 " + children.id
+		return
+	}
+	if children.failed {
+		t.LastResult = "跨会话子任务已结束但未全部完成；详情见子任务 " + children.id
+		if len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted" {
+			t.State = "waiting_delivery"
+			return
+		}
+		t.State = "stopped"
+		return
+	}
+	t.WorkCompleted = true
+	if len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted" {
+		t.State = "waiting_delivery"
+		t.LastResult = "跨会话子任务已完成，等待原回复回执；详情见子任务 " + children.id
+		return
+	}
+	t.State = "completed"
+	t.LastResult = "跨会话子任务已完成；详情见子任务 " + children.id
+}
 func (p *permittedTools) privileged() bool {
 	c := p.manager.agent.config()
 	return c.Enabled && !p.trace.Preview && !p.trace.ReportOnly && !p.trace.Surf && p.trace.Account == p.manager.native.Account() && contains(c.OwnerIDs, p.trace.Sender) && c.allowsPrivilegedThread(p.trace.Thread) && permittedRecipient(p.manager.Config().Config, p.trace.Thread)
@@ -556,6 +671,40 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	seenProcessWatchers := map[[4]string]bool{}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		if t.CrossThreadChildWait && t.State != "cancelled" && t.State != "stopped" && t.State != "completed" {
+			children := m.agent.crossThreadChildren(t)
+			if !children.found {
+				t.CrossThreadChildWait = false
+				t.State = "stopped"
+				t.Next = time.Time{}
+				t.LastResult = "跨会话子任务记录已移除，停止原父任务自动续办"
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					return nil, err
+				}
+				if err := m.agent.retireSettled(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if children.pending {
+				// The child owns the remaining work. Observe its persisted state
+				// on each scheduler pass without spending another model turn.
+				continue
+			}
+			if t.State == "waiting_delivery" && t.WorkCompleted {
+				// Child work is done; the remaining state is the parent's real
+				// outgoing receipt, which the delivery ledger reconciles.
+				continue
+			}
+			settleCrossThreadParent(&t, children)
+			if _, err := m.agent.updateSnapshot(t); err != nil {
+				return nil, err
+			}
+			if err := m.agent.retireSettled(); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if settleCompletedProcessPlaceholder(&t) {
 			if _, err := m.agent.updateSnapshot(t); err != nil {
 				m.log("completed_process_placeholder_settle_failed")
@@ -812,7 +961,18 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) (finishErr e
 		}
 	}
 	for _, t := range m.agent.list(in.Account, in.Thread) {
-		if t.ID == in.TaskID && t.State == "running" {
+		if t.ID != in.TaskID {
+			continue
+		}
+		if (t.State == "waiting" || t.State == "pending") && !t.CrossThreadChildWait && t.Runs > 0 && !t.Next.IsZero() {
+			if t.stopRepeatedNoProgress("saved_checkpoint") || t.NoProgressObservedRun == t.Runs {
+				if _, err := m.agent.updateSnapshot(t); err != nil {
+					saveFailure("task_checkpoint_save_failed", err)
+				}
+			}
+			continue
+		}
+		if t.State == "running" {
 			if t.NotificationText != "" && state == "reply" {
 				t.State = "completed"
 				t.LastResult = "提醒正文已交给发送链，实际发送状态以回执为准"
@@ -831,21 +991,18 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) (finishErr e
 				}
 				return
 			}
-			if (t.OwnerRequest && state == "reply") || (t.ReminderDue && state == "silent") {
+			if t.CrossThreadChildWait || (t.OwnerRequest && state == "reply") || (t.ReminderDue && state == "silent") {
+				if children := m.agent.crossThreadChildren(t); children.found {
+					settleCrossThreadParent(&t, children)
+					if err := m.agent.task(t); err != nil {
+						saveFailure("task_checkpoint_save_failed", err)
+					}
+					return
+				}
 				for _, child := range m.agent.children(in.Account, t.ID) {
-					if child.ParentID == t.ID && child.State != "cancelled" && child.State != "needs_review" {
-						// A cross-thread child is still running after the model
-						// acknowledged the request. Keep the parent live so restart
-						// recovery can route the child result back to this request;
-						// same-thread legacy tasks retain their completed projection.
-						if child.Thread != t.Thread {
-							t.State = "waiting"
-							t.Next = time.Now().UTC()
-							t.LastResult = "安排请求已保存；后续实际执行与发送状态见跨会话子任务 " + child.ID
-						} else {
-							t.State = "completed"
-							t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
-						}
+					if child.ParentID == t.ID && child.Thread == t.Thread && child.State != "cancelled" && child.State != "needs_review" {
+						t.State = "completed"
+						t.LastResult = "安排请求已处理；后续实际执行与发送状态见子任务 " + child.ID
 						if err := m.agent.task(t); err != nil {
 							saveFailure("task_checkpoint_save_failed", err)
 						}
@@ -921,6 +1078,9 @@ func (m *Manager) finishAgentTask(in companion.Input, state string) (finishErr e
 				t.LastResult = "原任务尚未完成；结合最新会话和已保存的工具结果继续"
 			}
 			settleFromDelivery(&t, state == "reply")
+			if t.State == "waiting" {
+				t.stopRepeatedNoProgress("unfinished_turn")
+			}
 			if _, err := m.agent.updateSnapshot(t); err != nil {
 				saveFailure("task_checkpoint_save_failed", err)
 			}

@@ -72,7 +72,13 @@ CREATE TABLE IF NOT EXISTS rebuild_requests(scope TEXT PRIMARY KEY,requested TEX
 CREATE TABLE IF NOT EXISTS search_documents(namespace TEXT,id TEXT,scope TEXT,kind TEXT,at TEXT,text TEXT,payload BLOB,hash TEXT,PRIMARY KEY(namespace,id));
 CREATE INDEX IF NOT EXISTS search_documents_scope_time ON search_documents(scope,at,id);
 CREATE TABLE IF NOT EXISTS source_conflicts(scope TEXT,event_id TEXT,other_event_id TEXT,reason TEXT,PRIMARY KEY(scope,event_id,other_event_id));
-CREATE TABLE IF NOT EXISTS context_metrics(id INTEGER PRIMARY KEY,at TEXT,total INTEGER,bytes INTEGER,components TEXT,method TEXT);
+CREATE TABLE IF NOT EXISTS context_metrics(
+ id INTEGER PRIMARY KEY,at TEXT,total INTEGER,bytes INTEGER,components TEXT,method TEXT,
+ run_id TEXT NOT NULL DEFAULT '',model_round INTEGER NOT NULL DEFAULT 0,
+ provider_attempts INTEGER NOT NULL DEFAULT 0,provider_reported INTEGER NOT NULL DEFAULT 0,
+ provider_input INTEGER NOT NULL DEFAULT 0,provider_output INTEGER NOT NULL DEFAULT 0,
+ provider_cache_hit INTEGER NOT NULL DEFAULT 0,provider_cache_unknown INTEGER NOT NULL DEFAULT 0,
+ provider_model TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS experience_reflections(
  id TEXT PRIMARY KEY,scope TEXT NOT NULL,source_event_id TEXT NOT NULL,source_event_revision INTEGER NOT NULL,
  source_observation_version INTEGER NOT NULL,source_observation_hash TEXT NOT NULL,
@@ -118,6 +124,51 @@ func upgradeLocalTaskFollowupTargets(db *sql.DB) error {
 	for _, name := range []string{"result_tool", "job_id"} {
 		if !columns[name] {
 			if _, err = tx.Exec("ALTER TABLE local_task_followups ADD COLUMN " + name + " TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// Old memory databases retain their numeric estimates. New nullable-by-default
+// run and provider fields are added without rewriting or reinterpreting them.
+func upgradeContextMetrics(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query("SELECT name FROM pragma_table_info('context_metrics')")
+	if err != nil {
+		return err
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	err = rows.Err()
+	closeErr := rows.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"run_id", "TEXT NOT NULL DEFAULT ''"}, {"model_round", "INTEGER NOT NULL DEFAULT 0"},
+		{"provider_attempts", "INTEGER NOT NULL DEFAULT 0"}, {"provider_reported", "INTEGER NOT NULL DEFAULT 0"},
+		{"provider_input", "INTEGER NOT NULL DEFAULT 0"}, {"provider_output", "INTEGER NOT NULL DEFAULT 0"},
+		{"provider_cache_hit", "INTEGER NOT NULL DEFAULT 0"}, {"provider_cache_unknown", "INTEGER NOT NULL DEFAULT 0"},
+		{"provider_model", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if !columns[column.name] {
+			if _, err = tx.Exec("ALTER TABLE context_metrics ADD COLUMN " + column.name + " " + column.definition); err != nil {
 				return err
 			}
 		}
@@ -220,6 +271,9 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 		}
 	}
 	if err = upgradeLocalTaskFollowupTargets(db); err != nil {
+		return fail(err)
+	}
+	if err = upgradeContextMetrics(db); err != nil {
 		return fail(err)
 	}
 	unlockInit()

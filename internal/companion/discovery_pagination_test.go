@@ -24,7 +24,7 @@ type cacheMissMusicTools struct{ calls []string }
 
 func (*cacheMissMusicTools) List(context.Context) ([]mcptools.Tool, error) {
 	var tools []mcptools.Tool
-	for _, name := range []string{"media_recent", "web_audio_search", "web_media_download"} {
+	for _, name := range []string{"media_recent", "music_library_search", "web_audio_search", "web_media_download"} {
 		tools = append(tools, mcptools.Tool{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)})
 	}
 	return tools, nil
@@ -34,6 +34,8 @@ func (p *cacheMissMusicTools) Call(_ context.Context, name string, _ json.RawMes
 	p.calls = append(p.calls, name)
 	switch name {
 	case "media_recent":
+		return `{"items":[],"total":0}`, nil
+	case "music_library_search":
 		return `{"items":[],"total":0}`, nil
 	case "web_audio_search":
 		return `{"items":[{"url":"https://www.bilibili.com/video/BV1xx411c7mD","title":"合成样本"}]}`, nil
@@ -53,8 +55,8 @@ func (*musicSearchModel) Chat(context.Context, string, []map[string]string) (str
 }
 func (m *musicSearchModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
 	m.step++
-	actions := []string{"discover_tools", "media_recent", "web_audio_search", "web_media_download"}
-	args := []string{`{"query":"media_recent"}`, `{"query":"合成样本"}`, `{"query":"合成样本"}`, `{"kind":"voice","url":"https://www.bilibili.com/video/BV1xx411c7mD"}`}
+	actions := []string{"discover_tools", "media_recent", "music_library_search", "web_audio_search", "web_media_download"}
+	args := []string{`{"query":"media_recent"}`, `{"query":"合成样本"}`, `{"query":"合成样本"}`, `{"query":"合成样本"}`, `{"kind":"voice","url":"https://www.bilibili.com/video/BV1xx411c7mD"}`}
 	if m.step > len(actions) {
 		return `{"action":"reply","messages":["已找到对应录音。"]}`, nil
 	}
@@ -75,11 +77,79 @@ func TestAudioRequestCanSearchAndDownloadAfterEmptyCacheWithoutUserURL(t *testin
 	if _, err = engine.Respond(t.Context(), Input{Mode: "direct", Preview: true, Text: "帮我找一首歌，曲名是合成样本"}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(tools.calls, []string{"media_recent", "web_audio_search", "web_media_download"}) {
+	if !slices.Equal(tools.calls, []string{"media_recent", "music_library_search", "web_audio_search", "web_media_download"}) {
 		t.Fatalf("calls: %v", tools.calls)
 	}
 	if emptyAssetSearch(`{"items":[],"total":8,"next_offset":8}`) {
 		t.Fatal("last page misreported as cache miss")
+	}
+	if next, _ := mediaSearchContinuation("media_recent", `{"items":[],"total":0}`, ResourceNeed{Kind: "voice"}, nil, []mcptools.Tool{{Name: "web_audio_search"}}, nil); next != "web_audio_search" {
+		t.Fatal("custom catalog without a shared library cannot continue online", next)
+	}
+	if next, _ := mediaSearchContinuation("music_library_search", `{"items":[],"total":0}`, ResourceNeed{Kind: "voice"}, nil, []mcptools.Tool{{Name: "media_recent"}}, map[string]bool{"music_library_search": true}); next != "media_recent" {
+		t.Fatal("shared library miss should check current conversation before online search", next)
+	}
+}
+
+type sharedSongTools struct{ calls []string }
+
+func (*sharedSongTools) List(context.Context) ([]mcptools.Tool, error) {
+	tools := []mcptools.Tool{}
+	for _, name := range []string{"media_recent", "music_library_search", "web_audio_search"} {
+		tools = append(tools, mcptools.Tool{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)})
+	}
+	return tools, nil
+}
+func (p *sharedSongTools) Call(_ context.Context, name string, _ json.RawMessage) (string, error) {
+	p.calls = append(p.calls, name)
+	switch name {
+	case "media_recent":
+		return `{"items":[],"total":0}`, nil
+	case "music_library_search":
+		return `{"items":[{"asset_id":"asset-cross-room","title":"合成样本原曲"}],"total":1}`, nil
+	default:
+		return "", fmt.Errorf("unexpected online call %s", name)
+	}
+}
+
+type sharedSongModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*sharedSongModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("expected native tools")
+}
+func (m *sharedSongModel) ChatFunctions(_ context.Context, _ string, turns []map[string]string, tools []mcptools.Tool) (string, error) {
+	m.step++
+	switch m.step {
+	case 1:
+		return `{"action":"tool","tool":"discover_tools","arguments":{"query":"music_library_search"}}`, nil
+	case 2:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "music_library_search" }) {
+			m.t.Fatal("shared local library was not exposed")
+		}
+		return `{"action":"tool","tool":"music_library_search","arguments":{"query":"合成样本"}}`, nil
+	default:
+		if !strings.Contains(fmt.Sprint(turns), "asset-cross-room") {
+			m.t.Fatal("shared original was not returned to the model")
+		}
+		return `{"action":"silent","reason":"local_asset_found"}`, nil
+	}
+}
+
+func TestSongRequestUsesSharedLocalLibraryBeforeOnlineSearch(t *testing.T) {
+	tools := &sharedSongTools{}
+	engine, err := NewPreview(enabledConfig(), &sharedSongModel{t: t}, "base persona")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Tools, engine.MaxToolCalls = tools, 6
+	if _, err = engine.Respond(t.Context(), Input{Mode: "direct", Preview: true, Text: "帮我找一首歌，曲名是合成样本"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tools.calls, []string{"music_library_search"}) {
+		t.Fatalf("local lookup should stop before online search: %v", tools.calls)
 	}
 }
 
@@ -165,6 +235,44 @@ func TestNativeToolDiscoveryContinuesBeyondFirstEightMatches(t *testing.T) {
 	e.MaxToolCalls = 6
 	if _, err := e.Respond(context.Background(), Input{Mode: "direct", Text: "核对工具目录", Preview: true}); err != nil || tools.calls != 1 {
 		t.Fatal(err, tools.calls)
+	}
+}
+
+type discoveryBatchModel struct {
+	t    *testing.T
+	step int
+}
+
+func (*discoveryBatchModel) Chat(context.Context, string, []map[string]string) (string, error) {
+	panic("native functions required")
+}
+
+func (m *discoveryBatchModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+	m.step++
+	switch m.step {
+	case 1:
+		return `{"action":"tool_batch","calls":[{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":0,"limit":6}},{"action":"tool","tool":"discover_tools","arguments":{"query":"catalog","offset":6,"limit":6}}]}`, nil
+	case 2:
+		if !slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "catalog_01" }) ||
+			!slices.ContainsFunc(tools, func(tool mcptools.Tool) bool { return tool.Name == "catalog_11" }) {
+			m.t.Fatal("same-batch discovery pages were not combined")
+		}
+		return `{"action":"tool","tool":"catalog_01","arguments":{}}`, nil
+	default:
+		return `{"action":"reply","messages":["已核对"]}`, nil
+	}
+}
+
+func TestNativeToolDiscoveryCombinesPagesWithinOneBatch(t *testing.T) {
+	access := &pagedCatalog{}
+	model := &discoveryBatchModel{t: t}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools, e.MaxToolCalls = access, 5
+	if _, err := e.Respond(t.Context(), Input{Mode: "direct", Text: "查目录", Preview: true}); err != nil || access.calls != 1 || model.step != 3 {
+		t.Fatalf("batch discovery failed: err=%v calls=%d model_steps=%d", err, access.calls, model.step)
 	}
 }
 

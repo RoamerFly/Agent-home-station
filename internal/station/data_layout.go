@@ -55,14 +55,22 @@ func stationMemoryDir(dataDir string) string {
 }
 
 func stationWorkspaceDir(dataDir string) string {
-	if structuredDataRoot(dataDir) {
-		modern := filepath.Join(dataDir, "workspaces")
-		if directoryExists(modern) {
-			return modern
-		}
-		return filepath.Join(dataDir, "workspace")
+	modern := filepath.Join(dataDir, "workspaces")
+	if directoryExists(modern) {
+		return modern
 	}
-	return filepath.Join(dataDir, "managed-workspaces")
+	if structuredDataRoot(dataDir) {
+		legacy := filepath.Join(dataDir, "workspace")
+		if directoryExists(legacy) {
+			return legacy
+		}
+	} else {
+		legacy := filepath.Join(dataDir, "managed-workspaces")
+		if directoryExists(legacy) {
+			return legacy
+		}
+	}
+	return modern
 }
 
 func stationLogsDir(dataDir string) string {
@@ -95,6 +103,30 @@ func stationProcessesDir(dataDir string) string {
 	return filepath.Join(dataDir, "local-processes")
 }
 
+func stationProjectToolTasksDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "tmp", "project-tool-tasks")
+	}
+	return filepath.Join(dataDir, "project-tool-tasks")
+}
+
+func stationComfyOutputStageDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		return filepath.Join(stationMainDir(dataDir), "tmp", "comfyui-output-stage")
+	}
+	return filepath.Join(dataDir, "comfyui-output-stage")
+}
+
+func stationVisionUsageDir(dataDir string) string {
+	if structuredDataRoot(dataDir) {
+		modern := filepath.Join(stationMainDir(dataDir), "local-vision-usage")
+		if directoryExists(modern) || !directoryExists(filepath.Join(dataDir, "local-vision-usage")) {
+			return modern
+		}
+	}
+	return filepath.Join(dataDir, "local-vision-usage")
+}
+
 // stationNativeLifecycleRelative keeps native locks and stop proofs inside
 // main_setting for structured homes. Legacy homes continue using their
 // historical root-level filenames during migration.
@@ -106,9 +138,8 @@ func stationNativeLifecycleRelative(dataDir, name string) string {
 }
 
 // DefaultWorkspaceRoot is exported for the command entry point and legacy
-// migration commands. It keeps old tests and homes on their former path while
-// new release data uses data/workspaces. Existing structured homes without
-// that directory retain their historical data/workspace root.
+// migration commands. New installations use data/workspaces; existing homes
+// with only a historical workspace root continue to use that root.
 func DefaultWorkspaceRoot(dataDir string) string { return stationWorkspaceDir(dataDir) }
 
 // ApplicationsRoot and PublicToolsRoot expose the same layout to the command

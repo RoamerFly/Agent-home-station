@@ -68,7 +68,7 @@ func (station *stationASR) transcribe(ctx context.Context, wav []byte, check fun
 	}
 	data, err := station.host.stationToolRequest(ctx, station.session, http.MethodPost, stationASRPath, map[string]any{"version": station.version, "audio": wav})
 	if err != nil {
-		return "", toolInputError("公共语音转写未返回结果，请用station_tool_status核对audio-cpp；本次未切换到云端")
+		return "", toolInputError("公共语音转写未返回结果，请用station_tool_manage 的 status 核对 audio-cpp；本次未切换到云端")
 	}
 	if err := check(ctx); err != nil {
 		return "", err

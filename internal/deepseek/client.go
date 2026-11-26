@@ -370,7 +370,7 @@ func (c *Client) requestOnce(ctx context.Context, body []byte) (answer string, f
 	if c.rejectToolCalls && (choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) != 0) {
 		return "", requestFailure("model_invalid_response", "decode", 200, false)
 	}
-	if choice.FinishReason == "tool_calls" {
+	if choice.FinishReason == "tool_calls" || (choice.FinishReason == "stop" && len(choice.Message.ToolCalls) != 0) {
 		if len(choice.Message.ToolCalls) == 0 || len(choice.Message.ToolCalls) > 8 {
 			return "", requestFailure("model_tool_call_count_invalid", "decode", 200, false)
 		}

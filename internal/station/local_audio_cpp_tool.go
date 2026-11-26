@@ -188,7 +188,7 @@ func (t *localToolSet) createAudioCppJob(ctx context.Context, host *localProject
 }
 
 func (t *localToolSet) publishAudioCpp(ctx context.Context, grant localWorkspaceGrant, source *companion.SourceRef, job string, wav []byte) (localArtifact, error) {
-	parent := filepath.Join(t.access.home.dataDir, "project-tool-tasks")
+	parent := stationProjectToolTasksDir(t.access.home.dataDir)
 	if err := os.MkdirAll(parent, 0700); err != nil {
 		return localArtifact{}, err
 	}

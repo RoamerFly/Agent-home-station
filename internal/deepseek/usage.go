@@ -16,6 +16,13 @@ type Usage struct {
 	Input    int64     `json:"input"`
 	Output   int64     `json:"output"`
 	CacheHit int64     `json:"cache_hit"`
+	// A reported zero is distinct from a provider omitting cache usage.
+	CacheHitReported bool `json:"cache_hit_reported"`
+}
+
+func (u Usage) CacheHitKnown() bool {
+	// Positive counts in older in-memory callers already establish presence.
+	return u.Reported && (u.CacheHitReported || u.CacheHit > 0)
 }
 
 func parseUsage(body []byte, stamp time.Time) Usage {
@@ -26,7 +33,7 @@ func parseUsage(body []byte, stamp time.Time) Usage {
 			Completion *int64 `json:"completion_tokens"`
 			Hit        *int64 `json:"prompt_cache_hit_tokens"`
 			Details    struct {
-				Cached int64 `json:"cached_tokens"`
+				Cached *int64 `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
@@ -37,9 +44,12 @@ func parseUsage(body []byte, stamp time.Time) Usage {
 	if r.Prompt == nil || r.Completion == nil {
 		return u
 	}
-	hit := r.Details.Cached
+	hit, known := int64(0), false
+	if r.Details.Cached != nil {
+		hit, known = *r.Details.Cached, true
+	}
 	if r.Hit != nil {
-		hit = *r.Hit
+		hit, known = *r.Hit, true
 	}
 	if *r.Prompt < 0 || *r.Prompt > 1_000_000_000 || *r.Completion < 0 || *r.Completion > 1_000_000_000 || hit < 0 || hit > *r.Prompt {
 		return u
@@ -48,6 +58,7 @@ func parseUsage(body []byte, stamp time.Time) Usage {
 	u.Input = *r.Prompt
 	u.Output = *r.Completion
 	u.CacheHit = hit
+	u.CacheHitReported = known
 	return u
 }
 

@@ -52,7 +52,7 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 			continue
 		}
 		if !strings.HasPrefix(a.MIME, "audio/") || a.Hash == "" {
-			return a, nil, toolInputError("参考素材必须是本会话缓存的原音频；请用media_recent选择实际音频asset_id；本次未提交生成")
+			return a, nil, toolInputError("参考素材须为已保存的原音频；请用music_library_search或media_recent选择音频asset_id；本次未提交生成")
 		}
 		b, err := m.cachedAssetData(a)
 		if err != nil || len(b) == 0 || len(b) > 25<<20 {
@@ -60,7 +60,7 @@ func (p *permittedTools) referenceAsset(id string) (mediaAsset, []byte, error) {
 		}
 		return a, b, nil
 	}
-	return mediaAsset{}, nil, toolInputError("本会话找不到参考音频；请先用media_recent核对引用或下载真实原曲；本次未提交生成")
+	return mediaAsset{}, nil, toolInputError("未找到参考音频；请先用music_library_search和media_recent核对本地原曲；本次未提交生成")
 }
 
 func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -82,7 +82,7 @@ func (p *permittedTools) inspectMusicReference(ctx context.Context, raw json.Raw
 	if err != nil {
 		return "", err
 	}
-	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "已读取本会话缓存。先核对歌手、版本和演唱片段；generation 是原提交配方。music_local_start 用 reference_start_seconds/reference_seconds 选原录音区间；省略起点沿用歌词依据最早位置，显式 0 保留开头。重发原版用 media_reuse。"}
+	out := map[string]any{"asset_id": a.ID, "title": a.Title, "source_url": a.URL, "cached_mime": a.MIME, "bytes": len(data), "generation": a.Music, "instruction": "已读取本地音频。先核对歌手、版本和演唱片段；generation 是原提交配方。music_local_start 用 reference_start_seconds/reference_seconds 选原录音区间；省略起点沿用歌词依据最早位置，显式 0 保留开头。重发原版用 media_reuse。"}
 	out["available_lyrics"] = p.availableLyricEvidence(a)
 	if a.Music != nil {
 		out["lyrics_evidence_ids"] = a.Music.LyricEvidence

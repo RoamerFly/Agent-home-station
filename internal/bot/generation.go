@@ -427,9 +427,7 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 			var observationEvidence MediaObservationEvidence
 			summary, observationEvidence, err = w.readRequiredMediaWithEvidence(readCtx, *analysis)
 			stop()
-			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
-				err = &groupObservationFailure{reason: observationReason(err), messageID: analysis.ID}
-			} else if err != nil && modelCtx.Err() == nil {
+			if err != nil && modelCtx.Err() == nil {
 				incomplete = true
 				summary = failedObservation(err)
 				err = s.call(modelCtx, func() error {

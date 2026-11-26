@@ -192,11 +192,7 @@ func (a mediaUnderstanding) receiveFile(ctx context.Context, msg linuxnative.Mes
 		if err != nil {
 			return "", errors.New("video_attachment_integrity_failed")
 		}
-		sample, err := sampleVideo(ctx, m.dir, data)
-		if err != nil && (sample.Seconds == 0 || ctx.Err() != nil) {
-			return "", err
-		}
-		observed, err := a.observeVideo(ctx, msg, data, sample, false)
+		observed, err := a.observeCachedIncomingVideo(ctx, msg, data, asset, "file_attachment")
 		if err != nil {
 			return "", err
 		}

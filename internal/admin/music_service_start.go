@@ -20,6 +20,17 @@ func (p *permittedTools) recoverMusicDependency(ctx context.Context) (bool, erro
 	return err == nil, err
 }
 
+// A known stopped Windows supervisor can be started before probing its HTTP
+// bridge. Otherwise a short health deadline may expire in the plugin runtime
+// before the bridge reports a transport-specific error to the caller.
+func (p *permittedTools) ensureMusicDependency(ctx context.Context) error {
+	if runtime.GOOS != "windows" || p.manager.windowsMusicStatus().Running {
+		return nil
+	}
+	_, err := p.recoverMusicDependency(ctx)
+	return err
+}
+
 // Called only by the installed capability's bound host-service callback.
 func (p *permittedTools) startMusicServiceHost(ctx context.Context) (string, error) {
 	authority, _ := ctx.Value(speechAdminTestContextKey{}).(*speechAdminTestAuthority)

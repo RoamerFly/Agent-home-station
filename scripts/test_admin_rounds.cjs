@@ -207,6 +207,57 @@ test('aggregated child messages join the parent instead of leaving pending cards
  const [legacy]=project([entry(1,{message_id:'older-child',event:'message_aggregated',status:'aggregated'})]);
  assert.equal(legacy.group,'done');
 });
+test('one group collection window has one queued card and keeps the actual batch anchor',()=>{
+ const queued=(n,id,related_message_id,thread_id='fixture@chatroom')=>entry(n,{thread_id,message_id:id,related_message_id,event:'message_queued',category:'received',status:'queued'});
+ const a=queued(1,'window-a',''),b=queued(2,'window-b','window-a'),c=queued(3,'window-c','window-a');
+ const next=queued(4,'next-window',''),other=queued(5,'other-thread','','other@chatroom');
+ let rows=project([a,b,c,next,other]);
+ assert.equal(rows.length,3);
+ assert.equal(rows.find(r=>r.triggerMessageID==='window-a').entries.length,3);
+ // Older queue logs have no link. The persisted inbox deadline restores the
+ // exact window without relying on a wall-clock 00/30-second boundary.
+ const old=[a,queued(2,'window-b',''),queued(3,'window-c',''),next,other];
+ const states={
+  'window-a':{phase:'received',direction:'incoming',aggregate_until:'2026-10-27T01:00:30Z'},
+  'window-b':{phase:'received',direction:'incoming',aggregate_until:'2026-10-27T01:00:30Z'},
+  'window-c':{phase:'received',direction:'incoming',aggregate_until:'2026-10-27T01:00:30Z'},
+  'next-window':{phase:'received',direction:'incoming',aggregate_until:'2026-10-27T01:01:01Z'},
+  'other-thread':{phase:'received',direction:'incoming',aggregate_until:'2026-10-27T01:00:30Z'},
+ };
+ rows=project(old,{},undefined,{loaded:true,states});
+ assert.equal(rows.length,3);
+ assert.equal(rows.find(r=>r.triggerMessageID==='window-a').entries.length,3);
+ rows=project([
+  a,b,c,next,other,
+  entry(6,{message_id:'window-a',related_message_id:'window-b',event:'message_aggregated',category:'decision',status:'aggregated'}),
+  entry(7,{message_id:'window-c',related_message_id:'window-b',event:'message_aggregated',category:'decision',status:'aggregated'}),
+  entry(8,{message_id:'window-b',event:'message_processed',category:'decision',status:'completed'}),
+ ]);
+ assert.equal(rows.length,3);
+ const batch=rows.find(r=>r.triggerMessageID==='window-b');
+ assert.equal(batch.entries.length,6);
+ assert.equal(batch.group,'done');
+});
+test('messages queued during an active group turn join it before and after receipt',()=>{
+ const root=entry(1,{message_id:'active-root',event:'generation_started',category:'decision',status:'running'});
+ const queued=entry(2,{message_id:'new-message',event:'message_queued',category:'received',status:'queued'});
+ const linkedQueue={...queued,related_message_id:'active-root'};
+ const received=entry(3,{message_id:'new-message',event:'message_received',category:'received',status:'received',content:'请接着处理'});
+ const inbox={loaded:true,states:{'active-root':{phase:'model_running'},'new-message':{phase:'received'}}};
+ let rows=project([root,queued],{},undefined,inbox);
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].entries.length,2);
+ rows=project([root,queued,received],{},undefined,inbox);
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].received.length,1);
+ const states={
+  'fixture@chatroom\0active-root':{state:'completed',active:false,updated:at(4)},
+  'fixture@chatroom\0new-message':{state:'running',active:true,updated:at(4)},
+ };
+ rows=project([root,linkedQueue,received],states,Date.parse(at(4)),{loaded:true,states:{'active-root':{phase:'completed'},'new-message':{phase:'model_running'}}});
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].group,'active');
+});
 test('old queued cards use a successful inbox snapshot before being settled',()=>{
  const queued=entry(1,{message_id:'old-queue',event:'message_queued',status:'queued'});
  const now=Date.parse(queued.time)+11*60*1000;

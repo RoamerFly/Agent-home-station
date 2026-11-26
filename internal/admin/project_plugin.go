@@ -435,6 +435,22 @@ func (p *projectPluginPolicy) mediate(ctx context.Context, authorized func() boo
 				}
 			} else {
 				value, err = call()
+				if p.request.Tool == "server_list" && errors.Is(err, agenthost.ErrPathOutsideRoots) {
+					// Only suggest a root from this successfully authorized invocation.
+					// A different directory starts at page one.
+					var next struct {
+						Path     string `json:"path"`
+						Global   bool   `json:"global,omitempty"`
+						FishHome bool   `json:"fish_home,omitempty"`
+						Limit    int    `json:"limit,omitempty"`
+					}
+					if json.Unmarshal(p.request.Arguments, &next) == nil && len(cfg.Roots) > 0 {
+						next.Path = cfg.Roots[0]
+						args, _ := json.Marshal(next)
+						err = &RuntimeFailure{Code: "path_scope_denied", Stage: "scope", Message: err.Error(), NotStarted: true,
+							Continuation: "列出本次授权的工作目录可调用 server_list " + string(args)}
+					}
+				}
 			}
 		}
 	}

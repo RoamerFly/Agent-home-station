@@ -26,7 +26,7 @@ func TestMemberDocumentToolsAndConversationIsolation(t *testing.T) {
 	for _, tool := range p.workspaceAgentTools() {
 		names[tool.Name] = true
 	}
-	for _, name := range []string{"artifact_workspace", "artifact_render_document", "artifact_document_memory", "station_tool_status", "station_tool_start", "station_tool_stop", "station_tool_restart"} {
+	for _, name := range []string{"artifact_workspace", "artifact_render_document", "artifact_document_memory", "station_tool_manage"} {
 		if !names[name] {
 			t.Fatal("missing member capability", name)
 		}

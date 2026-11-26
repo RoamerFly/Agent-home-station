@@ -41,6 +41,41 @@ func TestToolFileCatalogPreservesMediaAndProvenance(t *testing.T) {
 		}
 	}
 }
+func TestToolFileCatalogUsesConfiguredHomeAndKeepsLegacyHome(t *testing.T) {
+	data := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(data, "applications"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configured := filepath.Join(t.TempDir(), "chosen-workspaces")
+	s := &localProjectTools{home: &localHomeService{dataDir: data, root: configured}}
+	paths := []string{
+		filepath.Join(configured, "home", "new.wav"),
+		filepath.Join(data, "workspace", "home", "old.wav"),
+		filepath.Join(data, "workspaces", "home", "unconfigured.wav"),
+	}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("synthetic media"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, warnings := s.toolFiles(t.Context())
+	if len(warnings) != 0 || len(files) != 2 {
+		t.Fatal(files, warnings)
+	}
+	found := map[string]string{}
+	for _, file := range files {
+		found[file.Path] = file.Source
+	}
+	if found[paths[0]] != "工作站工作区" || found[paths[1]] != "工作站旧工作区" {
+		t.Fatal(found)
+	}
+	if _, ok := found[paths[2]]; ok {
+		t.Fatal("unconfigured home was scanned", found)
+	}
+}
 func TestToolFileKindsExcludeModels(t *testing.T) {
 	for _, p := range []string{"/tools/models/a.wav", "/data/catalog/a.wav", "/data/voice-library/a.wav"} {
 		if toolFileKind(p) != "" {

@@ -35,7 +35,7 @@ func TestDefaultPathsUseExecutableLocation(t *testing.T) {
 	if cfg.dataDir != wantData {
 		t.Fatalf("dataDir = %q, want %q", cfg.dataDir, wantData)
 	}
-	wantWorkspace := filepath.Join(wantData, "workspace")
+	wantWorkspace := filepath.Join(wantData, "workspaces")
 	if cfg.workspaceRoot != wantWorkspace {
 		t.Fatalf("workspaceRoot = %q, want %q", cfg.workspaceRoot, wantWorkspace)
 	}

@@ -26,9 +26,10 @@ type surfReviewer interface {
 // This deliberately stays short because it is present in every native
 // function-calling turn. Discovery names the matches; their exact schemas are
 // supplied by the native function catalogue on the next model request.
-const nativeToolDiscoveryPolicy = "从本轮schema选工具；缺少能力用discover_tools查找，下一轮按新schema调用。按错误修正参数或来源，复用已有结果。"
+const nativeToolDiscoveryPolicy = "从本轮schema选工具；问工具清单先用tool_overview，需具体参数再用discover_tools。按错误修正参数或来源，复用已有结果。"
 
 func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string]string) (decision Decision, runErr error) {
+	ctx = withContextMetricRun(ctx)
 	ctx, automaticReasoning, reasoningErr := e.taskReasoningContext(ctx)
 	if reasoningErr != nil {
 		return Decision{}, reasoningErr
@@ -115,7 +116,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		return d, nil
 	}
 	if !localHost && need.Fresh && need.Kind == "voice" {
-		system += "\n音频请求先找本地匹配原音轨；没有再查可播放或可下载的作品来源。已知BV/b23页面可直接尝试下载音轨。"
+		system += "\n歌曲原音轨先查 music_library_search，再查 media_recent；都没有合适版本才联网。已知 BV/b23 页面可直接下载音轨。"
 	}
 	if !localHost {
 		system += "\nmedia_delivery 记录源素材与发送回执；accepted 才算微信接收。停发或改格式按最新消息处理；复用时核对会话、原件和版本。"
@@ -127,12 +128,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	// Previously baseSystem was captured before resource guidance was appended.
 	baseSystem := system
 	activeTools := []mcptools.Tool{}
+	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
 	if nativeFunctions {
 		for _, t := range tools {
 			// Keep an ordinary turn small.  History retrieval and reading retained
 			// outputs are the only common primitives; all execution, project and
 			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -148,7 +150,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	} else {
 		system += "\n【可自主使用的工具】\n" + string(catalog) + `
 先理解current_message，再按本轮schema选工具、参数和分页；调用格式为 {"action":"tool","tool":"工具名","arguments":{}}。长任务用agent_task记录进展，结果不明时查原任务或回执。
-歌曲先查media_recent，本地没有再用web_audio_search或web_search；BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice，视频用kind=video；用户要文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
+歌曲先查music_library_search，再按需查media_recent；均无合适原曲再用web_audio_search或web_search。BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice，视频用kind=video；用户要文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
 
 	}
 	if nativeFunctions {
@@ -158,11 +160,13 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 `
 		} else {
 			system = baseSystem + `
-【原生工具调用】` + nativeToolDiscoveryPolicy + `回复只输出reply/silent JSON，按实际结果叙述。微信 accepted 才算接收；保留指定声线和原文件，长音频每条不超过60秒。
+【原生工具调用】` + nativeToolDiscoveryPolicy + `回复只输出reply/silent JSON，按实际结果叙述；保留指定声线和原文件，长音频每条不超过60秒。
 `
 		}
-		activeTools = append(activeTools, mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)})
-		system += "\n按需分页或续读；批量操作依次按反馈继续。"
+		activeTools = append(activeTools,
+			mcptools.Tool{Name: "tool_overview", Description: "Summarize authorized tool groups and counts with host service state in one read. Set group or include_names to list names, with offset/limit for continuation; use discover_tools for schemas.", InputSchema: json.RawMessage(`{"type":"object","properties":{"include_names":{"type":"boolean"},"group":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)},
+			mcptools.Tool{Name: "discover_tools", Description: "Find tools by name or keywords. Returns paginated names, total, next_offset and has_more; exact schemas appear in the next native function catalog. offset/limit choose a page (default 8).", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`)},
+		)
 	}
 	baseTools := append([]mcptools.Tool(nil), activeTools...)
 	allowed := map[string]bool{}
@@ -192,6 +196,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	}
 	if nativeFunctions {
 		allowed["discover_tools"] = true
+		allowed["tool_overview"] = true
 	}
 	max := e.MaxToolCalls
 	autonomous := false
@@ -215,6 +220,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	lastFailure := ""
 	backgroundScheduled := false
 	contextReported := false
+	modelRound := 0 // Only actual decision requests; pending native batch calls use the same response.
 	requiredMediaIDs := []string{}
 	musicDelivery := false
 	for _, turn := range turns {
@@ -246,6 +252,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		}
 	}
 	previousCalls := map[string]string{}
+	localSearches := map[string]bool{}
 	discoveredPages := map[string][]string{}
 	blockedWithoutProgress := 0
 	// An autonomous run has no call quota. Repeating an identical read with
@@ -334,6 +341,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		system += "\n强制分享已开启：优先读取适合目标的新内容并reply；复用已取得的结果。没有合适来源或工具不可用时silent。"
 	}
 	pendingCalls := []string{}
+	discoveredInBatch := false
 	// Delivery tools are feedback loops, not finite action slots. The caller's
 	// cancellation/deadline remains authoritative; other actions retain a budget.
 	followupRounds := 0
@@ -354,6 +362,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			historyNeed = nil
 			blockedWithoutProgress = 0
 			readResults = map[string][32]byte{}
+			localSearches = map[string]bool{}
 			unchangedReads = 0
 			followupRounds++
 			pendingCalls = nil // Re-plan siblings proposed before the new request.
@@ -365,6 +374,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 		turns = e.refreshMemoryPackets(ctx, turns)
 		turns = compactActionTurns(system, turns)
 		modelTurns := historyNeed.contextForModel(turns)
+		if nativeFunctions {
+			modelTurns = compactNativeModelEvidence(modelTurns)
+		}
 		catalogBytes, _ := json.Marshal(activeTools)
 		settings := e.memorySettings()
 		// This first pass is shared by native and plain Chat paths. Provider
@@ -380,7 +392,8 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			return Decision{}, err
 		}
 		ctx = withGenerationEvidence(ctx, callEvidence)
-		if len(pendingCalls) > 0 {
+		fromPending := len(pendingCalls) > 0
+		if fromPending {
 			answer = pendingCalls[0]
 			pendingCalls = pendingCalls[1:]
 		} else if nativeFunctions {
@@ -392,9 +405,6 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err != nil {
 				return Decision{}, err
 			}
-			if err := e.Store.recordContextMetrics(ctx, system+budget, modelTurns, catalogBytes); err != nil && e.ToolLog != nil {
-				e.ToolLog("context_metrics_write_failed")
-			}
 			if !contextReported {
 				e.reportContext(system+budget, modelTurns, activeTools)
 				contextReported = true
@@ -402,12 +412,15 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err := e.validateGenerationSources(ctx); err != nil {
 				return Decision{}, err
 			}
-			e.capturePreparedContext(system+budget, modelTurns, activeTools)
-			answer, err = native.ChatFunctions(e.modelRequestContext(ctx, callEvidence), system+budget, modelTurns, activeTools)
-		} else {
-			if err := e.Store.recordContextMetrics(ctx, system, modelTurns, nil); err != nil && e.ToolLog != nil {
+			modelRound++
+			metricID, metricErr := e.Store.recordContextMetricsRound(ctx, system+budget, modelTurns, catalogBytes, modelRound)
+			if metricErr != nil && e.ToolLog != nil {
 				e.ToolLog("context_metrics_write_failed")
 			}
+			e.capturePreparedContext(system+budget, modelTurns, activeTools)
+			modelCtx := e.withContextMetricUsage(e.modelRequestContext(ctx, callEvidence), metricID)
+			answer, err = native.ChatFunctions(modelCtx, system+budget, modelTurns, activeTools)
+		} else {
 			if !contextReported {
 				e.reportContext(system, modelTurns, nil)
 				contextReported = true
@@ -415,8 +428,14 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			if err := e.validateGenerationSources(ctx); err != nil {
 				return Decision{}, err
 			}
+			modelRound++
+			metricID, metricErr := e.Store.recordContextMetricsRound(ctx, system, modelTurns, nil, modelRound)
+			if metricErr != nil && e.ToolLog != nil {
+				e.ToolLog("context_metrics_write_failed")
+			}
 			e.capturePreparedContext(system, modelTurns, nil)
-			answer, err = e.model.Chat(e.modelRequestContext(ctx, callEvidence), system, modelTurns)
+			modelCtx := e.withContextMetricUsage(e.modelRequestContext(ctx, callEvidence), metricID)
+			answer, err = e.model.Chat(modelCtx, system, modelTurns)
 		}
 		if err != nil {
 			return Decision{}, err
@@ -432,6 +451,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 			continue
 		}
 		if nativeFunctions {
+			if !fromPending {
+				discoveredInBatch = false
+			}
 			calls, batchErr := expandToolBatch(answer, allowed)
 			if batchErr != nil {
 				return Decision{}, batchErr
@@ -731,7 +753,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 				return finalize("tool_no_progress")
 			}
 		}
-		if !started && blockedResult == "" && response.Tool != "discover_tools" {
+		if !started && blockedResult == "" && response.Tool != "discover_tools" && response.Tool != "tool_overview" {
 			if err := e.ValidateGenerationEvidence(ctx, callEvidence); err != nil {
 				return Decision{}, err
 			}
@@ -816,6 +838,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					b, _ := json.Marshal(status)
 					return string(b), nil
 				})
+			} else if nativeFunctions && response.Tool == "tool_overview" {
+				result, callErr = observedToolCall(toolCtx, func(callCtx context.Context) (string, error) {
+					return e.toolOverview(callCtx, tools, args)
+				})
 			} else if nativeFunctions && response.Tool == "discover_tools" {
 				invocation := toolCtx.Value(toolInvocationKey{}).(*toolInvocation)
 				invocation.attempt++
@@ -859,7 +885,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 								}
 							}
 						}
-						activeTools = append([]mcptools.Tool(nil), baseTools...)
+						if !discoveredInBatch {
+							activeTools = append([]mcptools.Tool(nil), baseTools...)
+							discoveredInBatch = true
+						}
 						for _, t := range discovered {
 							activeTools = exposeTool(activeTools, t)
 							allowed[t.Name] = true
@@ -985,7 +1014,10 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 					}
 				}
 				rememberResourceURLs(knownURLs, result)
-				nextTool, hint := mediaSearchContinuation(response.Tool, result, need, turns)
+				if response.Tool == "media_recent" || response.Tool == "music_library_search" {
+					localSearches[response.Tool] = true
+				}
+				nextTool, hint := mediaSearchContinuation(response.Tool, result, need, turns, tools, localSearches)
 				if nativeFunctions && response.Tool == "service_plugins" {
 					nextTool = "service_plugin_call"
 				}

@@ -29,11 +29,29 @@ func emptyAssetSearch(result string) bool {
 	return json.Unmarshal([]byte(result), &page) == nil && page.Total != nil && *page.Total == 0
 }
 
-func mediaSearchContinuation(tool, result string, need ResourceNeed, turns []map[string]string) (string, string) {
+func mediaSearchContinuation(tool, result string, need ResourceNeed, turns []map[string]string, available []mcptools.Tool, searched map[string]bool) (string, string) {
+	hasTool := func(name string) bool {
+		for _, candidate := range available {
+			if candidate.Name == name {
+				return true
+			}
+		}
+		return false
+	}
 	switch tool {
 	case "media_recent":
 		if emptyAssetSearch(result) && (need.Kind == "voice" || strings.Contains(UserRequestText(currentMessage(turns)), "翻唱")) {
-			return "web_audio_search", "当前会话的素材目录没有匹配项。若要获取公开作品，可直接按曲名和歌手搜索音源。"
+			if !searched["music_library_search"] && hasTool("music_library_search") {
+				return "music_library_search", "当前会话没有匹配素材，继续查本账号已保存的公开原曲。"
+			}
+			return "web_audio_search", "当前会话没有匹配素材，可按曲名和歌手搜索公开音源。"
+		}
+	case "music_library_search":
+		if emptyAssetSearch(result) && (need.Kind == "voice" || strings.Contains(UserRequestText(currentMessage(turns)), "翻唱")) {
+			if !searched["media_recent"] && hasTool("media_recent") {
+				return "media_recent", "共享原曲没有匹配项，继续查本会话收到的音频附件。"
+			}
+			return "web_audio_search", "本地歌曲资源库也没有匹配原曲，可以按曲名和歌手搜索公开音源。"
 		}
 	case "web_search", "web_audio_search":
 		if tool == "web_audio_search" || need.Fresh && need.Kind == "voice" {

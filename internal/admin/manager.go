@@ -73,6 +73,7 @@ type LogEntry struct {
 	UsagePriceSource       string                   `json:"usage_price_source,omitempty"`
 	UsageReported          bool                     `json:"usage_reported,omitempty"`
 	UsagePriced            bool                     `json:"usage_priced,omitempty"`
+	CacheHitReported       bool                     `json:"cache_hit_reported,omitempty"`
 	InputTokens            int64                    `json:"input_tokens,omitempty"`
 	OutputTokens           int64                    `json:"output_tokens,omitempty"`
 	CacheHitTokens         int64                    `json:"cache_hit_tokens,omitempty"`

@@ -355,21 +355,11 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err != nil && in.IsGroup {
-			if independentGroupTextRequest(in, *event) {
-				event.MediaReadFailed = true
-				name, detail := "background_video_read_failed", "背景视频未读到内容，继续独立文字请求。"
-				if event.Source.MessageType == 47 {
-					name, detail = "background_sticker_read_failed", "背景表情包未读到画面，继续独立文字请求。"
-				}
-				report(Record{Event: name, Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
-					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: detail})
-				continue
-			}
-			return &groupObservationFailure{reason: observationReason(err), messageID: id}
-		}
 		if err != nil {
+			event.MediaReadFailed = true
 			event.Text += "\n媒体读取未完成：\n" + failedObservation(err)
+			report(Record{Event: "batch_media_read_incomplete", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
+				RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err)})
 			continue
 		}
 		before := event.Text
@@ -382,32 +372,4 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		return &groupObservationFailure{reason: "media_batch_source_missing", messageID: in.TraceID}
 	}
 	return nil
-}
-
-// An unrelated video, share card or sticker can remain background for a verified text
-// request. Keep the existing failure policy when it is the actual target or
-// is explicitly referenced anywhere in this batch. A share from the same
-// sender is allowed when a later message is the explicit text request; this
-// prevents one unreadable card from blocking an independent song/voice task.
-func independentGroupTextRequest(in *companion.Input, media companion.ConversationEvent) bool {
-	if !in.Directed || media.Source == nil || media.MessageID == in.TraceID || media.Sender == "" {
-		return false
-	}
-	background := media.Source.MessageType == 43 || media.Source.MessageType == 49 || media.Source.MessageType == 47
-	if !background {
-		return false
-	}
-	if media.Source.MessageType == 43 && media.Sender == in.Sender {
-		return false
-	}
-	anchorText := false
-	for _, event := range in.UnreadMessages {
-		if event.ReplyTo != nil && event.ReplyTo.MessageID == media.MessageID {
-			return false
-		}
-		if event.MessageID == in.TraceID && event.Sender == in.Sender && event.NewRequest && event.Source != nil {
-			anchorText = event.Source.MessageType == 1 || event.Source.MessageType == 49 && event.ReplyTo != nil
-		}
-	}
-	return anchorText
 }

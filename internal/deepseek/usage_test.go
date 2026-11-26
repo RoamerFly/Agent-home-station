@@ -40,6 +40,25 @@ func TestUsageIncludesBilledInvalidAnswerAndUnknownAttempts(t *testing.T) {
 	}
 }
 
+func TestUsageDistinguishesMissingCacheFieldFromReportedZero(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		known      bool
+	}{
+		{"missing", `{"usage":{"prompt_tokens":10,"completion_tokens":4}}`, false},
+		{"explicit_zero", `{"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_cache_hit_tokens":0}}`, true},
+		{"nested_zero", `{"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":0}}}`, true},
+		{"empty_details", `{"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := parseUsage([]byte(tc.body), time.Now())
+			if !u.Reported || u.CacheHit != 0 || u.CacheHitKnown() != tc.known {
+				t.Fatalf("cache presence lost: %+v", u)
+			}
+		})
+	}
+}
+
 func TestNestedUsageObserversReceiveOneProviderAttemptEach(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"usage":{"prompt_tokens":12,"completion_tokens":3},"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)

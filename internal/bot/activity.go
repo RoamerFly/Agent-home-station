@@ -31,7 +31,7 @@ type Record struct {
 	Event, Category, ThreadID, Sender, Content, Reason, Status, MessageID, Origin, SendID                           string
 	ReviewFailure                                                                                                   *companion.ReviewFailure
 	UsageModel, UsagePurpose, UsagePriceSource                                                                      string
-	UsageReported, UsagePriced                                                                                      bool
+	UsageReported, UsagePriced, CacheHitReported                                                                    bool
 	InputTokens, OutputTokens, CacheHitTokens                                                                       int64
 	EstimatedCosts                                                                                                  map[string]float64
 }

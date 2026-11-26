@@ -319,7 +319,7 @@ func (t *localToolSet) claimLocalTTS(ctx context.Context, s *localProjectTools, 
 }
 
 func (t *localToolSet) publishLocalTTS(ctx context.Context, grant localWorkspaceGrant, source *companion.SourceRef, job string, wav []byte) (localArtifact, error) {
-	parent := filepath.Join(t.access.home.dataDir, "project-tool-tasks")
+	parent := stationProjectToolTasksDir(t.access.home.dataDir)
 	root, err := workspacefs.EnsurePath(parent)
 	if err != nil {
 		return localArtifact{}, err

@@ -37,6 +37,7 @@ type assetOriginal struct {
 	Music               *songSpec
 	Data                []byte
 	MIME, URL, Filename string
+	RequestURL          string // Exact public URL used by web_media_download; only its digest is persisted.
 	Parent              *assetOriginal
 }
 type assetRequest struct {
@@ -82,6 +83,7 @@ type mediaAsset struct {
 	MIME               string                 `json:"mime"`
 	Hash               string                 `json:"hash,omitempty"`
 	URL                string                 `json:"source_url,omitempty"`
+	RequestURLHashes   []string               `json:"request_url_hashes,omitempty"`
 	Bytes              int64                  `json:"bytes"`
 	Sources            map[string]string      `json:"sources"`
 	Updated            time.Time              `json:"updated"`
@@ -304,6 +306,9 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		return zero, e
 	}
 	a := mediaAsset{ID: id, Scope: scope, Account: in.Account, Title: assetName(original), Filename: assetName(original), MIME: original.MIME, Hash: digest, Bytes: int64(len(original.Data)), Sources: map[string]string{}, Updated: time.Now().UTC(), VoiceID: original.VoiceID, VoiceEngine: original.VoiceEngine, VoiceProfile: original.VoiceProfile, SynthesisText: boundedAssetSynthesisText(original.SynthesisText), SynthesisTextKnown: original.SynthesisTextKnown && strings.TrimSpace(original.SynthesisText) != ""}
+	if key := webMediaURLHash(original.RequestURL); key != "" {
+		a.RequestURLHashes = append(a.RequestURLHashes, key)
+	}
 	if u, e := url.Parse(original.URL); e == nil && u.Host != "" {
 		u.User = nil
 		if !mcptools.IsPublicVideoPage(original.URL) && !(strings.EqualFold(u.Hostname(), "www.bilibili.com") || strings.EqualFold(u.Hostname(), "bilibili.com")) {
@@ -339,6 +344,7 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		}
 		a.Requests = items[index].Requests
 		a.Formats = items[index].Formats
+		a.RequestURLHashes = appendWebMediaURLHashes(items[index].RequestURLHashes, a.RequestURLHashes...)
 		a.Sources = items[index].Sources
 		if a.Sources == nil {
 			a.Sources = map[string]string{}

@@ -300,7 +300,7 @@ type localProjectPolicy struct {
 // Reading an existing private artifact requires a task-scoped LPAC mount.
 // The long-lived creation worker never sees input copies from other requests.
 func (p *localProjectPolicy) inputRuntime(ctx context.Context) (*pluginruntime.Controller, func(), error) {
-	parent := filepath.Join(p.tool.projectTools.home.dataDir, "project-tool-tasks")
+	parent := stationProjectToolTasksDir(p.tool.projectTools.home.dataDir)
 	options := p.tool.projectTools.options
 	if p.capability != localDocumentExport {
 		options.DocumentRuntimeRoot = ""

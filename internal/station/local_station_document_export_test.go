@@ -78,7 +78,7 @@ func TestLiveStationDocumentExportPDFLPAC(t *testing.T) {
 	if err != nil || product != first || persisted != 1 {
 		t.Fatalf("first isolated PDF export product=%#v persisted=%d err=%v", product, persisted, err)
 	}
-	if entries, err := os.ReadDir(filepath.Join(home.dataDir, "project-tool-tasks")); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(stationProjectToolTasksDir(home.dataDir)); err != nil || len(entries) != 0 {
 		t.Fatalf("export left scoped runtime files: %#v, %v", entries, err)
 	}
 	if _, err := inputFile.Seek(0, io.SeekStart); err != nil {

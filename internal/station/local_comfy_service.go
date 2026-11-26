@@ -231,8 +231,11 @@ func (s *localComfyService) Use(ctx context.Context, fish, binding string, start
 }
 
 func (s *localComfyService) Stop(ctx context.Context) error {
+	if err := s.services.StopOwner(ctx, localComfyServiceOwner); err != nil {
+		return err
+	}
 	s.cancelAllIdle()
-	return s.services.StopOwner(ctx, localComfyServiceOwner)
+	return nil
 }
 
 func (s *localComfyService) Close(ctx context.Context) error {

@@ -137,7 +137,7 @@ func TestUnfinishedGroupTaskKeepsOriginalRoundActive(t *testing.T) {
 	}
 }
 
-func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
+func TestLogInboxStatesReadsOnlySafeMessageState(t *testing.T) {
 	f := setup(t)
 	f.manager.stateDir = t.TempDir()
 	server := &Server{manager: f.manager}
@@ -145,20 +145,23 @@ func TestLogInboxStatesReadsOnlyMessagePhases(t *testing.T) {
 	if loaded || states != nil {
 		t.Fatal("missing checkpoint must not be treated as an empty inbox")
 	}
-	data := []byte(`{"inbox":[{"phase":"received","event":{"data":{"messageId":"message-one","content":"private text"}}}],"utterance_plans":[{"trace":"message-one","state":"stopped","stop_reason":"reply_evidence_epoch_changed","index":0,"messages":["private reply"],"input":{"thread":"group@chatroom"}}]}`)
+	data := []byte(`{"inbox":[{"phase":"received","aggregate_until":"2026-10-27T01:00:30Z","event":{"data":{"messageId":"message-one","direction":"incoming","content":"private text"}}}],"utterance_plans":[{"trace":"message-one","state":"stopped","stop_reason":"reply_evidence_epoch_changed","index":0,"messages":["private reply"],"input":{"thread":"group@chatroom"}}]}`)
 	if err := os.WriteFile(filepath.Join(f.manager.stateDir, "messages-v2.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	states, loaded = server.logInboxStates()
-	if !loaded || states["message-one"].Phase != "received" || len(states) != 1 {
-		t.Fatal("inbox phase projection failed")
+	if !loaded || states["message-one"].Phase != "received" || states["message-one"].AggregateUntil != "2026-10-27T01:00:30Z" || states["message-one"].Direction != "incoming" || len(states) != 1 {
+		t.Fatal("inbox collection state projection failed")
 	}
 	_, plans, loaded := server.logRuntimeStates()
 	plan := plans["group@chatroom\x00message-one"]
 	if !loaded || len(plans) != 1 || plan.State != "stopped" || plan.StopReason != "reply_evidence_epoch_changed" || plan.Index != 0 || plan.Total != 1 {
 		t.Fatal("unfinished plan projection failed", plans)
 	}
-	projected, _ := json.Marshal(plans)
+	projected, _ := json.Marshal(struct {
+		Inbox map[string]logInboxState
+		Plans map[string]logPlanState
+	}{states, plans})
 	if strings.Contains(string(projected), "private reply") || strings.Contains(string(projected), "private text") {
 		t.Fatal("private message content leaked into plan status")
 	}

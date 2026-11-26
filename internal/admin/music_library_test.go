@@ -24,6 +24,12 @@ func TestPublicSongLibraryFindsOtherConversationAndKeepsPrivateAudioScoped(t *te
 	if err != nil || total != 1 || rows[0]["asset_id"] != public.ID {
 		t.Fatalf("shared song lookup: %v %d %v", err, total, rows)
 	}
+	for _, query := range []string{"着魔 歌手", "歌手《着魔》"} {
+		matches, count, searchErr := f.manager.searchMusicLibrary(other.Account, query, 0, 12)
+		if searchErr != nil || count != 1 || matches[0]["asset_id"] != public.ID {
+			t.Fatalf("unordered title and artist lookup %q: %v %d %v", query, searchErr, count, matches)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(f.manager.musicLibraryDirectory(other.Account), public.Hash+".m4a")); err != nil {
 		t.Fatal("verified library copy missing", err)
 	}

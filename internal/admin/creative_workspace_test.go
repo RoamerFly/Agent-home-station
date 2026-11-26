@@ -23,7 +23,7 @@ func TestGroupCreationUsesFishWorkspaceWithoutOwnerIdentity(t *testing.T) {
 	for _, tool := range p.workspaceAgentTools() {
 		names[tool.Name] = true
 	}
-	for _, name := range []string{"project_create", "project_checkout_plugin", "station_tool_enable", "workspace_write", "station_comfy"} {
+	for _, name := range []string{"project_create", "project_checkout_plugin", "station_tool_manage", "workspace_write", "station_comfy"} {
 		if !names[name] {
 			t.Fatal("creative tool unavailable in group", name)
 		}

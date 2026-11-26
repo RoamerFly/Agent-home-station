@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"runtime"
 	"time"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
@@ -48,7 +49,7 @@ func (p *permittedTools) yueRequest(ctx context.Context, method, path string, bo
 
 type yueHealth struct {
 	SingingVoiceProfile string `json:"singing_voice_profile,omitempty"`
-	BridgeVersion       int    `json:"bridge_version"`
+	BridgeVersion       int    `json:"bridge_version,omitempty"`
 	State               string `json:"state"`
 	Message             string `json:"message"`
 	Ready               bool   `json:"ready"`
@@ -57,6 +58,9 @@ type yueHealth struct {
 func (p *permittedTools) probeYuE(ctx context.Context) yueHealth {
 	if !p.manager.localMusicPluginConfigured(ctx) {
 		return yueHealth{State: "migration_required", Message: "请安装、授权并配置音乐工具的本地桥接；旧版语音配置不再直接授权音乐请求"}
+	}
+	if runtime.GOOS == "windows" && p.manager.windowsMusicRegistered() && !p.manager.windowsMusicStatus().Running {
+		return yueHealth{State: "stopped", Message: "本机受管音乐服务未运行；可用 music_service_start 启动"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -282,6 +286,9 @@ func (p *permittedTools) callYuE(ctx context.Context, name string, raw json.RawM
 		// Store the remote job mapping under the private effect ledger.
 		// Probe without side effects before claiming a create operation. An offline
 		// bridge must not become a fictitious successful/uncertain generation job.
+		if err := p.ensureMusicDependency(ctx); err != nil {
+			return "", err
+		}
 		health := p.probeYuE(ctx)
 		if health.State == "bridge_unavailable" {
 			started, err := p.recoverMusicDependency(ctx)

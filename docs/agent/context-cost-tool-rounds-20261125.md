@@ -1,0 +1,46 @@
+# 原生工具多轮合成回放（2026-11-25）
+
+这个探针测量从首次请求到最后一次工具反馈的累计模型输入。它使用正式的 Companion 原生分派、Admin 会话授权目录和六条合成历史。脚本按预设步骤选工具，检查每轮收到的工具反馈并以静默决策结束。四个场景各使用独立临时工作区。模型供应商请求和微信发送均为 0。
+
+| 场景 | 优化前 eefe7cf6 累计估算 | 阶段基线 c95e13b7 累计估算 | 本轮逐请求估算 | 本轮累计估算 | 本轮模型请求 / 工具终态 |
+| --- | ---: | ---: | --- | ---: | ---: |
+| 普通聊天 | 7,034 | 6,953 | 5,721 | 5,721 | 1 / 0 |
+| 工具盘点 | 15,009 | 14,387 | 5,590、6,333 | 11,923 | 2 / 1 |
+| 恢复音乐服务并回查 | 不支持统一恢复入口 | 29,370 | 5,639、6,084、6,277、6,442 | 24,442 | 4 / 3 |
+| 续办已有任务 | 22,670 | 22,526 | 5,790、6,237、6,803 | 18,830 | 3 / 2 |
+
+本轮使用基于 e9c9dfc6、已加入工具盘点终态修复的 Windows 工作树。累计值使用每轮系统提示、工具定义和消息正文的仓库估算，并为每条消息计入 8 个 token 的估算开销。临时任务路径和时间戳可能使重跑值有小幅波动。
+
+- **工具盘点**。一轮调用 `tool_overview`，校验授权工具数量等于隔离账户的实际目录大小，并检查合成服务状态。两个旧快照都有成功反馈，观察器记录 0 个工具终态。本轮同时拿到成功反馈与 1 个 `tool_completed`。
+- **恢复与回查**。`discover_tools` 按实际授权查询 `station_tool_manage`；下一轮调用 `ensure_ready`，最后调用 `status` 独立确认合成服务已就绪。旧快照缺少所需接口时标记 `unsupported`，其首轮检查不计入成功场景成本。
+- **任务续办**。临时 Admin 存储预置一个等待中的任务、来源消息 ID、已有结果和检查点。模型通过 `agent_tasks` 读出检查点，再用 `agent_task` 更新原 ID。回放重新读取存储，核对唯一任务、来源、已有结果以及新检查点，并确认没有业务操作重复提交。该用例覆盖任务记录续办；自然语言自主选择、原聊天长历史定位和微信投递仍需相应的真实证据。
+
+## 重跑
+
+从包含探针的工作树执行。Go 的 overlay 将同一份测试夹具映射到所选源码快照，源树无需写入测试文件。JSON 分别记录每轮输入、累计输入、成功反馈工具、实际观察到的终态、模拟服务动作和结果。供应商用量留空。
+
+```powershell
+python scripts/probe_tool_rounds.py --source-root . --output temp/tool-rounds-current.json --verify-current
+python scripts/probe_tool_rounds.py --source-root ../cost-c95e13b7 --output temp/tool-rounds-c95.json
+python scripts/probe_tool_rounds.py --source-root ../cost-eefe7cf6 --output temp/tool-rounds-eefe.json
+```
+
+`--verify-current` 要求每个场景成功，且每次工具反馈都有对应的完成终态。历史比较省略该参数，以便保留旧版缺能力或缺终态的事实。首轮七场景仍使用 [首轮固定回放](context-cost-fixed-replay-20261125.md)。
+
+## 真实模型隔离验收
+
+2026-11-25 在已部署源码 `25a3483b` 上，另用 `internal/admin/tool_overview_live_acceptance_test.go` 调用正式配置的模型服务。输入是合成管理员私聊与合成来源，记忆在临时数据库中；工具目录由 Admin 当前授权逻辑生成，服务状态由假后端返回。该测试不连接微信发送器，也不调用外部工具后端。测试只输出动作、终态及用量，不保存回复正文、私聊记录或密钥。
+
+| 提供商请求 / 用量已报告 | 提供商输入 / 输出 token | 模型动作 | 工具终态 | 最终决策 | 外部工具调用 |
+| ---: | ---: | --- | --- | --- | ---: |
+| 2 / 2 | 6,727 / 275 | `tool_overview` → 自然文本 | `tool_overview=tool_completed` × 1 | `reply`，成功 | 0 |
+
+本次普通私聊自动回复没有额外的复核模型调用。早期同夹具试验缺少合成消息来源，最终绑定报 `reply_anchor_not_grounded` 或 `reply_source_proof_missing`；补齐来源后，本地假模型和上述真实模型回放均通过。该试验验证了真实模型在这一合成请求中选用概览入口，但不验证真实微信消息的接收、服务状态真实性或发送签收。旧版正式私聊记录为 6 次模型请求、8 次工具终态、输入 107,743 token；它有不同的真实历史和配置，不能与这里的 6,727 token 直接计算节省百分比。相同夹具的源码前后成本比较仍以上表合成多轮回放为准，人民币费用只以工作站实际供应商用量和已配置单价账本为准。
+
+显式设置配置目录才会进行付费模型请求；未设置时该用例跳过。本地合成来源回放无需提供商。
+
+```powershell
+$env:AHS_LIVE_OVERVIEW_CONFIG='E:\Agent\agent-home-workstation\dist\release\data\applications\wechat\legacy-admin'
+go test ./internal/admin -run '^TestIsolatedLiveToolOverview$' -count=1 -v
+go test ./internal/admin -run '^TestIsolatedOverviewPlainReply$' -count=1 -v
+```

@@ -89,7 +89,7 @@ func TestLiveStationWechatDocumentLPAC(t *testing.T) {
 		reviseAvailable:        home.stationDocumentRevisionAvailable, reviseTitle: home.reviseStationDocumentTitle,
 		exportAvailable: home.stationDocumentExportAvailable, exportPDF: home.exportStationDocumentPDF}, true,
 		func(data []byte) string { return localPDFExtractText(t, options, data) })
-	entries, err := os.ReadDir(filepath.Join(home.dataDir, "project-tool-tasks"))
+	entries, err := os.ReadDir(stationProjectToolTasksDir(home.dataDir))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("isolated input remained after parsing: %v, %v", entries, err)
 	}

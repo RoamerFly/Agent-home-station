@@ -35,7 +35,7 @@ func (m *Manager) recordModelUsageDetail(thread, message, tool, callID string, m
 	costs, priced, source := m.billing.Estimate(model, u)
 	m.record(bot.Record{Event: "model_usage", Category: "system", ThreadID: thread, MessageID: message,
 		Origin: "model", Status: "recorded", Tool: tool, CallID: callID, UsageModel: u.Model, UsagePurpose: u.Purpose,
-		UsageReported: u.Reported, UsagePriced: priced, UsagePriceSource: source,
+		UsageReported: u.Reported, UsagePriced: priced, CacheHitReported: u.CacheHitKnown(), UsagePriceSource: source,
 		InputTokens: u.Input, OutputTokens: u.Output, CacheHitTokens: u.CacheHit, EstimatedCosts: costs})
 }
 

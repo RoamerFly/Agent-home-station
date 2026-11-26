@@ -36,7 +36,7 @@ func validMessageDigest(value string) bool {
 }
 
 func messageMediaKind(kind string) bool {
-	return kind == "stickers" || kind == "files" || kind == "images"
+	return kind == "stickers" || kind == "files" || kind == "images" || kind == "voices"
 }
 
 func (m *Manager) storeMessageMedia(kind, digest, ext string, src io.Reader, size int64) (string, error) {

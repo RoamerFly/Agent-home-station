@@ -25,6 +25,13 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 			if pending || s.isActive(id) || host.controller.Status(id).ActiveCalls > 0 {
 				return errors.New("工具正在处理任务，请完成后再停止或重启")
 			}
+			backendBusy, checkErr := s.projectBackendBusy(ctx, host.store.Account(), id)
+			if checkErr != nil {
+				return checkErr
+			}
+			if backendBusy {
+				return errors.New("工具正在处理任务，请完成后再停止或重启")
+			}
 		}
 		switch id {
 		case localRVCPackage:
@@ -145,15 +152,19 @@ func (s *localProjectTools) changeLifecycle(ctx context.Context, host *localProj
 }
 
 func stationLifecycleTools() []mcptools.Tool {
-	out := []mcptools.Tool{}
-	for _, action := range []string{"status", "enable", "start", "stop", "restart"} {
-		schema := `{"type":"object","properties":{"tool_id":{"type":"string"}},"additionalProperties":false}`
-		if action != "status" {
-			schema = `{"type":"object","properties":{"tool_id":{"type":"string"}},"required":["tool_id"],"additionalProperties":false}`
-		}
-		out = append(out, mcptools.NewTool("station_tool_"+action, "工作站公共工具生命周期："+action+"。status 列出工具和未就绪原因；enable 使主人已授权安装的外部工具按需待命；启动、停止和重启用于已启用工具。按次执行的工具启动时检查就绪状态。", schema))
+	return []mcptools.Tool{mcptools.NewTool("station_tool_manage", "管理公共工具：status 查询；ensure_ready 启动已启用工具；repair 在空闲时修复或重启，不重复原业务调用；其他动作为显式生命周期操作。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","enable","start","stop","restart"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`)}
+}
+
+func compactProjectToolStatus(views []localProjectToolView) []map[string]any {
+	summaries := make([]map[string]any, 0, len(views))
+	for _, view := range views {
+		summaries = append(summaries, map[string]any{
+			"id": view.ID, "name": view.Name, "installed": view.Installed,
+			"enabled": view.Enabled, "state": view.State,
+			"runtime_ready": view.RuntimeReady, "busy": view.Busy, "reason": view.Reason,
+		})
 	}
-	return out
+	return summaries
 }
 
 func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, raw json.RawMessage) (string, error) {
@@ -164,6 +175,7 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		return "", err
 	}
 	var in struct {
+		Action string `json:"action"`
 		ToolID string `json:"tool_id"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -179,6 +191,9 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		return "", err
 	}
 	action := strings.TrimPrefix(name, "station_tool_")
+	if action == "manage" {
+		action = in.Action
+	}
 	views := []localProjectToolView{}
 	sources := discoverToolPackages(s.options.CatalogDirectory)
 	if action == "status" {
@@ -195,10 +210,14 @@ func (t *localToolSet) callStationLifecycle(ctx context.Context, name string, ra
 		views = append(views, v)
 	}
 	if action == "status" {
+		if in.ToolID == "" {
+			out, _ := json.Marshal(map[string]any{"tools": compactProjectToolStatus(views), "detail": "station_tool_manage action=status tool_id=<id>"})
+			return string(out), nil
+		}
 		out, _ := json.Marshal(map[string]any{"tools": views})
 		return string(out), nil
 	}
-	if action != "enable" && action != "start" && action != "stop" && action != "restart" {
+	if action != "enable" && action != "start" && action != "stop" && action != "restart" && action != "ensure_ready" && action != "repair" {
 		return "", errors.New("未知工具操作")
 	}
 	if in.ToolID == "" || len(views) != 1 {

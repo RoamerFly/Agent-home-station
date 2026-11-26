@@ -1,5 +1,9 @@
 # 变更记录
 
+## 0.1.3
+
+- 工具包不再附带重复的 Wan 2.1 工作流 JSON；工作流及自定义节点由工作站在 `release/data/resources/comfyui` 管理，个人工作流位于 `release/data/workspaces/home/workflows/comfyui`。
+
 ## 0.1.1
 
 - 支持通过已登记的工作流生成 MP4，宿主在登记素材前核查容器、视频尺寸和首帧解码。

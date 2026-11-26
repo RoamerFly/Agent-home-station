@@ -36,58 +36,6 @@ func TestOwnerSingleMessageRetryIsNotConvertedToUnreadBatch(t *testing.T) {
 	}
 }
 
-func TestIndependentGroupTextRequestAllowsSameSenderShareCard(t *testing.T) {
-	share := companion.SourceRef{MessageID: "share", MessageType: 49}
-	in := companion.Input{
-		Directed: true,
-		Sender:   "sender",
-		TraceID:  "text",
-		UnreadMessages: []companion.ConversationEvent{
-			{MessageID: "share", Sender: "sender", Source: &share},
-			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}},
-		},
-	}
-	if !independentGroupTextRequest(&in, in.UnreadMessages[0]) {
-		t.Fatal("same-sender share card should remain background for a later explicit text request")
-	}
-}
-
-func TestIndependentGroupTextRequestKeepsReferencedShareBlocking(t *testing.T) {
-	share := companion.SourceRef{MessageID: "share", MessageType: 49}
-	in := companion.Input{
-		Directed: true,
-		Sender:   "sender",
-		TraceID:  "text",
-		UnreadMessages: []companion.ConversationEvent{
-			{MessageID: "share", Sender: "sender", Source: &share},
-			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}, ReplyTo: &share},
-		},
-	}
-	if independentGroupTextRequest(&in, in.UnreadMessages[0]) {
-		t.Fatal("a directly referenced share card must remain blocking")
-	}
-}
-
-func TestIndependentGroupTextRequestHandlesOnlyBackgroundSticker(t *testing.T) {
-	sticker := companion.SourceRef{MessageID: "sticker", MessageType: 47}
-	in := companion.Input{
-		Directed: true,
-		Sender:   "sender",
-		TraceID:  "text",
-		UnreadMessages: []companion.ConversationEvent{
-			{MessageID: sticker.MessageID, Sender: "sender", Source: &sticker},
-			{MessageID: "text", Sender: "sender", NewRequest: true, Source: &companion.SourceRef{MessageID: "text", MessageType: 1}},
-		},
-	}
-	if !independentGroupTextRequest(&in, in.UnreadMessages[0]) {
-		t.Fatal("an unrelated sticker blocked an independent directed request")
-	}
-	in.UnreadMessages[1].ReplyTo = &sticker
-	if independentGroupTextRequest(&in, in.UnreadMessages[0]) {
-		t.Fatal("a directly quoted sticker was treated as background")
-	}
-}
-
 func (s *pagedUnreadSource) Events(ctx context.Context, after string) (linuxnative.EventPage, error) {
 	n, _ := strconv.Atoi(after)
 	page := linuxnative.EventPage{NextCursor: after}
@@ -307,15 +255,10 @@ func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
 			}
 			pumpGeneration(t, w, func() bool { return w.generation.occupied() == 0 })
 			if permanent {
-				if calls != 0 || reports != 1 || videoReads != 1 || len(n.submissions) != 0 {
-					t.Fatal("failed input escaped to group or diagnostic missing", calls, reports, videoReads, len(n.submissions))
+				if calls != 1 || reports != 0 || videoReads != 1 || len(current.Unread) != 3 || !strings.Contains(string(current.Unread[2]), "附件读取未完成") || len(n.submissions) != 0 {
+					t.Fatal("unreadable video should remain marked within the batch", calls, reports, videoReads, len(current.Unread), len(n.submissions))
 				}
-				for _, it := range w.runtime.Inbox {
-					if it.Phase != "stopped" {
-						t.Fatal(it.Phase)
-					}
-				}
-				if err := w.drainInbox(t.Context()); err != nil || reports != 1 {
+				if err := w.drainInbox(t.Context()); err != nil || reports != 0 || calls != 1 {
 					t.Fatal("failed turn replayed", err, reports)
 				}
 			} else if calls != 1 || reports != 0 || videoReads != 2 || len(current.Unread) != 3 || !strings.Contains(string(current.Unread[1]), "verified-window-1") || !strings.Contains(string(current.Unread[2]), "verified-window-2") {

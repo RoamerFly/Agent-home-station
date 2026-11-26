@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "comfyui",
   "name": "ComfyUI 图像与视频生成",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "host_protocol": 1,
   "status": "ready",
   "platforms": [
@@ -19,15 +19,13 @@
   "dependencies": [],
   "files": {
     "capabilities.json": "4e1ba0cfff7c7b25fdea785c593baaf39d4c0fed26a814c0b790612d89ee9306",
-    "CHANGELOG.md": "f0016cdc66f714c642c1c6c0fcebd12e557f137bd8e57a09c1534ff227c25380",
+    "CHANGELOG.md": "eb05ab795cbc4f373fda70a6c0af032588b90155c8890c328f9a165e9b13638c",
     "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
     "MIGRATION.md": "b73e1539faa3767bf605377615eae14362a7518f976fa6c5f808adb74a15ade4",
     "PERMISSIONS.md": "81cefbef0969b6ad56714106dedaea57817950f8953917b59b604226a507cfb4",
-    "README.md": "82b5ffa30782b623081a06026b3010c6ec7562102aec980e6b36b763a62dfc34",
+    "README.md": "d80ddf719ed55a8aa883c0f49b25cfdcae6ed0ba9995e738233da1488084c429",
     "runtime/managed-service.json": "ad4e9f12f8adacc66c705a9ed0a15702b5477eddddb400f20bb03846d4413556",
     "ui.schema.json": "75ad213c4b6ede6a8196e79fa72c5e3971c6acb8dfa9299bbc9538b86cfadd02",
-    "examples/wan21-text-video.json": "0b14993f123efe1416b9aaecfd5b8f0eee0ec151a5c1981b5563a1ede27bdc18",
-    "examples/wan21-text-video.registration.json": "2ef7d9d4cbe1b480f10d6ad8b1d0aaef5b8c3fd50f4d3c6d0d0e0a9bb12fa393",
     "run-service.ps1": "0cb7b60a9eee7d09b9963ea1795a7b43a61a93739b35aac43b5cc68ea95305ed"
   }
 }

@@ -92,3 +92,27 @@ func TestLongHistoricalVideoDoesNotEvictEarlierPreferenceAndMemoryIsUnchanged(t 
 		t.Fatal(r)
 	}
 }
+
+func TestContextReportMeasuresAnonymousHistoryMediaAndToolSizes(t *testing.T) {
+	turns := []map[string]string{
+		{"role": "user", "content": `{"kind":"conversation_context","summary":{"text":"private-summary-marker"},"timeline":[{"quoted_message":{"text":"private-quote-marker"},"attachment_delivery":{"title":"private-media-marker"}}]}`},
+		{"role": "user", "content": `{"kind":"current_message","quoted_source":{"message_id":"private-reference-marker"},"incoming_media":[{"name":"private-file-marker"}],"unread_messages":[{"text":"private-unread-marker"}]}`},
+	}
+	tools := []mcptools.Tool{{Name: "private-tool-marker", Description: "private-description-marker", InputSchema: json.RawMessage(`{"type":"object","properties":{"private-schema-marker":{"type":"string"}}}`)}}
+	report := inspectContext("policy", turns, tools)
+	for _, key := range []string{"detail.history_summary", "detail.history_timeline", "detail.history_quotes", "detail.history_media", "detail.current_quotes", "detail.current_media", "detail.current_unread"} {
+		if report.ComponentBytes[key] == 0 {
+			t.Fatalf("missing context part %s", key)
+		}
+	}
+	var toolParts int
+	for key := range report.ComponentBytes {
+		if strings.HasPrefix(key, "detail.tool_input_schema_") {
+			toolParts++
+		}
+	}
+	encoded, _ := json.Marshal(report.ComponentBytes)
+	if toolParts != 1 || strings.Contains(string(encoded), "private-") {
+		t.Fatalf("metric leaked content or lost tool schema: %s", encoded)
+	}
+}
