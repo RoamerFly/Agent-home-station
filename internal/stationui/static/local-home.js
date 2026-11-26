@@ -3527,9 +3527,9 @@
     groupMore.hidden = true;
     const selectedHeading = appElement("h3", "选择作品查看通知", "douyin-round-section-title");
     const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
-    const contextAction = memoryButton("让 Agent 读取此作品音画", "button compact secondary", () => {
+    const contextAction = memoryButton("让 Agent 核对此作品资料与音画", "button compact secondary", () => {
       if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
-      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 locate 逐页核对当前创作者账号、本人作品及标题简介，取得该作品的临时 content_id。随后用 prepare 按页读取音轨（每次 audio_pages=1），再明确指定 audio_pages=0、visual_pages=1 按页采样画面，依据返回的进度续办，直到 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；重新 locate 后，未完成字段可能从首段重读。最后用 context 从首读开始，后续只用 next_cursor 逐页读取已保存证据；若返回 restart_required，丢弃先前页并从头读取。整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
+      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 context 首读已保存的作品资料、简介和音画证据。若 ownership=verified_own_work 且 audio_complete、visual_complete 均为真，只用 next_cursor 逐页续读到 agent_context_read_complete=true，不重复调用 prepare。否则用 locate 逐页核对当前创作者账号、本人作品及标题简介，取得临时 content_id；再用 prepare 只补缺失的音轨或画面页，读画面时显式指定 visual_pages，依据返回进度续办至 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；补证后用 context 从首页重读到 agent_context_read_complete=true。若 context 返回 restart_required，丢弃旧页并从头读取。按作品独立整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
       handoffDouyinWorkbenchChat(draft, feedback);
     });
     contextAction.hidden = true;
@@ -3568,7 +3568,7 @@
       selectedWorkID = workID;
       selectedHeading.textContent = label + "的通知";
       context.textContent = "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。";
-      contextAction.hidden = true;
+      contextAction.hidden = !/^[1-9]\d{0,19}$/.test(workID);
       for (const button of groups.querySelectorAll("button[data-work-id]")) {
         button.setAttribute("aria-pressed", String(button.dataset.workId === workID));
       }
@@ -3750,7 +3750,6 @@
         nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear();
         contextMore.textContent = "更多音画证据";
         contextMore.hidden = true;
-        contextAction.hidden = true;
         context.replaceChildren(appElement("p", "正在读取本机已保存的作品证据…"));
       }
       const query = new URLSearchParams({ date: date.value, work_id: workID, limit: "20" });
@@ -3763,7 +3762,7 @@
             Array.isArray(result.media_pages) && result.media_pages.length === 0 && result.next_cursor === "") {
           nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = true; usedContextCursors.clear();
           context.replaceChildren(appElement("p", "作品资料或已保存音画证据在翻页期间发生变化。旧页已丢弃，请从头读取同一作品。"));
-          contextAction.hidden = true;
+          contextAction.hidden = false;
           contextMore.textContent = "重新读取作品证据"; contextMore.hidden = false;
           return;
         }
@@ -3796,7 +3795,7 @@
             context.append(appElement("p", "音轨转写：" + (result.audio_complete ? "已完成已读分页" : "尚未覆盖整段") +
               "；画面：" + (result.visual_complete ? "采样分页已结束" : "采样分页尚未结束") + "。采样不等于逐帧观看。"));
           }
-          contextAction.hidden = result.ownership !== "verified_own_work" || result.audio_complete && result.visual_complete;
+          contextAction.hidden = false;
         }
         if (result.ownership === "verified_own_work") {
           for (const page of result.media_pages) {
