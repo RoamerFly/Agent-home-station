@@ -2455,9 +2455,13 @@
     if (id === "douyin") {
       const value = apps.douyinWebLogin.value;
       const paused = value?.paused || value?.detached;
-      const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
+      const read = douyinWebReadEnabled(value), publish = douyinWebPublishEnabled(value);
       const actions = [read, value?.works_enabled === true, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
-      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
+      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : allowed ? "已授权" : "未授权";
+      const memoryScopes = Array.isArray(value?.memory_scopes) ? value.memory_scopes : [];
+      const noticeStatus = !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : value.notice_bound ? "已绑定" : "未绑定";
+      const visualStatus = value?.visual_enabled && value?.visual_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(douyinWebVisualEnabled(value));
+      const imagesStatus = value?.images_enabled && value?.images_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(value?.images_enabled === true);
       const state = douyinAppState(value);
       return {
         service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "网页通道待恢复",
@@ -2466,9 +2470,19 @@
         state,
         connected: state !== "not_connected",
         capabilities: [
-          ["内容浏览", auth(read), "依据本机保存的浏览范围，实际可读性以网页为准。"],
-          ["作品发布", auth(publish), "作品提交及发布结果按各任务单独核对。"],
-          ["直播控制", "待验证", "程序检查可读取本机状态，直播控制仍需单独验证。"],
+          ["网页文字", auth(read), read && douyinWebReadScope(value) === "home_and_videos" ? "可读取首页和从首页发现的视频页文字；按实际页面与覆盖范围返回。" : "先允许首页文字读取，再按需扩大到视频页。", "browse"],
+          ["本人作品", auth(value?.works_enabled === true), "从已核对的创作者账号读取作品列表和单篇信息。", "browse"],
+          ["公开图文图片", imagesStatus, "本人公开图文的图片按批交给已配置的视觉服务分析。", "browse"],
+          ["视频评论", auth(douyinWebCommentsEnabled(value)), "读取页面实际加载的评论，保留作者和评论编号并支持续读。", "browse"],
+          ["静音播放观察", auth(douyinWebPlaybackEnabled(value)), "记录确切视频的实际播放区间，不代表完整观看。", "browse"],
+          ["音轨转写", auth(douyinWebAudioEnabled(value)), "使用已启用的本机语音识别按窗口转写确切视频音轨。", "browse"],
+          ["视频画面分析", visualStatus, "按批分析确切视频的采样帧；需要已配置的媒体理解工具。", "browse"],
+          ["平台互动通知", noticeStatus, "绑定账号后按批手动读取；平台网页可能同时标记已读，Agent 读取另行授权。", "interactions"],
+          ["点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "从已读父评论由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["普通账号作品发布", auth(publish), "从已登记成品由主人聊天创建草稿，此处管理原任务；公开发布尚待验收。", "publications"],
+          ["工作站按需记忆", auth(memoryScopes.length > 0), memoryScopes.length ? `已允许 ${memoryScopes.length} 类抖音资料按需留存与检索；各类来源单独授权。` : "可分别授权本人作品、评论和互动通知的按需留存与检索。", "account"],
+          ["直播伴侣与本机预览", !value ? unknown : value.detached ? "已撤下" : "可检查", "可检查直播伴侣程序状态并打开 OBS 本机预览；未接通抖音平台开播。", "live"],
         ],
       };
     }
@@ -4198,12 +4212,28 @@
     page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
     account_works: "本人作品列表", own_video: "本人作品信息", images: "图文图片",
   };
+  const douyinReadAmounts = {
+    page_text: ["字", 0], comments: ["条", 0], visual: ["帧", 12], audio: ["秒", 240],
+    playback: ["秒", 20], account_works: ["条", 0], own_video: ["字", 0], images: ["张", 6],
+  };
   function douyinReadPanel(view) {
     const panel = appElement("section", "", "douyin-read-panel");
     const actions = appElement("div", "", "publication-actions");
     const output = appElement("div", "", "configuration-round-records");
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
+    const limitInputs = new Map();
+    const readKey = (connection, content, field) => JSON.stringify([connection, content, field]);
+    function requestedLimit(input, field) {
+      const raw = input.value.trim();
+      const limit = Number(raw);
+      const [unit, max] = douyinReadAmounts[field];
+      if (!raw && !input.validity.badInput) return 0;
+      if (Number.isSafeInteger(limit) && limit > 0 && (!max || limit <= max)) return limit;
+      feedback.textContent = max ? `本次${douyinReadLabels[field]}读取量须为 1–${max} ${unit}。` : "请输入大于零的整数读取量。";
+      input.focus();
+      return null;
+    }
     function beginRead() {
       view.douyinReadAbort?.abort();
       const controller = new AbortController();
@@ -4214,6 +4244,7 @@
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       feedback.textContent = "正在核对抖音读取授权…";
+      limitInputs.clear();
       actions.replaceChildren(discovery); output.replaceChildren();
       try {
         const { items } = await request("/api/local/apps/observation?app_id=douyin", { signal: controller.signal });
@@ -4232,22 +4263,41 @@
         if (!Object.hasOwn(douyinReadLabels, field)) continue;
         const kind = field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field];
         const name = label ? label + " · " + kind : kind;
-        area.append(memoryButton(name, "button compact secondary", () => void read(connection, content, field)));
+        const [unit, max] = douyinReadAmounts[field];
+        const choice = appElement("div", "", "douyin-read-choice");
+        const amount = appElement("label", `本次读取量（${unit}）`, "douyin-read-choice-limit");
+        const input = document.createElement("input");
+        input.type = "number"; input.min = "1"; input.step = "1";
+        if (max) input.max = String(max);
+        input.placeholder = "默认 / 续读";
+        input.setAttribute("aria-label", name + `本次读取量（${unit}）`);
+        amount.append(input);
+        choice.append(amount, memoryButton(name, "button compact secondary", () => {
+          const limit = requestedLimit(input, field);
+          if (limit !== null) void read(connection, content, field, limit > 0 && field !== "own_video", limit);
+        }));
+        area.append(choice);
+        limitInputs.set(readKey(connection, content, field), input);
       }
     }
-    async function read(connection, content, field, refresh = false) {
+    async function read(connection, content, field, refresh = false, limit = 0) {
+      const focusResult = panel.contains(document.activeElement);
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       const query = { app_id: "douyin", connection_id: connection, content_id: content, field, refresh };
+      if (limit > 0) query.limit = limit;
       feedback.textContent = "正在读取" + douyinReadLabels[field] + "…";
       try {
         const result = await request("/api/local/apps/observation", { method: "POST", body: JSON.stringify(query), signal: controller.signal });
         if (!active()) return;
         const chunks = Array.isArray(result.chunks) ? result.chunks : [];
         const page = appElement("section", "", "memory-detail-section douyin-read-result");
+        page.tabIndex = -1;
+        page.setAttribute("aria-label", (field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]) + "读取结果");
         const header = appElement("div", "", "publication-actions");
         header.append(appElement("strong", field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]),
           appElement("span", result.complete ? "本次读取无后续页" : "仍有后续页", "station-label"));
+        if (limit > 0) header.append(appElement("span", "指定读取量 " + limit, "station-label"));
         if (result.resumed && !result.cached) header.append(appElement("span", "从已保存进度续读", "station-label"));
         if (result.visual_proof) {
           const proof = result.visual_proof;
@@ -4264,11 +4314,15 @@
         }
         if (!chunks.length) page.append(appElement("p", "这页没有返回文本，可查看本次覆盖状态。"));
         const controls = appElement("div", "", "publication-actions douyin-read-pagination");
-        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field)));
+        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field, false, limit)));
+        const key = readKey(connection, content, field);
         if (["page_text", "comments", "visual", "audio", "playback", "account_works", "images"].includes(field))
-          controls.append(memoryButton("从头刷新", "button compact quiet", () => void read(connection, content, field, true)));
+          controls.append(memoryButton("从头刷新", "button compact quiet", () => {
+            const input = limitInputs.get(key);
+            const nextLimit = input?.isConnected ? requestedLimit(input, field) : limit;
+            if (nextLimit !== null) void read(connection, content, field, true, nextLimit);
+          }));
         page.append(controls);
-        const key = JSON.stringify([content, field]);
         const prior = [...output.children].filter((element) => element.dataset.read === key);
         if (!refresh && result.resumed && !result.cached) {
           prior.at(-1)?.querySelector(".douyin-read-pagination")?.remove();
@@ -4278,6 +4332,7 @@
           output.append(page);
         }
         page.dataset.read = key;
+        if (focusResult && (panel.contains(document.activeElement) || document.activeElement === document.body)) page.focus();
         feedback.textContent = "";
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -4287,7 +4342,7 @@
     }
     actions.append(discovery);
     panel.append(appElement("h4", "内容读取"), appElement("p", "从已授权的入口读取文字、评论和媒体证据。首页候选不能作为本人作品列表。", "app-scope-note"),
-      actions, feedback, output);
+      appElement("p", "每项可单独填写读取量。留空沿用已保存进度，新内容使用默认量；填写后从头读取，结果页的「继续读取」沿用本次数量。", "app-scope-note"), actions, feedback, output);
     return panel;
   }
 
@@ -4516,6 +4571,31 @@
     void load();
     return section;
   }
+  function openDouyinWorkbenchSection(view, route) {
+    selectAppConfiguration(view, route);
+    if (appConfiguration === view && view.section === route) {
+      $("#app-configuration-nav").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    }
+  }
+  function douyinWorkbenchFeatures(evidence, view) {
+    const section = appElement("section", "", "douyin-workbench-features");
+    section.append(appElement("h4", "已接入的抖音功能"),
+      appElement("p", "状态反映本机登录、授权和可用入口；实际读取范围与外部操作结果以每次回执为准。", "app-scope-note"));
+    const grid = appElement("div", "", "douyin-workbench-feature-grid");
+    const routes = { account: "账号与授权", browse: "内容浏览", publications: "作品发布", interactions: "互动任务", live: "直播与本机预览" };
+    for (const [name, status, description, route] of evidence.capabilities) {
+      const card = appElement("article", "", "app-capability douyin-workbench-feature");
+      card.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", description));
+      if (view.sections.some((item) => item.id === route)) {
+        const button = memoryButton("打开" + routes[route], "button compact secondary", () => openDouyinWorkbenchSection(view, route));
+        button.setAttribute("aria-label", name + "：打开" + routes[route]);
+        card.append(button);
+      }
+      grid.append(card);
+    }
+    section.append(grid);
+    return section;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -4550,7 +4630,7 @@
     }
     switch (section) {
       case "overview":
-        controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
+        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
         if (record.id === "douyin") {
           const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
           const overview = appElement("section", "", "app-layer douyin-workbench-overview");
@@ -4558,11 +4638,12 @@
           account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
           const routes = appElement("div", "", "douyin-workbench-routes");
           for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
-            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => selectAppConfiguration(view, id)));
+            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
           }
           overview.append(account, routes);
           controls.splice(1, 0, overview);
-        }
+          controls.push(douyinWorkbenchFeatures(evidence, view));
+        } else controls.push(appCapabilityRows(evidence, true));
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
@@ -4716,6 +4797,9 @@
       case "publications":
       case "interactions":
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        if (record.id === "douyin") controls.push(appElement("p", section === "publications"
+          ? "请在主工作站聊天中用已登记成品创建草稿，并明确标题、简介和可见范围；这里按原任务编号提交、续办和核对回执。"
+          : "请先在「内容浏览」读取确切视频或父评论，再在主工作站聊天中创建点赞或回复任务；这里管理原任务。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
           const login = apps.douyinWebLogin.value;
           if (view.douyinNoticeLogin !== login) {
