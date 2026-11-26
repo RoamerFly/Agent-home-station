@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"wechat-bot/internal/companion"
 )
@@ -41,5 +42,30 @@ func TestReferenceCorrectionCannotUseTextOnlyComfyWorkflow(t *testing.T) {
 		if _, err := p.callStationComfy(context.Background(), json.RawMessage(raw)); err == nil || err.Error() != "station_comfy_image_workflow_required" {
 			t.Fatalf("text-only workflow silently ignored reference: %s %v", raw, err)
 		}
+	}
+}
+
+func TestCorrectedVideoRequiresExactUploadedMessageForComfyRun(t *testing.T) {
+	f, p := trustedAgent(t)
+	task := agentTask{
+		ID: "corrected-video", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", State: "waiting",
+		CorrectionAt: time.Now().UTC(), CorrectionRequiredMediaKind: "video", CorrectionReferenceImageID: "uploaded-mini-image",
+	}
+	if err := f.manager.agent.task(task); err != nil {
+		t.Fatal(err)
+	}
+	p.trace.TaskID = task.ID
+	for _, raw := range []string{
+		`{"action":"run","workflow_id":"h3-image-reference-to-video"}`,
+		`{"action":"run","workflow_id":"h3-image-reference-to-video","own_mini":true}`,
+		`{"action":"run","workflow_id":"h3-image-reference-to-video","source_path":"C:\\mini.jpg"}`,
+		`{"action":"run","workflow_id":"h3-image-reference-to-video","source_message_id":"old-image"}`,
+	} {
+		if _, err := p.callStationComfy(context.Background(), json.RawMessage(raw)); err == nil || err.Error() != "纠错视频请显式传新上传图片的 source_message_id；不能用 own_mini 或 source_path" {
+			t.Fatalf("uncorrected source reached Comfy: %s %v", raw, err)
+		}
+	}
+	if _, err := p.callStationComfy(context.Background(), json.RawMessage(`{"action":"run","workflow_id":"h3-image-reference-to-video","source_message_id":"uploaded-mini-image"}`)); err == nil || err.Error() == "纠错视频请显式传新上传图片的 source_message_id；不能用 own_mini 或 source_path" {
+		t.Fatalf("exact uploaded message was rejected by corrected-source guard: %v", err)
 	}
 }

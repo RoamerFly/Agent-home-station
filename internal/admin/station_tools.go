@@ -227,6 +227,13 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
 			return "", toolInputError("station_comfy_workflow_required")
 		}
+		if p.trace.TaskID != "" {
+			if task, ok := p.manager.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok &&
+				task.Sender == p.trace.Sender && task.CorrectionRequiredMediaKind == "video" && task.CorrectionReferenceImageID != "" &&
+				(in.SourceMessageID != task.CorrectionReferenceImageID || in.SourcePath != "" || in.OwnMini) {
+				return "", toolInputError("纠错视频请显式传新上传图片的 source_message_id；不能用 own_mini 或 source_path")
+			}
+		}
 		imageInput := stationComfyImageInput(in.WorkflowID)
 		if imageInput == "" && (in.SourceMessageID != "" || in.SourcePath != "" || in.OwnMini || stationComfyExplicitReference(p.trace.Text)) {
 			return "", toolInputError("station_comfy_image_workflow_required")
