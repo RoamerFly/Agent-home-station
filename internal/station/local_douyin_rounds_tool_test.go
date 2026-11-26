@@ -123,7 +123,8 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	tools = noticeToolSet(t, f, "round-tool-context", true)
 	descriptionOnly, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID})
 	if err != nil || descriptionOnly["ownership"] != "verified_own_work" || descriptionOnly["audio_complete"] != false ||
-		descriptionOnly["visual_complete"] != false || descriptionOnly["media_page_count"] != float64(0) {
+		descriptionOnly["visual_complete"] != false || descriptionOnly["media_page_count"] != float64(0) ||
+		descriptionOnly["agent_context_read_complete"] != false {
 		t.Fatalf("creator description before media observation: %v %v", descriptionOnly, err)
 	}
 	hash := strings.Repeat("a", 64)
@@ -145,18 +146,20 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	contextPage, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1})
 	if err != nil || contextPage["ownership"] != "verified_own_work" || contextPage["audio_complete"] != true ||
 		contextPage["visual_complete"] != true || !strings.Contains(contextPage["creator_text"].(string), "简介 合成的简介") ||
-		contextPage["next_offset"] != float64(1) || contextPage["next_cursor"] == "" {
+		contextPage["next_offset"] != float64(1) || contextPage["next_cursor"] == "" ||
+		contextPage["agent_context_read_complete"] != false || contextPage["agent_pages_read"] != float64(1) {
 		t.Fatalf("saved context first page: %v %v", contextPage, err)
 	}
 	contextCursor := contextPage["next_cursor"].(string)
 	contextNext, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "cursor": contextCursor})
 	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil ||
-		contextNext["snapshot_state"] != "stable" {
+		contextNext["snapshot_state"] != "stable" || contextNext["agent_context_read_complete"] != true ||
+		contextNext["agent_pages_read"] != float64(2) {
 		t.Fatalf("saved context cursor continuation: %v %v", contextNext, err)
 	}
 	contextNext, err = call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "offset": 1})
 	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil ||
-		contextNext["snapshot_state"] != "legacy_offset_unpinned" {
+		contextNext["snapshot_state"] != "legacy_offset_unpinned" || contextNext["agent_context_read_complete"] != false {
 		t.Fatalf("saved context continuation: %v %v", contextNext, err)
 	}
 	if _, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID,
@@ -176,7 +179,7 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	}
 	stale, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "cursor": contextCursor})
 	if err != nil || stale["restart_required"] != true || stale["snapshot_state"] != "restart_required" ||
-		len(stale["media_pages"].([]any)) != 0 || stale["creator_text"] != nil {
+		len(stale["media_pages"].([]any)) != 0 || stale["creator_text"] != nil || stale["agent_context_read_complete"] != false {
 		t.Fatalf("changed creator description reused prior page cursor: %v %v", stale, err)
 	}
 	updated, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID})

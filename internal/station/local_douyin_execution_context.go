@@ -40,23 +40,25 @@ type localDouyinWorkContextPage struct {
 }
 
 type localDouyinExecutionWorkContext struct {
-	WorkID            string                       `json:"work_id"`
-	Ownership         string                       `json:"ownership"`
-	CreatorText       string                       `json:"creator_text,omitempty"`
-	CreatorCoverage   string                       `json:"creator_coverage,omitempty"`
-	CreatorObservedAt string                       `json:"creator_observed_at,omitempty"`
-	MediaSHA256       string                       `json:"media_sha256,omitempty"`
-	AudioComplete     bool                         `json:"audio_complete"`
-	VisualComplete    bool                         `json:"visual_complete"`
-	MediaPages        []localDouyinWorkContextPage `json:"media_pages"`
-	MediaPageCount    int                          `json:"media_page_count"`
-	NextOffset        int                          `json:"next_offset,omitempty"`
-	NextCursor        string                       `json:"next_cursor"`
-	SnapshotState     string                       `json:"snapshot_state,omitempty"`
-	RestartRequired   bool                         `json:"restart_required"`
-	EffectiveLimit    int                          `json:"effective_limit"`
-	Coverage          string                       `json:"coverage"`
-	ReplyEligible     bool                         `json:"reply_eligible"`
+	WorkID                   string                       `json:"work_id"`
+	Ownership                string                       `json:"ownership"`
+	CreatorText              string                       `json:"creator_text,omitempty"`
+	CreatorCoverage          string                       `json:"creator_coverage,omitempty"`
+	CreatorObservedAt        string                       `json:"creator_observed_at,omitempty"`
+	MediaSHA256              string                       `json:"media_sha256,omitempty"`
+	AudioComplete            bool                         `json:"audio_complete"`
+	VisualComplete           bool                         `json:"visual_complete"`
+	MediaPages               []localDouyinWorkContextPage `json:"media_pages"`
+	MediaPageCount           int                          `json:"media_page_count"`
+	NextOffset               int                          `json:"next_offset,omitempty"`
+	NextCursor               string                       `json:"next_cursor"`
+	AgentPagesRead           int                          `json:"agent_pages_read,omitempty"`
+	AgentContextReadComplete bool                         `json:"agent_context_read_complete"`
+	SnapshotState            string                       `json:"snapshot_state,omitempty"`
+	RestartRequired          bool                         `json:"restart_required"`
+	EffectiveLimit           int                          `json:"effective_limit"`
+	Coverage                 string                       `json:"coverage"`
+	ReplyEligible            bool                         `json:"reply_eligible"`
 }
 
 func (p *localDouyinWebObservation) captureCreatorMediaContext(ctx context.Context, a localDouyinWebAccess,

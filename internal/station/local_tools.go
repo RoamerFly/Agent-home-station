@@ -20,37 +20,38 @@ import (
 )
 
 type localToolSet struct {
-	directMedia            *deepseek.Client
-	memory                 companion.ToolAccess
-	files                  *localWorkspaceFileTools
-	process                *localProcessTools
-	processError           error
-	projectTools           *localProjectTools
-	access                 *localWorkspaceAccess
-	python                 string
-	run                    *companion.LocalToolRun
-	traceID                string
-	inspectOnly            bool
-	store                  *companion.Store
-	wechat                 *stationWechat
-	observations           *apphost.Observer
-	appReads               []apphost.ObservationResult
-	noticeReads            []localDouyinNoticeProof
-	douyinRoundProofs      []localDouyinRoundContextProof
-	douyinVideoCheckProofs []localDouyinVideoCheckProof
-	wechatMemoryProofs     []localWechatMemoryProof
-	wechatMemoryRefs       map[string]localWechatMemoryReference
-	wechatMemoryPages      map[string]localWechatMemoryPage
-	douyinMemoryRequested  bool
-	douyinMemoryOrigin     func(context.Context) error
-	douyinMemoryProofs     map[localDouyinMemoryProof]struct{}
-	douyinMemoryRefs       map[string]localDouyinMemoryReference
-	douyinMemoryPages      map[string]localDouyinMemoryPage
-	memoryLinked           bool
-	publications           *localChatService
-	requestTime            time.Time
-	continuationGuard      func(context.Context) error
-	mcpSessions            map[string]*stationMCPSession
+	directMedia             *deepseek.Client
+	memory                  companion.ToolAccess
+	files                   *localWorkspaceFileTools
+	process                 *localProcessTools
+	processError            error
+	projectTools            *localProjectTools
+	access                  *localWorkspaceAccess
+	python                  string
+	run                     *companion.LocalToolRun
+	traceID                 string
+	inspectOnly             bool
+	store                   *companion.Store
+	wechat                  *stationWechat
+	observations            *apphost.Observer
+	appReads                []apphost.ObservationResult
+	noticeReads             []localDouyinNoticeProof
+	douyinRoundProofs       []localDouyinRoundContextProof
+	douyinRoundContextReads map[string]localDouyinRoundContextRead
+	douyinVideoCheckProofs  []localDouyinVideoCheckProof
+	wechatMemoryProofs      []localWechatMemoryProof
+	wechatMemoryRefs        map[string]localWechatMemoryReference
+	wechatMemoryPages       map[string]localWechatMemoryPage
+	douyinMemoryRequested   bool
+	douyinMemoryOrigin      func(context.Context) error
+	douyinMemoryProofs      map[localDouyinMemoryProof]struct{}
+	douyinMemoryRefs        map[string]localDouyinMemoryReference
+	douyinMemoryPages       map[string]localDouyinMemoryPage
+	memoryLinked            bool
+	publications            *localChatService
+	requestTime             time.Time
+	continuationGuard       func(context.Context) error
+	mcpSessions             map[string]*stationMCPSession
 	// catalog is the application index injected with the workspace note. It
 	// carries names and switch state only; no application content is loaded.
 	catalog map[string]any
