@@ -133,6 +133,20 @@ func (p *permittedTools) inheritTaskDelivery(t *agentTask) {
 	}
 }
 func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
+	in.ExplicitRoundRetry = t.RoundRetry || t.RoundRetryLineage
+	in.FreshRoundLineage = t.RoundRetryFreshLineage
+	if t.RoundRetryFreshLineage {
+		in.FreshRoundPriorTraceID = t.RoundRetryPriorTrace
+		in.FreshRoundPriorTaskID = t.RoundRetryPriorTaskID
+		for _, event := range t.RoundRetryUnread {
+			if event.MessageID != "" {
+				in.FreshRoundSourceMessageIDs = append(in.FreshRoundSourceMessageIDs, event.MessageID)
+			}
+			if event.Source != nil && event.Source.EventID != "" {
+				in.FreshRoundExcludedEventIDs = append(in.FreshRoundExcludedEventIDs, event.Source.EventID)
+			}
+		}
+	}
 	if in.OriginTraceID != "" {
 		in.OriginThread = t.Thread
 		if t.ReportSourceThread != "" {
@@ -140,7 +154,7 @@ func taskResultInput(t agentTask, in *companion.Input) *companion.Input {
 		}
 	}
 	in.NotificationText = t.NotificationText
-	in.SilentExecution = t.NotificationText == "" && !t.ReportOnly && !t.OwnerRequest && t.RecoveryMessageID == ""
+	in.SilentExecution = t.NotificationText == "" && !t.ReportOnly && !t.OwnerRequest && t.RecoveryMessageID == "" && !t.RoundRetry
 
 	// A retryable model failure may occur after an authorized read completed.
 	// Carry only the task's own persisted checkpoint into the resumed input;

@@ -319,46 +319,26 @@
   const popup=window.WechatDialogs.open({title:round.source+' · 执行过程',subtitle:time(round.time)+' · '+round.lifecycle});
   if(!round.system){
    const actions=node(popup.body,'div',undefined,'dialog-actions');
-   const closed=round.entries.some(item=>item.event==='round_manually_closed');
-   const status=node(actions,'span',closed?'回合已关闭，后续不会处理。':'可按原消息继续处理；原始记录保留。','hint');
-   let trigger;
-   if(!closed&&round.thread_id&&round.triggerMessageID){
-    trigger=button(actions,'手动触发处理',async()=>{
-     trigger.disabled=true;status.textContent='正在触发原消息处理…';
+   const status=node(actions,'span','可以重试原请求或取消本回合；已发送记录保留。','hint');
+   const ids=[...new Set((round.batchMessages?.length?round.batchMessages:round.received).map(item=>item.message_id).filter(Boolean))];
+   const payload={thread_id:round.thread_id,message_id:round.triggerMessageID,task_id:round.taskID||'',message_ids:ids};
+   const controls=[];
+   const action=(label,path,mode)=>{
+    const control=button(actions,label,async()=>{
+     for(const item of controls)item.disabled=true;
+     status.textContent=mode==='fresh'?'正在从原消息建立全新处理…':mode?'正在重新处理原消息…':'正在取消回合…';
      try{
-      const data=await window.WechatAdmin.api('/api/logs/round/process',{method:'POST',json:{thread_id:round.thread_id,message_id:round.triggerMessageID}});
+      await window.WechatAdmin.api(path,{method:'POST',json:mode?{...payload,mode}:payload});
       if(!popup.alive())return;
-      const result=data.item||{};
-      const defaults={queued:'原消息已重新进入处理队列。',receipt_pending:'已核对原发送，回执仍待确认；不会重复发送。',already_done:'原消息已经处理完成。',unavailable:'当前无法处理原消息。'};
-      status.textContent=result.reason||defaults[result.status]||'处理请求已返回，请查看执行记录。';
-      if(result.status==='queued'||result.status==='receipt_pending')window.WechatActivity.refresh().catch(()=>{});
-      if(result.status!=='queued'&&result.status!=='receipt_pending')trigger.disabled=false;
-     }catch(e){if(popup.alive()){status.textContent='手动触发未生效：'+e.message;trigger.disabled=false}}
-    });
-    trigger.className='primary';
-   }
-   if(!closed&&round.group!=='done'&&!round.taskID){
-    const close=button(actions,'关闭回合',async()=>{
-     close.disabled=true;status.textContent='正在关闭…';
-     try{
-      await window.WechatAdmin.api('/api/logs/round/close',{method:'POST',json:{message_id:round.triggerMessageID,thread_id:round.thread_id}});
-      status.textContent='回合已关闭，后续处理已停止。';if(trigger)trigger.disabled=true;
+      status.textContent=mode?'已建立新的执行尝试，请查看执行回合。':'本回合已取消，后续不再处理。';
       await window.WechatActivity.refresh();
-     }catch(e){status.textContent='关闭未生效：'+e.message;close.disabled=false}
+     }catch(e){if(popup.alive()){status.textContent=label+'失败：'+e.message;for(const item of controls)item.disabled=false}}
     });
-    close.className='secondary';
-    if(round.group==='active'){
-     const complete=button(actions,'手动完成',async()=>{
-      if(!await window.WechatDialogs.confirmAction({title:'手动完成执行回合',message:'将此回合标记为已完成；不会发送或重发微信消息。',confirmText:'手动完成'}))return;
-      complete.disabled=true;status.textContent='正在保存…';
-      try{
-       await window.WechatAdmin.api('/api/logs/round/manual-complete',{method:'POST',json:{message_id:round.triggerMessageID}});
-       status.textContent='已手动完成；保留原始处理记录。';await window.WechatActivity.refresh();
-      }catch(e){status.textContent='手动完成失败：'+e.message;complete.disabled=false}
-     });
-     complete.className='secondary';
-    }
-   }
+    controls.push(control);return control;
+   };
+   action('带记忆再试','/api/logs/round/retry','with_memory').className='primary';
+   action('无记忆再试','/api/logs/round/retry','fresh').className='secondary';
+   action('取消回合','/api/logs/round/cancel').className='secondary';
   }
   fillRound(popup.body,round);return popup;
  }

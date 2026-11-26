@@ -15,6 +15,24 @@ import (
 type Input struct {
 	SilentExecution  bool   `json:"silent_execution,omitempty"`
 	NotificationText string `json:"notification_text,omitempty"`
+	// FreshRoundRetry is supplied only by the host for a new attempt at the
+	// original source. It is deliberately absent from model-facing JSON. The
+	// original source and accepted deliveries remain durable; only this model
+	// attempt's view of the selected round's old derived context is isolated.
+	FreshRoundRetry bool `json:"-"`
+	// FreshRoundLineage carries the old-attempt context mask into asynchronous
+	// descendants. Unlike FreshRoundRetry, it retains this generation's task
+	// state and recovery tool results.
+	FreshRoundLineage bool `json:"fresh_round_lineage,omitempty"`
+	// ExplicitRoundRetry is a host decision to create an independent attempt
+	// from a closed original round. It never overrides closure of this attempt.
+	ExplicitRoundRetry bool `json:"explicit_round_retry,omitempty"`
+	// FreshRoundPriorTraceID names the selected prior execution attempt when
+	// the host starts a new task trace for this retry. It is not model content.
+	FreshRoundPriorTraceID     string   `json:"fresh_round_prior_trace_id,omitempty"`
+	FreshRoundPriorTaskID      string   `json:"fresh_round_prior_task_id,omitempty"`
+	FreshRoundSourceMessageIDs []string `json:"fresh_round_source_message_ids,omitempty"`
+	FreshRoundExcludedEventIDs []string `json:"fresh_round_excluded_event_ids,omitempty"`
 	// ReplayNonce is host-issued for a bounded, read-only administrator retry
 	// of an original native source. It never authorizes delivery or mutation.
 	ReplayNonce string `json:"-"`
@@ -212,7 +230,7 @@ type Engine struct {
 
 func (e *Engine) conversationScope(in Input, cfg Config, now time.Time) Scope {
 	scope := e.Store.Context(in, cfg, now)
-	if e.ConversationPreference != nil {
+	if e.ConversationPreference != nil && !freshRoundUnbound(in) {
 		if text, provided := e.ConversationPreference(in); provided {
 			scope.Preferences = text
 		}
@@ -295,6 +313,9 @@ func silent(reason string) Decision {
 	return Decision{Action: "silent", Messages: []string{}, Reason: reason}
 }
 func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, resultErr error) {
+	if input.FreshRoundRetry {
+		input = freshRoundInput(input)
+	}
 	if input.SilentExecution {
 		ctx = WithProgress(ctx, nil)
 	}
@@ -401,6 +422,16 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	} else if input.Source != nil && !input.Preview && c.Permissions.Remember && !runtimeInput(input) {
 		return Decision{}, errors.New("source_identity_conflict_or_unavailable")
 	}
+	if input.FreshRoundRetry && strings.TrimSpace(UserRequestText(input.Text)) == "" && len(input.IncomingMedia) == 0 && len(input.UnreadMessages) == 0 {
+		return Decision{}, errors.New("fresh_round_original_source_unavailable")
+	}
+	if freshRoundIsolation(input) {
+		excludedIDs, err := e.Store.FreshRoundEventIDs(ctx, input)
+		if err != nil {
+			return Decision{}, err
+		}
+		input.FreshRoundExcludedEventIDs = excludedIDs
+	}
 	if input.Source != nil || input.TraceID != "" {
 		scope = e.conversationScope(input, c, now)
 	}
@@ -445,7 +476,7 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		}
 	}
 	settings := c.ContextConfig()
-	if !input.Preview && len(input.UnreadMessages) == 0 && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
+	if !freshRoundIsolation(input) && !input.Preview && len(input.UnreadMessages) == 0 && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
 		_, compressionErr := e.CompressContext(ctx, input, false)
 		if compressionErr != nil && e.ToolLog != nil {
 			e.ToolLog("context_compression_failed")
@@ -473,6 +504,9 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		scope = NamedScope(scope, resolvedNames, c.Name)
 	}
 	reflectionCandidates, reflectionNotes, experienceMood := e.proactiveReflectionContext(ctx, input, now)
+	if freshRoundIsolation(input) {
+		reflectionCandidates, reflectionNotes, experienceMood = nil, nil, nil
+	}
 	if len(input.UnreadMessages) > 0 {
 		ids := map[string]bool{}
 		for _, m := range input.UnreadMessages {
@@ -489,12 +523,20 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		scope.Messages = kept
 		system += "\nunread_messages按时间合并处理；结合current_time判断仍有效的话题，可合并回应或安静。工具授权以对应锚点消息的request_actor_id/message_sender_id为准。"
 	}
-	turns := e.contextTurns(scope, input)
-	system += "\ncurrent_time使用timezone本地时间，Z结尾时间为UTC。做歌、换声和重试立即续办原任务/job_id；明确约定未来时间时才创建提醒。"
+	modelInput := input
+	if input.FreshRoundRetry {
+		modelInput = freshRoundModelInput(input)
+	}
+	turns := e.contextTurns(scope, modelInput)
+	if input.FreshRoundRetry {
+		system += "\ncurrent_time使用timezone本地时间，Z结尾时间为UTC。做歌、换声立即处理当前请求；明确约定未来时间时才创建提醒。"
+	} else {
+		system += "\ncurrent_time使用timezone本地时间，Z结尾时间为UTC。做歌、换声和重试立即续办原任务/job_id；明确约定未来时间时才创建提醒。"
+	}
 	if input.IsGroup {
 		system += "\n群聊分清已发生的事与期待、类比或假设；自然回应当前话题。recent_reply_style提示近期重复表达，换一种说法。"
 	}
-	if recalled := e.memoryContext(ctx, input, scope); recalled != "" {
+	if recalled := e.memoryContext(ctx, modelInput, scope); recalled != "" {
 		turns = append(turns, map[string]string{"role": "user", "content": recalled})
 	}
 	if access, ok := e.Tools.(interface{ AgentContext(context.Context) string }); ok {
@@ -506,11 +548,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	if speaker == "" {
 		speaker = input.Sender
 	}
-	messageID := input.TraceID
-	if messageID == "" && input.Source != nil {
-		messageID = input.Source.MessageID
+	messageID := modelInput.TraceID
+	if messageID == "" && modelInput.Source != nil {
+		messageID = modelInput.Source.MessageID
 	}
-	currentPayload := map[string]any{"kind": "current_message", "account": input.Account, "channel": input.Channel, "thread": input.Thread, "message_id": messageID, "source": input.Source, "quoted_source": input.QuotedSource, "addressees": input.Addressees, "mentioned_ids": input.MentionedIDs, "incoming_media": input.IncomingMedia, "background_result": input.BackgroundResult, "unread_messages": input.UnreadMessages, "recovery_tool_results": input.RecoveryToolResults, "timezone": c.Timezone, "task_continuation": input.TaskID != "", "task_id": input.TaskID, "request_trace_id": input.OriginTraceID, "mode": input.Mode, "message_sender_name": speaker, "message_sender_id": input.Sender, "message_sender_name_source": input.SenderNameSource, "request_actor_id": input.Sender, "text": input.Text, "directed": input.Directed, "must_reply": input.MustReply, "platform_response_required": input.MustReply, "review_required": input.ReviewRequired, "historical_review": input.HistoricalReview, "is_group": input.IsGroup, "relation_notes": scope.Notes, "conversation_preferences": scope.Preferences, "preferences_policy": "本会话表达偏好；分享总结依据实际读取的内容。", "message_time": input.MessageTime, "surf": input.Surf, "surf_force_share": input.SurfForceShare, "recent_media_focus": recentMediaFocus(scope), "planned_reviews": input.PlannedReviews, "current_time": now.In(location(c.Timezone)).Format(time.RFC3339)}
+	currentPayload := map[string]any{"kind": "current_message", "account": modelInput.Account, "channel": modelInput.Channel, "thread": modelInput.Thread, "message_id": messageID, "source": modelInput.Source, "quoted_source": modelInput.QuotedSource, "addressees": modelInput.Addressees, "mentioned_ids": modelInput.MentionedIDs, "incoming_media": modelInput.IncomingMedia, "background_result": modelInput.BackgroundResult, "unread_messages": modelInput.UnreadMessages, "recovery_tool_results": modelInput.RecoveryToolResults, "timezone": c.Timezone, "task_continuation": modelInput.TaskID != "", "task_id": modelInput.TaskID, "request_trace_id": modelInput.OriginTraceID, "mode": modelInput.Mode, "message_sender_name": speaker, "message_sender_id": modelInput.Sender, "message_sender_name_source": modelInput.SenderNameSource, "request_actor_id": modelInput.Sender, "text": modelInput.Text, "directed": modelInput.Directed, "must_reply": modelInput.MustReply, "platform_response_required": modelInput.MustReply, "review_required": modelInput.ReviewRequired, "historical_review": modelInput.HistoricalReview, "is_group": modelInput.IsGroup, "relation_notes": scope.Notes, "conversation_preferences": scope.Preferences, "preferences_policy": "本会话表达偏好；分享总结依据实际读取的内容。", "message_time": modelInput.MessageTime, "surf": modelInput.Surf, "surf_force_share": modelInput.SurfForceShare, "recent_media_focus": recentMediaFocus(scope), "planned_reviews": modelInput.PlannedReviews, "current_time": now.In(location(c.Timezone)).Format(time.RFC3339)}
 	if len(input.IncomingMedia) != 0 && !input.Preview {
 		currentPayload["media_read_hint"] = "尚未取得内容时可发现 incoming_media_read，按需读取本条或引用的实际素材。"
 		for _, media := range input.IncomingMedia {
@@ -544,11 +586,17 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		currentPayload["recent_reply_style"] = hints
 	}
 	delete(currentPayload, "unread_messages")
-	for key, value := range e.inputEvidenceFields(input) {
+	for key, value := range e.inputEvidenceFields(modelInput) {
 		currentPayload[key] = value
 	}
-	if len(input.UnreadMessages) > 0 {
-		currentPayload["unread_messages"] = e.unreadEvidence(input)
+	if len(modelInput.UnreadMessages) > 0 {
+		unread := e.unreadEvidence(modelInput)
+		if freshRoundIsolation(input) {
+			for _, event := range unread {
+				delete(event, "media_observations")
+			}
+		}
+		currentPayload["unread_messages"] = unread
 	}
 	payload, _ := json.Marshal(currentPayload)
 	turns = append(turns, map[string]string{"role": "user", "content": string(payload)})

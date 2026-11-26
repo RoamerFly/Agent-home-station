@@ -93,28 +93,34 @@ func (ev *MemoryEvent) OmitMediaObservationText() {
 }
 
 type MemoryQuery struct {
-	BeforeMessageID string    `json:"before_message_id,omitempty"`
-	MediaKind       string    `json:"media_kind,omitempty"`
-	Order           string    `json:"order,omitempty"`
-	MetadataOnly    bool      `json:"metadata_only,omitempty"`
-	EventYear       int       `json:"event_year,omitempty"`
-	TimeBasis       string    `json:"time_basis,omitempty"`
-	MinSimilarity   *float64  `json:"min_similarity,omitempty"`
-	Pinned          bool      `json:"pinned,omitempty"`
-	Continuity      bool      `json:"continuity,omitempty"`
-	CommitmentState string    `json:"commitment_state,omitempty"`
-	Scopes          []string  `json:"-"`
-	Query           string    `json:"query"`
-	Kind            string    `json:"kind,omitempty"`
-	Subject         string    `json:"subject,omitempty"`
-	Since           string    `json:"since,omitempty"`
-	Before          string    `json:"before,omitempty"`
-	Cursor          string    `json:"cursor,omitempty"`
-	Offset          int       `json:"offset,omitempty"`
-	Limit           int       `json:"limit,omitempty"`
-	Originals       bool      `json:"originals,omitempty"`
-	Vector          []float32 `json:"-"`
-	Space           string    `json:"-"`
+	// Host-only per-attempt isolation. They are never accepted from model
+	// arguments and do not delete the underlying source or delivery records.
+	FreshExcludeEventIDs    []string  `json:"-"`
+	FreshExcludeTraces      []string  `json:"-"`
+	FreshExcludeTracePrefix string    `json:"-"`
+	FreshExcludeUnsourced   bool      `json:"-"`
+	BeforeMessageID         string    `json:"before_message_id,omitempty"`
+	MediaKind               string    `json:"media_kind,omitempty"`
+	Order                   string    `json:"order,omitempty"`
+	MetadataOnly            bool      `json:"metadata_only,omitempty"`
+	EventYear               int       `json:"event_year,omitempty"`
+	TimeBasis               string    `json:"time_basis,omitempty"`
+	MinSimilarity           *float64  `json:"min_similarity,omitempty"`
+	Pinned                  bool      `json:"pinned,omitempty"`
+	Continuity              bool      `json:"continuity,omitempty"`
+	CommitmentState         string    `json:"commitment_state,omitempty"`
+	Scopes                  []string  `json:"-"`
+	Query                   string    `json:"query"`
+	Kind                    string    `json:"kind,omitempty"`
+	Subject                 string    `json:"subject,omitempty"`
+	Since                   string    `json:"since,omitempty"`
+	Before                  string    `json:"before,omitempty"`
+	Cursor                  string    `json:"cursor,omitempty"`
+	Offset                  int       `json:"offset,omitempty"`
+	Limit                   int       `json:"limit,omitempty"`
+	Originals               bool      `json:"originals,omitempty"`
+	Vector                  []float32 `json:"-"`
+	Space                   string    `json:"-"`
 }
 type MemoryPage struct {
 	CoverageScopes map[string]string `json:"coverage_scopes,omitempty"`
@@ -682,7 +688,7 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	}
 	var maxUpdated string
 	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(updated),'') FROM memories").Scan(&maxUpdated)
-	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.Continuity, q.CommitmentState, q.MinSimilarity, q.BeforeMessageID, q.MediaKind, q.Order, q.MetadataOnly, maxUpdated, version})
+	key, _ := json.Marshal([]any{q.Scopes, q.Query, q.Kind, q.Subject, q.Since, q.Before, q.EventYear, q.TimeBasis, q.Originals, q.Space, q.Pinned, q.Continuity, q.CommitmentState, q.MinSimilarity, q.BeforeMessageID, q.MediaKind, q.Order, q.MetadataOnly, q.FreshExcludeEventIDs, q.FreshExcludeTraces, q.FreshExcludeTracePrefix, q.FreshExcludeUnsourced, maxUpdated, version})
 	hash := sha256.Sum256(key)
 	if q.Cursor != "" {
 		var c struct {
@@ -702,6 +708,17 @@ func (s *Store) searchMemory(ctx context.Context, q MemoryQuery) (MemoryPage, er
 	where := "m.scope IN (" + placeholders(len(q.Scopes)) + ") AND m.status IN ('active','conflicted') AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN source_conflicts sc ON sc.event_id=ms.event_id WHERE ms.memory_id=m.id) AND NOT EXISTS(SELECT 1 FROM memory_sources ms JOIN memory_blocks mb ON mb.event_id=ms.event_id AND mb.scope=m.scope WHERE ms.memory_id=m.id)"
 	where += reliableMemorySourcesSQL("m")
 	args := stringsArgs(q.Scopes)
+	if q.FreshExcludeUnsourced {
+		// An unsourced manual note cannot be attributed to a single prior
+		// attempt. Hide it only from this isolated model view.
+		where += " AND EXISTS(SELECT 1 FROM memory_sources sourced WHERE sourced.memory_id=m.id)"
+	}
+	for _, eventID := range q.FreshExcludeEventIDs {
+		if eventID != "" {
+			where += " AND NOT EXISTS(SELECT 1 FROM memory_sources old WHERE old.memory_id=m.id AND old.event_id=?)"
+			args = append(args, eventID)
+		}
+	}
 	if q.EventYear > 0 {
 		where += " AND m.event_year=?"
 		args = append(args, q.EventYear)
@@ -848,6 +865,23 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 	p := MemoryPage{Items: []MemoryHit{}, Coverage: "indexed_originals", EffectiveLimit: q.Limit}
 	where := "e.scope IN (" + placeholders(len(q.Scopes)) + ") AND e.suppressed=0 AND NOT EXISTS(SELECT 1 FROM source_conflicts sc WHERE sc.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM memory_blocks b WHERE b.scope=e.scope AND b.event_id=e.id)"
 	args := stringsArgs(q.Scopes)
+	for _, eventID := range q.FreshExcludeEventIDs {
+		if eventID != "" {
+			where += " AND (e.role!='assistant' OR e.id!=?)"
+			args = append(args, eventID)
+		}
+	}
+	for _, trace := range q.FreshExcludeTraces {
+		if trace == "" {
+			continue
+		}
+		where += " AND NOT (e.role='assistant' AND (e.trace=? OR json_extract(e.payload,'$.request_trace_id')=?))"
+		args = append(args, trace, trace)
+	}
+	if q.FreshExcludeTracePrefix != "" {
+		where += " AND NOT (e.role='assistant' AND (substr(e.trace,1,?)=? OR substr(COALESCE(json_extract(e.payload,'$.request_trace_id'),''),1,?)=?))"
+		args = append(args, len(q.FreshExcludeTracePrefix), q.FreshExcludeTracePrefix, len(q.FreshExcludeTracePrefix), q.FreshExcludeTracePrefix)
+	}
 	if q.BeforeMessageID != "" {
 		// Resolve only an authorized, visible original. Sequence disambiguates
 		// equal timestamps; the anchor itself and later replies are excluded.
@@ -920,6 +954,13 @@ func (s *Store) searchEvents(ctx context.Context, q MemoryQuery, terms []string,
 			return p, e
 		}
 		enrichMemoryEvent(&ev, payload)
+		for _, excludedID := range q.FreshExcludeEventIDs {
+			if ev.ID == excludedID {
+				ev.Text = UserRequestText(ev.Text)
+				ev.IncomingMedia = freshMediaMetadata(ev.IncomingMedia)
+				break
+			}
+		}
 		ev.TextBytes = len(ev.Text)
 		// Search returns previews, just as it does for visual observations.
 		// ReadEvent checks source visibility on demand, after this cursor releases

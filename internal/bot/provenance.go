@@ -27,8 +27,10 @@ func messageSource(m linuxnative.Message) companion.SourceRef {
 func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.Engine) {
 	source := messageSource(m)
 	source.Account = in.Account
-	if provider, ok := any(e.Store).(interface{ SourceInstanceID() string }); ok {
-		source.InstanceID = provider.SourceInstanceID()
+	if e != nil && e.Store != nil {
+		if provider, ok := any(e.Store).(interface{ SourceInstanceID() string }); ok {
+			source.InstanceID = provider.SourceInstanceID()
+		}
 	}
 	in.Source = &source
 	in.QuotedLiteral = ""
@@ -94,6 +96,16 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 			in.IncomingMedia = []companion.IncomingMediaRef{{Source: quoted, Kind: quotedKind, Filename: identity.Clean(quotedFilename), UploaderID: m.ResolvedQuote.SenderID, ObservationState: "pending", ObservationVersion: 1}}
 		}
 	}
+}
+
+// NativeMessageInput exposes the same source and media projection used by
+// live intake to the authenticated console retry path. Its caller should
+// replace Source with the persisted verified ref when one exists.
+func NativeMessageInput(m linuxnative.Message) companion.Input {
+	in := companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID,
+		Sender: m.SenderID, TraceID: m.ID, MessageTime: m.CreatedAt, QuoteServerID: m.ServerID}
+	bindInputSource(&in, m, nil)
+	return in
 }
 
 func nativeArticleCardPart(m linuxnative.Message) (companion.ObservationPart, bool) {

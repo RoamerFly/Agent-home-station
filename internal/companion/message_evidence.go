@@ -412,6 +412,12 @@ func (e *Engine) safeCurrentEvidence(in Input) map[string]any {
 	var current map[string]any
 	_ = json.Unmarshal(raw, &current)
 	delete(current, "original_text")
+	delete(current, "explicit_round_retry")
+	delete(current, "fresh_round_lineage")
+	delete(current, "fresh_round_prior_trace_id")
+	delete(current, "fresh_round_prior_task_id")
+	delete(current, "fresh_round_source_message_ids")
+	delete(current, "fresh_round_excluded_event_ids")
 	delete(current, "incoming_media")
 	delete(current, "unread_messages")
 	for k, v := range e.inputEvidenceFields(in) {

@@ -272,6 +272,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			query := strings.ToLower(strings.TrimSpace(in.Query))
 			matches := []map[string]any{}
 			for _, task := range m.agent.list(p.trace.Account, thread) {
+				if freshRoundHidesTask(p.trace, task) {
+					continue
+				}
 				if task.State == "pending" || task.State == "waiting" || task.State == "running" || task.State == "waiting_delivery" || query != "" && !strings.Contains(strings.ToLower(task.Title), query) {
 					continue
 				}
@@ -287,13 +290,16 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		tasks := m.agent.active(p.trace.Account, thread)
 		visible := tasks[:0]
 		for _, task := range tasks {
+			if freshRoundHidesTask(p.trace, task) {
+				continue
+			}
 			if task.Reminder == nil || task.Sender == p.trace.Sender {
 				visible = append(visible, task)
 			}
 		}
 		tasks = visible
 		for i := range tasks {
-			tasks[i] = copyTask(tasks[i])
+			tasks[i] = modelTaskView(tasks[i])
 			if tasks[i].PluginJob != nil {
 				// Origin is host recovery evidence, not conversation-visible data.
 				tasks[i].PluginJob.Origin = nil
@@ -363,7 +369,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", toolInputError("指定任务不存在、不是本人任务或投递目标已撤权")
 			}
 			if target.State == "cancelled" {
-				return encode(target, nil)
+				return encode(modelTaskView(target), nil)
 			}
 			target.State = "cancelled"
 			target.LastResult = "已由原请求管理员取消；未提交部分停止，已提交部分仅核对回执"
@@ -375,7 +381,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", err
 			}
 			m.record(bot.Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: taskDeliveryThread(target), Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: target.Title, Status: "cancelled", Reason: "owner_cross_conversation_task_cancelled", Origin: "agent"})
-			return encode(target, nil)
+			return encode(modelTaskView(target), nil)
 		}
 
 		sourceThread := in.SourceThread
@@ -500,7 +506,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", err
 			}
 			m.record(bot.Record{Event: "agent_task_corrected", Category: "decision", ThreadID: corrected.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, RelatedMessageID: corrected.ID, Status: corrected.State, Reason: "original_requester_explicit_correction", Origin: "agent"})
-			return encode(corrected, nil)
+			return encode(modelTaskView(corrected), nil)
 		}
 		// A continuation already has a durable task identity. A fresh key or
 		// title in that turn updates its checkpoint instead of creating a second
@@ -558,7 +564,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if t.ID != "" {
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
-				return encode(old, nil)
+				return encode(modelTaskView(old), nil)
 			}
 			found := false
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
@@ -593,7 +599,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				t.ID = legacyID
 			}
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
-				return encode(old, nil)
+				return encode(modelTaskView(old), nil)
 			}
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
@@ -605,7 +611,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if t.PluginJob != nil {
 			if in.State == "cancelled" {
 				updated, err := m.cancelPluginTask(ctx, t)
-				return encode(updated, err)
+				return encode(modelTaskView(updated), err)
 			}
 			return "", toolInputError("工具任务由其持久生命周期管理，请使用plugin_job_status或plugin_job_cancel；不改写为已完成")
 		}
@@ -651,7 +657,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if t.OwnerRequested {
 			requirements = "continuation of an authenticated owner request; current owner and conversation authorization rechecked; pending is not delivery"
 		}
-		return encode(map[string]any{"task": t, "background_requires": requirements, "storage_file": m.agent.dir + "/agent-state.json", "due_at": t.Next}, nil)
+		return encode(map[string]any{"task": modelTaskView(t), "background_requires": requirements, "storage_file": m.agent.dir + "/agent-state.json", "due_at": t.Next}, nil)
 	case "wechat_send_text":
 		return wechatapp.SendText(ctx, args, &wechatTextHost{p: p, raw: args})
 	case "wechat_account_action":
@@ -675,4 +681,20 @@ func (p *permittedTools) rememberAgentSend(thread, text, key string) {
 	if err := p.manager.memory.AcceptedDelivery(in, text, key, c, time.Now()); err != nil {
 		p.manager.log("agent_send_memory_failed")
 	}
+}
+
+// Retry bookkeeping belongs to the host scheduler and must not become model
+// evidence through task lookup or checkpoint tool results.
+func modelTaskView(task agentTask) agentTask {
+	task = copyTask(task)
+	task.RoundRetry = false
+	task.RoundRetryFresh = false
+	task.RoundRetryLineage = false
+	task.RoundRetryFreshLineage = false
+	task.RoundRetryPriorTrace = ""
+	task.RoundRetryPriorTaskID = ""
+	task.RoundRetryMedia = nil
+	task.RoundRetryQuote = nil
+	task.RoundRetryUnread = nil
+	return task
 }

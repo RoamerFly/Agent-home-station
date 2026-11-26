@@ -55,7 +55,7 @@ func budgetTokenText(text string, budget int) string {
 }
 
 func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) string {
-	if in.SourceOnlyContext || in.Preview || !e.Config.Permissions.Remember || !e.memorySettings().Enabled || e.Store.db == nil {
+	if in.SourceOnlyContext || in.Preview || freshRoundUnbound(in) || !e.Config.Permissions.Remember || !e.memorySettings().Enabled || e.Store.db == nil {
 		return ""
 	}
 	id := ScopeID(in.Channel, in.Account, in.Thread)
@@ -84,6 +84,10 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 		}
 	}
 	q := MemoryQuery{Scopes: []string{id}, Query: query, Limit: 12, EventYear: explicitMemoryYear(query)}
+	if freshRoundIsolation(in) {
+		q.FreshExcludeEventIDs = freshRoundEventIDs(in)
+		q.FreshExcludeUnsourced = true
+	}
 	if strings.Contains(query, "那个") || strings.Contains(query, "刚才") || strings.Contains(query, "上次") {
 		added := 0
 		for i := len(scope.Messages) - 1; i >= 0 && added < 2; i-- {
@@ -126,7 +130,7 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 	used := 0
 	coreUsed := 0
 	coreBudget := e.memorySettings().ContinuityTokens
-	core, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Query: query, EventYear: q.EventYear, Pinned: true, Limit: 16})
+	core, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Query: query, EventYear: q.EventYear, Pinned: true, Limit: 16, FreshExcludeEventIDs: q.FreshExcludeEventIDs, FreshExcludeUnsourced: q.FreshExcludeUnsourced})
 	page.Items = append(core.Items, page.Items...)
 	// A follow-up need not repeat the words that occurred when an open shared
 	// plan was recorded. For a direct conversation, add only open commitments
@@ -136,7 +140,7 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 	// normal source, correction and forgetting filters; the model decides
 	// whether a commitment actually answers the natural-language request.
 	if !in.IsGroup && in.Sender != "" && !runtimeInput(in) && in.Mode != "proactive" {
-		continuity, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Subject: in.Sender, EventYear: q.EventYear, Pinned: true, Continuity: true, CommitmentState: "open", Limit: 8})
+		continuity, _ := e.Store.SearchMemory(ctx, MemoryQuery{Scopes: []string{id}, Subject: in.Sender, EventYear: q.EventYear, Pinned: true, Continuity: true, CommitmentState: "open", Limit: 8, FreshExcludeEventIDs: q.FreshExcludeEventIDs, FreshExcludeUnsourced: q.FreshExcludeUnsourced})
 		page.Items = append(continuity.Items, page.Items...)
 	}
 	seen := map[string]bool{}
@@ -144,6 +148,12 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 	for _, hit := range page.Items {
 		m := hit.Entry
 		if m == nil {
+			continue
+		}
+		if freshRoundIsolation(in) && memoryUsesAnySource(m, q.FreshExcludeEventIDs) {
+			// This derived entry may contain conclusions from the selected
+			// attempt. Keep it durable for normal turns, but do not feed it
+			// back into an isolated attempt at the same original message.
 			continue
 		}
 		if seen[m.ID] {
@@ -172,6 +182,20 @@ func (e *Engine) memoryContext(ctx context.Context, in Input, scope Scope) strin
 	}
 	b, _ := json.Marshal(map[string]any{"kind": "long_term_memory", "items": items, "degraded": degraded, "token_estimate": used, "token_method": "conservative_text_estimate", "instruction": "按来源及conflicted/inference状态使用；精确原话用memory_read，任务与投递状态看任务和回执。"})
 	return string(b)
+}
+
+func memoryUsesAnySource(m *MemoryEntry, eventIDs []string) bool {
+	if m == nil || len(eventIDs) == 0 {
+		return false
+	}
+	for _, source := range m.Sources {
+		for _, eventID := range eventIDs {
+			if eventID != "" && source.EventID == eventID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Both the first decision and a continuation see the same attribution and
