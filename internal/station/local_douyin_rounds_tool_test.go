@@ -3,11 +3,16 @@ package station
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
+	"wechat-bot/internal/hostfile"
 	"wechat-bot/internal/stationbrowser"
+	"wechat-bot/internal/workspacefs"
 )
 
 func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *testing.T) {
@@ -152,5 +157,110 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	}
 	if err := tools.ValidateGenerationSources(t.Context()); err == nil {
 		t.Fatal("revoked works-memory grant left previously read context usable")
+	}
+}
+
+func TestLocalDouyinRoundsLocateOnlySavedNoticeWorkAndResumesIndependentScan(t *testing.T) {
+	f, m, view := syntheticExecutionRoundFixture(t, true)
+	identity, err := m.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		t.Fatal(err)
+	}
+	const workID = "7391234567890123456"
+	creator := strings.Repeat("c", 64)
+	record, _, err := m.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record,
+		stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: creator,
+			Items: []stationbrowser.DouyinNotice{{ID: "locate-1", WorkID: workID}}}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	m.readWorks = func(_ context.Context, _ string, in stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		reads++
+		if err := authorize(); err != nil {
+			return stationbrowser.DouyinCreatorWorksPage{}, err
+		}
+		if in.Page != 0 {
+			t.Fatalf("unexpected creator page: %+v", in)
+		}
+		return stationbrowser.DouyinCreatorWorksPage{Account: creator, PageKey: "synthetic-page", CoverageKnown: true,
+			Works: []stationbrowser.DouyinCreatorWork{
+				{ID: "7391234567890123457", Title: "其他作品", Visibility: "公开", Video: true},
+				{ID: workID, Title: "目标作品", Caption: "目标简介", Visibility: "公开", Video: true},
+			}}, nil
+	}
+	tools := noticeToolSet(t, f, "locate-denied", true)
+	call := func(tools *localToolSet, input map[string]any) (map[string]any, error) {
+		t.Helper()
+		raw, _ := json.Marshal(input)
+		value, err := tools.Call(t.Context(), localDouyinRoundsToolName, raw)
+		if err != nil {
+			return nil, err
+		}
+		var result map[string]any
+		if err := json.Unmarshal([]byte(value), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result, nil
+	}
+	day := executionRoundDay()
+	if _, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID}); err == nil || reads != 0 {
+		t.Fatalf("works memory denial reached browser: reads=%d err=%v", reads, err)
+	}
+	code, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_memory", "revision": view["revision"],
+		"memory_scope": douyinMemoryWorks, "allow_memory": true}, true)
+	if code != 200 {
+		t.Fatalf("works memory grant: %d %v", code, view)
+	}
+	tools = noticeToolSet(t, f, "locate-allowed", true)
+	if _, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID, "limit": 1}); err == nil {
+		t.Fatal("locate silently accepted unrelated limit")
+	}
+	if _, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": "7391234567890123458"}); err == nil || reads != 0 {
+		t.Fatalf("unsaved work triggered creator scan: reads=%d err=%v", reads, err)
+	}
+	first, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID, "pages": 1, "page_size": 1})
+	if err != nil || first["state"] != "pending" || first["can_resume"] != true || first["pages_read"] != float64(1) ||
+		first["works_scanned"] != float64(1) || first["content_id"] != nil {
+		t.Fatalf("first bounded scan: %v %v", first, err)
+	}
+	second, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID, "pages": 1, "page_size": 1, "resume": true})
+	if err != nil || second["state"] != "found" || second["ownership"] != "verified_own_work" ||
+		second["resumed"] != true || second["can_resume"] != false ||
+		!strings.HasPrefix(second["content_id"].(string), douyinapp.WebCreatorWorkPrefix) || reads != 2 {
+		t.Fatalf("target continuation: %v %v reads=%d", second, err, reads)
+	}
+	fields := second["fields"].([]any)
+	if len(fields) == 0 || fields[0] != string(apphost.ObservationPageText) || second["reply_eligible"] != false {
+		t.Fatalf("unexpected locate fields: %v", second)
+	}
+	if err := tools.ValidateGenerationSources(t.Context()); err != nil {
+		t.Fatalf("found source proof changed: %v", err)
+	}
+	completed, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID, "page_size": 1, "resume": true})
+	if err != nil || completed["state"] != "refresh_required" || completed["content_id"] != nil || reads != 2 {
+		t.Fatalf("cached completed scan implied absence or leaked stale handle: %v %v reads=%d", completed, err, reads)
+	}
+	record, _, err = m.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(stationObservationsDir(m.home.dataDir), "douyin-round-locate",
+		localCheckpointKey(localDouyinExecutionScope(identity.FishID, identity.LocalOwner.ID, record), day, workID))
+	root, err := workspacefs.EnsurePath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root.Close()
+	release, err := hostfile.TryLock(filepath.Join(dir, "scan.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := call(tools, map[string]any{"action": "locate", "date": day, "work_id": workID, "resume": true}); !errors.Is(err, apphost.ErrObservationWebSessionBusy) {
+		t.Fatalf("concurrent scan was not fenced: %v", err)
 	}
 }

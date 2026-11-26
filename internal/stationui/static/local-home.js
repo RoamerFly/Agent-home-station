@@ -1995,13 +1995,13 @@
             replies.type = "checkbox";
             replies.checked = douyinWebRepliesEnabled(value);
             replies.disabled = busy || (!replies.checked && (!available || !douyinWebCommentsEnabled(value)));
-            replies.setAttribute("aria-label", "允许回复评论");
+            replies.setAttribute("aria-label", "保留回复评论许可，当前暂停发送");
             replies.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowReplies: replies.checked }); });
-            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许回复评论"));
+            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "保留回复许可（当前暂停发送）"));
             interactionActions.append(repliesLabel);
             const interactionNote = douyinWebCommentsEnabled(value)
-              ? "点赞需要首页及视频页文字读取；回复评论还依赖视频评论读取。两项互动都单独保存。"
-              : "点赞需要首页及视频页文字读取；回复评论还需先允许读取视频评论。";
+              ? "点赞需要首页及视频页文字读取；回复许可还依赖视频评论读取。通知到目标评论及直接父评论尚未核实，当前暂停回复发送。"
+              : "点赞需要首页及视频页文字读取；回复许可还需先允许读取视频评论，当前暂停回复发送。";
             if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给项目工具中已启用的共享视觉能力处理。` : `${value.visual_reason || "请先在项目工具中启用媒体理解；抖音这里无需重复配置。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
@@ -5166,7 +5166,7 @@
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
         if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
           appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
-        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "请先在「内容浏览」读取确切视频或父评论，再在主工作站聊天中创建点赞或回复任务；这里管理原任务。真实平台互动尚待验收。", "app-scope-note"));
+        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务；抖音通用评论回复暂不可新建或提交，等待通知目标和直接父评论核验。这里仍可查询或取消原回复任务。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
           if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
@@ -6111,12 +6111,14 @@
       }
     }
     details.append(summary, appElement("p", note));
+    if (task.kind === "reply_comment") details.append(appElement("p", "原回复任务仅可查询或取消；通知关系核验完成前暂停提交与续办。", "publication-reference"));
     const pending = current.douyinInteractions.pending.get(task.job_id);
     if (pending?.size) details.append(appElement("p", pending.has("cancel") ? "正在登记停止…" : "正在处理原互动任务…", "publication-reference"));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(interactionActions)) {
       if (!available.includes(action)) continue;
+      if (task.kind === "reply_comment" && (action === "submit" || action === "resume")) continue;
       if (douyinIsDetached(current) && action !== "cancel") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
@@ -7412,7 +7414,7 @@
     if (!panel.childElementCount) panel.append(appElement("p", "正在读取应用工具…", "project-tools-empty"));
     const labels = {
       wechat: ["会话与消息读取", "文字、图片、语音、视频和文件收发", "通讯录与群管理", "视频号账号内解析"],
-      douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
+      douyin: ["作品、评论与网页内容读取", "点赞；评论回复待核验", "创作者作品管理与发布"],
       bilibili: ["稿件与评论读取", "账号授权与视频发布"]
     };
     const wechatLabels = { "share-reader": "微信分享解析", "music": "微信音乐与投递" };
