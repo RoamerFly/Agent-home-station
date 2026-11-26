@@ -207,6 +207,11 @@ func (w *Worker) triggerRoundProcessing(ctx context.Context, threadID, messageID
 		}
 	}
 	if inbox.ToolStarted {
+		if resumed, resumeErr := w.resumePausedPublicVideo(ctx, inbox, false); resumeErr != nil {
+			return ReplayItem{}, resumeErr
+		} else if resumed {
+			return ReplayItem{MessageID: messageID, Status: "queued", Reason: "已保留原工具结果，继续完成未发送的回复"}, nil
+		}
 		item.Status, item.Reason = "unavailable", "原回合已有工具操作，不能重复执行"
 		return item, nil
 	}

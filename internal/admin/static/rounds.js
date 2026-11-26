@@ -28,9 +28,9 @@
   // The filter describes the disposition of the round. The detailed status
   // stays available for receipts, failures and partial results.
   const statusGroups = {
-    pending: ['received','queued','retrying_tool','retrying_model','retrying_delivery','waiting','waiting_receipt'],
+    pending: ['received','queued','retrying_tool','retrying_model','retrying_delivery','waiting','waiting_receipt','needs_review'],
     active: ['running','cancelling','checking_receipt'],
-    done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled','needs_review'],
+    done: ['accepted','completed','silent','skipped','blocked','stopped','failed','expired','partially_completed','partially_cancelled'],
   };
   const groupByStatus = Object.fromEntries(Object.entries(statusGroups).flatMap(([group, states]) => states.map(state => [state,group])));
   const groupLabels = {pending:'待处理',active:'进行中',done:'已完成'};

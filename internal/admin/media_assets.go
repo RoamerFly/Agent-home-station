@@ -317,7 +317,33 @@ func (m *Manager) rememberAssetFormats(in companion.Input, original assetOrigina
 		u.Fragment = ""
 		a.URL = u.String()
 	}
+	if strings.HasPrefix(a.MIME, "video/") && mcptools.IsPublicVideoPage(original.RequestURL) {
+		// The resolver can return playable bytes without a canonical page URL.
+		// Retain the sanitized, already requested public page so a later
+		// asset_id audio read can bind back to this received message.
+		if requested := sharePublicURL(original.RequestURL); requested != "" {
+			if a.URL == "" {
+				a.URL = requested
+			}
+			if mcptools.IsPublicVideoPage(a.URL) {
+				a.RequestURLHashes = appendWebMediaURLHashes(a.RequestURLHashes, webMediaURLHash(sharePublicURL(a.URL)))
+			}
+		}
+	}
 	if index >= 0 {
+		// This ID is the same bytes in the same conversation. A later tool may
+		// call the video "received" instead of "shared" while preparing an
+		// upload; that alias must not rewrite the original indexed identity and
+		// invalidate the generation that just inspected it.
+		if items[index].Title != "" {
+			a.Title = items[index].Title
+		}
+		if items[index].Filename != "" {
+			a.Filename = items[index].Filename
+		}
+		if items[index].URL != "" {
+			a.URL = items[index].URL
+		}
 		a.StorageName = items[index].StorageName
 		a.DocumentMemory = items[index].DocumentMemory
 		if a.VoiceID == "" {

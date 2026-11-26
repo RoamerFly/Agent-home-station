@@ -172,6 +172,9 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 				if !strings.HasPrefix(a.MIME, "video/") {
 					return nil, "", toolInputError("这不是原视频素材；请从media_recent找parent_asset_id对应的原视频")
 				}
+				if publicURL := registeredVideoAssetURL(a); publicURL != "" {
+					in.URL = publicURL
+				}
 				b, e := m.cachedAssetData(a)
 				return b, a.ID, e
 			}
@@ -273,6 +276,22 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 		in.cachedAssetID = asset.ID
 	}
 	return v.Data, policy.requestedURL, nil
+}
+
+// A public page on a cached video is usable as an audio source only when the
+// same page was registered with the original verified download request.
+func registeredVideoAssetURL(asset mediaAsset) string {
+	if !mcptools.IsPublicVideoPage(asset.URL) {
+		return ""
+	}
+	publicURL := sharePublicURL(asset.URL)
+	key := webMediaURLHash(publicURL)
+	for _, registered := range asset.RequestURLHashes {
+		if registered == key {
+			return publicURL
+		}
+	}
+	return ""
 }
 
 func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args json.RawMessage) (result string, callErr error) {
@@ -547,12 +566,16 @@ func (p *permittedTools) inspectionTranscriptionMessage(ctx context.Context, in 
 			if asset.ID != in.Asset || asset.Account != p.trace.Account || asset.Scope != assetScope(companion.Input{Channel: "wechat", Account: p.trace.Account, Thread: in.SourceThread}) {
 				continue
 			}
+			publicURL := registeredVideoAssetURL(asset)
+			if in.URL != "" && sharePublicURL(in.URL) != publicURL {
+				publicURL = ""
+			}
 			for _, r := range asset.Requests {
 				if r.SourceFingerprint == "" {
 					continue
 				}
 				current, err := p.manager.native.Message(ctx, r.TraceID)
-				if err == nil && current.ID == r.TraceID && current.AccountID == p.trace.Account && current.ThreadID == in.SourceThread && p.inspectionThreadAllowed(current.ThreadID) && current.Direction == "incoming" && (current.Type == 43 || current.Type == 49) && inboundFingerprint(current) == r.SourceFingerprint {
+				if err == nil && current.ID == r.TraceID && current.AccountID == p.trace.Account && current.ThreadID == in.SourceThread && p.inspectionThreadAllowed(current.ThreadID) && current.Direction == "incoming" && (current.Type == 43 || current.Type == 49 || current.Type == 1 && publicURL != "") && inboundFingerprint(current) == r.SourceFingerprint {
 					return current, nil
 				}
 				if ctx.Err() != nil {

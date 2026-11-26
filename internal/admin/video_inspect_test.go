@@ -187,3 +187,46 @@ func TestInspectionPluginAudioUsesCanonicalReceivedAssetSource(t *testing.T) {
 		t.Fatal("missing canonical source scope accepted")
 	}
 }
+
+func TestInspectedPublicTextVideoAssetRetainsBoundAudioSource(t *testing.T) {
+	f, p, native := forwardFixture(t)
+	f.manager.config.Behavior.ReadVideos = true
+	native.message = linuxnative.Message{ID: "text-video", AccountID: "test", ThreadID: "source@chatroom", SenderID: "source-member", ServerID: "text-server", CreatedAt: "2026-11-26T07:51:17Z", Direction: "incoming", Type: 1}
+	trace := companion.Input{Channel: "wechat", Account: "test", Thread: native.message.ThreadID, TraceID: native.message.ID, Sender: native.message.SenderID, MessageTime: native.message.CreatedAt}
+	requested := "https://b23.tv/eqZkIxJ"
+	asset, err := f.manager.rememberAssetFormats(trace, assetOriginal{InboundMessage: &native.message, Data: inspectionFixture(t), MIME: "video/mp4", Filename: "分享视频.mp4", RequestURL: requested}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := videoInspectionInput{Asset: asset.ID, SourceThread: native.message.ThreadID}
+	data, _, err := p.inspectionSource(t.Context(), &in)
+	if err != nil || len(data) == 0 || in.URL != requested {
+		t.Fatalf("cached public source was not recovered: url=%q bytes=%d err=%v", in.URL, len(data), err)
+	}
+	message, err := p.inspectionTranscriptionMessage(t.Context(), in)
+	if err != nil || message.ID != native.message.ID || message.Type != 1 {
+		t.Fatalf("bound incoming text source unavailable for audio: %+v %v", message, err)
+	}
+	wrong := in
+	wrong.SourceThread = "another@chatroom"
+	if _, err := p.inspectionTranscriptionMessage(t.Context(), wrong); err == nil {
+		t.Fatal("asset audio crossed conversation scope")
+	}
+	wrong = in
+	wrong.URL = "https://b23.tv/other"
+	if _, err := p.inspectionTranscriptionMessage(t.Context(), wrong); err == nil {
+		t.Fatal("asset audio accepted a different public URL")
+	}
+	native.message.ServerID = "changed-server"
+	if _, err := p.inspectionTranscriptionMessage(t.Context(), in); err == nil {
+		t.Fatal("changed native message was accepted for cached audio")
+	}
+	native.message.ServerID = "text-server"
+	asset.RequestURLHashes = nil
+	if err := f.manager.saveAssets([]mediaAsset{asset}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.inspectionTranscriptionMessage(t.Context(), in); err == nil {
+		t.Fatal("unregistered public URL was accepted for cached audio")
+	}
+}

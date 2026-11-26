@@ -304,7 +304,12 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	knownInputSource := cloneSource(input.Source)
 	defer func() {
 		if resultErr != nil {
-			e.writeReplyAudit(input, result, []string{"request_failure"}, "request_failed", []byte(`{}`))
+			state, risks := "request_failed", []string{"request_failure"}
+			var changed *GenerationEvidenceChangedError
+			if errors.As(resultErr, &changed) {
+				state, risks = "evidence_changed", nil
+			}
+			e.writeReplyAudit(input, result, risks, state, []byte(`{}`))
 		}
 	}()
 	input.UnreadMessages = append([]ConversationEvent(nil), input.UnreadMessages...)

@@ -23,6 +23,7 @@ type inboxItem struct {
 	AggregateUntil           time.Time                         `json:"aggregate_until,omitempty"`
 	CollectedAt              time.Time                         `json:"collected_at,omitempty"`
 	ToolStarted              bool                              `json:"tool_started,omitempty"`
+	EvidenceResumeAttempted  bool                              `json:"evidence_resume_attempted,omitempty"`
 	Event                    linuxnative.Event                 `json:"event"`
 	Phase                    string                            `json:"phase"`
 	Updated                  time.Time                         `json:"updated"`
@@ -540,6 +541,9 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 		}
 	}
 	if err := w.saveRuntime(); err != nil {
+		return err
+	}
+	if err := w.resumePausedPublicVideos(ctx); err != nil {
 		return err
 	}
 	if w.config.Options.RecoverBacklog {

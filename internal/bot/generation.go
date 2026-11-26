@@ -637,6 +637,18 @@ func (w *Worker) finishGeneration(ctx context.Context, r generationResult) {
 		defer w.config.BacklogSettled(r.input.Account, r.input.Thread, ids, r.decision.Action)
 	}
 	w.finishCharacter(ctx, r.engine, r.input, r.decision, r.err, r.processingErr, r.job.toolStarted, r.progressDelivered)
+	var changed *companion.GenerationEvidenceChangedError
+	if r.input.TaskID == "" && errors.As(r.err, &changed) && w.runtime != nil {
+		for i := range w.runtime.Inbox {
+			item := &w.runtime.Inbox[i]
+			if item.Event.Data.MessageID == r.input.TraceID && item.Event.Data.ThreadID == r.input.Thread {
+				if _, err := w.resumePausedPublicVideo(ctx, item, true); err != nil {
+					w.persistErr = err
+				}
+				break
+			}
+		}
+	}
 	if c := r.engine.Config.ConversationConfig(); c.RecheckOnMessage && len(r.job.updates) > 0 && r.job.reviewed != generationFingerprint(r.job) {
 		for _, caption := range w.runtime.MediaReplies {
 			if caption.Trace == r.input.TraceID && !caption.terminal() {

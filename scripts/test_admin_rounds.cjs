@@ -29,7 +29,7 @@ test('status filters group terminal failures separately from unresolved receipts
   ['task_delivery_updated','decision','partially_cancelled','','done'],
   ['task_delivery_updated','decision','partially_completed','','done'],
   ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
-  ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
+  ['generation_paused','decision','needs_review','generation_evidence_changed','pending'],
   ['reminder_overdue','decision','expired','reminder_overdue_while_offline','done'],
   ['send_failed','error','failed','send_outcome_unknown','pending'],
   ['message_sent','sent','accepted','','done']
@@ -39,10 +39,25 @@ test('status filters group terminal failures separately from unresolved receipts
   assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
   if(status==='needs_review'){
    const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
-   assert.equal(project([...r.entries,processed])[0].group,'done');
+   assert.equal(project([...r.entries,processed])[0].group,'pending');
   }
   if(reason==='send_outcome_unknown') assert.equal(project([...r.entries,entry(2,{event:'message_processed',category:'decision',status:'completed'})])[0].group,'pending');
  }
+});
+
+test('a paused model after a successful download remains pending until its reply is sent',()=>{
+ const rows=[
+  entry(1,{event:'message_received',category:'received',status:'received'}),
+  entry(2,{event:'generation_started',category:'decision',status:'processing'}),
+  entry(3,{event:'plugin_output_ready',category:'tool',status:'succeeded'}),
+  entry(4,{event:'generation_paused',category:'decision',status:'needs_review',reason:'generation_evidence_changed'}),
+ ];
+ const [round]=project(rows,{},undefined,{loaded:true,states:{'message-1':{phase:'needs_review'}}});
+ assert.equal(round.status,'needs_review');
+ assert.equal(round.group,'pending');
+ assert.equal(round.lifecycle,'待处理');
+ assert.equal(round.sent.length,0);
+ assert(round.timeline.some(item=>item.event==='generation_paused'));
 });
 
 test('an unsent semantic reply cannot make its execution round completed',()=>{
@@ -86,7 +101,7 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  const row=entry(1,{thread_id:'wxid-owner',source_kind:'private',source:'主人',event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'未提交的旧草稿'});
  const [round]=project([row]);
  assert.equal(round.status,'needs_review');
- assert.equal(round.group,'done');
+ assert.equal(round.group,'pending');
  assert.equal(round.orphanReceipt,true);
 });
 test('receipt-only continuation remains unfinished until a verified receipt',()=>{
