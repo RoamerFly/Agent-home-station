@@ -631,11 +631,11 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 				return "", false
 			}
 		}
-		if rule.Mode != "all" && rule.Mode != "social" && !preferredShare && !w.addressed(message) {
+		if rule.Mode != "all" && rule.Mode != "social" && !preferredShare && !verifiedGroupAddressed(message) {
 			return "", false
 		}
-		// Display names are not trusted as evidence of a mention. Remove only
-		// leading display mentions after structured self=true has passed.
+		// Display names are not evidence of a mention. Strip leading display
+		// tokens only after this group's reply rule admits the message.
 		for strings.HasPrefix(text, "@") {
 			i := strings.IndexAny(text, " \u2005\t\n")
 			if i < 0 {

@@ -127,14 +127,13 @@ func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {
 			return "quiet_unmentioned_group_message"
 		}
 		rule := w.config.GroupRules[m.ThreadID]
-		mentioned := m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self
-		if rule.Mode == "social" && !mentioned {
+		if rule.Mode == "social" && !w.addressed(m) {
 			c, ok := w.model.(*companion.Engine)
 			if !ok || !c.Config.Permissions.ObserveGroups || !c.Config.Permissions.AutonomousGroups {
 				return "social_permission_denied"
 			}
 		}
-		if rule.Mode != "all" && rule.Mode != "social" && !mentioned {
+		if rule.Mode != "all" && rule.Mode != "social" && !verifiedGroupAddressed(m) {
 			return "not_a_verified_mention"
 		}
 		if rule.Prefix != "" {

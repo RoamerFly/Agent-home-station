@@ -9,11 +9,12 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+func verifiedGroupAddressed(m linuxnative.Message) bool {
+	return m.ReplyToSelf || m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self
+}
+
 func (w *Worker) addressed(m linuxnative.Message) bool {
-	if m.ReplyToSelf {
-		return true
-	}
-	if m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self {
+	if verifiedGroupAddressed(m) {
 		return true
 	}
 	text := strings.ToLower(m.Body)

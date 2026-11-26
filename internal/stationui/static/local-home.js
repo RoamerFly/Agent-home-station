@@ -565,7 +565,7 @@
         const fields = appElement("div", "", "details-grid");
         const mode = document.createElement("select");
         mode.setAttribute("aria-label", threadID + " 群聊触发方式");
-        for (const [optionValue, optionText] of [["mention", "只在提及时回复"], ["all", "每条群聊文字都交给大肥鱼判断"], ["social", "允许观察本群并自主选择接话"]]) {
+        for (const [optionValue, optionText] of [["mention", "仅@回复"], ["all", "回复全部"], ["social", "自主接话"]]) {
           const option = document.createElement("option");
           option.value = optionValue;
           option.textContent = optionText;

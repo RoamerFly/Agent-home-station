@@ -179,6 +179,50 @@ func TestEligibilityUsesStructuredMentionsAndFreshAllowlistedText(t *testing.T) 
 	}
 }
 
+func TestMentionModeRequiresVerifiedGroupAddress(t *testing.T) {
+	w := newTestWorker(t, &fakeSource{}, &fakeModel{}, &fakeSender{})
+	w.config.GroupRules = map[string]GroupRule{"room@chatroom": {Mode: "mention"}}
+	m := fixtureMessage("named-question", "room@chatroom", "大肥鱼，可以帮我吗？", "incoming")
+	no, yes := false, true
+	m.Mentions.State, m.Mentions.Self = "known", &no
+	if !w.addressed(m) {
+		t.Fatal("named question no longer classified as addressed for all/social mode")
+	}
+	if _, ok := w.prompt(m, time.Now()); ok {
+		t.Fatal("named question triggered mention-only mode without verified address")
+	}
+	m.Mentions.State, m.Mentions.Self = "unknown", nil
+	if _, ok := w.prompt(m, time.Now()); ok {
+		t.Fatal("unknown mention metadata triggered mention-only mode")
+	}
+	for _, mode := range []string{"all", "social"} {
+		w.config.GroupRules[m.ThreadID] = GroupRule{Mode: mode}
+		if _, ok := w.prompt(m, time.Now()); !ok {
+			t.Fatalf("named question no longer eligible in %s mode", mode)
+		}
+	}
+	w.config.GroupRules[m.ThreadID] = GroupRule{Mode: "mention"}
+	m.Mentions.State = "known"
+	m.Mentions.Self = &yes
+	if prompt, ok := w.prompt(m, time.Now()); !ok || prompt != m.Body {
+		t.Fatalf("verified self mention rejected: prompt=%q eligible=%t", prompt, ok)
+	}
+	m.Mentions.Self = &no
+	m.ReplyToSelf = true
+	if prompt, ok := w.prompt(m, time.Now()); !ok || prompt != m.Body {
+		t.Fatalf("verified reply to self rejected: prompt=%q eligible=%t", prompt, ok)
+	}
+	w.config.GroupRules[m.ThreadID] = GroupRule{Mode: "mention", Prefix: "prefix:"}
+	if reason := w.skipReason(m, time.Now()); reason != "group_prefix_not_matched_or_empty" {
+		t.Fatalf("verified reply to self reported wrong skip reason: %s", reason)
+	}
+	w.config.GroupRules[m.ThreadID] = GroupRule{Mode: "mention"}
+	m.ReplyToSelf = false
+	if prompt, ok := w.promptWithSharePreference(m, time.Now(), true); !ok || prompt != m.Body {
+		t.Fatalf("preferred share exception rejected: prompt=%q eligible=%t", prompt, ok)
+	}
+}
+
 func TestClaimsBeforeModelAndDoesNotReplayUnknownSendOnRestart(t *testing.T) {
 	for _, modelFails := range []bool{false, true} {
 		t.Run(strconv.FormatBool(modelFails), func(t *testing.T) {
