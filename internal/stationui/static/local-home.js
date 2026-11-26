@@ -6073,14 +6073,16 @@
     review.append(content);
     let loading = false;
     let loaded = false;
+    let previewVideo = null;
     review.addEventListener("toggle", async () => {
-      if (!review.open || loading || loaded) return;
+      if (!review.open) { previewVideo?.pause(); return; }
+      if (loading || loaded) return;
       loading = true;
       content.replaceChildren(appElement("p", "正在读取原任务内容…"));
       try {
         const value = await request(`/api/local/apps/douyin/publications/review?job_id=${encodeURIComponent(task.job_id)}`);
         if (value?.task?.job_id !== task.job_id || typeof value.title !== "string" ||
-            typeof value.body !== "string" || !Array.isArray(value.artifacts)) {
+            typeof value.body !== "string" || !Array.isArray(value.artifacts) || value.artifacts.length !== 1) {
           throw new Error("原任务内容返回格式无效，请稍后重试。");
         }
         content.replaceChildren();
@@ -6093,6 +6095,17 @@
           facts.append(appElement("dt", label), appElement("dd", text));
         }
         content.append(facts);
+        const previewLabel = appElement("strong", "视频预览（手动播放）");
+        const preview = document.createElement("video");
+        preview.className = "douyin-publication-review-video";
+        preview.controls = true;
+        preview.preload = "none";
+        preview.setAttribute("aria-label", "原发布任务的视频预览");
+        preview.src = `/api/local/apps/douyin/publications/review/video?job_id=${encodeURIComponent(task.job_id)}`;
+        const previewFeedback = appElement("p", "播放前请核对标题、文案和可见范围。", "app-scope-note");
+        preview.addEventListener("error", () => { previewFeedback.textContent = "视频预览不可用，请下载素材核对原文件。"; });
+        previewVideo = preview;
+        content.append(previewLabel, preview, previewFeedback);
         const media = appElement("ul", "", "douyin-publication-review-media");
         for (const artifact of value.artifacts) {
           if (typeof artifact?.id !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(artifact.id)) continue;

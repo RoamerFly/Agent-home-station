@@ -9,7 +9,7 @@
 | 内容浏览 | 发现获准内容后，读取首页和视频页文字、本人作品列表与单篇信息、公开视频评论、静音播放证据、音轨转写、采样画面和本人公开图文图片；按返回的进度续读或从头刷新。每项可单独填写字数、条数、张数、帧数或秒数；留空沿用已保存进度，新内容使用默认量，明确填写后从头读取并让后续页沿用该请求量。 |
 | 互动任务 | 绑定并手动读取平台互动通知、单独允许 Agent 按主人请求读取通知；查看和管理已有点赞与评论回复任务的原任务状态。 |
 | 执行回合 | 按北京时间日期和作品编号分别查看已保存的互动通知；作品组与组内通知各自分页，缺失作品编号单列。账号和创作者作品证据吻合时展示该作品标题、简介，以及已实际读取的音轨转写和画面采样页及覆盖状态；可把该作品的音画续读请求预填进主聊天。打开页面不会访问抖音或标记通知已读。通知与具体评论、直接父评论仍未逐条核实，回合均不会回复。 |
-| 作品发布 | 编辑创作请求并带到主工作站聊天输入框、打开已登记项目工具、管理普通账号发布许可与创作者中心登录、查看已有草稿和原任务回执；展开原任务可只读审阅标题、文案、可见范围及成品编号、哈希和大小，并手动下载素材核对。 |
+| 作品发布 | 编辑创作请求并带到主工作站聊天输入框、打开已登记项目工具、管理普通账号发布许可与创作者中心登录、查看已有草稿和原任务回执；展开原任务可只读审阅标题、文案、可见范围、成品编号、哈希和大小，手动播放或下载原任务视频。 |
 | 直播与本机预览 | 检查本机直播伴侣程序路径、安装版本与运行状态，打开 OBS 本机预览。 |
 
 点赞任务由主人在主工作站聊天中基于已读取的视频创建。抖音通知到目标评论及直接父评论尚未逐条核实，通用 `app_action` 暂不创建或提交抖音评论回复；升级前留下的回复任务可查询状态或取消，不能继续发送。其他应用的回复及抖音点赞任务不受此临时门禁影响。作品发布页的“制作作品”入口预填一条可编辑请求：Agent 先检查已登记项目工具并制作视频；项目工具已返回不可变成品编号时直接使用，只有生成家目录文件时才调用 `artifact_publish` 登记，再核对成品并用明确文案与可见范围创建抖音草稿。点击“带到主聊天”仅把文字放进聊天输入框，主人核对并手动发送；不会由入口发送聊天或投稿。执行回合在核对本人作品后显示“让 Agent 读取此作品音画”，只预填指定日期和作品编号的请求，指引 Agent 按 `locate`→`prepare`→`context` 定位作品、分页准备音画证据并读取已保存上下文；画面页须显式请求，通知到目标评论及直接父评论未验真前不创建或发送回复。独立 Windows 工作台经受限的宿主消息把请求交给主窗口，浏览器预览在同一标签页返回主页面。项目工具入口也返回主工作站。发布任务仍按原请求提供提交、续办、状态查询和停止；创建流程绑定原请求、来源版本和成品证明，当前本机 HTTP 工作台接口只接受原任务操作，不能凭页面输入绕过来源核对。发布审阅只读原任务账本，Agent 的通用任务列表与状态查询不会带出草稿正文。
@@ -24,6 +24,8 @@ Agent 已接入只读 `douyin_rounds` 工具读取同一执行回合账本。`wo
 
 普通聊天中的 `douyin_video_check` 按已登记 `artifact_id` 只读检查当前主人的不可变视频成品，先复核来源与 SHA-256，再返回 MP4/WebM 容器签名、视频时长/尺寸/FPS、指定帧解码时间及指定音频片段的可解码状态。帧编号、音频起点和片段秒数、时间预算均可指定；默认只抽样第 0 帧与开头 1 秒。该结果是技术抽样，不检验内容含义或全片每秒播放。作品发布入口的聊天草稿现在要求 Agent 在登记成品后执行该检查，再创建“仅自己可见”的抖音草稿；入口本身不会投稿。
 
+发布审阅的视频预览只从原 `job_id` 取本机已登记的唯一 MP4/WebM 成品，逐次复核主人、当前抖音连接、成品来源和 SHA-256；只读返回支持浏览器分段播放，不调用创作者中心或提交任务。视频默认不预加载，主人展开审阅后可手动播放，也可保留原下载方式。合成草稿已核对完整视频、Range 字节、无主人会话、旧账号和失效来源的拒绝；真实工作台播放观感尚待截图或用户操作验收。
+
 公开项目 [douyin-mcp 的通知详情实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_notice.go#L78-L100) 使用单条 `notice_id_str` 请求。被动捕获现严格接纳该形式，同时保留原有 `id_list`；该项目没有提供单条请求的真实响应样本，故响应仍按已知 `notice_list_v2` 结构校验，实际兼容性待脱敏响应确认。[同项目的子评论读取实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_comment.go#L77-L115) 使用作品 `item_id` 与根评论 `comment_id`，但不证明通知候选字段就是本次目标评论。该项目的[评论发布实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_interact.go#L182-L194)还要求同会话签名材料，不能把仅有 Cookie 视为写接口验收；本工作台保持原有浏览器会话操作链路，未做真实回复。
 
 ## 评论通知的回复范围
@@ -34,4 +36,4 @@ Agent 已接入只读 `douyin_rounds` 工具读取同一执行回合账本。`wo
 
 抖音工作台入口、执行回合入口和渲染涉及共用文件 `internal/station/local_app_configuration.go`、`internal/stationui/static/local-home.js`、`internal/stationui/static/local-home.css`，后端通知入账还涉及 `internal/station/local_douyin_notice.go` 与 `internal/station/local_app_inbox.go`。本轮共用页面改动位于抖音 `rounds` 分组、作品音画续读请求、`publications` 创作与审阅入口及对应样式，以及互动许可和旧回复任务暂停提示；桌面宿主 `ApplicationWorkbenchDialog`、`MainForm`、`WindowTests` 新增 Douyin 专属纯文本草稿与项目工具路由，主页面只预填输入框或打开工具页。共用 `internal/apphost/publication.go` 增加仅供本机 owner 精确任务审阅的方法，`internal/station/local_app_publication.go` 注册抖音专属只读审阅路由；通用发布列表与状态结构保持元数据边界。共用 `internal/station/local_tools.go` 增加 `douyin_rounds` 的发现、分派与作品上下文源核对接线，实现在抖音专属 `internal/station/local_douyin_rounds_tool.go`；共用 `internal/station/local_app_interaction.go` 增加抖音评论回复的临时服务端门禁，其他应用交互路径仍按原逻辑。共用测试夹具 `internal/station/local_home_test.go` 另修正本机回环会话登录方式，原密码路由夹具保持原样。合并微信分支时核对这些文件中抖音专属分支及工作台分区变动，尤其保留微信原有执行回合路由与页面。未修改构建脚本；工作台能力说明位于本抖音专属文档。
 
-本次续开发的共用文件改动涉及 `internal/station/local_tools.go` 中 `douyin_video_check` 的发现、分派与最终生成前的成品来源复核接线，以及 `project_comfy_register` 普通聊天分派和撤销媒体权限后原 Comfy 任务的查询/取消入口；`internal/stationui/static/local-home.js` 只修改抖音创作草稿、逐条通知的只读请求提示和执行回合作品音画 `next_cursor` 续页与重读提示。`internal/station/local_douyin_web_login.go` 只增加抖音关系读取器注入点；`internal/stationbrowser/douyin_notice_detail.go` 只扩展抖音通知详情的被动请求识别。后续与 `wechat` 分支集成时逐项核对这些共用接线和页面文案。
+本次续开发的共用文件改动涉及 `internal/station/local_tools.go` 中 `douyin_video_check` 的发现、分派与最终生成前的成品来源复核接线，以及 `project_comfy_register` 普通聊天分派和撤销媒体权限后原 Comfy 任务的查询/取消入口；`internal/stationui/static/local-home.js` 只修改抖音创作草稿、逐条通知的只读请求提示、执行回合作品音画 `next_cursor` 续页与重读提示，以及发布审阅的视频控件；`internal/stationui/static/local-home.css` 只新增该视频控件的桌面尺寸样式。视频预览服务端位于抖音专属 `internal/station/local_douyin_publication_review.go`。`internal/station/local_douyin_web_login.go` 只增加抖音关系读取器注入点；`internal/stationbrowser/douyin_notice_detail.go` 只扩展抖音通知详情的被动请求识别。后续与 `wechat` 分支集成时逐项核对这些共用接线和页面文案。

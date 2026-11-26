@@ -376,6 +376,7 @@ h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); line-
 .douyin-publication-review-facts { display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:var(--s-1) var(--s-2); margin:var(--s-2) 0; }
 .douyin-publication-review-facts dt { color:var(--text-muted); }
 .douyin-publication-review-facts dd { margin:0; white-space:pre-wrap; }
+.douyin-publication-review-video { display:block; inline-size:min(100%, 30rem); max-block-size:60vh; margin-block:var(--s-2) 0; border-radius:var(--r-sm); background:#111827; object-fit:contain; }
 .douyin-publication-review-media { display:grid; gap:var(--s-1); margin:var(--s-1) 0 0; padding-left:var(--s-4); }
 .douyin-publication-review-media li { min-width:0; }
 .douyin-publication-review-media code { display:block; color:var(--text-muted); white-space:normal; overflow-wrap:anywhere; }
