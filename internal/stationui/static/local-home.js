@@ -3576,6 +3576,7 @@
       void loadContext();
     }
     function roundCard(item) {
+      const noticeDay = date.value;
       const card = appElement("article", "", "douyin-round-card");
       const header = appElement("div", "", "douyin-round-card-header");
       header.append(appElement("h4", "通知 " + item.notice_id), appElement("span", "待核对 · 不会回复", "station-label"));
@@ -3599,6 +3600,13 @@
         ["回复资格", item.reason + " · 不会回复"],
       ]) facts.append(appElement("dt", name), appElement("dd", value));
       card.append(header, facts);
+      if (item.detail_status === "observed_candidate" && /^[1-9]\d{0,19}$/.test(item.work_id || "") &&
+          item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "reply_comment.cid"].includes(candidate.path))) {
+        card.append(memoryButton("让 Agent 只读核对这条通知", "button compact secondary", () => {
+          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；若详情中有明确的 CID 路径候选，可用 relation 仅对其中一条候选做只读定向探测，子评论的 root 路径和编号也只能从同一详情选取。多个候选或关系不明时请说明分歧，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；目标评论、直接父评论和通知字段语义尚未验真，不要点赞、评论或投稿。`;
+          handoffDouyinWorkbenchChat(draft, feedback);
+        }));
+      }
       return card;
     }
     async function loadGroups(append = false) {
@@ -4936,11 +4944,11 @@
     row.append(appElement("h5", "制作作品"));
     const detail = appElement("div", "", "publication-detail");
     detail.append(appElement("strong", "用已登记的项目工具创作"),
-      appElement("p", "编辑下面的请求，再交给主工作站聊天。Agent 会根据可用工具制作成品、登记不可变产物并创建抖音草稿；此入口不会发送聊天或投稿。"));
+      appElement("p", "编辑下面的请求，再交给主工作站聊天。Agent 会根据可用工具制作成品、登记不可变产物、抽样检查音画轨可解码性并创建抖音草稿；此入口不会发送聊天或投稿。"));
     const field = appElement("label", "创作请求草稿", "settings-field");
     const input = document.createElement("textarea");
     input.rows = 7; input.maxLength = 6000; input.autocomplete = "off";
-    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频并核对音画，再将最终 MP4 或 WebM 登记为不可变成品。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
+    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频，把最终 MP4 或 WebM 登记为不可变成品，再用 douyin_video_check 核对该成品的容器、时长、尺寸，以及指定画面和音频片段是否可解码；这项抽样不检验内容含义，也不能证明全片每秒均可播放。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
     input.addEventListener("input", () => { view.douyinCreationDraft = input.value; });
     field.append(input);
     const actions = appElement("div", "", "publication-actions");

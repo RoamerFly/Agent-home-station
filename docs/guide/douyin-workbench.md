@@ -20,6 +20,12 @@ Agent 已接入只读 `douyin_rounds` 工具读取同一执行回合账本。`wo
 
 `douyin_rounds` 的 `notice` 动作要求 `date` 和 `notice_id`，只返回本机同一授权范围内精确匹配的单条通知及未核实候选，不返回私有创作者账号摘要，也不据候选生成回复目标。`prepare` 的临时作品入口约 20 分钟有效；新一次 `locate` 会得到不同入口，未完成的音轨或画面观察可能从首段重读并重复产生模型费用。`can_resume` 只表示现有入口及观察游标下可续办；遇来源变化会返回须重新定位的状态。全量音轨和跨全时长采样画面仍须逐页核对 `context_complete` 与实际覆盖，真实平台未验收。
 
+`relation` 是通知限定的只读关系探测：要求该日期、通知编号已保存且详情有候选，目标 `target_path`/`target_id` 必须与详情中的 CID 候选完全一致；子评论的可选 `root_path`/`root_id` 也必须来自同一详情。它还要求当前创作者作品归属、本人作品和评论记忆授权，只在该作品页自然返回的一页中寻找这条评论，不遍历整件作品评论区。执行回合页面仅在通知详情含 CID 路径候选时显示“让 Agent 只读核对这条通知”，按钮只把指定日期、作品和通知的请求预填进主聊天。返回 `observed` 只证明选中候选与该页一条结构化评论相符；`pending` 可能表示目标在别页，`busy` 表示独立登录资料正在使用。通知候选语义、主楼及直接父评论仍未验真，所有结果 `reply_eligible=false`，不能触发回复。
+
+普通聊天中的 `douyin_video_check` 按已登记 `artifact_id` 只读检查当前主人的不可变视频成品，先复核来源与 SHA-256，再返回 MP4/WebM 容器签名、视频时长/尺寸/FPS、指定帧解码时间及指定音频片段的可解码状态。帧编号、音频起点和片段秒数、时间预算均可指定；默认只抽样第 0 帧与开头 1 秒。该结果是技术抽样，不检验内容含义或全片每秒播放。作品发布入口的聊天草稿现在要求 Agent 在登记成品后执行该检查，再创建“仅自己可见”的抖音草稿；入口本身不会投稿。
+
+公开项目 [douyin-mcp 的通知详情实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_notice.go#L78-L100) 使用单条 `notice_id_str` 请求。被动捕获现严格接纳该形式，同时保留原有 `id_list`；该项目没有提供单条请求的真实响应样本，故响应仍按已知 `notice_list_v2` 结构校验，实际兼容性待脱敏响应确认。[同项目的子评论读取实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_comment.go#L77-L115) 使用作品 `item_id` 与根评论 `comment_id`，但不证明通知候选字段就是本次目标评论。该项目的[评论发布实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_interact.go#L182-L194)还要求同会话签名材料，不能把仅有 Cookie 视为写接口验收；本工作台保持原有浏览器会话操作链路，未做真实回复。
+
 ## 评论通知的回复范围
 
 执行回合以本人作品收到的评论信息提醒为入口，不靠遍历作品评论区发现新请求。目标规则是只回复本人作品的主评论（顶层评论），以及直接回复本账号子评论的子评论；回复其他人子评论的通知不进入回复。判断必须逐条核实通知对应的账号及作品、目标评论编号、评论层级、直接父评论作者和原任务状态。通知读取器从原生列表响应保留通知编号、原始类型数值、时间、关联作品编号及白名单结构字段中的候选编号，整批页面文字仍单独展示；同一受控会话中自然发出的通知详情响应仅按已读列表编号逐条归并，并明确记录未返回或响应无效。另有只读目标评论核验函数，在上层已给出作品、目标 `cid` 和子评论根编号时才观察该作品页自然发出的结构化列表响应；目标不在该页即返回待核对，不翻页发现通知。接口路径及字段参考 [DouyinApiDoc 的通知详情说明](https://douyinapidoc.readthedocs.io/zh-cn/stable/source/API/api/) 与 [DouyinComments 的回复列表示例](https://github.com/alphaply/DouyinComments/blob/master/fetch_replies.py)，属于第三方线索，尚未由当前账号的真实响应校准。候选路径既不能把整批文字按顺序拼给某个编号，也不能把作品编号直接当作本人作品证明。因此执行回合保存无正文的通知元数据和候选路径，显示待核对，不创建或提交回复任务。用户提供的网页版截图及本次普通 Edge 查看中，“评论了你的作品”可对应子评论，提醒文案不能证明是主评论；“回复了你的评论”也没有直接父评论编号。先前手机端截图中的“首评”标签不缩小主评论的范围。
@@ -27,3 +33,5 @@ Agent 已接入只读 `douyin_rounds` 工具读取同一执行回合账本。`wo
 ## 与微信分支集成时核对
 
 抖音工作台入口、执行回合入口和渲染涉及共用文件 `internal/station/local_app_configuration.go`、`internal/stationui/static/local-home.js`、`internal/stationui/static/local-home.css`，后端通知入账还涉及 `internal/station/local_douyin_notice.go` 与 `internal/station/local_app_inbox.go`。本轮共用页面改动位于抖音 `rounds` 分组、作品音画续读请求、`publications` 创作与审阅入口及对应样式，以及互动许可和旧回复任务暂停提示；桌面宿主 `ApplicationWorkbenchDialog`、`MainForm`、`WindowTests` 新增 Douyin 专属纯文本草稿与项目工具路由，主页面只预填输入框或打开工具页。共用 `internal/apphost/publication.go` 增加仅供本机 owner 精确任务审阅的方法，`internal/station/local_app_publication.go` 注册抖音专属只读审阅路由；通用发布列表与状态结构保持元数据边界。共用 `internal/station/local_tools.go` 增加 `douyin_rounds` 的发现、分派与作品上下文源核对接线，实现在抖音专属 `internal/station/local_douyin_rounds_tool.go`；共用 `internal/station/local_app_interaction.go` 增加抖音评论回复的临时服务端门禁，其他应用交互路径仍按原逻辑。共用测试夹具 `internal/station/local_home_test.go` 另修正本机回环会话登录方式，原密码路由夹具保持原样。合并微信分支时核对这些文件中抖音专属分支及工作台分区变动，尤其保留微信原有执行回合路由与页面。未修改构建脚本；工作台能力说明位于本抖音专属文档。
+
+本次续开发的共用文件改动仅为 `internal/station/local_tools.go` 中 `douyin_video_check` 的发现、分派与最终生成前的成品来源复核接线，以及 `internal/stationui/static/local-home.js` 中抖音创作草稿和逐条通知的只读请求提示。`internal/station/local_douyin_web_login.go` 只增加抖音关系读取器注入点；`internal/stationbrowser/douyin_notice_detail.go` 只扩展抖音通知详情的被动请求识别。后续与 `wechat` 分支集成时逐项核对这些共用接线和页面文案。

@@ -36,7 +36,24 @@ func noticeDetailRequest(raw, origin string, known map[string]int) ([]noticeDeta
 		return nil, false
 	}
 	values, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(values["aid"]) != 1 || values["aid"][0] != "6383" || len(values["id_list"]) != 1 || len(values["id_list"][0]) > 2048 {
+	if err != nil || len(values["aid"]) != 1 || values["aid"][0] != "6383" {
+		return nil, false
+	}
+	// Observed and published web implementations use batched id_list and
+	// single notice_id_str requests respectively. Request recognition does not
+	// establish the single form's response shape. Never combine both forms.
+	if _, batch := values["id_list"]; !batch {
+		ids := values["notice_id_str"]
+		if len(ids) != 1 || !douyinVideoID.MatchString(ids[0]) {
+			return nil, false
+		}
+		listType, found := known[ids[0]]
+		if !found || listType < 0 {
+			return nil, false
+		}
+		return []noticeDetailRef{{id: ids[0], requestType: listType}}, true
+	}
+	if len(values["notice_id_str"]) != 0 || len(values["id_list"]) != 1 || len(values["id_list"][0]) > 2048 {
 		return nil, false
 	}
 	var items []json.RawMessage

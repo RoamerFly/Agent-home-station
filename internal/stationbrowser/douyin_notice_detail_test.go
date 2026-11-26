@@ -42,6 +42,41 @@ func TestDouyinNoticeDetailRequiresKnownExactIDs(t *testing.T) {
 	}
 }
 
+func TestDouyinNoticeDetailSingleIDRequestStaysBoundToKnownNotice(t *testing.T) {
+	const origin = "https://www.douyin.com"
+	known := map[string]int{"123456": 31, "777777": 0}
+	makeURL := func(id string) string {
+		return origin + douyinNoticeDetailPath + "?aid=6383&notice_id_str=" + url.QueryEscape(id)
+	}
+	refs, ok := noticeDetailRequest(makeURL("123456"), origin, known)
+	if !ok || len(refs) != 1 || refs[0].id != "123456" || refs[0].requestType != 31 {
+		t.Fatalf("known single detail rejected: %+v %v", refs, ok)
+	}
+	items, err := parseDouyinNoticeDetail(t.Context(), []byte(`{"status_code":0,"notice_list_v2":[{"nid_str":"123456","type":31,"aweme_id":"200","comment":{"cid":"400"}}]}`), refs)
+	if err != nil || len(items) != 1 || items[0].NoticeID != "123456" || len(items[0].Candidates) != 1 ||
+		items[0].Candidates[0].Path != "comment.cid" || items[0].Candidates[0].ID != "400" {
+		t.Fatalf("single detail was not normalized as an unclassified candidate: %+v %v", items, err)
+	}
+	if _, ok := noticeDetailRequest(makeURL("777777"), origin, known); !ok {
+		t.Fatal("known notice with list type 0 lost single detail request")
+	}
+	for _, raw := range []string{
+		makeURL("111111"),
+		makeURL("not-a-number"),
+		makeURL("123456") + "&notice_id_str=123456",
+		makeURL("123456") + "&id_list=" + url.QueryEscape(`[{"notice_id_str":"123456","type":31}]`),
+		strings.Replace(makeURL("123456"), "aid=6383", "aid=6383&aid=6383", 1),
+		strings.Replace(makeURL("123456"), origin, "https://creator.douyin.com", 1),
+	} {
+		if _, ok := noticeDetailRequest(raw, origin, known); ok {
+			t.Errorf("invalid single detail request admitted: %s", raw)
+		}
+	}
+	if _, err := parseDouyinNoticeDetail(t.Context(), []byte(`{"status_code":0,"notice_list_v2":[{"nid_str":"123456","type":33}]}`), refs); !errors.Is(err, ErrDouyinNoticeUnavailable) {
+		t.Fatalf("different notification type accepted: %v", err)
+	}
+}
+
 func TestDouyinNoticeDetailNormalizesPerNoticeWithoutReplyAuthority(t *testing.T) {
 	refs := []noticeDetailRef{{id: "123456", requestType: 0}}
 	raw := []byte(`{"status_code":0,"notice_list_v2":[{"nid_str":"123456","type":31,"create_time":1700000000,"aweme_id":"7391234567890123456","cid":"111","real_cid":"222","comment":{"cid":"333","reply_id":"444","text":"private-comment"},"reply_comment":{"cid":"555","reply_to_reply_id":"444"},"from_user":{"uid":"private-uid"},"message_extra":"private-extra"}]}`)

@@ -20,36 +20,37 @@ import (
 )
 
 type localToolSet struct {
-	directMedia           *deepseek.Client
-	memory                companion.ToolAccess
-	files                 *localWorkspaceFileTools
-	process               *localProcessTools
-	processError          error
-	projectTools          *localProjectTools
-	access                *localWorkspaceAccess
-	python                string
-	run                   *companion.LocalToolRun
-	traceID               string
-	inspectOnly           bool
-	store                 *companion.Store
-	wechat                *stationWechat
-	observations          *apphost.Observer
-	appReads              []apphost.ObservationResult
-	noticeReads           []localDouyinNoticeProof
-	douyinRoundProofs     []localDouyinRoundContextProof
-	wechatMemoryProofs    []localWechatMemoryProof
-	wechatMemoryRefs      map[string]localWechatMemoryReference
-	wechatMemoryPages     map[string]localWechatMemoryPage
-	douyinMemoryRequested bool
-	douyinMemoryOrigin    func(context.Context) error
-	douyinMemoryProofs    map[localDouyinMemoryProof]struct{}
-	douyinMemoryRefs      map[string]localDouyinMemoryReference
-	douyinMemoryPages     map[string]localDouyinMemoryPage
-	memoryLinked          bool
-	publications          *localChatService
-	requestTime           time.Time
-	continuationGuard     func(context.Context) error
-	mcpSessions           map[string]*stationMCPSession
+	directMedia            *deepseek.Client
+	memory                 companion.ToolAccess
+	files                  *localWorkspaceFileTools
+	process                *localProcessTools
+	processError           error
+	projectTools           *localProjectTools
+	access                 *localWorkspaceAccess
+	python                 string
+	run                    *companion.LocalToolRun
+	traceID                string
+	inspectOnly            bool
+	store                  *companion.Store
+	wechat                 *stationWechat
+	observations           *apphost.Observer
+	appReads               []apphost.ObservationResult
+	noticeReads            []localDouyinNoticeProof
+	douyinRoundProofs      []localDouyinRoundContextProof
+	douyinVideoCheckProofs []localDouyinVideoCheckProof
+	wechatMemoryProofs     []localWechatMemoryProof
+	wechatMemoryRefs       map[string]localWechatMemoryReference
+	wechatMemoryPages      map[string]localWechatMemoryPage
+	douyinMemoryRequested  bool
+	douyinMemoryOrigin     func(context.Context) error
+	douyinMemoryProofs     map[localDouyinMemoryProof]struct{}
+	douyinMemoryRefs       map[string]localDouyinMemoryReference
+	douyinMemoryPages      map[string]localDouyinMemoryPage
+	memoryLinked           bool
+	publications           *localChatService
+	requestTime            time.Time
+	continuationGuard      func(context.Context) error
+	mcpSessions            map[string]*stationMCPSession
 	// catalog is the application index injected with the workspace note. It
 	// carries names and switch state only; no application content is loaded.
 	catalog map[string]any
@@ -65,7 +66,7 @@ type localToolSet struct {
 func (*localToolSet) AutonomousActions() bool { return true }
 
 func (t *localToolSet) RequestScopedMemory() bool {
-	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0 || len(t.douyinRoundProofs) > 0
+	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0 || len(t.douyinRoundProofs) > 0 || len(t.douyinVideoCheckProofs) > 0
 }
 
 func (h *localChatService) tools(store *companion.Store, in companion.Input) *localToolSet {
@@ -125,6 +126,9 @@ func (t *localToolSet) ValidateGenerationSources(ctx context.Context) error {
 	if err := t.checkDouyinRoundContextProofs(ctx); err != nil {
 		return err
 	}
+	if err := t.checkDouyinVideoCheckProofs(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -181,6 +185,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	}
 	if t.access.home.artifacts != nil && t.run != nil {
 		all = append(all, mcptools.NewTool(localArtifactPublishTool, "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，宿主自动计算并返回实际 SHA-256；已知哈希时可选 expected_sha256 核对指定版本，无需仅为登记另起进程算哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path"],"additionalProperties":false}`))
+		all = append(all, localDouyinVideoCheckTool())
 	}
 	// Execution and generation only appear after the owner hands them over.
 	if t.grants.Documents {
@@ -320,6 +325,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localArtifactPublishTool {
 		return t.publishCheckpointed(ctx, raw)
+	}
+	if name == localDouyinVideoCheckToolName {
+		return t.callDouyinVideoCheck(ctx, raw)
 	}
 	if strings.HasPrefix(name, "memory_") {
 		return t.memory.Call(ctx, name, raw)
