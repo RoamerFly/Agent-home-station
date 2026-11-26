@@ -116,20 +116,73 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	m.readRelation = func(_ context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
 		check func() error) (stationbrowser.DouyinCommentRelation, error) {
 		readCalls++
-		if !strings.Contains(profile, "web-login") || req != (stationbrowser.DouyinCommentRelationRequest{
-			WorkID: workID, RootID: "400", TargetID: "300"}) || check() != nil {
+		if !strings.Contains(profile, "web-login") || req.WorkID != workID || check() != nil {
 			t.Fatalf("reader lost exact scope or authorization: profile=%q req=%+v", profile, req)
 		}
-		return stationbrowser.DouyinCommentRelation{CID: "300", WorkID: workID, ReplyID: "400",
-			ReplyToReplyID: "500", AuthorUID: "901", Text: "合成目标评论"}, nil
+		switch req {
+		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "300"}:
+			return stationbrowser.DouyinCommentRelation{CID: "300", WorkID: workID, ReplyID: "400",
+				ReplyToReplyID: "500", AuthorUID: "901", Text: "合成目标评论"}, nil
+		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, TargetID: "400"}:
+			return stationbrowser.DouyinCommentRelation{CID: "400", WorkID: workID, ReplyID: "0",
+				ReplyToReplyID: "0", AuthorUID: "901", Text: "合成主评论"}, nil
+		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "500"}:
+			return stationbrowser.DouyinCommentRelation{CID: "500", WorkID: workID, ReplyID: "400",
+				ReplyToReplyID: "0", AuthorUID: creatorUID, Text: "合成本人子评论"}, nil
+		default:
+			t.Fatalf("reader was asked to scan an unexpected comment: %+v", req)
+			return stationbrowser.DouyinCommentRelation{}, nil
+		}
 	}
 	result, err := call(tools, args())
 	if err != nil || result["state"] != "observed" || result["cid"] != "300" ||
 		result["reply_id"] != "400" || result["reply_to_reply_id"] != "500" ||
 		result["author_is_creator"] != false || result["text"] != "合成目标评论" ||
-		result["reply_eligible"] != false || readCalls != 1 {
+		result["root_state"] != "observed" || result["parent_state"] != "observed" ||
+		result["parent_author_is_creator"] != true || result["thread_state"] != "self_child_observed" ||
+		result["reply_eligible"] != false || readCalls != 3 {
 		t.Fatalf("target relation became reply proof or lost fields: %v %v reads=%d", result, err, readCalls)
 	}
+	selfChildReader := m.readRelation
+	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
+		check func() error) (stationbrowser.DouyinCommentRelation, error) {
+		if req.TargetID == "500" {
+			return stationbrowser.DouyinCommentRelation{CID: "500", WorkID: workID, ReplyID: "400",
+				ReplyToReplyID: "0", AuthorUID: "902", Text: "他人的子评论"}, check()
+		}
+		return selfChildReader(ctx, profile, req, check)
+	}
+	otherChild, err := call(tools, args())
+	if err != nil || otherChild["thread_state"] != "other_child_observed" ||
+		otherChild["parent_author_is_creator"] != false || otherChild["reply_eligible"] != false {
+		t.Fatalf("another person's child was not excluded: %v %v", otherChild, err)
+	}
+	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
+		check func() error) (stationbrowser.DouyinCommentRelation, error) {
+		if req.TargetID == "300" {
+			return stationbrowser.DouyinCommentRelation{CID: "300", WorkID: workID, ReplyID: "400",
+				ReplyToReplyID: "0", AuthorUID: "901", Text: "直接回复主评论"}, check()
+		}
+		t.Fatalf("direct-root child caused extra relation probe: %+v", req)
+		return stationbrowser.DouyinCommentRelation{}, nil
+	}
+	directRoot, err := call(tools, args())
+	if err != nil || directRoot["thread_state"] != "direct_parent_is_root" || directRoot["reply_eligible"] != false {
+		t.Fatalf("direct reply to root was not excluded: %v %v", directRoot, err)
+	}
+	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
+		check func() error) (stationbrowser.DouyinCommentRelation, error) {
+		if req.TargetID == "400" {
+			return stationbrowser.DouyinCommentRelation{}, errors.Join(stationbrowser.ErrDouyinCommentTargetPending, check())
+		}
+		return selfChildReader(ctx, profile, req, check)
+	}
+	pendingRoot, err := call(tools, args())
+	if err != nil || pendingRoot["root_state"] != "pending" || pendingRoot["parent_state"] != nil ||
+		pendingRoot["thread_state"] != "unverified" || pendingRoot["reply_eligible"] != false {
+		t.Fatalf("missing natural root page became a reply proof: %v %v", pendingRoot, err)
+	}
+	m.readRelation = selfChildReader
 	if err := tools.ValidateGenerationSources(t.Context()); err != nil {
 		t.Fatalf("relation source was not retained: %v", err)
 	}

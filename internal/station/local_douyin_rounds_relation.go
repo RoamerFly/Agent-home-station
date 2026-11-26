@@ -15,25 +15,29 @@ import (
 )
 
 // A relation probe never promotes a notification candidate to reply proof.
-// Only one page naturally requested by the video page is inspected; a missing
-// target, root or direct parent remains unverified.
+// Each exact target/root/parent probe inspects at most one naturally emitted
+// page. A missing row remains unverified; no comment thread is scanned.
 type localDouyinRoundRelationResult struct {
-	Date            string `json:"date"`
-	NoticeID        string `json:"notice_id"`
-	WorkID          string `json:"work_id"`
-	TargetPath      string `json:"target_path"`
-	TargetID        string `json:"target_id"`
-	RootPath        string `json:"root_path,omitempty"`
-	RootID          string `json:"root_id,omitempty"`
-	State           string `json:"state"`
-	StopReason      string `json:"stop_reason,omitempty"`
-	CID             string `json:"cid,omitempty"`
-	ReplyID         string `json:"reply_id,omitempty"`
-	ReplyToReplyID  string `json:"reply_to_reply_id,omitempty"`
-	AuthorIsCreator *bool  `json:"author_is_creator,omitempty"`
-	Text            string `json:"text,omitempty"`
-	Coverage        string `json:"coverage"`
-	ReplyEligible   bool   `json:"reply_eligible"`
+	Date                  string `json:"date"`
+	NoticeID              string `json:"notice_id"`
+	WorkID                string `json:"work_id"`
+	TargetPath            string `json:"target_path"`
+	TargetID              string `json:"target_id"`
+	RootPath              string `json:"root_path,omitempty"`
+	RootID                string `json:"root_id,omitempty"`
+	State                 string `json:"state"`
+	StopReason            string `json:"stop_reason,omitempty"`
+	CID                   string `json:"cid,omitempty"`
+	ReplyID               string `json:"reply_id,omitempty"`
+	ReplyToReplyID        string `json:"reply_to_reply_id,omitempty"`
+	AuthorIsCreator       *bool  `json:"author_is_creator,omitempty"`
+	RootState             string `json:"root_state,omitempty"`
+	ParentState           string `json:"parent_state,omitempty"`
+	ParentAuthorIsCreator *bool  `json:"parent_author_is_creator,omitempty"`
+	ThreadState           string `json:"thread_state,omitempty"`
+	Text                  string `json:"text,omitempty"`
+	Coverage              string `json:"coverage"`
+	ReplyEligible         bool   `json:"reply_eligible"`
 }
 
 func validDouyinRoundRelationTargetPath(path string) bool {
@@ -131,7 +135,9 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	if reader == nil {
 		return result, nil, stationbrowser.ErrDouyinCommentsUnavailable
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	// At most three exact reads: notification target, its declared root, then
+	// its declared direct parent. Each still needs a naturally emitted page.
+	readCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	stop := context.AfterFunc(serviceCtx, cancel)
 	defer stop()
@@ -166,6 +172,87 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	authorIsCreator := hex.EncodeToString(digest[:]) == evidence.creatorAccount
 	result.AuthorIsCreator = &authorIsCreator
 	result.Text = got.Text
-	result.Coverage = "只核对通知详情候选指向的单条评论；主楼和直接父评论尚未核实，通知字段语义尚未校准"
+	if in.RootID == "" {
+		result.ThreadState = "top_level_observed"
+		result.Coverage = "仅目标主评论的结构化关系已观察；通知目标字段语义尚未校准"
+		return result, proof, nil
+	}
+	if got.ReplyToReplyID == "0" || got.ReplyToReplyID == in.RootID {
+		result.ThreadState = "direct_parent_is_root"
+		result.Coverage = "目标子评论直接回复主楼；不是回复本账号子评论的情形；通知字段语义尚未校准"
+		return result, proof, nil
+	}
+	readRelated := func(rootID, targetID string) (stationbrowser.DouyinCommentRelation, error) {
+		if err := check(); err != nil {
+			return stationbrowser.DouyinCommentRelation{}, err
+		}
+		row, err := reader(readCtx, profile, stationbrowser.DouyinCommentRelationRequest{
+			WorkID: result.WorkID, RootID: rootID, TargetID: targetID}, check)
+		if checkErr := check(); checkErr != nil {
+			return stationbrowser.DouyinCommentRelation{}, checkErr
+		}
+		if readCtx.Err() != nil {
+			return stationbrowser.DouyinCommentRelation{}, stationbrowser.ErrDouyinCommentsUnavailable
+		}
+		return row, err
+	}
+	classifyRead := func(err error, field *string, pendingReason string) error {
+		if err == nil {
+			return nil
+		}
+		switch {
+		case errors.Is(err, stationbrowser.ErrDouyinLoginActive):
+			*field, result.StopReason = "busy", "browser_profile_in_use"
+		case errors.Is(err, stationbrowser.ErrDouyinCommentTargetPending):
+			*field, result.StopReason = "pending", pendingReason
+		default:
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(err, apphost.ErrObservationForbidden) || errors.Is(err, errLocalDouyinNoticeGrant) {
+				return err
+			}
+			return stationbrowser.ErrDouyinCommentsUnavailable
+		}
+		return nil
+	}
+	root, readErr := readRelated("", in.RootID)
+	if err := classifyRead(readErr, &result.RootState, "root_not_in_natural_page"); err != nil {
+		return result, nil, err
+	}
+	if readErr != nil {
+		result.ThreadState = "unverified"
+		result.Coverage = "目标评论已观察；主评论仍未核实；不能判断回复关系"
+		return result, proof, nil
+	}
+	if root.CID != in.RootID || root.WorkID != result.WorkID || root.ReplyID != "0" ||
+		root.ReplyToReplyID != "0" || !validLocalDouyinCommentID(root.AuthorUID) ||
+		strings.TrimSpace(root.Text) == "" || len(root.Text) > 8192 {
+		return result, nil, apphost.ErrObservationInvalid
+	}
+	result.RootState = "observed"
+	parent, readErr := readRelated(in.RootID, got.ReplyToReplyID)
+	if err := classifyRead(readErr, &result.ParentState, "parent_not_in_natural_page"); err != nil {
+		return result, nil, err
+	}
+	if readErr != nil {
+		result.ThreadState = "unverified"
+		result.Coverage = "目标与主评论已观察；直接父评论仍未核实；不能判断回复关系"
+		return result, proof, nil
+	}
+	if parent.CID != got.ReplyToReplyID || parent.WorkID != result.WorkID || parent.ReplyID != in.RootID ||
+		parent.ReplyToReplyID == parent.CID ||
+		parent.ReplyToReplyID != "0" && !validLocalDouyinCommentID(parent.ReplyToReplyID) ||
+		!validLocalDouyinCommentID(parent.AuthorUID) || strings.TrimSpace(parent.Text) == "" || len(parent.Text) > 8192 {
+		return result, nil, apphost.ErrObservationInvalid
+	}
+	result.ParentState = "observed"
+	parentDigest := sha256.Sum256([]byte(parent.AuthorUID))
+	parentIsCreator := hex.EncodeToString(parentDigest[:]) == evidence.creatorAccount
+	result.ParentAuthorIsCreator = &parentIsCreator
+	if parentIsCreator {
+		result.ThreadState = "self_child_observed"
+	} else {
+		result.ThreadState = "other_child_observed"
+	}
+	result.Coverage = "仅逐条核对目标、主评论及直接父评论的结构化关系；通知目标字段语义尚未校准，不授权回复"
 	return result, proof, nil
 }
