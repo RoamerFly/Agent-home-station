@@ -27,3 +27,12 @@
 平台游标停滞时停止并返回原因，不重复循环。后批控件未能加载时返回已读取部分和有效续读位置。单次浏览器操作目前有 45 秒总时限，每批等待八秒；深页重放或平台响应缓慢可能需要重新读取，不能据此宣称已覆盖全部历史通知。
 
 Windows 验证使用真实 Edge 和合成回环页面，覆盖悬停入口、按钮与滚动续页、批数、跨批去重、前批变化、停滞游标和请求拦截；Station 接口和窄窗浏览器回放覆盖一次性许可、续读凭证及撤权。正式账号的真实通知字段、页面变体和平台标已读结果仍需单独验收。本轮没有访问正式账号、发送互动或开播。
+
+## 现成接口与接入依据（2026-11-26 核对）
+
+- [douyin-mcp 的网页版通知列表与详情实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_relation.go#L151-L187)使用 `GET /aweme/v1/web/notice/` 读取 `notice_list_v2`；其[通知详情实现](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_notice.go#L78-L99)使用 `GET /aweme/v1/web/notice/detail/` 和 `notice_id_str`。该 MIT 项目返回未经类型化的详情，测试只核对请求路径，没有可验证的通知详情响应样本。列表实现固定 `is_mark_read=1`，现有工作台的一次性标已读许可仍须保留。
+- 同一项目的[评论及子评论接口](https://github.com/yunsur/douyin-mcp/blob/ad31354e6723e86fc0ee397ad62d93f8cdeffd11/douyin/api_comment.go#L10-L160)分别使用 `/aweme/v1/web/comment/list/` 和 `/aweme/v1/web/comment/list/reply/`，后者以根评论 `cid` 翻页。它们可在通知明确指向评论后核对该评论所在的层级；不能用遍历作品评论区代替本需求的通知发现入口。[DouyinComments 的子评论解析](https://github.com/alphaply/DouyinComments/blob/a4fa0e5525d9df1745f92edd4c7577172855cfb7/fetch_replies.py#L58-L79)还使用 `cid`、`reply_id`、`reply_to_reply_id` 和作者 `sec_uid`，但没有提供通知与这些编号的可靠对应关系。
+- 较早的 [TikTokDownload 网页接口说明](https://github.com/Johnserf-Seed/TikTokDownload/wiki/APIv1.0)也列出通知详情及评论字段，但其详情请求使用 `id_list`，与上述较新的 `notice_id_str` 实现不同。不能仅凭旧说明固定生产请求形态。
+- [抖音开放平台评论回复事件](https://open.douyin.com/platform/resource/docs/openapi/interaction-management/comment-management-user/accept-comment-reply-event)正式提供 `comment_id`、`reply_to_comment_id`、`reply_to_item_id` 与用户标识；[用户评论管理权限](https://open.douyin.com/platform/resource/docs/accession-guide/type-and-permission/)需申请及用户 OAuth 授权。这是独立的开放平台接入路径，不等同于当前保存的网页登录会话。已核对的事件目录未证明存在覆盖所有主评论的同类事件。
+
+下一步沿用工作台已保存的网页版会话、账号绑定和通知授权：由通知列表发现具体 `nid_str`，针对该编号核对详情，再仅对指向的评论及其直接父评论做定向校验。必须同时确认作品归当前账号、评论的真实 `cid`、直接父评论编号和作者、当前账号的作者标识；主评论或直接回复本账号子评论的子评论才可进入回复决策。现有公开项目与测试未提供这条完整证据链，正式账号的脱敏通知列表、单条详情及对应评论响应需要核对后才能启用自动回复。脱敏样本保留编号之间的对应关系，去除 Cookie、签名、令牌、昵称、正文和媒体地址；原始响应不提交仓库。
