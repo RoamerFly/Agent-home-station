@@ -100,22 +100,86 @@ func TestAdministratorResumesOriginalGroupVideoTaskWithVerifiedCorrection(t *tes
 	}
 	status, body, _ := f.request("POST", "/api/agent/tasks/"+old.ID, map[string]any{
 		"action": "resume", "continuation_note": "取消旧双人图作业，只用新上传的 mini 参考图重做两段共 15 秒视频，最终成片发原群",
-		"source_message_ids": []string{"new-image", "correction"},
+		"source_message_ids": []string{"new-image", "correction"}, "required_media_kind": "video",
 	}, true, true)
 	if status != http.StatusOK {
 		t.Fatalf("correction resume: %d %s", status, body)
 	}
 	got, ok := f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
 	if !ok || got.State != "pending" || got.ID != old.ID || got.Goal != old.Goal || got.RequestedText != old.RequestedText ||
-		!slices.Equal(got.SourceMessageIDs, []string{"original", "new-image", "correction"}) || got.Delivery == nil || *got.Delivery != *oldReceipt ||
+		!slices.Equal(got.SourceMessageIDs, []string{"original", "new-image", "correction"}) || got.Delivery != nil || got.CorrectionOldDeliveryTrace != oldReceipt.Trace ||
 		got.WorkCompleted || got.CorrectionAt.IsZero() || strings.Contains(got.Checkpoint, "old-job-needle") ||
-		!strings.Contains(got.Checkpoint, "新上传的 mini 参考图") || !strings.Contains(got.Checkpoint, "old-text") || len(got.Actions) != 1 {
+		!strings.Contains(got.Checkpoint, "新上传的 mini 参考图") || !strings.Contains(got.Checkpoint, "old-text") || len(got.Actions) != 1 ||
+		got.CorrectionRequiredMediaKind != "video" || got.CorrectionReferenceImageID != "new-image" {
 		t.Fatalf("original task or accepted receipt was lost: %+v", got)
 	}
 	input, err := f.manager.claimAgentTask(time.Now().Add(time.Second), func(string) bool { return false })
 	if err != nil || input == nil || input.TaskID != old.ID || strings.Contains(input.Text, "old-job-needle") ||
 		!strings.Contains(input.Text, "new-image") || !strings.Contains(input.Text, "correction") || !strings.Contains(input.Text, "old-text") {
 		t.Fatalf("corrected task context reintroduced old work: %+v %v", input, err)
+	}
+	if err := f.manager.updateAgentDelivery(*input, *oldReceipt); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	if got.Delivery != nil || !slices.Contains(got.CorrectionTraces, input.TraceID) {
+		t.Fatalf("old receipt entered correction generation: %+v", got)
+	}
+	got.State = "completed"
+	if _, err := f.manager.agent.saveTask(got); err == nil {
+		t.Fatal("old task history satisfied corrected video")
+	}
+	access := &permittedTools{manager: f.manager, trace: *input}
+	access.rememberTaskAction("station_comfy", json.RawMessage(`{"action":"run","source_message_id":"new-image"}`), `{"job_id":"new-job"}`, nil)
+	beforePublish, _ := f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	beforePublish.Delivery = &bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1}
+	if beforePublish.correctedDeliveryComplete() {
+		t.Fatal("new Comfy job alone satisfied corrected video without a staged output")
+	}
+	access.rememberTaskAction("artifact_publish", json.RawMessage(`{"path":"new-final.mp4","task_id":"group-video"}`), `{"staged_only":true,"media":[{"kind":"video","id":"new-media"}]}`, nil)
+	newReceipt := bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1}
+	if err := f.manager.updateAgentDelivery(*input, newReceipt); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	if got.CorrectionWorkStartedAt.IsZero() || got.CorrectionMediaPreparedAt.IsZero() || got.Delivery == nil || got.State == "completed" {
+		t.Fatalf("new video evidence not preserved before completion: %+v", got)
+	}
+	got.State = "completed"
+	if _, err := f.manager.agent.saveTask(got); err != nil {
+		t.Fatalf("new video was not allowed to complete: %v", err)
+	}
+	if err := f.manager.agent.retireSettled(); err != nil {
+		t.Fatal(err)
+	}
+	if _, active := f.manager.agent.data.Tasks[old.ID]; active {
+		t.Fatal("completed task was not archived")
+	}
+	status, body, _ = f.request("POST", "/api/agent/tasks/"+old.ID, map[string]any{
+		"action": "reopen", "continuation_note": "再次只用这张参考图重新制作视频",
+		"source_message_ids": []string{"new-image", "correction"}, "required_media_kind": "video",
+	}, true, true)
+	if status != http.StatusOK {
+		t.Fatalf("archived correction reopen: %d %s", status, body)
+	}
+	got, ok = f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	if !ok || got.State != "pending" || got.Delivery != nil || got.CorrectionOldDeliveryTrace != input.TraceID ||
+		len(got.CorrectionTraces) != 0 || !got.CorrectionWorkStartedAt.IsZero() || !got.CorrectionMediaPreparedAt.IsZero() ||
+		!strings.Contains(got.Checkpoint, "再次只用这张参考图") {
+		t.Fatalf("archive reopen carried previous generation into new work: %+v", got)
+	}
+	previousCorrectionAt := got.CorrectionAt
+	status, body, _ = f.request("POST", "/api/agent/tasks/"+old.ID, map[string]any{
+		"action": "resume", "continuation_note": "第三次纠正，仍只使用这张参考图",
+		"source_message_ids": []string{"new-image", "correction"}, "required_media_kind": "video",
+	}, true, true)
+	if status != http.StatusOK {
+		t.Fatalf("active second correction: %d %s", status, body)
+	}
+	got, _ = f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	if !got.CorrectionAt.After(previousCorrectionAt) || got.Delivery != nil || len(got.CorrectionTraces) != 0 ||
+		!strings.Contains(got.Checkpoint, "第三次纠正") {
+		t.Fatalf("second correction reused prior generation: %+v", got)
 	}
 }
 

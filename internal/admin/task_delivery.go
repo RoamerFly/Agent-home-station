@@ -83,6 +83,9 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		if task.ID != in.TaskID || task.State == "cancelled" {
 			continue
 		}
+		if !task.CorrectionAt.IsZero() && !contains(task.CorrectionTraces, delivery.Trace) {
+			return nil // A receipt from the superseded work generation arrived late.
+		}
 		if task.Delivery != nil && *task.Delivery == delivery {
 			return nil
 		}
@@ -140,6 +143,11 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 				task.LastResult += "；所需媒体已获微信服务端回执，客户端显示/播放尚未核实；说明文字由模型选择省略"
 			} else {
 				task.LastResult += "；所需媒体与介绍已获微信服务端回执，客户端显示/播放尚未核实"
+			}
+			if !task.correctedDeliveryComplete() && task.State == "completed" {
+				task.State = "waiting"
+				task.WorkCompleted = false
+				task.Next = time.Now().Add(bot.DeliveryRetryBackoff(task.Runs))
 			}
 		case "failed", "partial_failed":
 			task.State = "failed"

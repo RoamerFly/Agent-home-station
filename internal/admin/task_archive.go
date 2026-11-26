@@ -209,6 +209,37 @@ func (a *agentControl) reopenArchivedTask(id, account, continuationNote string) 
 	return copyTask(t), nil
 }
 
+// Reopen a completed task as a new correction generation. The caller has
+// already verified the added native messages and prepared the replacement
+// checkpoint; this method commits that snapshot before removing the archive.
+func (a *agentControl) reopenArchivedCorrectedTask(t agentTask) (agentTask, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, active := a.data.Tasks[t.ID]; active {
+		return agentTask{}, errors.New("任务仍在活跃队列")
+	}
+	old, ok := a.archived[t.ID]
+	if !ok || old.Account != t.Account || old.Thread != t.Thread || old.Sender != t.Sender ||
+		old.State != "completed" || !old.Updated.Equal(t.Updated) || t.CorrectionAt.IsZero() ||
+		old.Reminder != nil || old.ReminderDue || len(old.PendingOperations) > 0 {
+		return agentTask{}, errors.New("已完成任务状态已变化，无法纠错恢复")
+	}
+	t.State = "pending"
+	t.WorkCompleted = false
+	t.Delivery = nil
+	t.Next = time.Now().UTC()
+	t.Updated = t.Next
+	t.Runs = 0
+	a.data.Tasks[t.ID] = copyTask(t)
+	if err := a.persist(); err != nil {
+		delete(a.data.Tasks, t.ID)
+		return agentTask{}, err
+	}
+	delete(a.archived, t.ID)
+	_ = os.Remove(filepath.Join(a.dir, "archive", "agent-tasks", agentID(t.ID)+".json"))
+	return copyTask(t), nil
+}
+
 // Completion and delivery remain separate. Incomplete/uncertain delivery never
 // disappears from the active list merely because a model said "completed".
 func (a *agentControl) retireSettled() error {

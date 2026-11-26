@@ -184,27 +184,33 @@ type agentTask struct {
 	// conversation whose material was actually read, and DeliveryThread is the
 	// conversation where the result belongs. Thread remains the legacy
 	// execution/delivery key so older persisted tasks continue to work.
-	RequestThread          string    `json:"request_thread,omitempty"`
-	SourceThread           string    `json:"source_thread,omitempty"`
-	SourceMessageIDs       []string  `json:"source_message_ids,omitempty"`
-	CorrectionAt           time.Time `json:"correction_at,omitempty"`
-	DeliveryThread         string    `json:"delivery_thread,omitempty"`
-	ID                     string    `json:"id"`
-	Account                string    `json:"account"`
-	Thread                 string    `json:"thread"`
-	Sender                 string    `json:"sender"`
-	Title                  string    `json:"title"`
-	Checkpoint             string    `json:"checkpoint"`
-	State                  string    `json:"state"`
-	Next                   time.Time `json:"next"`
-	Updated                time.Time `json:"updated"`
-	Runs                   int       `json:"runs"`
-	LastResult             string    `json:"last_result,omitempty"`
-	NoProgressKey          string    `json:"no_progress_key,omitempty"`
-	NoProgressRuns         int       `json:"no_progress_runs,omitempty"`
-	NoProgressObservedRun  int       `json:"no_progress_observed_run,omitempty"`
-	CrossThreadChildWait   bool      `json:"cross_thread_child_wait,omitempty"`
-	CrossThreadChildFailed bool      `json:"cross_thread_child_failed,omitempty"`
+	RequestThread               string    `json:"request_thread,omitempty"`
+	SourceThread                string    `json:"source_thread,omitempty"`
+	SourceMessageIDs            []string  `json:"source_message_ids,omitempty"`
+	CorrectionAt                time.Time `json:"correction_at,omitempty"`
+	CorrectionRequiredMediaKind string    `json:"correction_required_media_kind,omitempty"`
+	CorrectionReferenceImageID  string    `json:"correction_reference_image_id,omitempty"`
+	CorrectionOldDeliveryTrace  string    `json:"correction_old_delivery_trace,omitempty"`
+	CorrectionTraces            []string  `json:"correction_traces,omitempty"`
+	CorrectionWorkStartedAt     time.Time `json:"correction_work_started_at,omitempty"`
+	CorrectionMediaPreparedAt   time.Time `json:"correction_media_prepared_at,omitempty"`
+	DeliveryThread              string    `json:"delivery_thread,omitempty"`
+	ID                          string    `json:"id"`
+	Account                     string    `json:"account"`
+	Thread                      string    `json:"thread"`
+	Sender                      string    `json:"sender"`
+	Title                       string    `json:"title"`
+	Checkpoint                  string    `json:"checkpoint"`
+	State                       string    `json:"state"`
+	Next                        time.Time `json:"next"`
+	Updated                     time.Time `json:"updated"`
+	Runs                        int       `json:"runs"`
+	LastResult                  string    `json:"last_result,omitempty"`
+	NoProgressKey               string    `json:"no_progress_key,omitempty"`
+	NoProgressRuns              int       `json:"no_progress_runs,omitempty"`
+	NoProgressObservedRun       int       `json:"no_progress_observed_run,omitempty"`
+	CrossThreadChildWait        bool      `json:"cross_thread_child_wait,omitempty"`
+	CrossThreadChildFailed      bool      `json:"cross_thread_child_failed,omitempty"`
 	// Model recovery checkpoints are created only after a completed, read-only
 	// tool result.  They let a retryable model request continue the same task
 	// without rerunning the tool or widening its original authority.
@@ -212,6 +218,23 @@ type agentTask struct {
 	RecoveryEvidence *companion.GenerationEvidence     `json:"model_recovery_evidence,omitempty"`
 	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"model_recovery_privacy,omitempty"`
 }
+
+// A corrected task is a new work generation under the same request ID. Old
+// text/media receipts remain in the audit trail, but cannot finish this work.
+func (t agentTask) correctedDeliveryComplete() bool {
+	if t.CorrectionAt.IsZero() {
+		return true
+	}
+	if t.Delivery == nil || t.Delivery.State != "accepted" || !contains(t.CorrectionTraces, t.Delivery.Trace) {
+		return false
+	}
+	if t.CorrectionRequiredMediaKind == "video" {
+		return t.CorrectionWorkStartedAt.After(t.CorrectionAt) && t.CorrectionMediaPreparedAt.After(t.CorrectionAt) &&
+			t.Delivery.Expected > 0 && t.Delivery.Accepted == t.Delivery.Expected
+	}
+	return t.Delivery.Accepted > 0 || t.Delivery.TextAccepted > 0
+}
+
 type agentOperation struct {
 	AppAction *apphost.ActionIntent `json:"app_action,omitempty"`
 	Arguments json.RawMessage       `json:"arguments,omitempty"`
@@ -479,6 +502,25 @@ func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 			t.Constraints = copyTask(old).Constraints
 		}
 		t.OwnerRequested = t.OwnerRequested || old.OwnerRequested
+		if !old.CorrectionAt.IsZero() {
+			t.CorrectionAt = old.CorrectionAt
+			t.CorrectionRequiredMediaKind = old.CorrectionRequiredMediaKind
+			t.CorrectionReferenceImageID = old.CorrectionReferenceImageID
+			t.CorrectionOldDeliveryTrace = old.CorrectionOldDeliveryTrace
+			traces := slices.Clone(old.CorrectionTraces)
+			for _, trace := range t.CorrectionTraces {
+				if !contains(traces, trace) {
+					traces = append(traces, trace)
+				}
+			}
+			t.CorrectionTraces = traces
+			if !old.CorrectionWorkStartedAt.IsZero() {
+				t.CorrectionWorkStartedAt = old.CorrectionWorkStartedAt
+			}
+			if !old.CorrectionMediaPreparedAt.IsZero() {
+				t.CorrectionMediaPreparedAt = old.CorrectionMediaPreparedAt
+			}
+		}
 	}
 	if err := validateTaskConstraints(t); err != nil {
 		return agentTask{}, err
@@ -502,6 +544,9 @@ func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 	}
 	if t.State == "completed" && (len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted") {
 		t.State = "waiting_delivery"
+	}
+	if t.State == "completed" && !t.correctedDeliveryComplete() {
+		return agentTask{}, errors.New("纠错后的新视频尚未生成并获得本轮微信媒体回执，原任务未完成")
 	}
 	if exists {
 		t.PendingOperations = append([]string{}, old.PendingOperations...)
@@ -912,6 +957,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		// Non-owner continuations retain proactive authorization and quiet checks;
 		// completed evaluations do not exhaust a daily allowance.
 		in := companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}
+		if !t.CorrectionAt.IsZero() && !contains(t.CorrectionTraces, in.TraceID) {
+			t.CorrectionTraces = append(t.CorrectionTraces, in.TraceID)
+		}
 		taskResultInput(t, &in)
 		if ownerContinuation {
 			in.Mode, in.Directed = "direct", true
@@ -1283,9 +1331,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /api/agent/tasks/{id}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Action           string   `json:"action"`
-			ContinuationNote string   `json:"continuation_note"`
-			SourceMessageIDs []string `json:"source_message_ids"`
+			Action            string   `json:"action"`
+			ContinuationNote  string   `json:"continuation_note"`
+			SourceMessageIDs  []string `json:"source_message_ids"`
+			RequiredMediaKind string   `json:"required_media_kind"`
 			reminderEdit
 		}
 		if !decode(w, r, &in) {
@@ -1307,6 +1356,26 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			return
 		}
 		if in.Action == "reopen" {
+			if len(in.SourceMessageIDs) > 0 || in.RequiredMediaKind != "" {
+				old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), "")
+				if !ok || old.State != "completed" {
+					fail(w, 409, "未找到可纠错恢复的已完成任务")
+					return
+				}
+				corrected, err := s.manager.prepareTaskCorrection(r.Context(), old, in.ContinuationNote, in.SourceMessageIDs, in.RequiredMediaKind)
+				if err != nil {
+					fail(w, 409, err.Error())
+					return
+				}
+				task, err := s.manager.agent.reopenArchivedCorrectedTask(corrected)
+				if err != nil {
+					fail(w, 409, err.Error())
+					return
+				}
+				s.manager.record(bot.Record{Event: "agent_task_corrected", Category: "decision", ThreadID: task.Thread, Sender: task.Sender, MessageID: task.OriginTrace, RelatedMessageID: task.ID, Status: "pending", Reason: "admin_explicit_correction", Origin: "admin"})
+				respond(w, 200, task)
+				return
+			}
 			task, err := s.manager.agent.reopenArchivedTask(r.PathValue("id"), s.manager.native.Account(), in.ContinuationNote)
 			if err != nil {
 				fail(w, 409, err.Error())
@@ -1429,34 +1498,12 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			if in.Action == "resume" {
 				correction := strings.TrimSpace(in.ContinuationNote) != "" || len(in.SourceMessageIDs) > 0
 				if correction {
-					if t.Reminder != nil || t.resultKind() != "" || t.DeliveryJob != "" || len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted" {
-						fail(w, 409, "原任务仍有运行或发送结果待核对，请先取消旧作业并核对回执")
-						return
-					}
-					note := strings.TrimSpace(in.ContinuationNote)
-					if note == "" || len(in.SourceMessageIDs) == 0 || len([]rune(note)) > 600 || strings.ContainsRune(note, 0) {
-						fail(w, 400, "纠错续办需要说明和来源消息，说明最多 600 字")
-						return
-					}
-					sources, err := s.manager.verifiedTaskCorrectionSources(r.Context(), t, in.SourceMessageIDs)
+					corrected, err := s.manager.prepareTaskCorrection(r.Context(), t, in.ContinuationNote, in.SourceMessageIDs, in.RequiredMediaKind)
 					if err != nil {
 						fail(w, 409, err.Error())
 						return
 					}
-					t.SourceMessageIDs = sources
-					// The correction replaces an obsolete tool checkpoint. The original
-					// request and accepted delivery receipt remain attached to this ID.
-					t.Checkpoint = "明确纠错：旧作业与素材不再使用；以新增来源消息为准，续做原请求。" + note
-					if t.Delivery != nil {
-						receipt, _ := json.Marshal(t.Delivery)
-						t.Checkpoint += "\n此前已接受的发送回执（勿重复发送）：" + string(receipt)
-					}
-					t.LastResult = "主人明确纠错，旧检查点已替换；沿用原任务及已接受回执继续未完成部分"
-					t.WorkCompleted = false
-					t.CorrectionAt = time.Now().UTC()
-					t.NoProgressKey = ""
-					t.NoProgressRuns = 0
-					t.NoProgressObservedRun = 0
+					t = corrected
 				}
 				clearEmptyTaskDelivery(&t)
 				if t.Delivery != nil && (!correction || t.Delivery.State != "accepted") {
@@ -1500,32 +1547,76 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 // A correction may add only real messages from the original requester and
 // source conversation. Existing task identity and the original request stay
 // unchanged; a later model turn can read the new image and correction text.
-func (m *Manager) verifiedTaskCorrectionSources(ctx context.Context, task agentTask, ids []string) ([]string, error) {
+func (m *Manager) verifiedTaskCorrectionSources(ctx context.Context, task agentTask, ids []string) ([]string, string, error) {
 	if len(ids) == 0 || len(ids) > 50 {
-		return nil, errors.New("纠错来源消息数量无效")
+		return nil, "", errors.New("纠错来源消息数量无效")
 	}
 	source := taskSourceThread(task)
 	if source == "" || task.Sender == "" || task.Account != m.native.Account() {
-		return nil, errors.New("原任务来源身份不可用")
+		return nil, "", errors.New("原任务来源身份不可用")
 	}
 	result := append([]string(nil), task.SourceMessageIDs...)
+	imageID := ""
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" || len(id) > 512 {
-			return nil, errors.New("纠错来源消息编号无效")
+			return nil, "", errors.New("纠错来源消息编号无效")
 		}
 		message, err := m.native.Message(ctx, id)
 		if err != nil || message.ID != id || message.AccountID != task.Account || message.ThreadID != source || message.SenderID != task.Sender || message.Direction != "incoming" {
-			return nil, errors.New("纠错来源必须是原请求者在同一会话发来的真实消息")
+			return nil, "", errors.New("纠错来源必须是原请求者在同一会话发来的真实消息")
+		}
+		if message.Type == 3 {
+			imageID = id
 		}
 		if !contains(result, id) {
 			if len(result) >= 50 {
-				return nil, errors.New("纠错来源消息数量无效")
+				return nil, "", errors.New("纠错来源消息数量无效")
 			}
 			result = append(result, id)
 		}
 	}
-	return result, nil
+	return result, imageID, nil
+}
+
+func (m *Manager) prepareTaskCorrection(ctx context.Context, t agentTask, note string, ids []string, requiredKind string) (agentTask, error) {
+	if t.Reminder != nil || t.resultKind() != "" || t.DeliveryJob != "" || len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted" {
+		return agentTask{}, errors.New("原任务仍有运行或发送结果待核对")
+	}
+	note = strings.TrimSpace(note)
+	if note == "" || len(ids) == 0 || len([]rune(note)) > 600 || strings.ContainsRune(note, 0) {
+		return agentTask{}, errors.New("纠错续办需要说明和来源消息，说明最多 600 字")
+	}
+	if requiredKind != "" && requiredKind != "video" {
+		return agentTask{}, errors.New("目前仅支持将 video 指定为纠错交付类型")
+	}
+	sources, imageID, err := m.verifiedTaskCorrectionSources(ctx, t, ids)
+	if err != nil {
+		return agentTask{}, err
+	}
+	if requiredKind == "video" && imageID == "" {
+		return agentTask{}, errors.New("视频纠错续办需要本轮真实参考图片")
+	}
+	t.SourceMessageIDs = sources
+	t.Checkpoint = "明确纠错：旧作业与素材不再使用；以新增来源消息为准，续做原请求。" + note
+	if t.Delivery != nil {
+		receipt, _ := json.Marshal(t.Delivery)
+		t.Checkpoint += "\n此前已接受的发送回执（仅供审计，勿重复发送）：" + string(receipt)
+		t.CorrectionOldDeliveryTrace = t.Delivery.Trace
+	}
+	t.Delivery = nil
+	t.CorrectionAt = time.Now().UTC()
+	t.CorrectionRequiredMediaKind = requiredKind
+	t.CorrectionReferenceImageID = imageID
+	t.CorrectionTraces = nil
+	t.CorrectionWorkStartedAt = time.Time{}
+	t.CorrectionMediaPreparedAt = time.Time{}
+	t.LastResult = "主人明确纠错，旧检查点已替换；原回执仅供审计，新作品仍需生成并交付"
+	t.WorkCompleted = false
+	t.NoProgressKey = ""
+	t.NoProgressRuns = 0
+	t.NoProgressObservedRun = 0
+	return t, nil
 }
 
 // privilegedCall durably claims side effects. Interrupted/unknown operations

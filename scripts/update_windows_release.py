@@ -1,6 +1,7 @@
 """Stage and update a Windows release, restarting its existing workstation."""
 
 import argparse
+import http.cookiejar
 import ctypes
 from ctypes import wintypes
 import json
@@ -28,6 +29,7 @@ SERVER = Path("data/main_setting/runtime/agent-home-station-server.exe")
 MIGRATION = Path("data/main_setting/registry/migration-manifest.json")
 PORTS = (8080, 8082, 6174)
 MANUAL_DELETION = Path("E:/待删除")
+BOT_CONSOLE = "http://127.0.0.1:8080"
 
 
 def physical(path):
@@ -222,7 +224,7 @@ def running_release_pids(launcher):
     return matches
 
 
-def stop_release_for_update(release, timeout):
+def stop_release_for_update(release, timeout, on_running=None):
     launcher = release / EXE
     running = running_release_pids(launcher)
     if len(running) > 1:
@@ -231,6 +233,8 @@ def stop_release_for_update(release, timeout):
         if listeners():
             raise RuntimeError("Workstation ports are in use by another process; update not started")
         return False
+    if on_running is not None:
+        on_running()
     subprocess.run([str(launcher), "--exit-services"], cwd=release, timeout=min(timeout, 15),
                    check=True, creationflags=subprocess.CREATE_NO_WINDOW)
     deadline = time.monotonic() + timeout
@@ -239,6 +243,76 @@ def stop_release_for_update(release, timeout):
             return True
         time.sleep(0.2)
     raise RuntimeError("Workstation did not fully exit; update not started")
+
+
+class BotConsole:
+    """Use a short-lived local session; never persist its cookie or CSRF token."""
+
+    def __init__(self, release):
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+        )
+        self.csrf = ""
+        session = self.request("/api/session")
+        if session.get("authenticated") is not True or not isinstance(session.get("csrf"), str) or not session["csrf"]:
+            raise RuntimeError("Local bot console session is unavailable; update not started")
+        self.csrf = session["csrf"]
+        diagnostics = self.request("/api/startup/diagnostics")
+        actual = diagnostics.get("log_directory")
+        expected = release / "data/main_setting/logs"
+        if not isinstance(actual, str) or os.path.normcase(os.path.abspath(actual)) != os.path.normcase(os.path.abspath(expected)):
+            raise RuntimeError("Local bot console does not belong to this release")
+
+    def request(self, path, post=False):
+        headers = {"Origin": BOT_CONSOLE}
+        if post:
+            headers["X-CSRF-Token"] = self.csrf
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            BOT_CONSOLE + path, data=b"{}" if post else None, headers=headers,
+        )
+        with self.opener.open(request, timeout=3) as response:
+            if response.status != 200:
+                raise RuntimeError("Local bot console request failed")
+            return json.load(response)
+
+    def state(self):
+        config = self.request("/api/config")
+        status = self.request("/api/status")
+        enabled = config.get("enabled")
+        bot = status.get("bot")
+        if not isinstance(enabled, bool) or not isinstance(bot, dict) or not isinstance(bot.get("state"), str):
+            raise RuntimeError("Local bot console returned an invalid state")
+        return {"enabled": enabled, "running": bot["state"] == "running"}
+
+
+def read_bot_state(release):
+    try:
+        return BotConsole(release).state()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError("Cannot read the local bot state before stopping the release") from error
+
+
+def restore_bot_state(release, before, timeout):
+    """Only restore a bot that was enabled before this update."""
+    if before is None or not before["enabled"]:
+        return False
+    try:
+        console = BotConsole(release)
+        state = console.state()
+        if not state["enabled"] or not state["running"]:
+            console.request("/api/bot/start", post=True)
+        deadline = time.monotonic() + timeout
+        while True:
+            state = console.state()
+            if state["enabled"] and state["running"]:
+                return True
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Bot did not resume after the release restart")
+            time.sleep(0.5)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError("Cannot confirm the bot resumed after the release restart") from error
 
 
 def probe_health(release, process, timeout, account):
@@ -349,11 +423,17 @@ def update(args, release, work):
     write_json(work / "migration-before.json", old_report)
     if not old_report["ok"]:
         raise ValueError("Existing release migration manifest is invalid")
+    bot_before = None
     if args.keep_stopped:
         if running_release_pids(release / EXE) or listeners():
             raise RuntimeError("Stop the workstation before a keep-stopped update")
     else:
-        stop_release_for_update(release, args.timeout)
+        def remember_bot_state():
+            nonlocal bot_before
+            bot_before = read_bot_state(release)
+            write_json(work / "bot-before.json", bot_before)
+
+        stop_release_for_update(release, args.timeout, on_running=remember_bot_state)
     transaction = Replacement(release, work)
     launcher = release / EXE
     startup = subprocess.STARTUPINFO()
@@ -384,6 +464,7 @@ def update(args, release, work):
             return
         process = subprocess.Popen([str(launcher)], cwd=release, startupinfo=startup)
         native_login = probe_health(release, process, args.timeout, args.native_account)
+        restore_bot_state(release, bot_before, args.timeout)
         write_json(work / "result.json", {"updated": True, "restarted": True,
                                           "healthy": True, "native_login": native_login})
     except (Exception, KeyboardInterrupt):
@@ -404,6 +485,7 @@ def update(args, release, work):
         try:
             recovered = subprocess.Popen([str(launcher)], cwd=release, startupinfo=startup)
             native_login = probe_health(release, recovered, args.timeout, args.native_account)
+            restore_bot_state(release, bot_before, args.timeout)
             write_json(work / "result.json", {"updated": False, "rolled_back": True,
                                               "restarted": True, "healthy": True, "native_login": native_login})
         except Exception:

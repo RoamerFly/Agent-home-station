@@ -46,6 +46,15 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	}
 	t.Constraints = copyTask(current).Constraints
 	t.OwnerRequested = t.OwnerRequested || current.OwnerRequested
+	if !resume && !current.CorrectionAt.IsZero() {
+		t.CorrectionAt = current.CorrectionAt
+		t.CorrectionRequiredMediaKind = current.CorrectionRequiredMediaKind
+		t.CorrectionReferenceImageID = current.CorrectionReferenceImageID
+		t.CorrectionOldDeliveryTrace = current.CorrectionOldDeliveryTrace
+		t.CorrectionTraces = append([]string(nil), current.CorrectionTraces...)
+		t.CorrectionWorkStartedAt = current.CorrectionWorkStartedAt
+		t.CorrectionMediaPreparedAt = current.CorrectionMediaPreparedAt
+	}
 	if err := validateTaskConstraints(t); err != nil {
 		return false, err
 	}
@@ -53,6 +62,11 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	if t.State == "completed" && len(t.PendingOperations) > 0 {
 		t.WorkCompleted = true
 		t.State = "waiting_delivery"
+	}
+	if t.State == "completed" && !t.correctedDeliveryComplete() {
+		t.State = "waiting"
+		t.WorkCompleted = false
+		t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
 	}
 	t.Actions = current.Actions
 	if current.Goal != "" {
