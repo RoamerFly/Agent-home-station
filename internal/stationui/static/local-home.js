@@ -3505,8 +3505,8 @@
   function douyinExecutionRoundsPanel(view) {
     const panel = appElement("section", "", "configuration-rounds douyin-rounds");
     panel.setAttribute("aria-label", "抖音执行回合");
-    const intro = appElement("p", "这里仅查看本机已保存的抖音互动通知元数据；记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
-    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。当前记录缺少评论编号和父评论归属，不能根据通知类型或页面文字自动分类，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
+    const intro = appElement("p", "这里仅查看本机已保存的抖音互动通知元数据及原生响应中的候选编号；记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。原生字段的编号尚未核实与本次来评、直接父评论的对应关系，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
     const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
     const dateLabel = appElement("label", "首次观察日期（北京时间）");
     const date = document.createElement("input");
@@ -3544,7 +3544,8 @@
         ["平台时间", douyinRoundTime(item.created_at)],
         ["本机首次观察", douyinRoundTime(item.observed_at)],
         ["来源范围", "已保存通知元数据，单条来源未记录"],
-        ["评论定位", "待核对：缺少目标评论编号、层级和直接父评论归属"],
+        ["原生候选字段", item.candidates.length ? item.candidates.map((candidate) => candidate.path + "=" + candidate.id).join("；") + "（未经关联核对）" : "未取得可验证编号"],
+        ["评论定位", "待核对：尚未核实目标评论、层级和直接父评论归属"],
         ["回复资格", item.reason + " · 不会回复"],
       ]) facts.append(appElement("dt", name), appElement("dd", value));
       card.append(header, facts);
@@ -3587,7 +3588,9 @@
         const cards = result.rounds.map((item) => {
           if (!item || typeof item.notice_id !== "string" || !item.notice_id || !Number.isInteger(item.type) ||
               typeof item.work_id !== "string" || typeof item.created_at !== "string" || typeof item.observed_at !== "string" ||
-              item.state !== "待核对" || item.reason !== "证据不足" || item.reply_eligible !== false) {
+              item.state !== "待核对" || item.reason !== "证据不足" || item.reply_eligible !== false ||
+              !Array.isArray(item.candidates) || item.candidates.length > 16 ||
+              !item.candidates.every((candidate) => candidate && typeof candidate.path === "string" && typeof candidate.id === "string" && /^[1-9]\d{0,19}$/.test(candidate.id))) {
             throw new Error("抖音通知证据返回格式无效，请稍后重试。");
           }
           return roundCard(item);
@@ -3597,7 +3600,7 @@
         nextBefore = result.next_before;
         more.hidden = !nextBefore;
         const count = records.childElementCount;
-        feedback.textContent = count ? "已显示 " + count + " 条已保存记录；本页实际页大小 " + result.effective_limit + "。全部证据不足，不会回复。" :
+        feedback.textContent = count ? "已显示 " + count + " 条已保存记录；本页实际页大小 " + result.effective_limit + "。候选编号未经关联核对，全部不会回复。" :
           "所选日期没有已保存的通知元数据；不代表抖音平台没有互动消息。";
         if (moreFocused && more.hidden) feedback.focus({ preventScroll: true });
       } catch (error) {

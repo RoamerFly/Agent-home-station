@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"wechat-bot/internal/fishidentity"
@@ -31,14 +32,15 @@ var localDouyinExecutionZone = time.FixedZone("Asia/Shanghai", 8*60*60)
 // parent author and the current account's author identity from a verified
 // source; none of those are available here.
 type localDouyinExecutionRound struct {
-	NoticeID      string `json:"notice_id"`
-	Type          int    `json:"type"`
-	WorkID        string `json:"work_id"`
-	CreatedAt     string `json:"created_at"`
-	ObservedAt    string `json:"observed_at"`
-	State         string `json:"state"`
-	Reason        string `json:"reason"`
-	ReplyEligible bool   `json:"reply_eligible"`
+	NoticeID      string                                 `json:"notice_id"`
+	Type          int                                    `json:"type"`
+	WorkID        string                                 `json:"work_id"`
+	CreatedAt     string                                 `json:"created_at"`
+	ObservedAt    string                                 `json:"observed_at"`
+	State         string                                 `json:"state"`
+	Reason        string                                 `json:"reason"`
+	ReplyEligible bool                                   `json:"reply_eligible"`
+	Candidates    []stationbrowser.DouyinNoticeCandidate `json:"candidates"`
 }
 
 type localDouyinExecutionRoundsResult struct {
@@ -61,7 +63,33 @@ CREATE TABLE IF NOT EXISTS rounds (
   observed_date TEXT NOT NULL,
   UNIQUE(scope, notice_id)
 );
-CREATE INDEX IF NOT EXISTS rounds_day ON rounds(scope, observed_date, sequence DESC);`
+CREATE INDEX IF NOT EXISTS rounds_day ON rounds(scope, observed_date, sequence DESC);
+CREATE TABLE IF NOT EXISTS round_candidates (
+  scope TEXT NOT NULL,
+  notice_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  PRIMARY KEY(scope, notice_id, path, candidate_id)
+) WITHOUT ROWID;`
+
+func validDouyinRoundCandidate(candidate stationbrowser.DouyinNoticeCandidate) bool {
+	switch candidate.Path {
+	case "cid", "real_cid", "reply_id", "reply_to_reply_id", "user.uid",
+		"comment.cid", "comment.reply_id", "comment.reply_to_reply_id", "comment.user.uid",
+		"reply_comment.cid", "reply_comment.reply_id", "reply_comment.reply_to_reply_id", "reply_comment.user.uid":
+	default:
+		return false
+	}
+	if len(candidate.ID) < 1 || len(candidate.ID) > 20 || candidate.ID[0] == '0' {
+		return false
+	}
+	for _, digit := range candidate.ID {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 func localDouyinExecutionScope(fish, owner string, record localDouyinWebRecord) string {
 	// The notice binding epoch prevents revocation and a later rebind of the
@@ -153,6 +181,31 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
 			scope, item.ID, item.Type, item.WorkID, created, stamp, day); err != nil {
 			return err
+		}
+		if len(item.Candidates) > 16 {
+			continue
+		}
+		seenCandidates := make(map[string]string, len(item.Candidates))
+		valid := true
+		for _, candidate := range item.Candidates {
+			if !validDouyinRoundCandidate(candidate) {
+				valid = false
+				break
+			}
+			if previous, exists := seenCandidates[candidate.Path]; exists && previous != candidate.ID {
+				valid = false
+				break
+			}
+			seenCandidates[candidate.Path] = candidate.ID
+		}
+		if !valid {
+			continue
+		}
+		for path, id := range seenCandidates {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO round_candidates(scope,notice_id,path,candidate_id) VALUES(?,?,?,?)`,
+				scope, item.ID, path, id); err != nil {
+				return err
+			}
 		}
 	}
 	// Match apply's lock order. Holding both the process lock and login.lock
@@ -310,8 +363,67 @@ func (m *localDouyinWebLogin) listExecutionRounds(ctx context.Context, scope, da
 			break
 		}
 		row.State, row.Reason = "待核对", "证据不足"
+		row.Candidates = []stationbrowser.DouyinNoticeCandidate{}
 		result.Rounds = append(result.Rounds, row)
 		last = sequence
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+	return result, readLocalDouyinRoundCandidates(ctx, db, scope, result.Rounds)
+}
+
+func readLocalDouyinRoundCandidates(ctx context.Context, db *sql.DB, scope string, rounds []localDouyinExecutionRound) error {
+	if len(rounds) == 0 {
+		return nil
+	}
+	// Older ledgers do not have this table. Viewing a round must remain read-only.
+	var tableCount int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='round_candidates'`).Scan(&tableCount); err != nil || tableCount == 0 {
+		return err
+	}
+	indices := make(map[string]int, len(rounds))
+	for index, row := range rounds {
+		indices[row.NoticeID] = index
+	}
+	for start := 0; start < len(rounds); start += 200 {
+		end := min(start+200, len(rounds))
+		placeholders := make([]string, 0, end-start)
+		args := make([]any, 0, end-start+1)
+		args = append(args, scope)
+		for _, row := range rounds[start:end] {
+			placeholders = append(placeholders, "?")
+			args = append(args, row.NoticeID)
+		}
+		query := `SELECT notice_id,path,candidate_id FROM round_candidates WHERE scope=? AND notice_id IN (` + strings.Join(placeholders, ",") + `) ORDER BY notice_id,path,candidate_id`
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var noticeID string
+			var candidate stationbrowser.DouyinNoticeCandidate
+			if err := rows.Scan(&noticeID, &candidate.Path, &candidate.ID); err != nil {
+				rows.Close()
+				return err
+			}
+			index, found := indices[noticeID]
+			if !found || !validDouyinRoundCandidate(candidate) || len(rounds[index].Candidates) >= 16 {
+				rows.Close()
+				return errors.New("抖音执行回合候选字段无效")
+			}
+			rounds[index].Candidates = append(rounds[index].Candidates, candidate)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

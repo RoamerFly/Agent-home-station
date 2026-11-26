@@ -284,7 +284,7 @@ func scrollDouyinComments(ctx context.Context, session *cdpSession, id string) e
 		} `json:"result"`
 	}
 	err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{
-		"expression":    "(()=>{const c=document.querySelector('[data-e2e=comment-list],[data-e2e=comment-container],[data-e2e=comment-panel]');if(c){c.scrollTop=Math.max(c.scrollHeight,c.scrollTop+c.clientHeight);return true}window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));return true})()",
+		"expression":    `(()=>{const c=document.querySelector('#merge-all-comment-container,[data-e2e="comment-list"].comment-mainContent,[data-e2e=comment-list],[data-e2e=comment-container],[data-e2e=comment-panel]');if(c){for(let n=c;n&&n!==document.documentElement;n=n.parentElement){const y=getComputedStyle(n).overflowY;if((y==='auto'||y==='scroll')&&n.scrollHeight>n.clientHeight+1){n.scrollTop=Math.min(n.scrollHeight-n.clientHeight,n.scrollTop+Math.max(n.clientHeight,1));return true}}}window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));return true})()`,
 		"returnByValue": true,
 		"awaitPromise":  true,
 	}, &out)
@@ -323,30 +323,59 @@ func (p renderedDouyinComments) fingerprint() string {
 	return b.String()
 }
 
-func renderedDouyinCommentsExpression(_ string, _ bool) string {
-	return `(() => {
+func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
+	return strings.Replace(`(() => {
  const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden';
  const txt=e=>String(e?.textContent||'').trim();
  const relative=/^(?:刚刚|\d+\s*(?:秒|分钟|小时|天|周|月|年)前)$/;
  const rfc3339=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
- const comments=[], seen=new Set();let invalid=false;
- for(const e of document.querySelectorAll('[data-e2e="comment-item"],[data-comment-id],[data-cid]')){
+ const fixture=__LOCAL_FIXTURE__;
+ const comments=[], seen=new Set();
+ const nativeLists=document.querySelectorAll('#merge-all-comment-container,[data-e2e="comment-list"].comment-mainContent');
+ const nativeList=nativeLists.length===1?nativeLists[0]:null;
+ let invalid=nativeLists.length>1||(!fixture&&!nativeList);
+ const cards=nativeList?nativeList.querySelectorAll('[data-e2e="comment-item"]'):fixture?document.querySelectorAll('[data-e2e="comment-item"],[data-comment-id],[data-cid]'):[];
+ for(const e of cards){
    if(!visible(e)) continue;
-   const id=String(e.getAttribute('data-comment-id')||e.dataset.commentId||e.getAttribute('data-cid')||e.dataset.cid||'').trim();
+   const explicitID=String(e.getAttribute('data-comment-id')||e.dataset.commentId||e.getAttribute('data-cid')||e.dataset.cid||'').trim();
+   const tooltipNodes=[...(String(e.id||'').startsWith('tooltip_')?[e]:[]),...e.querySelectorAll('[id^="tooltip_"]')]
+     .filter(node=>node.closest('[data-e2e="comment-item"]')===e);
+   const tooltip=tooltipNodes.length===1?/^tooltip_([1-9][0-9]{18})$/.exec(tooltipNodes[0].id):null;
+   if(tooltipNodes.length>1||(tooltipNodes.length===1&&!tooltip)||(!fixture&&!tooltip)||(tooltip&&explicitID&&explicitID!==tooltip[1])){invalid=true;continue}
+   const id=tooltip?.[1]||(fixture?explicitID:'');
    if(!/^[1-9][0-9]{0,19}$/.test(id)){invalid=true;continue}if(seen.has(id))continue;
-   const authorEl=e.querySelector('[data-e2e="comment-user-name"],[data-e2e="comment-username"],[data-author-id],[data-sec-uid]');
-   const authorID=String(authorEl?.getAttribute('data-author-id')||authorEl?.dataset.authorId||authorEl?.getAttribute('data-sec-uid')||authorEl?.dataset.secUid||e.getAttribute('data-author-id')||e.dataset.authorId||e.getAttribute('data-sec-uid')||e.dataset.secUid||'').trim();
-   const body=e.querySelector('[data-e2e="comment-content"],[data-e2e="comment-text"],[data-comment-text]');
-   if(!/^[A-Za-z0-9._-]{1,256}$/.test(authorID)||!body){invalid=true;continue}
+   const own=node=>node.closest('[data-e2e="comment-item"]')===e;
+   const oldAuthors=[...e.querySelectorAll('[data-e2e="comment-user-name"],[data-e2e="comment-username"],[data-author-id],[data-sec-uid]')].filter(own);
+   const oldBodies=[...e.querySelectorAll('[data-e2e="comment-content"],[data-e2e="comment-text"],[data-comment-text]')].filter(own);
+   if(oldAuthors.length>1||oldBodies.length>1){invalid=true;continue}
+   let authorEl=oldAuthors[0]||null;
+   let authorID=String(authorEl?.getAttribute('data-author-id')||authorEl?.dataset.authorId||authorEl?.getAttribute('data-sec-uid')||authorEl?.dataset.secUid||e.getAttribute('data-author-id')||e.dataset.authorId||e.getAttribute('data-sec-uid')||e.dataset.secUid||'').trim();
+   if(!authorID){
+     const wraps=[...e.querySelectorAll('.comment-item-info-wrap')].filter(own);
+     if(wraps.length!==1){invalid=true;continue}
+     const links=[...wraps[0].querySelectorAll('a[href]')].filter(own);
+     let first=null;
+     for(const link of links){
+       let url;try{url=new URL(link.getAttribute('href'),'https://www.douyin.com/')}catch{continue}
+       if(url.origin==='https://www.douyin.com'&&/^\/user\//.test(url.pathname)){first={link,url};break}
+     }
+     const match=first&&/^\/user\/([A-Za-z0-9._-]{1,256})\/?$/.exec(first.url.pathname);
+     if(!match){invalid=true;continue}
+     authorEl=first.link;authorID=match[1];
+   }
+   let body=oldBodies[0]||null;
+   if(!body){const bodies=[...e.querySelectorAll('.FduGc_lz')].filter(own);if(bodies.length!==1){invalid=true;continue}body=bodies[0]}
+   if(!/^[A-Za-z0-9._-]{1,256}$/.test(authorID)){invalid=true;continue}
    const text=txt(body);if(!text){invalid=true;continue}
-   const rawTime=String(e.getAttribute('data-comment-created-at')||e.dataset.commentCreatedAt||e.querySelector('time[datetime]')?.getAttribute('datetime')||'').trim();
+   const ownTime=[...e.querySelectorAll('time[datetime]')].find(own);
+   const rawTime=String(e.getAttribute('data-comment-created-at')||e.dataset.commentCreatedAt||ownTime?.getAttribute('datetime')||'').trim();
    const createdAt=(rawTime&&!relative.test(rawTime)&&rfc3339.test(rawTime)&&!Number.isNaN(Date.parse(rawTime)))?new Date(rawTime).toISOString():'';
    comments.push({id,authorID,author:txt(authorEl),text,createdAt});seen.add(id);
  }
- const hasItems=document.querySelector('[data-e2e="comment-item"],[data-comment-id],[data-cid]')!==null;
+ const hasItems=cards.length>0;
  const page={url:String(location.href||''),ready:document.readyState==='complete',loaded:hasItems||visible(document.querySelector('[data-e2e="comment-empty"]')),empty:visible(document.querySelector('[data-e2e="comment-empty"]')),end:visible(document.querySelector('[data-e2e="comments-end"]')),loginForm:visible(document.querySelector('input[type=password],form[action*="login"],form[action*="passport"]')),challenge:visible(document.querySelector('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')),invalid,comments};
  if(new TextEncoder().encode(JSON.stringify(page)).length>3600000)return {tooLarge:true};return page;
-})()`
+})()`, "__LOCAL_FIXTURE__", fmt.Sprint(localFixture), 1)
 }
 
 func renderedDouyinCommentsPage(ctx context.Context, session *cdpSession, id, target string, localFixture bool) (renderedDouyinComments, error) {

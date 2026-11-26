@@ -3,6 +3,7 @@ package station
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,9 +71,9 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 			return stationbrowser.DouyinNoticePage{}, err
 		}
 		return stationbrowser.DouyinNoticePage{Account: in.Account, PagesRead: 1, RenderedText: syntheticNoticeText, Items: []stationbrowser.DouyinNotice{
-			{ID: "n-1", Type: 7, WorkID: "w-1", CreatedAt: 1700000000},
-			{ID: "n-2", Type: 8, WorkID: "w-2"},
-			{ID: "n-3", Type: 9},
+			{ID: "n-1", Type: 7, WorkID: "w-1", CreatedAt: 1700000000, Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "real_cid", ID: "1234567890123456789"}}},
+			{ID: "n-2", Type: 8, WorkID: "w-2", Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.cid", ID: "2234567890123456789"}}},
+			{ID: "n-3", Type: 9, Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "reply_comment.cid", ID: "3234567890123456789"}, {Path: "text", ID: "4234567890123456789"}}},
 		}}, nil
 	}
 	path := localDouyinExecutionRoundsPath + "?date=" + executionRoundDay()
@@ -110,6 +111,11 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 		if row["state"] != "待核对" || row["reason"] != "证据不足" || row["reply_eligible"] != false || row["observed_at"] == "" {
 			t.Fatalf("unverified notice became actionable: %v", row)
 		}
+		candidates, ok := row["candidates"].([]any)
+		if !ok || row["notice_id"] == "n-2" && (len(candidates) != 1 || candidates[0].(map[string]any)["path"] != "comment.cid" || candidates[0].(map[string]any)["id"] != "2234567890123456789") ||
+			row["notice_id"] == "n-3" && len(candidates) != 0 {
+			t.Fatalf("unverified or invalid candidate leaked into round: %v", row)
+		}
 	}
 	if bytes.Contains([]byte(localAppObservationJSONString(page)), []byte(syntheticNoticeText)) {
 		t.Fatal("notification body entered execution response")
@@ -117,6 +123,9 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 	code, next := f.request("GET", path+"&limit=2&before="+page["next_before"].(string), nil, false)
 	if code != http.StatusOK || len(next["rounds"].([]any)) != 1 || next["next_before"] != "" {
 		t.Fatalf("second execution page: %d %v", code, next)
+	}
+	if candidates := next["rounds"].([]any)[0].(map[string]any)["candidates"].([]any); len(candidates) != 1 || candidates[0].(map[string]any)["path"] != "real_cid" {
+		t.Fatalf("older round lost candidate: %v", next)
 	}
 	identity, err := m.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil {
@@ -170,6 +179,50 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 	}
 	if code, out := f.request("GET", path, nil, false); code != http.StatusOK || len(out["rounds"].([]any)) != 0 {
 		t.Fatalf("older binding ledger reopened: %d %v", code, out)
+	}
+}
+
+func TestLocalDouyinExecutionRoundsReadsLegacyLedgerWithoutWriting(t *testing.T) {
+	f, m, _ := syntheticExecutionRoundFixture(t, false)
+	identity, err := m.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		t.Fatal(err)
+	}
+	record, _, err := m.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(stationApplicationsDir(f.dir), "douyin", "execution-rounds")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "rounds.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE rounds (sequence INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, notice_id TEXT NOT NULL, type INTEGER NOT NULL, work_id TEXT NOT NULL, created_at TEXT NOT NULL, observed_at TEXT NOT NULL, observed_date TEXT NOT NULL, UNIQUE(scope,notice_id))`); err != nil {
+		t.Fatal(err)
+	}
+	scope := localDouyinExecutionScope(identity.FishID, identity.LocalOwner.ID, record)
+	if _, err := db.Exec(`INSERT INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
+		scope, "legacy-1", 7, "", "", time.Now().UTC().Format(time.RFC3339), executionRoundDay()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	page, err := m.listExecutionRounds(t.Context(), scope, executionRoundDay(), 0, 20)
+	if err != nil || len(page.Rounds) != 1 || page.Rounds[0].Candidates == nil || len(page.Rounds[0].Candidates) != 0 || page.Rounds[0].ReplyEligible {
+		t.Fatalf("legacy round read: %+v %v", page, err)
+	}
+	db, err = sql.Open("sqlite", filepath.Join(dir, "rounds.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var created int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='round_candidates'`).Scan(&created); err != nil || created != 0 {
+		t.Fatalf("read created candidate table: %d %v", created, err)
 	}
 }
 
