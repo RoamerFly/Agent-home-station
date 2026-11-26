@@ -59,6 +59,86 @@ func grantExecutionNoticeMemory(t *testing.T, f *localHomeFixture, view map[stri
 	return next
 }
 
+func TestLocalDouyinExecutionRoundsKeepDetailCandidatesScopedAndNonActionable(t *testing.T) {
+	f, m, _ := syntheticExecutionRoundFixture(t, false)
+	identity, err := m.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		t.Fatal(err)
+	}
+	record, _, err := m.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator := strings.Repeat("c", 64)
+	base := stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: creator,
+		Items: []stationbrowser.DouyinNotice{{ID: "101", Type: 7, WorkID: "200"}, {ID: "102", Type: 7, WorkID: ""}, {ID: "103", Type: 7, WorkID: "300"}},
+		Details: []stationbrowser.DouyinNoticeDetail{
+			{NoticeID: "101", NoticeType: 7, WorkID: "200", CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.cid", ID: "400"}}},
+			{NoticeID: "102", NoticeType: 7, WorkID: "200", CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.cid", ID: "401"}}},
+		}, DetailProgress: "partial"}
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, base); err != nil {
+		t.Fatalf("detail capture discarded notification list: %v", err)
+	}
+	read := func() map[string]map[string]any {
+		t.Helper()
+		code, output := f.request("GET", localDouyinExecutionRoundsPath+"?date="+executionRoundDay(), nil, false)
+		if code != http.StatusOK {
+			t.Fatalf("GET rounds: %d %v", code, output)
+		}
+		byID := map[string]map[string]any{}
+		for _, raw := range output["rounds"].([]any) {
+			row := raw.(map[string]any)
+			if row["reply_eligible"] != false || row["detail_candidates"] == nil {
+				t.Fatalf("detail became actionable or null: %v", row)
+			}
+			byID[row["notice_id"].(string)] = row
+		}
+		if strings.Contains(localAppObservationJSONString(output), creator) {
+			t.Fatal("private creator account digest leaked")
+		}
+		return byID
+	}
+	rows := read()
+	if len(rows) != 3 || rows["101"]["detail_status"] != "observed_candidate" ||
+		len(rows["101"]["detail_candidates"].([]any)) != 1 ||
+		rows["102"]["work_id"] != "" || rows["102"]["detail_status"] != "invalid_fields" || len(rows["102"]["detail_candidates"].([]any)) != 0 ||
+		rows["103"]["detail_status"] != "partial" || len(rows["103"]["detail_candidates"].([]any)) != 0 {
+		t.Fatalf("detail statuses/fields lost list boundary: %+v", rows)
+	}
+	// A second observation with a conflicting CID must erase the earlier
+	// candidate, but retain the original notification row and its work.
+	base.Items = base.Items[:1]
+	base.Details = []stationbrowser.DouyinNoticeDetail{{NoticeID: "101", NoticeType: 7, WorkID: "200", CandidateFieldsValid: true,
+		Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.cid", ID: "499"}}}}
+	base.DetailProgress = ""
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, base); err != nil {
+		t.Fatal(err)
+	}
+	rows = read()
+	if rows["101"]["detail_status"] != "conflict" || len(rows["101"]["detail_candidates"].([]any)) != 0 {
+		t.Fatalf("conflicting detail remained a candidate: %v", rows["101"])
+	}
+	// An unmatched detail is a failed detail read, not a reason to drop the
+	// list notification that may already have been marked read on Douyin.
+	base.Items = []stationbrowser.DouyinNotice{{ID: "104", Type: 7, WorkID: "500"}}
+	base.Details = []stationbrowser.DouyinNoticeDetail{{NoticeID: "999", WorkID: "500"}}
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, base); err != nil {
+		t.Fatalf("unmatched detail discarded list: %v", err)
+	}
+	rows = read()
+	if rows["104"]["detail_status"] != "conflict" || len(rows["104"]["detail_candidates"].([]any)) != 0 {
+		t.Fatalf("unmatched detail gained authority: %v", rows["104"])
+	}
+	base.Items = []stationbrowser.DouyinNotice{{ID: "101", Type: 7, WorkID: "999"}}
+	base.Details = nil
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, base); err != errLocalDouyinNoticeGrant {
+		t.Fatalf("saved notice/work identity conflict accepted: %v", err)
+	}
+	if other, err := m.listExecutionRounds(t.Context(), "other-account-scope", executionRoundDay(), 0, 20); err != nil || len(other.Rounds) != 0 {
+		t.Fatalf("other account scope read details: %+v %v", other, err)
+	}
+}
+
 func TestLocalDouyinExecutionRoundsWorkGroupsAndFilteredPagination(t *testing.T) {
 	f, m, _ := syntheticExecutionRoundFixture(t, false)
 	platformReads := 0

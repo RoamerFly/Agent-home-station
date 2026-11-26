@@ -35,15 +35,17 @@ var localDouyinExecutionZone = time.FixedZone("Asia/Shanghai", 8*60*60)
 // at capture time, but does not prove work ownership or comment parentage.
 // Reply decisions still require verified comment and parent identities.
 type localDouyinExecutionRound struct {
-	NoticeID      string                                 `json:"notice_id"`
-	Type          int                                    `json:"type"`
-	WorkID        string                                 `json:"work_id"`
-	CreatedAt     string                                 `json:"created_at"`
-	ObservedAt    string                                 `json:"observed_at"`
-	State         string                                 `json:"state"`
-	Reason        string                                 `json:"reason"`
-	ReplyEligible bool                                   `json:"reply_eligible"`
-	Candidates    []stationbrowser.DouyinNoticeCandidate `json:"candidates"`
+	NoticeID         string                                 `json:"notice_id"`
+	Type             int                                    `json:"type"`
+	WorkID           string                                 `json:"work_id"`
+	CreatedAt        string                                 `json:"created_at"`
+	ObservedAt       string                                 `json:"observed_at"`
+	State            string                                 `json:"state"`
+	Reason           string                                 `json:"reason"`
+	ReplyEligible    bool                                   `json:"reply_eligible"`
+	Candidates       []stationbrowser.DouyinNoticeCandidate `json:"candidates"`
+	DetailStatus     string                                 `json:"detail_status"`
+	DetailCandidates []stationbrowser.DouyinNoticeCandidate `json:"detail_candidates"`
 }
 
 type localDouyinExecutionRoundsResult struct {
@@ -104,6 +106,20 @@ CREATE TABLE IF NOT EXISTS round_creator_accounts (
   notice_id TEXT NOT NULL,
   creator_account TEXT NOT NULL,
   PRIMARY KEY(scope, notice_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS round_details (
+  scope TEXT NOT NULL,
+  notice_id TEXT NOT NULL,
+  work_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  PRIMARY KEY(scope, notice_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS round_detail_candidates (
+  scope TEXT NOT NULL,
+  notice_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  PRIMARY KEY(scope, notice_id, path)
 ) WITHOUT ROWID;`
 
 func validDouyinRoundCandidate(candidate stationbrowser.DouyinNoticeCandidate) bool {
@@ -123,6 +139,60 @@ func validDouyinRoundCandidate(candidate stationbrowser.DouyinNoticeCandidate) b
 		}
 	}
 	return true
+}
+
+func validDouyinRoundDetailStatus(status string) bool {
+	switch status {
+	case "not_observed", "partial", "in_flight", "invalid_response", "conflict",
+		"account_unverified", "invalid_fields", "observed_no_candidates", "observed_candidate":
+		return true
+	}
+	return false
+}
+
+func missingDouyinRoundDetailStatus(progress string) (string, bool) {
+	switch progress {
+	case "", "not_observed":
+		return "not_observed", true
+	case "partial", "in_flight", "invalid_response", "conflict":
+		return progress, true
+	}
+	return "", false
+}
+
+func normalizedDouyinRoundDetail(item stationbrowser.DouyinNotice, detail stationbrowser.DouyinNoticeDetail, creatorAccount string) (string, map[string]string, error) {
+	if detail.NoticeID != item.ID || item.WorkID != "" && detail.WorkID != "" && detail.WorkID != item.WorkID ||
+		detail.RequestType != 0 && detail.RequestType != item.Type ||
+		detail.NoticeType != 0 && detail.NoticeType != item.Type ||
+		item.CreatedAt > 0 && detail.CreatedAt > 0 && item.CreatedAt != detail.CreatedAt {
+		return "conflict", nil, nil
+	}
+	if item.WorkID == "" || detail.WorkID == "" || !validLocalDouyinCommentID(item.WorkID) {
+		return "invalid_fields", nil, nil
+	}
+	if !detail.CandidateFieldsValid {
+		return "invalid_fields", nil, nil
+	}
+	if creatorAccount == "" {
+		return "account_unverified", nil, nil
+	}
+	if len(detail.Candidates) > 16 {
+		return "invalid_fields", nil, nil
+	}
+	seen := make(map[string]string, len(detail.Candidates))
+	for _, candidate := range detail.Candidates {
+		if !validDouyinRoundCandidate(candidate) {
+			return "invalid_fields", nil, nil
+		}
+		if prior, exists := seen[candidate.Path]; exists && prior != candidate.ID {
+			return "conflict", nil, nil
+		}
+		seen[candidate.Path] = candidate.ID
+	}
+	if len(seen) == 0 {
+		return "observed_no_candidates", nil, nil
+	}
+	return "observed_candidate", seen, nil
 }
 
 func localDouyinExecutionScope(fish, owner string, record localDouyinWebRecord) string {
@@ -207,10 +277,36 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 	stamp := observed.Format(time.RFC3339Nano)
 	day := observed.In(localDouyinExecutionZone).Format("2006-01-02")
 	scope := localDouyinExecutionScope(fish, owner, record)
+	missingDetailStatus, validProgress := missingDouyinRoundDetailStatus(page.DetailProgress)
+	if !validProgress {
+		missingDetailStatus = "invalid_response"
+	}
+	itemsByID := make(map[string]stationbrowser.DouyinNotice, len(page.Items))
 	for _, item := range page.Items {
 		if item.ID == "" {
 			return errors.New("通知编号缺失，执行回合未保存")
 		}
+		if _, duplicate := itemsByID[item.ID]; duplicate {
+			return errLocalDouyinNoticeGrant
+		}
+		itemsByID[item.ID] = item
+	}
+	detailsByID := make(map[string]stationbrowser.DouyinNoticeDetail, len(page.Details))
+	detailConflicts := make(map[string]bool)
+	for _, detail := range page.Details {
+		_, found := itemsByID[detail.NoticeID]
+		if !found || detail.NoticeID == "" {
+			missingDetailStatus = "conflict"
+			continue
+		}
+		if _, duplicate := detailsByID[detail.NoticeID]; duplicate || detailConflicts[detail.NoticeID] {
+			delete(detailsByID, detail.NoticeID)
+			detailConflicts[detail.NoticeID] = true
+			continue
+		}
+		detailsByID[detail.NoticeID] = detail
+	}
+	for _, item := range page.Items {
 		created := ""
 		if item.CreatedAt > 0 && item.CreatedAt < 253402300800 {
 			created = time.Unix(item.CreatedAt, 0).UTC().Format(time.RFC3339)
@@ -218,6 +314,11 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
 			scope, item.ID, item.Type, item.WorkID, created, stamp, day); err != nil {
 			return err
+		}
+		var recordedType int
+		var recordedWork string
+		if err := tx.QueryRowContext(ctx, `SELECT type,work_id FROM rounds WHERE scope=? AND notice_id=?`, scope, item.ID).Scan(&recordedType, &recordedWork); err != nil || recordedType != item.Type || recordedWork != item.WorkID {
+			return errLocalDouyinNoticeGrant
 		}
 		if page.CreatorAccount != "" {
 			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO round_creator_accounts(scope,notice_id,creator_account) VALUES(?,?,?)`,
@@ -231,6 +332,18 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 			if recorded != page.CreatorAccount {
 				return errLocalDouyinNoticeGrant
 			}
+		}
+		detailStatus, detailCandidates := missingDetailStatus, map[string]string(nil)
+		if detailConflicts[item.ID] {
+			detailStatus = "conflict"
+		} else if detail, found := detailsByID[item.ID]; found {
+			detailStatus, detailCandidates, err = normalizedDouyinRoundDetail(item, detail, page.CreatorAccount)
+			if err != nil {
+				return err
+			}
+		}
+		if err := storeLocalDouyinRoundDetail(ctx, tx, scope, item.ID, item.WorkID, detailStatus, detailCandidates); err != nil {
+			return err
 		}
 		if len(item.Candidates) > 16 {
 			continue
@@ -291,6 +404,106 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		return errLocalDouyinNoticeGrant
 	}
 	return tx.Commit()
+}
+
+func storeLocalDouyinRoundDetail(ctx context.Context, tx *sql.Tx, scope, noticeID, workID, status string, candidates map[string]string) error {
+	if !validDouyinRoundDetailStatus(status) || status != "observed_candidate" && len(candidates) != 0 ||
+		status == "observed_candidate" && len(candidates) == 0 {
+		return errLocalDouyinNoticeGrant
+	}
+	var oldWork, oldStatus string
+	err := tx.QueryRowContext(ctx, `SELECT work_id,status FROM round_details WHERE scope=? AND notice_id=?`, scope, noticeID).Scan(&oldWork, &oldStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO round_details(scope,notice_id,work_id,status) VALUES(?,?,?,?)`, scope, noticeID, workID, status); err != nil {
+			return err
+		}
+		return writeLocalDouyinRoundDetailCandidates(ctx, tx, scope, noticeID, candidates)
+	}
+	if err != nil || oldWork != workID || !validDouyinRoundDetailStatus(oldStatus) {
+		return errLocalDouyinNoticeGrant
+	}
+	if oldStatus == "conflict" {
+		return nil
+	}
+	oldObserved := oldStatus == "observed_candidate" || oldStatus == "observed_no_candidates"
+	newObserved := status == "observed_candidate" || status == "observed_no_candidates"
+	if oldObserved && newObserved {
+		var oldCandidates map[string]string
+		oldCandidates, err = readLocalDouyinDetailCandidateMap(ctx, tx, scope, noticeID)
+		if err != nil {
+			return err
+		}
+		if oldStatus == status && equalLocalDouyinCandidateMaps(oldCandidates, candidates) {
+			return nil
+		}
+		status = "conflict"
+		candidates = nil
+	} else if oldObserved {
+		if status == "invalid_fields" || status == "conflict" {
+			status = "conflict"
+			candidates = nil
+		} else {
+			return nil // a later missing detail cannot erase prior observed evidence
+		}
+	} else if status == "observed_candidate" || status == "observed_no_candidates" {
+		if oldStatus == "invalid_fields" {
+			status = "conflict"
+			candidates = nil
+		}
+	} else if oldStatus == "invalid_fields" && status != "conflict" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE round_details SET status=? WHERE scope=? AND notice_id=?`, status, scope, noticeID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM round_detail_candidates WHERE scope=? AND notice_id=?`, scope, noticeID); err != nil {
+		return err
+	}
+	return writeLocalDouyinRoundDetailCandidates(ctx, tx, scope, noticeID, candidates)
+}
+
+func readLocalDouyinDetailCandidateMap(ctx context.Context, tx *sql.Tx, scope, noticeID string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path,candidate_id FROM round_detail_candidates WHERE scope=? AND notice_id=?`, scope, noticeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var candidate stationbrowser.DouyinNoticeCandidate
+		if err := rows.Scan(&candidate.Path, &candidate.ID); err != nil || !validDouyinRoundCandidate(candidate) || len(result) >= 16 {
+			return nil, errLocalDouyinNoticeGrant
+		}
+		result[candidate.Path] = candidate.ID
+	}
+	return result, rows.Err()
+}
+
+func equalLocalDouyinCandidateMaps(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for path, id := range a {
+		if b[path] != id {
+			return false
+		}
+	}
+	return true
+}
+
+func writeLocalDouyinRoundDetailCandidates(ctx context.Context, tx *sql.Tx, scope, noticeID string, candidates map[string]string) error {
+	if len(candidates) > 16 {
+		return errLocalDouyinNoticeGrant
+	}
+	for path, id := range candidates {
+		if !validDouyinRoundCandidate(stationbrowser.DouyinNoticeCandidate{Path: path, ID: id}) {
+			return errLocalDouyinNoticeGrant
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO round_detail_candidates(scope,notice_id,path,candidate_id) VALUES(?,?,?,?)`, scope, noticeID, path, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *localDouyinWebLogin) executionRoundRoutes(owner *websession.Store, mux *http.ServeMux) {
@@ -499,6 +712,8 @@ func (m *localDouyinWebLogin) listExecutionRoundsForWork(ctx context.Context, sc
 		}
 		row.State, row.Reason = "待核对", "证据不足"
 		row.Candidates = []stationbrowser.DouyinNoticeCandidate{}
+		row.DetailStatus = "not_observed"
+		row.DetailCandidates = []stationbrowser.DouyinNoticeCandidate{}
 		result.Rounds = append(result.Rounds, row)
 		last = sequence
 	}
@@ -508,7 +723,10 @@ func (m *localDouyinWebLogin) listExecutionRoundsForWork(ctx context.Context, sc
 	if err := rows.Close(); err != nil {
 		return result, err
 	}
-	return result, readLocalDouyinRoundCandidates(ctx, db, scope, result.Rounds)
+	if err := readLocalDouyinRoundCandidates(ctx, db, scope, result.Rounds); err != nil {
+		return result, err
+	}
+	return result, readLocalDouyinRoundDetails(ctx, db, scope, result.Rounds)
 }
 
 func (m *localDouyinWebLogin) listExecutionWorkGroups(ctx context.Context, scope, day string, limit int, cursor string) (localDouyinExecutionWorkGroupsResult, error) {
@@ -624,6 +842,91 @@ func readLocalDouyinRoundCandidates(ctx context.Context, db *sql.DB, scope strin
 		}
 		if err := rows.Close(); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func readLocalDouyinRoundDetails(ctx context.Context, db *sql.DB, scope string, rounds []localDouyinExecutionRound) error {
+	if len(rounds) == 0 {
+		return nil
+	}
+	// A read of a ledger created before detail capture remains read-only.
+	var tableCount int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='round_details'`).Scan(&tableCount); err != nil || tableCount == 0 {
+		return err
+	}
+	indices := make(map[string]int, len(rounds))
+	for index, round := range rounds {
+		indices[round.NoticeID] = index
+	}
+	for start := 0; start < len(rounds); start += 200 {
+		end := min(start+200, len(rounds))
+		placeholders := make([]string, end-start)
+		args := make([]any, 0, end-start+1)
+		args = append(args, scope)
+		for index, round := range rounds[start:end] {
+			placeholders[index] = "?"
+			args = append(args, round.NoticeID)
+		}
+		suffix := ` WHERE d.scope=? AND d.notice_id IN (` + strings.Join(placeholders, ",") + `) ORDER BY d.notice_id`
+		query := `SELECT d.notice_id,d.work_id,d.status,coalesce(c.creator_account,'') FROM round_details d
+			LEFT JOIN round_creator_accounts c ON c.scope=d.scope AND c.notice_id=d.notice_id` + suffix
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var noticeID, workID, status, creatorAccount string
+			if err := rows.Scan(&noticeID, &workID, &status, &creatorAccount); err != nil {
+				rows.Close()
+				return err
+			}
+			index, found := indices[noticeID]
+			if !found || workID != rounds[index].WorkID || !validDouyinRoundDetailStatus(status) ||
+				(status == "observed_candidate" || status == "observed_no_candidates") && !validDouyinNoticeAccount(creatorAccount) {
+				rows.Close()
+				return errors.New("抖音执行回合详情证据无效")
+			}
+			rounds[index].DetailStatus = status
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		query = `SELECT notice_id,path,candidate_id FROM round_detail_candidates WHERE scope=? AND notice_id IN (` + strings.Join(placeholders, ",") + `) ORDER BY notice_id,path`
+		rows, err = db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var noticeID string
+			var candidate stationbrowser.DouyinNoticeCandidate
+			if err := rows.Scan(&noticeID, &candidate.Path, &candidate.ID); err != nil {
+				rows.Close()
+				return err
+			}
+			index, found := indices[noticeID]
+			if !found || rounds[index].DetailStatus != "observed_candidate" || !validDouyinRoundCandidate(candidate) || len(rounds[index].DetailCandidates) >= 16 {
+				rows.Close()
+				return errors.New("抖音执行回合详情候选字段无效")
+			}
+			rounds[index].DetailCandidates = append(rounds[index].DetailCandidates, candidate)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, round := range rounds[start:end] {
+			if round.DetailStatus == "observed_candidate" && len(round.DetailCandidates) == 0 {
+				return errors.New("抖音执行回合详情候选字段缺失")
+			}
 		}
 	}
 	return nil

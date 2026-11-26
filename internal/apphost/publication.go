@@ -157,6 +157,18 @@ type PublicationView struct {
 	AvailableActions []string                         `json:"available_actions"`
 }
 
+// PublicationReview is an owner-only, exact-task view for a human to inspect
+// before submitting a saved draft. It is deliberately separate from
+// PublicationView, which may be returned to an Agent in list/status calls.
+// Origin and arbitrary provider options are never serialized here.
+type PublicationReview struct {
+	Task      PublicationView       `json:"task"`
+	Title     string                `json:"title"`
+	Body      string                `json:"body"`
+	Artifacts []PublicationArtifact `json:"artifacts"`
+	Options   json.RawMessage       `json:"-"`
+}
+
 type PublicationPage struct {
 	Items   []PublicationView `json:"items"`
 	Next    int64             `json:"next"`
@@ -292,6 +304,37 @@ func (p *Publisher) Action(ctx context.Context, actor pluginhost.Invocation, job
 	default:
 		return PublicationView{}, ErrPublicationConflict
 	}
+}
+
+// ReviewForOwner reads one immutable draft from the local ledger. The caller
+// must additionally verify that the saved connection still belongs to the
+// intended application account before exposing this human-only result.
+func (p *Publisher) ReviewForOwner(ctx context.Context, actor pluginhost.Invocation, appID, jobID string) (PublicationReview, error) {
+	if p == nil || p.store == nil {
+		return PublicationReview{}, ErrPublicationUnavailable
+	}
+	if appID == "" || jobID == "" {
+		return PublicationReview{}, ErrNotFound
+	}
+	job, err := p.store.Job(ctx, jobID)
+	if err != nil || job.Plugin != "application/"+appID || job.Tool != "publication" {
+		return PublicationReview{}, ErrNotFound
+	}
+	record, err := publicationFromJob(job)
+	if err != nil {
+		return PublicationReview{}, ErrPublicationConflict
+	}
+	if !sameActor(actor, job.Context) {
+		return PublicationReview{}, ErrPublicationOwnership
+	}
+	if record.Draft.Target.AppID != appID {
+		return PublicationReview{}, ErrNotFound
+	}
+	return PublicationReview{
+		Task: viewFor(job, record), Title: record.Draft.Title, Body: record.Draft.Body,
+		Artifacts: append([]PublicationArtifact{}, record.Draft.Artifacts...),
+		Options:   append(json.RawMessage(nil), record.Draft.Options...),
+	}, nil
 }
 
 func (p *Publisher) List(ctx context.Context, actor pluginhost.Invocation, appID string, after int64, limit int) (PublicationPage, error) {

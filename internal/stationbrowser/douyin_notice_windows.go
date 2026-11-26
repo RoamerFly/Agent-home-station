@@ -4,10 +4,13 @@ package stationbrowser
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -77,15 +80,75 @@ type noticeRequestFence struct {
 	target, origin, sessionID string
 	authorize                 func() error
 	intent                    atomic.Pointer[noticeIntent]
+	mainFrame                 atomic.Pointer[string]
 	closed                    atomic.Bool
 	allowMarkRead             bool
 	after                     DouyinNoticeCheckpoint
 	pages                     int
+	detailMu                  sync.Mutex
+	details                   map[string]DouyinNoticeDetail
+	detailConflicts           map[string]bool
+	detailInvalid             atomic.Bool
+	detailInFlight            atomic.Int32
 }
 
 type noticeIntent struct {
 	frame    string
 	position noticePosition
+}
+
+type noticeDetailIntent struct {
+	frame     string
+	urlDigest [32]byte
+	refs      []noticeDetailRef
+}
+
+func (f *noticeRequestFence) recordDetails(items []DouyinNoticeDetail) {
+	f.detailMu.Lock()
+	defer f.detailMu.Unlock()
+	if f.details == nil {
+		f.details = make(map[string]DouyinNoticeDetail)
+		f.detailConflicts = make(map[string]bool)
+	}
+	for _, item := range items {
+		if f.detailConflicts[item.NoticeID] {
+			continue
+		}
+		if previous, found := f.details[item.NoticeID]; found && !reflect.DeepEqual(previous, item) {
+			delete(f.details, item.NoticeID)
+			f.detailConflicts[item.NoticeID] = true
+			continue
+		}
+		f.details[item.NoticeID] = item
+	}
+}
+
+func (f *noticeRequestFence) snapshotDetails(items []DouyinNotice) ([]DouyinNoticeDetail, string) {
+	f.detailMu.Lock()
+	defer f.detailMu.Unlock()
+	var details []DouyinNoticeDetail
+	progress := ""
+	for _, item := range items {
+		if f.detailConflicts[item.ID] {
+			progress = "conflict"
+			continue
+		}
+		if detail, found := f.details[item.ID]; found {
+			details = append(details, detail)
+		}
+	}
+	if progress == "" && f.detailInvalid.Load() {
+		progress = "invalid_response"
+	}
+	if progress == "" && f.detailInFlight.Load() != 0 {
+		progress = "in_flight"
+	}
+	if progress == "" && len(details) == 0 {
+		progress = "not_observed"
+	} else if progress == "" && len(details) < len(items) {
+		progress = "partial"
+	}
+	return details, progress
 }
 
 func checkNoticeAccount(ctx context.Context, session readerSession, id string, world int64, target, account string, authorize func() error) error {
@@ -126,6 +189,8 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 	var admittedIntent noticeIntent
 	var checkpoint DouyinNoticeCheckpoint
 	seen := map[noticePosition]bool{}
+	known := map[string]int{}
+	detailAdmitted := map[string]noticeDetailIntent{}
 	failed := false
 	report := func(outcome noticeReadOutcome) {
 		if failed {
@@ -167,9 +232,36 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 			method := "Fetch.failRequest"
 			params := map[string]any{"requestId": req.ID, "errorReason": "BlockedByClient"}
 			position, mark, exact := noticeListRequest(req.Request.URL, f.origin)
+			detailRefs, detailExact := noticeDetailRequest(req.Request.URL, f.origin, known)
 			intent := f.intent.Load()
+			mainFrame := f.mainFrame.Load()
 			switch {
 			case req.Status != 0 || req.ResponseError != "":
+				if detail, found := detailAdmitted[req.ID]; found {
+					delete(detailAdmitted, req.ID)
+					if req.Frame != detail.frame || sha256.Sum256([]byte(req.Request.URL)) != detail.urlDigest || req.ResponseError != "" {
+						report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
+					} else if err := f.authorize(); err != nil {
+						report(noticeReadOutcome{err: err})
+					} else {
+						if req.Status == 200 {
+							if items, err := readDouyinNoticeDetailResponse(ctx, session, f.sessionID, req.ID, detail.refs); err == nil {
+								f.recordDetails(items)
+							} else {
+								f.detailInvalid.Store(true)
+							}
+						} else {
+							f.detailInvalid.Store(true)
+						}
+						method = "Fetch.continueResponse"
+						params = map[string]any{"requestId": req.ID}
+					}
+					if session.Call(ctx, f.sessionID, method, params, nil) != nil {
+						report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
+					}
+					f.detailInFlight.Add(-1)
+					continue
+				}
 				if exact && req.ID == admitted && req.Frame == admittedIntent.frame && !failed {
 					admitted = ""
 					var page DouyinNoticePage
@@ -182,6 +274,13 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 						err = denied
 					}
 					if err == nil {
+						for _, item := range page.Items {
+							if previous, found := known[item.ID]; found && previous != item.Type {
+								known[item.ID] = -1
+							} else if !found {
+								known[item.ID] = item.Type
+							}
+						}
 						checkpoint = noticeCheckpoint(checkpoint, admittedIntent.position, page)
 						if checkpoint.Pages <= f.after.Pages && (!page.HasMore ||
 							checkpoint.Pages == f.after.Pages && checkpoint != f.after) {
@@ -208,6 +307,17 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 					report(noticeReadOutcome{page: page, next: nextIntent, err: err})
 					continue
 				}
+			case !failed && !f.closed.Load() && f.allowMarkRead && len(detailAdmitted) < 20 && mainFrame != nil &&
+				req.Frame == *mainFrame && req.Request.Method == "GET" &&
+				(req.Kind == "XHR" || req.Kind == "Fetch") && detailExact && len(detailRefs) != 0:
+				if err := f.authorize(); err != nil {
+					report(noticeReadOutcome{err: err})
+				} else {
+					detailAdmitted[req.ID] = noticeDetailIntent{frame: req.Frame, urlDigest: sha256.Sum256([]byte(req.Request.URL)), refs: detailRefs}
+					f.detailInFlight.Add(1)
+					method = "Fetch.continueRequest"
+					params = map[string]any{"requestId": req.ID, "interceptResponse": true}
+				}
 			case !failed && !f.closed.Load() && admitted == "" && intent != nil && req.Frame == intent.frame && req.Request.Method == "GET" && exact &&
 				(req.Kind == "XHR" || req.Kind == "Fetch") && position.min == intent.position.min && position.max == intent.position.max &&
 				(intent.position.group == "" || position.group == intent.position.group) && f.intent.CompareAndSwap(intent, nil):
@@ -227,6 +337,10 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 				params = map[string]any{"requestId": req.ID}
 			}
 			if session.Call(ctx, f.sessionID, method, params, nil) != nil {
+				if _, found := detailAdmitted[req.ID]; found && method == "Fetch.continueRequest" {
+					delete(detailAdmitted, req.ID)
+					f.detailInFlight.Add(-1)
+				}
 				report(noticeReadOutcome{err: ErrDouyinNoticeUnavailable})
 			}
 		}
@@ -234,22 +348,38 @@ func (f *noticeRequestFence) run(ctx context.Context, session readerSession, out
 }
 
 func readDouyinNoticeResponse(ctx context.Context, session readerSession, id, requestID string) (DouyinNoticePage, error) {
+	raw, err := readDouyinNoticeBody(ctx, session, id, requestID)
+	if err != nil {
+		return DouyinNoticePage{}, err
+	}
+	return parseDouyinNoticePage(ctx, raw)
+}
+
+func readDouyinNoticeDetailResponse(ctx context.Context, session readerSession, id, requestID string, refs []noticeDetailRef) ([]DouyinNoticeDetail, error) {
+	raw, err := readDouyinNoticeBody(ctx, session, id, requestID)
+	if err != nil {
+		return nil, err
+	}
+	return parseDouyinNoticeDetail(ctx, raw, refs)
+}
+
+func readDouyinNoticeBody(ctx context.Context, session readerSession, id, requestID string) ([]byte, error) {
 	var out struct {
 		Body          string
 		Base64Encoded bool
 	}
 	if session.Call(ctx, id, "Fetch.getResponseBody", map[string]any{"requestId": requestID}, &out) != nil || len(out.Body) > 350<<10 {
-		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
+		return nil, ErrDouyinNoticeUnavailable
 	}
 	raw := []byte(out.Body)
 	if out.Base64Encoded {
 		var err error
 		raw, err = base64.StdEncoding.DecodeString(out.Body)
 		if err != nil {
-			return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
+			return nil, ErrDouyinNoticeUnavailable
 		}
 	}
-	return parseDouyinNoticePage(ctx, raw)
+	return raw, nil
 }
 
 func readDouyinNoticeSession(ctx context.Context, session readerSession, target string, input *DouyinNoticeRequest, authorize func() error) (DouyinNoticePage, error) {
@@ -305,6 +435,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	if session.Call(ctx, id, "Page.navigate", map[string]any{"url": target}, &nav) != nil || nav.ErrorText != "" || nav.IsDownload {
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
+	fence.mainFrame.Store(&nav.FrameID)
 	var world int64
 	var account, creatorAccount string
 	for until := time.Now().Add(20 * time.Second); time.Now().Before(until); {
@@ -386,10 +517,39 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 			break
 		}
 	}
+	fence.intent.Store(nil)
+	// Let the page finish natural, list-triggered detail GETs. The fence has
+	// no list intent now, so this short window cannot admit another page.
+	if len(collected.Items) != 0 {
+		settle, stop := context.WithTimeout(ctx, 300*time.Millisecond)
+		for settle.Err() == nil {
+			if err := authorize(); err != nil {
+				stop()
+				return DouyinNoticePage{}, err
+			}
+			if creatorWait(settle) != nil {
+				break
+			}
+		}
+		stop()
+	}
 	// Close the request gate before reading the rendered list. Its text is
 	// presentation evidence, never authority to admit an additional page.
 	fence.closed.Store(true)
 	fence.intent.Store(nil)
+	if fence.detailInFlight.Load() != 0 {
+		pending, stop := context.WithTimeout(ctx, time.Second)
+		for pending.Err() == nil && fence.detailInFlight.Load() != 0 {
+			if err := authorize(); err != nil {
+				stop()
+				return DouyinNoticePage{}, err
+			}
+			if creatorWait(pending) != nil {
+				break
+			}
+		}
+		stop()
+	}
 	if len(collected.Items) != 0 {
 		textCtx, stop := context.WithTimeout(ctx, 3*time.Second)
 		defer stop()
@@ -406,6 +566,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	if err := checkNoticeAccount(ctx, session, id, world, target, account, authorize); err != nil {
 		return DouyinNoticePage{}, err
 	}
+	collected.Details, collected.DetailProgress = fence.snapshotDetails(collected.Items)
 	return collected, nil
 }
 

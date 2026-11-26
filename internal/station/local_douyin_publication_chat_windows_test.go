@@ -293,6 +293,36 @@ func TestDouyinPublicationVideoNormalChatStagesAndReconciles(t *testing.T) {
 	if s.uploads != 1 || s.submits != 1 {
 		t.Fatalf("upload counts: upload=%d submit=%d", s.uploads, s.submits)
 	}
+	code, review := f.request("GET", "/api/local/apps/douyin/publications/review?job_id="+job, nil, false)
+	if code != 200 || review["title"] != "合成视频标题" || review["body"] != "合成视频正文" || review["visibility"] != "private" ||
+		review["task"].(map[string]any)["job_id"] != job {
+		t.Fatalf("human review lost original draft: %d %#v", code, review)
+	}
+	artifacts, ok := review["artifacts"].([]any)
+	if !ok || len(artifacts) != 1 || artifacts[0].(map[string]any)["id"] != artifact ||
+		artifacts[0].(map[string]any)["sha256"] != sha256Hex(s.media) ||
+		artifacts[0].(map[string]any)["bytes"] != float64(len(s.media)) {
+		t.Fatalf("human review media reference differs: %#v", review)
+	}
+	if strings.Contains(strings.ToLower(string(mustLocalDouyinJSON(review))), "origin") ||
+		strings.Contains(string(mustLocalDouyinJSON(review)), "publication-staging") {
+		t.Fatal("review leaked provenance or private staging path")
+	}
+	if code, _ := f.request("GET", "/api/local/apps/douyin/publications/review?job_id="+strings.Repeat("a", 64), nil, false); code != 404 {
+		t.Fatalf("unknown task review: %d", code)
+	}
+	for _, query := range []string{"job_id=" + job + "&job_id=" + job, "job_id=" + job + "&extra=1"} {
+		if code, _ := f.request("GET", "/api/local/apps/douyin/publications/review?"+query, nil, false); code != 400 {
+			t.Fatalf("ambiguous review request accepted: %d", code)
+		}
+	}
+	jar := f.client.Jar
+	f.client.Jar = nil
+	unauthenticated, _ := f.request("GET", "/api/local/apps/douyin/publications/review?job_id="+job, nil, false)
+	f.client.Jar = jar
+	if unauthenticated != 401 || s.uploads != 1 || s.submits != 1 {
+		t.Fatalf("review bypassed owner session or changed publication: %d, upload=%d submit=%d", unauthenticated, s.uploads, s.submits)
+	}
 	_, view := f.request("GET", localDouyinWebRoute, nil, false)
 	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": view["revision"], "allow_publish": false}, true); code != 200 {
 		t.Fatal(code)

@@ -47,8 +47,12 @@ type DouyinNoticePage struct {
 	Account string
 	// CreatorAccount uses the same domain as DouyinCreatorWorksPage.Account.
 	// It is a digest of the signed-in UID, never the UID or a session token.
-	CreatorAccount   string
-	Items            []DouyinNotice
+	CreatorAccount string
+	Items          []DouyinNotice
+	// Details contain only normalized evidence from naturally issued detail
+	// GETs for list IDs. They never establish a reply target by themselves.
+	Details          []DouyinNoticeDetail
+	DetailProgress   string
 	MinTime, MaxTime int64
 	HasMore          bool
 	// RenderedText is separate from item metadata. The official page filters
@@ -285,7 +289,7 @@ func parseDouyinNoticePage(ctx context.Context, raw []byte) (DouyinNoticePage, e
 		if json.Unmarshal(rawItem, &row) != nil {
 			return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 		}
-		if !douyinVideoID.MatchString(row.ID) || row.Type < 1 || row.CreatedAt < 0 || seen[row.ID] {
+		if !douyinVideoID.MatchString(row.ID) || row.Type < 0 || row.CreatedAt < 0 || seen[row.ID] {
 			return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 		}
 		seen[row.ID] = true
