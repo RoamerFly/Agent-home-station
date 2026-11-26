@@ -89,7 +89,7 @@ type localProjectToolView struct {
 }
 
 func (s *localProjectTools) runtimeReady() bool {
-	return runtime.GOOS == "windows" && stationruntime.ToolRuntimeReady(s.options, s.home.root)
+	return runtime.GOOS == "windows" && stationruntime.ToolBrokerReady(s.options, s.home.root)
 }
 
 func (s *localProjectTools) pdfRuntimeReady() bool {
@@ -403,6 +403,18 @@ func (s *localProjectTools) projectView(ctx context.Context, host *localProjectT
 		targetDigest = view.PackageDigest
 		view.Reason = ""
 	}
+	if item.Enabled && item.Package.Runtime.Transport == "mcp-stdio" && runtime.GOOS == "windows" {
+		// InstalledToolExecutor selects a package-owned interpreter when present.
+		// The shared release interpreter is not a prerequisite for that package.
+		options := s.options
+		options.DocumentRuntimeRoot = ""
+		grant := pluginhost.Grant{Account: host.store.Account(), Plugin: item.Package.ID, Version: item.Package.Version, Permissions: item.Permissions}
+		_, resolveErr := stationruntime.InstalledToolExecutor(host.store, options, s.home.root).Resolve(ctx, item.Package, grant)
+		view.RuntimeReady = resolveErr == nil
+		if resolveErr != nil {
+			view.Reason = "tool_runtime_unavailable"
+		}
+	}
 	view.UpdateAvailable = view.CatalogAvailable && item.Digest != targetDigest
 	view.PDFReady = id == pluginruntime.DocumentWorkshopID && (item.Digest == contract.ManifestSHA256 || compatibleDocumentDigest(projectOperation(localDocumentExportTool), item.Digest)) && s.pdfRuntimeReady()
 	view.Busy = backendBusy || s.isActive(id)
@@ -569,11 +581,6 @@ func (s *localProjectTools) changeProjectTool(w http.ResponseWriter, r *http.Req
 		websession.Fail(w, 400, "安装需要主人明确授予本机成品读写权限")
 		return
 	}
-	if (in.Action == "enable" || in.Action == "start" || in.Action == "restart") && id != localRVCPackage && id != localComfyPackage && id != localYuEPackage && id != localTTSPackage && id != localAudioCppPackage && id != localOBSPackage && !s.runtimeReady() {
-		websession.Fail(w, 409, "Windows 项目工具运行器缺失")
-		return
-	}
-
 	s.update.Lock()
 	defer s.update.Unlock()
 	ctx := r.Context()

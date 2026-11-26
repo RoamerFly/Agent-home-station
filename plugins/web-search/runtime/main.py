@@ -470,9 +470,30 @@ def search(args, get, route=None, configuration=None):
     if backend == "public":
         return public_search(args, get)
     if backend == "deepseek":
-        if route is None:
-            raise ValueError("deepseek_route_unavailable")
-        return deepseek_search(args, route)
+        try:
+            if route is None:
+                raise ValueError("deepseek_route_unavailable")
+            return deepseek_search(args, route)
+        except ValueError as error:
+            primary = str(error)
+            # Bad caller parameters and cancellation cannot be repaired by
+            # changing sources. A provider or route failure can: try each
+            # public index once in this same tool call.
+            if primary == "request_cancelled" or primary in {
+                "invalid_search_arguments", "query_required", "invalid_count",
+                "invalid_offset", "invalid_limit", "invalid_max_bytes",
+                "invalid_timeout_seconds", "offset_outside_results",
+            }:
+                raise
+            fallback = public_search(args, get)
+            if fallback.get("ok"):
+                fallback["fallback_used"] = True
+                return fallback
+            if fallback.get("error") == "search_sources_unavailable":
+                code = "search_" + primary + "_public_unavailable"
+                if re.fullmatch(r"[a-z_]{1,96}", code):
+                    return {"ok": False, "error": code}
+            return fallback
     raise ValueError("search_backend_not_configured")
 
 
@@ -539,6 +560,22 @@ class Wire:
         self.outgoing.write(raw + "\n")
         self.outgoing.flush()
 
+    @staticmethod
+    def host_failure(reply):
+        error = reply.get("error")
+        data = error.get("data") if isinstance(error, dict) else None
+        if isinstance(data, dict):
+            code, stage = data.get("code"), data.get("stage")
+            if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,64}", code):
+                if code == "request_cancelled":
+                    return code
+                if isinstance(stage, str) and re.fullmatch(r"[a-z_]{1,32}", stage) and stage not in code:
+                    combined = "host_" + stage + "_" + code
+                    if len(combined) <= 96:
+                        return combined
+                return "host_" + code
+        return "host_service_denied_or_failed"
+
     def get(self, url, maximum, timeout):
         self.seq += 1
         key = "web-read-" + str(self.seq)
@@ -548,7 +585,7 @@ class Wire:
         if reply.get("jsonrpc") != "2.0" or reply.get("id") != key:
             raise ValueError("host_response_identity_mismatch")
         if "error" in reply:
-            return {"ok": False, "error": "host_service_denied_or_failed"}
+            return {"ok": False, "error": self.host_failure(reply)}
         return reply["result"]
 
     def route(self, route, body, maximum, timeout):
@@ -560,7 +597,7 @@ class Wire:
         if reply.get("jsonrpc") != "2.0" or reply.get("id") != key:
             raise ValueError("host_response_identity_mismatch")
         if "error" in reply:
-            raise ValueError("host_service_denied_or_failed")
+            raise ValueError(self.host_failure(reply))
         if not isinstance(reply.get("result"), dict):
             raise ValueError("invalid_host_response")
         return reply["result"]
@@ -584,7 +621,7 @@ class Wire:
                     if not isinstance(self.configuration, dict):
                         raise ValueError("invalid_configuration")
                     initialized = True
-                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.4"}}
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "web-search", "version": "0.3.8"}}
                 elif method == "ping" and initialized:
                     pass
                 elif method == "tools/call" and initialized:

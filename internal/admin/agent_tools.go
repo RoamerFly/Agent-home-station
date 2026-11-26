@@ -49,7 +49,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "启动本机 YuE/RVC 受管服务；查询 music_service_status 就绪后续办原任务。", `{"type":"object","properties":{},"additionalProperties":false}`))
-		tools = append(tools, agentTool("station_tool_manage", "公共工具状态与恢复：status 列目录；ensure_ready 启动已启用工具；repair 在空闲时修复，不重做原任务；start/restart/stop/enable 为显式操作。音乐桥接用 tool_id=music-bridge。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","start","restart","stop","enable"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("station_tool_manage", "查询并启停实际执行的公共工具。status 列微信和工作站实例；同名工具默认管理微信已安装实例，可用 execution_host 指定。ensure_ready 启动已启用工具，repair 在空闲时修复；不重做原任务。音乐桥用 tool_id=music-bridge。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","start","restart","stop","enable"]},"tool_id":{"type":"string"},"execution_host":{"type":"string","enum":["auto","wechat","station"]}},"required":["action"],"additionalProperties":false}`))
 	}
 	projectTools := p.projectPluginTools(context.Background())
 	tools = append(tools, projectTools...)

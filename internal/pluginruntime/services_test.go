@@ -4,10 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 )
+
+func TestHostServiceFailureOnlyExposesBoundedRouteDiagnostics(t *testing.T) {
+	web := &mcptools.WebError{Code: "plugin_route_http_rejected", Status: 401, Stage: "http_status"}
+	want := map[string]any{"code": -32001, "message": "host_service_failed", "data": map[string]string{"code": "plugin_route_http_rejected", "stage": "http_status"}}
+	if got := hostServiceFailure("wechat/http_route", web); !reflect.DeepEqual(got, want) {
+		t.Fatalf("route diagnostic = %#v", got)
+	}
+	for _, tc := range []struct {
+		method string
+		err    error
+	}{
+		{"wechat/http_read", web},
+		{"wechat/http_route", errors.New("secret=https://private.example/path")},
+		{"wechat/http_route", &mcptools.WebError{Code: "unlisted_private_failure", Stage: "private"}},
+	} {
+		if got := hostServiceFailure(tc.method, tc.err); !reflect.DeepEqual(got, map[string]any{"code": -32001, "message": "host_service_failed"}) {
+			t.Fatalf("unexpected host detail for %s: %#v", tc.method, got)
+		}
+	}
+}
 
 func TestServiceProxyRequiresCurrentCallPermissionAndIdentity(t *testing.T) {
 	ctx := context.Background()

@@ -29,6 +29,7 @@ import (
 // view. It keeps paths, tokens and implementation details out of the Agent
 // conversation while allowing future tools to appear without a Go enum.
 type stationToolView struct {
+	ExecutionHost    string                       `json:"execution_host,omitempty"`
 	DirectoryPackage bool                         `json:"directory_package"`
 	Backends         []pluginhost.ToolBackendView `json:"backends,omitempty"`
 	ExternalPackage  bool                         `json:"external_package,omitempty"`
@@ -36,6 +37,7 @@ type stationToolView struct {
 	Name             string                       `json:"name"`
 	Installed        bool                         `json:"installed"`
 	Enabled          bool                         `json:"enabled"`
+	Busy             bool                         `json:"busy"`
 	Revision         int                          `json:"revision"`
 	State            string                       `json:"state"`
 	RuntimeReady     bool                         `json:"runtime_ready"`
@@ -47,8 +49,8 @@ func compactStationToolStatus(views []stationToolView) []map[string]any {
 	tools := make([]map[string]any, 0, len(views))
 	for _, tool := range views {
 		tools = append(tools, map[string]any{
-			"id": tool.ID, "name": tool.Name, "installed": tool.Installed,
-			"enabled": tool.Enabled, "state": tool.State,
+			"execution_host": "station", "id": tool.ID, "name": tool.Name, "installed": tool.Installed,
+			"enabled": tool.Enabled, "state": tool.State, "busy": tool.Busy,
 			"runtime_ready": tool.RuntimeReady, "reason": tool.Reason,
 		})
 	}
@@ -758,8 +760,9 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 		return "", toolInputError("station_tool_not_authorized")
 	}
 	var in struct {
-		Action string `json:"action"`
-		ToolID string `json:"tool_id"`
+		Action        string `json:"action"`
+		ToolID        string `json:"tool_id"`
+		ExecutionHost string `json:"execution_host"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return "", toolInputError("station_tool_arguments_invalid")
@@ -770,6 +773,14 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 	if action != "status" && action != "enable" && action != "start" && action != "stop" && action != "restart" && action != "ensure_ready" && action != "repair" {
 		return "", toolInputError("station_tool_action_invalid")
 	}
+	if in.ExecutionHost != "" && in.ExecutionHost != "auto" && in.ExecutionHost != "station" && in.ExecutionHost != "wechat" {
+		return "", toolInputError("station_tool_execution_host_invalid")
+	}
+	if in.ToolID != "" {
+		if _, err := stationToolIDs(in.ToolID); err != nil {
+			return "", err
+		}
+	}
 	if action != "status" {
 		if _, err := stationToolIDs(in.ToolID); err != nil {
 			return "", err
@@ -777,6 +788,56 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 	}
 	if in.ToolID == "music-bridge" {
 		return p.manageMusicBridge(ctx, action)
+	}
+	if action == "status" && in.ToolID == "" {
+		result := map[string]any{"detail": "station_tool_manage action=status tool_id=<id> execution_host=wechat|station"}
+		if in.ExecutionHost != "station" {
+			views, err := p.wechatToolList(ctx)
+			if err != nil {
+				result["wechat_error"] = "wechat_tool_status_unavailable"
+			} else {
+				result["wechat_tools"] = compactWechatToolStatus(views)
+			}
+		}
+		if in.ExecutionHost != "wechat" {
+			session, err := p.stationToolLogin(ctx)
+			if err == nil {
+				var data []byte
+				data, err = p.stationToolRequest(ctx, session, http.MethodGet, "/api/local/project-tools", nil)
+				if err == nil {
+					var view struct {
+						Tools []stationToolView `json:"tools"`
+					}
+					err = json.Unmarshal(data, &view)
+					if err == nil {
+						result["station_tools"] = compactStationToolStatus(view.Tools)
+						result["music_bridge"] = p.musicBridgeStatus(ctx)
+					}
+				}
+			}
+			if err != nil {
+				result["station_error"] = "station_tool_status_unavailable"
+			}
+		}
+		out, _ := json.Marshal(result)
+		return string(out), nil
+	}
+	// Singing and conversion use Station's managed backends through the music
+	// bridge; old account snapshots with these IDs remain available for
+	// explicit inspection, but are not the effective execution host.
+	preferStation := in.ExecutionHost == "" || in.ExecutionHost == "auto"
+	preferStation = preferStation && (in.ToolID == "rvc" || in.ToolID == "yue")
+	if in.ExecutionHost != "station" && !preferStation {
+		if in.ExecutionHost == "wechat" {
+			return p.manageWechatTool(ctx, action, in.ToolID)
+		}
+		installed, err := p.wechatToolInstalled(ctx, in.ToolID)
+		if err != nil {
+			return "", errors.New("wechat_tool_status_unavailable")
+		}
+		if installed {
+			return p.manageWechatTool(ctx, action, in.ToolID)
+		}
 	}
 	session, err := p.stationToolLogin(ctx)
 	if err != nil {
@@ -793,12 +854,9 @@ func (p *permittedTools) callStationTool(ctx context.Context, action string, raw
 		if json.Unmarshal(data, &view) != nil {
 			return "", errors.New("station_tool_status_invalid")
 		}
-		if in.ToolID == "" {
-			out, _ := json.Marshal(map[string]any{"tools": compactStationToolStatus(view.Tools), "music_bridge": p.musicBridgeStatus(ctx), "detail": "station_tool_manage action=status tool_id=<id>"})
-			return string(out), nil
-		}
 		for _, tool := range view.Tools {
 			if tool.ID == in.ToolID {
+				tool.ExecutionHost = "station"
 				out, _ := json.Marshal(tool)
 				return string(out), nil
 			}

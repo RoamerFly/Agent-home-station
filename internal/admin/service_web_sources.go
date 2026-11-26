@@ -139,7 +139,10 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 		}
 		var backend string
 		_ = json.Unmarshal(config.Values["search_backend"], &backend)
-		if backend != "" && backend != "public" {
+		// A configured provider may fail for one request. The installed plugin
+		// can fall back to these exact public indexes without expanding its
+		// network authority or changing the requested search query.
+		if backend != "" && backend != "public" && backend != "deepseek" {
 			return errors.New("web_public_backend_not_selected")
 		}
 		query := strings.TrimSpace(args.Query)

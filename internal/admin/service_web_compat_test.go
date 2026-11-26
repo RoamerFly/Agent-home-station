@@ -40,6 +40,36 @@ func TestWebSearchAllowsOnlyDeclaredThirdPublicIndex(t *testing.T) {
 	}
 }
 
+func TestConfiguredDeepSeekMayUseBoundPublicSearchFallback(t *testing.T) {
+	f, p := trustedAgent(t)
+	store, installed := installPublicWebFixture(t, f)
+	var err error
+	installed, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveConfiguration(t.Context(), installed.Package.ID, pluginhost.ConfigUpdate{
+		Values:  map[string]json.RawMessage{"search_backend": json.RawMessage(`"deepseek"`)},
+		Secrets: map[string]string{"search_key": "synthetic-search-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := servicePluginPolicy{p: p}
+	job := pluginhost.Job{Plugin: "web-search", Tool: "web.search", Arguments: json.RawMessage(`{"query":"测试 搜索"}`)}
+	allowed := "https://www.bing.com/search?q=%E6%B5%8B%E8%AF%95+%E6%90%9C%E7%B4%A2&format=rss"
+	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 20); err != nil {
+		t.Fatalf("bound public fallback rejected: %v", err)
+	}
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://www.bing.com/search?q=changed&format=rss", 2<<20, 20); err == nil {
+		t.Fatal("changed fallback query accepted")
+	}
+}
+
 func installPublicWebFixture(t *testing.T, f *webFixture) (*pluginhost.Store, pluginhost.InstalledPackage) {
 	t.Helper()
 	s, err := f.manager.packageStore()

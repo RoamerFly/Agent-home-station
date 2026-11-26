@@ -18,6 +18,46 @@ def response(body, url="https://example.test/page", kind="text/html; charset=utf
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_deepseek_route_failure_uses_public_index_in_same_call(self):
+        calls = []
+        def route(*_):
+            calls.append("deepseek")
+            raise ValueError("host_http_route_http_status")
+        def get(url, *_):
+            calls.append(url)
+            return response("<rss><channel><item><title>番茄小说 漫改版权</title><link>https://example.test/rights</link></item></channel></rss>", url, "text/xml")
+        result = plugin.search({"query": "番茄小说 漫改版权"}, get, route, {"search_backend": "deepseek"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["backend"], "public")
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(len(calls), 2)
+
+    def test_deepseek_and_public_failure_preserves_primary_machine_code(self):
+        calls = []
+        def route(*_):
+            calls.append("deepseek")
+            raise ValueError("host_http_route_http_status")
+        def get(url, *_):
+            calls.append(url)
+            return {"ok": False, "error": "network_timeout"}
+        result = plugin.search({"query": "番茄小说 漫改版权"}, get, route, {"search_backend": "deepseek"})
+        self.assertEqual(result, {"ok": False, "error": "search_host_http_route_http_status_public_unavailable"})
+        self.assertEqual(len(calls), 4)
+
+    def test_deepseek_invalid_parameters_do_not_trigger_public_search(self):
+        with self.assertRaisesRegex(ValueError, "invalid_count"):
+            plugin.search({"query": "番茄小说", "count": 0}, lambda *_: self.fail("public search called"), lambda *_: self.fail("provider called"), {"search_backend": "deepseek"})
+
+    def test_wire_preserves_only_bounded_host_machine_error(self):
+        error = {"jsonrpc": "2.0", "id": "web-route-1", "error": {"code": -32001, "message": "host_service_failed", "data": {"code": "http_status", "stage": "http_route"}}}
+        wire = plugin.Wire(io.StringIO(json.dumps(error) + "\n"), io.StringIO())
+        with self.assertRaisesRegex(ValueError, "^host_http_route_http_status$"):
+            wire.route("deepseek-search", {"query": "test"}, 1000, 10)
+        error["error"]["data"]["code"] = "secret token=123"
+        self.assertEqual(plugin.Wire.host_failure(error), "host_service_denied_or_failed")
+        error["error"]["data"]["code"] = "request_cancelled"
+        self.assertEqual(plugin.Wire.host_failure(error), "request_cancelled")
+
     def test_site_refusal_falls_back_to_matching_indexed_bv_only(self):
         def get(url, *_):
             if url.startswith("https://api.bilibili.com/"):
