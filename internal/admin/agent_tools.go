@@ -71,7 +71,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, agentTool("agent_clock", "Read current local time and timezone before scheduling. Create reminders only for an explicit future time; immediate work continues in its current task. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；当前任务续办会沿用 ID。纠正旧请求可传原消息的 origin_message_id，更新已有任务。pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。跨会话主人任务传真实 source IDs 和 delivery_thread_id；target_task_id 用于取消旧任务。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；当前任务续办沿用 ID。用户明确更换视频参考图时，以原消息 origin_message_id、图片和纠错消息 source_message_ids 及 corrected_request=true 重开原任务，取消旧作业后重做。pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"},"corrected_request":{"type":"boolean"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
@@ -339,6 +339,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			TargetTaskID     string   `json:"target_task_id"`
 			OriginMessageID  string   `json:"origin_message_id"`
 			DelaySeconds     int      `json:"delay_seconds"`
+			CorrectedRequest bool     `json:"corrected_request"`
 		}
 		if json.Unmarshal(args, &in) != nil || len(in.Checkpoint) > 6000 || len(in.Title) > 200 || !contains([]string{"pending", "waiting", "completed", "cancelled", "needs_review"}, in.State) {
 			return "", toolInputError("任务参数无效")
@@ -425,6 +426,81 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if !p.conversationReadAllowed(deliveryThread) || sourceThread != p.trace.Thread && !p.privileged() {
 			return "", toolInputError("任务投递目标未获授权")
+		}
+		if in.CorrectedRequest {
+			if in.OriginMessageID == "" || in.State != "pending" || sourceThread != p.trace.Thread || deliveryThread != sourceThread || len(in.SourceMessageIDs) < 3 {
+				return "", toolInputError("纠错视频需原请求、参考图片及纠错消息，并沿用原会话任务")
+			}
+			var previous agentTask
+			found := false
+			for _, candidate := range m.agent.list(p.trace.Account, deliveryThread) {
+				if candidate.OriginTrace != origin || candidate.Sender != p.trace.Sender || taskSourceThread(candidate) != sourceThread || candidate.Reminder != nil || candidate.PluginJob != nil {
+					continue
+				}
+				if in.ID != "" && candidate.ID != in.ID {
+					continue
+				}
+				if found {
+					return "", toolInputError("原消息对应多个任务，请指定原任务 id")
+				}
+				previous, found = candidate, true
+			}
+			if !found || previous.State == "cancelled" {
+				return "", toolInputError("未找到可纠错的原视频任务")
+			}
+			// The model chooses whether this is a correction; native records prove
+			// that a new reference image and a separate user message really exist.
+			hasCorrectionText := false
+			for _, id := range in.SourceMessageIDs {
+				if id == origin {
+					continue
+				}
+				message, err := m.native.Message(ctx, id)
+				if err == nil && message.ID == id && message.AccountID == p.trace.Account && message.ThreadID == sourceThread && message.SenderID == p.trace.Sender && message.Direction == "incoming" && message.Type == 1 && strings.TrimSpace(message.Body) != "" {
+					hasCorrectionText = true
+				}
+			}
+			if !hasCorrectionText {
+				return "", toolInputError("请提供原请求者的纠错消息")
+			}
+			note := strings.TrimSpace(in.Checkpoint)
+			if len([]rune(note)) > 480 {
+				note = string([]rune(note)[:480])
+			}
+			for i := len(previous.Actions) - 1; i >= 0; i-- {
+				action := previous.Actions[i]
+				if action.Tool != "station_comfy" || !strings.Contains(action.Arguments, `"action":"run"`) {
+					continue
+				}
+				var result struct {
+					JobID string `json:"job_id"`
+				}
+				if json.Unmarshal([]byte(action.Result), &result) == nil && result.JobID != "" {
+					note += "；先取消旧 Comfy 作业 job_id=" + result.JobID
+					break
+				}
+			}
+			corrected, err := m.prepareTaskCorrection(ctx, previous, note, in.SourceMessageIDs, "video")
+			if err != nil {
+				return "", err
+			}
+			if previous.State == "completed" {
+				corrected, err = m.agent.reopenArchivedCorrectedTask(corrected)
+			} else {
+				var saved bool
+				saved, err = m.agent.transitionSnapshot(corrected, true)
+				if err == nil && !saved {
+					err = toolInputError("原任务状态已变化，请重新读取后纠错")
+				}
+				if err == nil {
+					corrected, _ = m.agent.lookupTask(previous.ID, previous.Account, previous.Thread)
+				}
+			}
+			if err != nil {
+				return "", err
+			}
+			m.record(bot.Record{Event: "agent_task_corrected", Category: "decision", ThreadID: corrected.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, RelatedMessageID: corrected.ID, Status: corrected.State, Reason: "original_requester_explicit_correction", Origin: "agent"})
+			return encode(corrected, nil)
 		}
 		// A continuation already has a durable task identity. A fresh key or
 		// title in that turn updates its checkpoint instead of creating a second
