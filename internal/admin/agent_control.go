@@ -608,6 +608,12 @@ func (t *agentTask) stopRepeatedNoProgress(outcome string) bool {
 	if t.resultKind() != "" || t.DeliveryJob != "" || t.Delivery != nil && t.Delivery.State != "accepted" || len(t.PendingOperations) > 0 || t.CrossThreadChildWait {
 		return false
 	}
+	if t.waitingForComfyJob() {
+		// A live external render is durable work, even when consecutive status
+		// polls return the same in_progress result.
+		t.NoProgressKey, t.NoProgressRuns, t.NoProgressObservedRun = "", 0, t.Runs
+		return false
+	}
 	if t.NoProgressRuns > 0 && t.NoProgressObservedRun == t.Runs {
 		return false
 	}
