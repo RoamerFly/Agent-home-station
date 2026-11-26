@@ -132,22 +132,22 @@ func TestAdministratorResumesOriginalGroupVideoTaskWithVerifiedCorrection(t *tes
 	access := &permittedTools{manager: f.manager, trace: *input}
 	access.rememberTaskAction("station_comfy", json.RawMessage(`{"action":"run","source_message_id":"new-image"}`), `{"job_id":"new-job"}`, nil)
 	beforePublish, _ := f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
-	beforePublish.Delivery = &bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1}
+	beforePublish.Delivery = &bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1, VideoExpected: 1, VideoAccepted: 1}
 	if beforePublish.correctedDeliveryComplete() {
 		t.Fatal("new Comfy job alone satisfied corrected video without a staged output")
 	}
 	access.rememberTaskAction("artifact_publish", json.RawMessage(`{"path":"new-final.mp4","task_id":"group-video"}`), `{"staged_only":true,"media":[{"kind":"video","id":"new-media"}]}`, nil)
-	newReceipt := bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1}
+	newReceipt := bot.TaskDelivery{Trace: input.TraceID, State: "accepted", Expected: 1, Accepted: 1, VideoExpected: 1, VideoAccepted: 1, VideoSourceID: "new-media"}
 	if err := f.manager.updateAgentDelivery(*input, newReceipt); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
-	if got.CorrectionWorkStartedAt.IsZero() || got.CorrectionMediaPreparedAt.IsZero() || got.Delivery == nil || got.State == "completed" {
-		t.Fatalf("new video evidence not preserved before completion: %+v", got)
+	if got.CorrectionWorkStartedAt.IsZero() || got.CorrectionMediaPreparedAt.IsZero() || got.Delivery == nil || got.State != "waiting" || got.WorkCompleted {
+		t.Fatalf("video receipt without completion intent should remain active: %+v", got)
 	}
 	got.State = "completed"
 	if _, err := f.manager.agent.saveTask(got); err != nil {
-		t.Fatalf("new video was not allowed to complete: %v", err)
+		t.Fatalf("verified video should allow explicit completion: %v", err)
 	}
 	if err := f.manager.agent.retireSettled(); err != nil {
 		t.Fatal(err)

@@ -71,12 +71,14 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 			var prepared struct {
 				Media []struct {
 					Kind string `json:"kind"`
+					ID   string `json:"id"`
 				} `json:"media"`
 			}
 			if json.Unmarshal([]byte(result), &prepared) == nil {
 				for _, media := range prepared.Media {
-					if media.Kind == t.CorrectionRequiredMediaKind && media.Kind != "" && !t.CorrectionWorkStartedAt.IsZero() {
+					if media.Kind == t.CorrectionRequiredMediaKind && media.ID != "" && !t.CorrectionWorkStartedAt.IsZero() {
 						t.CorrectionMediaPreparedAt = entry.At
+						t.CorrectionPreparedMediaID = media.ID
 					}
 				}
 			}
@@ -85,12 +87,14 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 			var prepared struct {
 				Media []struct {
 					Kind string `json:"kind"`
+					ID   string `json:"id"`
 				} `json:"media"`
 			}
 			if json.Unmarshal([]byte(result), &prepared) == nil {
 				for _, media := range prepared.Media {
-					if media.Kind == t.CorrectionRequiredMediaKind && media.Kind != "" {
+					if media.Kind == t.CorrectionRequiredMediaKind && media.ID != "" {
 						t.CorrectionMediaPreparedAt = entry.At
+						t.CorrectionPreparedMediaID = media.ID
 					}
 				}
 			}

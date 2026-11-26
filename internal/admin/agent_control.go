@@ -184,33 +184,35 @@ type agentTask struct {
 	// conversation whose material was actually read, and DeliveryThread is the
 	// conversation where the result belongs. Thread remains the legacy
 	// execution/delivery key so older persisted tasks continue to work.
-	RequestThread               string    `json:"request_thread,omitempty"`
-	SourceThread                string    `json:"source_thread,omitempty"`
-	SourceMessageIDs            []string  `json:"source_message_ids,omitempty"`
-	CorrectionAt                time.Time `json:"correction_at,omitempty"`
-	CorrectionRequiredMediaKind string    `json:"correction_required_media_kind,omitempty"`
-	CorrectionReferenceImageID  string    `json:"correction_reference_image_id,omitempty"`
-	CorrectionOldDeliveryTrace  string    `json:"correction_old_delivery_trace,omitempty"`
-	CorrectionTraces            []string  `json:"correction_traces,omitempty"`
-	CorrectionWorkStartedAt     time.Time `json:"correction_work_started_at,omitempty"`
-	CorrectionMediaPreparedAt   time.Time `json:"correction_media_prepared_at,omitempty"`
-	DeliveryThread              string    `json:"delivery_thread,omitempty"`
-	ID                          string    `json:"id"`
-	Account                     string    `json:"account"`
-	Thread                      string    `json:"thread"`
-	Sender                      string    `json:"sender"`
-	Title                       string    `json:"title"`
-	Checkpoint                  string    `json:"checkpoint"`
-	State                       string    `json:"state"`
-	Next                        time.Time `json:"next"`
-	Updated                     time.Time `json:"updated"`
-	Runs                        int       `json:"runs"`
-	LastResult                  string    `json:"last_result,omitempty"`
-	NoProgressKey               string    `json:"no_progress_key,omitempty"`
-	NoProgressRuns              int       `json:"no_progress_runs,omitempty"`
-	NoProgressObservedRun       int       `json:"no_progress_observed_run,omitempty"`
-	CrossThreadChildWait        bool      `json:"cross_thread_child_wait,omitempty"`
-	CrossThreadChildFailed      bool      `json:"cross_thread_child_failed,omitempty"`
+	RequestThread                 string    `json:"request_thread,omitempty"`
+	SourceThread                  string    `json:"source_thread,omitempty"`
+	SourceMessageIDs              []string  `json:"source_message_ids,omitempty"`
+	CorrectionAt                  time.Time `json:"correction_at,omitempty"`
+	CorrectionRequiredMediaKind   string    `json:"correction_required_media_kind,omitempty"`
+	CorrectionReferenceImageID    string    `json:"correction_reference_image_id,omitempty"`
+	CorrectionOldDeliveryTrace    string    `json:"correction_old_delivery_trace,omitempty"`
+	CorrectionTraces              []string  `json:"correction_traces,omitempty"`
+	CorrectionWorkStartedAt       time.Time `json:"correction_work_started_at,omitempty"`
+	CorrectionMediaPreparedAt     time.Time `json:"correction_media_prepared_at,omitempty"`
+	CorrectionPreparedMediaID     string    `json:"correction_prepared_media_id,omitempty"`
+	CorrectionCompletionRequested bool      `json:"correction_completion_requested,omitempty"`
+	DeliveryThread                string    `json:"delivery_thread,omitempty"`
+	ID                            string    `json:"id"`
+	Account                       string    `json:"account"`
+	Thread                        string    `json:"thread"`
+	Sender                        string    `json:"sender"`
+	Title                         string    `json:"title"`
+	Checkpoint                    string    `json:"checkpoint"`
+	State                         string    `json:"state"`
+	Next                          time.Time `json:"next"`
+	Updated                       time.Time `json:"updated"`
+	Runs                          int       `json:"runs"`
+	LastResult                    string    `json:"last_result,omitempty"`
+	NoProgressKey                 string    `json:"no_progress_key,omitempty"`
+	NoProgressRuns                int       `json:"no_progress_runs,omitempty"`
+	NoProgressObservedRun         int       `json:"no_progress_observed_run,omitempty"`
+	CrossThreadChildWait          bool      `json:"cross_thread_child_wait,omitempty"`
+	CrossThreadChildFailed        bool      `json:"cross_thread_child_failed,omitempty"`
 	// Model recovery checkpoints are created only after a completed, read-only
 	// tool result.  They let a retryable model request continue the same task
 	// without rerunning the tool or widening its original authority.
@@ -230,9 +232,18 @@ func (t agentTask) correctedDeliveryComplete() bool {
 	}
 	if t.CorrectionRequiredMediaKind == "video" {
 		return t.CorrectionWorkStartedAt.After(t.CorrectionAt) && t.CorrectionMediaPreparedAt.After(t.CorrectionAt) &&
-			t.Delivery.Expected > 0 && t.Delivery.Accepted == t.Delivery.Expected
+			t.Delivery.VideoExpected > 0 && t.Delivery.VideoAccepted == t.Delivery.VideoExpected &&
+			t.CorrectionPreparedMediaID != "" && t.Delivery.VideoSourceID == t.CorrectionPreparedMediaID &&
+			t.Delivery.Expected == t.Delivery.Accepted &&
+			(t.Delivery.TextAccepted == t.Delivery.TextExpected || t.Delivery.CaptionOmitted)
 	}
 	return t.Delivery.Accepted > 0 || t.Delivery.TextAccepted > 0
+}
+
+func (t agentTask) correctedWorkPrepared() bool {
+	return !t.CorrectionAt.IsZero() && t.CorrectionRequiredMediaKind == "video" &&
+		t.CorrectionWorkStartedAt.After(t.CorrectionAt) && t.CorrectionMediaPreparedAt.After(t.CorrectionAt) &&
+		t.CorrectionPreparedMediaID != ""
 }
 
 type agentOperation struct {
@@ -520,6 +531,10 @@ func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 			if !old.CorrectionMediaPreparedAt.IsZero() {
 				t.CorrectionMediaPreparedAt = old.CorrectionMediaPreparedAt
 			}
+			if old.CorrectionPreparedMediaID != "" {
+				t.CorrectionPreparedMediaID = old.CorrectionPreparedMediaID
+			}
+			t.CorrectionCompletionRequested = t.CorrectionCompletionRequested || old.CorrectionCompletionRequested
 		}
 	}
 	if err := validateTaskConstraints(t); err != nil {
@@ -542,11 +557,32 @@ func (a *agentControl) saveTask(t agentTask) (agentTask, error) {
 	if exists {
 		t.PendingOperations = append([]string{}, old.PendingOperations...)
 	}
+	if t.State == "completed" && !t.correctedDeliveryComplete() {
+		if !t.correctedWorkPrepared() {
+			return agentTask{}, errors.New("纠错后的新视频尚未生成并准备交付，原任务未完成")
+		}
+		t.CorrectionCompletionRequested = true
+		if t.Delivery != nil && t.Delivery.State == "accepted" {
+			t.State = "waiting"
+			t.WorkCompleted = false
+			t.Next = time.Now().Add(2 * time.Minute)
+			t.LastResult = "已接收本代文字，但视频尚无完整微信回执；继续核对发送"
+		} else {
+			if t.Delivery == nil && len(t.PendingOperations) == 0 {
+				t.State = "waiting"
+				t.WorkCompleted = false
+				t.Next = time.Now().Add(2 * time.Minute)
+				t.LastResult = "新视频已准备，尚无微信发送计划或回执；稍后核对成品与发送"
+			} else {
+				t.State = "waiting_delivery"
+				t.WorkCompleted = t.Delivery != nil && t.Delivery.VideoExpected > 0
+				t.Next = time.Time{}
+				t.LastResult = "新视频已准备，等待本代微信发送回执"
+			}
+		}
+	}
 	if t.State == "completed" && (len(t.PendingOperations) > 0 || t.Delivery != nil && t.Delivery.State != "accepted") {
 		t.State = "waiting_delivery"
-	}
-	if t.State == "completed" && !t.correctedDeliveryComplete() {
-		return agentTask{}, errors.New("纠错后的新视频尚未生成并获得本轮微信媒体回执，原任务未完成")
 	}
 	if exists {
 		t.PendingOperations = append([]string{}, old.PendingOperations...)
@@ -771,6 +807,18 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 	}
 	seenProcessWatchers := map[[4]string]bool{}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		if t.State == "waiting_delivery" && t.WorkCompleted && t.correctedWorkPrepared() && t.Delivery == nil && len(t.PendingOperations) == 0 &&
+			(t.Next.IsZero() || !now.Before(t.Next)) {
+			t.State = "waiting"
+			t.WorkCompleted = false
+			t.CorrectionCompletionRequested = true
+			t.Next = now.Add(2 * time.Minute)
+			t.LastResult = "新视频已准备但尚无微信发送计划或回执；继续核对原成品与发送状态"
+			if _, err := m.agent.updateSnapshot(t); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if t.CrossThreadChildWait && t.State != "cancelled" && t.State != "stopped" && t.State != "completed" {
 			children := m.agent.crossThreadChildren(t)
 			if !children.found {
@@ -978,7 +1026,8 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 				continue
 			}
 		}
-		if t.Delivery != nil && t.Delivery.State == "accepted" && !t.WorkCompleted {
+		if t.Delivery != nil && t.Delivery.State == "accepted" && !t.WorkCompleted &&
+			(t.CorrectionAt.IsZero() || !t.correctedDeliveryComplete()) {
 			t.LastResult = "此前文字已获微信回执，原任务仍需继续"
 			t.Delivery = nil
 		}
@@ -1447,6 +1496,12 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				t.State = "completed"
 				t.WorkCompleted = true
 				t.LastResult = "主人手动设为完成；不代表工具已执行或消息已送达"
+				if !t.CorrectionAt.IsZero() && t.correctedDeliveryComplete() {
+					t.LastResult = "纠错后的视频已获本代微信服务端接收回执；主人确认任务完成"
+					if t.Delivery.TextExpected > 0 && t.Delivery.TextAccepted == t.Delivery.TextExpected {
+						t.LastResult = "纠错后的视频与说明文字已获本代微信服务端接收回执；主人确认任务完成"
+					}
+				}
 				saved, err := s.manager.agent.transitionSnapshot(t, false)
 				if err != nil {
 					fail(w, 500, err.Error())
@@ -1617,6 +1672,8 @@ func (m *Manager) prepareTaskCorrection(ctx context.Context, t agentTask, note s
 	t.CorrectionTraces = nil
 	t.CorrectionWorkStartedAt = time.Time{}
 	t.CorrectionMediaPreparedAt = time.Time{}
+	t.CorrectionPreparedMediaID = ""
+	t.CorrectionCompletionRequested = false
 	t.LastResult = "主人明确纠错，旧检查点已替换；原回执仅供审计，新作品仍需生成并交付"
 	t.WorkCompleted = false
 	t.NoProgressKey = ""
