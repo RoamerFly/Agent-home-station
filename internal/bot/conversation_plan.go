@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
@@ -62,6 +64,27 @@ func explicitCorrectionToPriorInput(in companion.Input, m linuxnative.Message) b
 	words := strings.ToLower(strings.TrimSpace(m.Body))
 	if words == "" {
 		return false
+	}
+	// A new uploaded image followed by “只用这张参考图” explicitly replaces
+	// the source of an active image/video request. It is not a general request
+	// to recheck every new message in the thread.
+	creative := strings.ToLower(in.Text + " " + in.RequestedText)
+	if strings.Contains(creative, "图") || strings.Contains(creative, "画") || strings.Contains(creative, "视频") ||
+		strings.Contains(creative, "image") || strings.Contains(creative, "video") {
+		for _, phrase := range []string{"只用这张参考图", "只用这张图", "就用这张参考图", "以这张参考图为准", "只用我刚发的图", "就用我刚发的图"} {
+			if strings.Contains(words, phrase) {
+				return true
+			}
+		}
+	}
+	if _, after, ok := strings.Cut(words, "不是"); ok {
+		// "是 konan 的声线，不是柯南" directly corrects the prior
+		// request even without saying "刚才". Only the old requester's
+		// matching term selects a read-only judgment; the model decides action.
+		if target := strings.FieldsFunc(after, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) }); len(target) > 0 &&
+			utf8.RuneCountInString(target[0]) >= 2 && strings.Contains(strings.ToLower(in.Text+" "+in.RequestedText), target[0]) {
+			return true
+		}
 	}
 	verb := false
 	for _, part := range []string{"说错", "发错", "写错", "不对", "错了", "更正", "纠正", "修改", "改成", "取消", "撤回", "别发", "不要发", "别做", "不要做", "别继续", "不用继续", "停止", "停下", "cancel", "retract", "wrong", "correct"} {
@@ -233,7 +256,7 @@ func (w *Worker) queueUtteranceFrom(c *companion.Engine, in companion.Input, d c
 	if len(p.Updates) > 0 {
 		p.State, p.ReviewReason, p.ReviewReturnState = "review_pending", "new_message", "queued"
 	}
-	if in.QuoteServerID != "" && (in.Directed && w.config.Options.QuoteReplies || in.QuoteSharedMessage) {
+	if in.QuoteServerID != "" && in.TraceID != "" {
 		p.Quote = replyQuote(in)
 	}
 	p.Trace = in.TraceID
@@ -259,6 +282,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 	if m.Type != 1 && !m.IsQuotedText() {
 		return
 	}
+	w.cancelCreativeMediaForCorrection(m)
 	correction := w.correctionPlan(m)
 	if c.Config.ConversationConfig().RecheckOnMessage {
 		for _, r := range w.runtime.MediaReplies {
@@ -548,11 +572,14 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 			w.activity(Record{Event: "utterance_plan_stopped", Category: "error", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "needs_review", Reason: "text_sender_cannot_reconcile_unknown"})
 			continue
 		}
-		if !w.taskActive(p.Input) || !w.allowed[p.Input.Thread] || !c.Config.Enabled || !c.Config.Permissions.ReplyText || (!c.Config.ConversationConfig().Enabled) || p.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || p.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(p.Input.Thread) {
+		if !w.taskActive(p.Input) || !w.allowed[p.Input.Thread] || !c.Config.Enabled || !c.Config.Permissions.ReplyText || (!c.Config.ConversationConfig().Enabled) || p.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(p.Input.Thread) {
 			p.State = "stopped"
 			w.persistErr = w.saveRuntime()
-			w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "stopped", Reason: "utterance_permission_quiet_or_expired"})
+			w.activity(Record{Event: "utterance_plan_stopped", Category: "decision", ThreadID: p.Input.Thread, MessageID: p.Input.TraceID, Status: "stopped", Reason: "utterance_permission_or_expired"})
 			w.refreshMediaParent(p.Input.TraceID)
+			continue
+		}
+		if p.Input.Mode == "proactive" && c.Config.Quiet(time.Now()) {
 			continue
 		}
 		if p.State == "review_pending" && !w.draining() && !time.Now().Before(p.Next) {

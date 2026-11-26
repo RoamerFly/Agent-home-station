@@ -18,7 +18,7 @@ func librarySong(a mediaAsset, account string) bool {
 	return a.Account == account && a.Hash != "" && a.URL != "" && a.Music == nil && strings.HasPrefix(a.MIME, "audio/")
 }
 
-func musicLibraryMatches(a mediaAsset, query string) bool {
+func musicLibraryMatch(a mediaAsset, query string) (string, int) {
 	parts := func(value string) []string {
 		return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
 			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
@@ -26,15 +26,25 @@ func musicLibraryMatches(a mediaAsset, query string) bool {
 	}
 	terms := parts(query)
 	if len(terms) == 0 {
-		return false
+		return "", 0
 	}
 	name := strings.Join(parts(a.Title+" "+a.Filename), "")
+	matched := 0
 	for _, term := range terms {
-		if !strings.Contains(name, term) {
-			return false
+		if strings.Contains(name, term) {
+			matched++
 		}
 	}
-	return true
+	if matched == len(terms) {
+		return "exact", matched
+	}
+	// Song requests often include an anime, scene or alternate artist spelling
+	// that is absent from an otherwise matching saved recording. Offer a
+	// clearly labelled candidate only when most terms still match locally.
+	if matched >= 2 && matched*5 >= len(terms)*3 {
+		return "partial", matched
+	}
+	return "", 0
 }
 
 func (m *Manager) musicLibraryDirectory(account string) string {
@@ -82,15 +92,30 @@ func (m *Manager) searchMusicLibrary(account, query string, offset, limit int) (
 		return nil, 0, err
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Updated.After(items[j].Updated) })
-	rows := []map[string]any{}
+	exact, partial := []map[string]any{}, []map[string]any{}
 	for _, a := range items {
-		if !librarySong(a, account) || !musicLibraryMatches(a, query) {
+		if !librarySong(a, account) {
+			continue
+		}
+		quality, matched := musicLibraryMatch(a, query)
+		if quality == "" {
 			continue
 		}
 		if err := m.materializeLibrarySong(a); err != nil {
 			continue // A missing or corrupt local file is not a usable match.
 		}
-		rows = append(rows, map[string]any{"asset_id": a.ID, "title": a.Title, "filename": a.Filename, "mime": a.MIME, "bytes": a.Bytes, "source_url": a.URL, "is_generated": false, "original_cached": true})
+		row := map[string]any{"asset_id": a.ID, "title": a.Title, "filename": a.Filename, "mime": a.MIME, "bytes": a.Bytes, "source_url": a.URL, "is_generated": false, "original_cached": true, "match_quality": quality}
+		if quality == "exact" {
+			exact = append(exact, row)
+		} else {
+			row["matched_terms"] = matched
+			partial = append(partial, row)
+		}
+	}
+	rows := exact
+	if len(rows) == 0 {
+		sort.SliceStable(partial, func(i, j int) bool { return partial[i]["matched_terms"].(int) > partial[j]["matched_terms"].(int) })
+		rows = partial
 	}
 	if offset > len(rows) {
 		return nil, 0, errors.New("歌曲资源库分页参数无效")

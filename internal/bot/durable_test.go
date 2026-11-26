@@ -472,3 +472,37 @@ func TestSegmentedReplyOnlyQuotesFirstAcrossRestart(t *testing.T) {
 		t.Fatal("restart duplicated first segment")
 	}
 }
+
+func TestUndirectedGroupMediaReplyQuotesOnlyFirstProgressAndSegment(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}, acceptRetry: true}
+	w := durableWorker(t, n)
+	in := companion.Input{Thread: "room@chatroom", TraceID: "original-image", QuoteServerID: "native-server-77", Mode: "social", IsGroup: true}
+	for index, bubble := range []int{-1, 0, 1} {
+		w.runtime.SendGates = nil
+		_, _ = w.sendText(context.Background(), in, bubble, "合成回复")
+		if len(n.submissions) != index+1 {
+			t.Fatalf("bubble %d missing: %d submissions", bubble, len(n.submissions))
+		}
+		quote := n.submissions[index].Quote
+		if index == 0 && (quote == nil || quote.MessageID != in.TraceID || quote.ServerID != in.QuoteServerID) {
+			t.Fatalf("first reply did not quote original: %+v", quote)
+		}
+		if index > 0 && quote != nil {
+			t.Fatalf("bubble %d repeated original quote: %+v", bubble, quote)
+		}
+		if err := w.loadRuntime("server-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUnsubmittedCancelledProgressDoesNotConsumeOriginalQuote(t *testing.T) {
+	n := &reliableFake{intents: map[string]linuxnative.ToolStatus{}}
+	w := durableWorker(t, n)
+	in := companion.Input{Thread: "room@chatroom", TraceID: "original-image", QuoteServerID: "native-server-77", Mode: "social", IsGroup: true}
+	w.runtime.Deliveries = append(w.runtime.Deliveries, &delivery{Thread: in.Thread, Trace: in.TraceID, Bubble: -1, Input: in, Quote: replyQuote(in), State: "stopped"})
+	_, _ = w.sendText(context.Background(), in, 0, "第一条实际提交的回复")
+	if len(n.submissions) != 1 || n.submissions[0].Quote == nil || n.submissions[0].Quote.MessageID != in.TraceID {
+		t.Fatalf("cancelled unsent progress consumed quote: %+v", n.submissions)
+	}
+}

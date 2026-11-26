@@ -49,3 +49,20 @@ func TestOneVoiceRegistrationSupportsSpeechAndRVCWeights(t *testing.T) {
 		t.Fatal("unified voice lost one synthesis route")
 	}
 }
+
+func TestPublicSongLibraryOffersArtistMatchWhenRequestAddsAnime(t *testing.T) {
+	f := setup(t)
+	in := companion.Input{Channel: "wechat", Account: "test", Thread: "first-room", TraceID: "song"}
+	best, err := f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic song one"), MIME: "audio/mp4", Filename: "倉木麻衣 - Secret of my heart.m4a", URL: "https://www.bilibili.com/video/BV1234567890"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.manager.rememberAssetFormats(in, assetOriginal{Data: []byte("synthetic song two"), MIME: "audio/mp4", Filename: "Other - Secret of my heart.m4a", URL: "https://www.bilibili.com/video/BV1234567891"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := f.manager.searchMusicLibrary(in.Account, "Secret of my heart 倉木麻衣 名侦探柯南", 0, 10)
+	if err != nil || len(rows) < 1 || rows[0]["asset_id"] != best.ID || rows[0]["match_quality"] != "partial" {
+		t.Fatalf("song and artist should lead local candidates: %v %v", err, rows)
+	}
+}

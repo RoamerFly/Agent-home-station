@@ -83,6 +83,9 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		if task.ID != in.TaskID || task.State == "cancelled" {
 			continue
 		}
+		if !task.CorrectionAt.IsZero() && !contains(task.CorrectionTraces, delivery.Trace) {
+			return nil // A receipt from the superseded work generation arrived late.
+		}
 		if task.Delivery != nil && *task.Delivery == delivery {
 			return nil
 		}
@@ -91,6 +94,13 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 		}
 		task.Delivery = &delivery
 		wasRunning := task.State == "running"
+		if task.CorrectionCompletionRequested && task.correctedWorkPrepared() && delivery.VideoExpected > 0 &&
+			delivery.State != "failed" && delivery.State != "partial_failed" && delivery.State != "needs_review" {
+			task.WorkCompleted = true
+			if !wasRunning {
+				task.Next = time.Time{}
+			}
+		}
 		if !wasRunning {
 			task.State = "waiting_delivery"
 		}
@@ -140,6 +150,18 @@ func (m *Manager) updateAgentDelivery(in companion.Input, delivery bot.TaskDeliv
 				task.LastResult += "；所需媒体已获微信服务端回执，客户端显示/播放尚未核实；说明文字由模型选择省略"
 			} else {
 				task.LastResult += "；所需媒体与介绍已获微信服务端回执，客户端显示/播放尚未核实"
+			}
+			if !task.CorrectionAt.IsZero() {
+				switch {
+				case task.WorkCompleted && task.correctedDeliveryComplete() && len(task.PendingOperations) == 0:
+					task.State = "completed"
+					task.WorkCompleted = true
+					task.Next = time.Time{}
+				default:
+					task.State = "waiting"
+					task.WorkCompleted = false
+					task.Next = time.Now().Add(2 * time.Minute)
+				}
 			}
 		case "failed", "partial_failed":
 			task.State = "failed"

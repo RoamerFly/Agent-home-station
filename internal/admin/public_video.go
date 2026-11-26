@@ -53,6 +53,48 @@ func preparePublicVideo(ctx context.Context, dir string, data []byte) ([]byte, e
 	return result, nil
 }
 
+// DASH exposes separate video and audio bytes. Mux only the two streams proven
+// to originate from the same public playback response; no external URL is
+// passed to ffmpeg and neither input is exposed to a tool result.
+func muxPublicStreamPair(ctx context.Context, dir string, video, audio []byte, limit int64) ([]byte, error) {
+	if len(video) == 0 || len(audio) == 0 || limit <= 0 || int64(len(video))+int64(len(audio)) > limit {
+		return nil, &mcptools.WebError{Code: "response_too_large"}
+	}
+	tmp, err := os.MkdirTemp(dir, "public-stream-pair-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	videoPath, audioPath, output := filepath.Join(tmp, "video.mp4"), filepath.Join(tmp, "audio.m4a"), filepath.Join(tmp, "output.mp4")
+	if err = os.WriteFile(videoPath, video, 0600); err != nil {
+		return nil, err
+	}
+	if err = os.WriteFile(audioPath, audio, 0600); err != nil {
+		return nil, err
+	}
+	command := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-i", videoPath, "-i", audioPath, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", output)
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if err = command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &mcptools.WebError{Code: "video_prepare_failed"}
+	}
+	f, err := os.Open(output)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	result, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 || int64(len(result)) > limit {
+		return nil, &mcptools.WebError{Code: "response_too_large"}
+	}
+	return result, nil
+}
+
 func publicVideoDuration(ctx context.Context, dir string, data []byte) (float64, error) {
 	tmp, err := os.MkdirTemp(dir, "public-video-duration-")
 	if err != nil {

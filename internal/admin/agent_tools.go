@@ -45,11 +45,11 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 		tools = append(tools, diagnosticsTool())
 	}
 	if p.workspaceExecutionAllowed() {
-		tools = append(tools, agentTool("station_comfy", "使用 ComfyUI：workflows 查看工作流及参数，models 选模型，author 登记工作流，run 提交，job 查成品，attach 暂存为微信附件。图像输入先 upload(source_message_id 或 source_path)；工作目录文件加 fish_home=true，随后使用返回的 filename。生图优先 qwen21-text-to-image-hq，视频优先 MiniMax H3 工作流。模型清单、文件名和本地路径仅向账号管理员披露；普通成员可正常创作。attach 后仍须发送附件。", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","upload","run","job","attach"]},"source_message_id":{"type":"string"},"source_path":{"type":"string"},"fish_home":{"type":"boolean"},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("station_comfy", "使用 ComfyUI：run 可连同 source_message_id、source_path 或 own_mini 一次提交图生视频，自动上传并填参考图；刚收到的参考图优先用其消息编号。own_mini 指 home/character/大肥鱼-mini可爱版.jpg。h3-image-to-video 用原图作首帧；h3-image-reference-to-video 用 R2V 让角色参与复杂场景。run 可传 duration_seconds，按24帧/秒设置时长。用户明确改用新参考图时，先以 job_action=cancel 取消原 job_id，再用新图片消息编号重新 run；不要发送旧成品。workflows 查看参数，job 查询或取消，attach 暂存微信附件。模型清单与本地路径仅向管理员披露。", `{"type":"object","properties":{"action":{"type":"string","enum":["workflows","models","author","upload","run","job","attach"]},"source_message_id":{"type":"string"},"source_path":{"type":"string"},"own_mini":{"type":"boolean"},"fish_home":{"type":"boolean"},"duration_seconds":{"type":"number","minimum":0.1},"workflow_id":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":["string","integer","number","boolean"]}},"job_id":{"type":"string"},"job_action":{"type":"string","enum":["status","cancel"]},"artifact_id":{"type":"string"},"category":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"goal":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
 	}
 	if p.privileged() || p.workspaceExecutionAllowed() {
 		tools = append(tools, agentTool("music_service_start", "启动本机 YuE/RVC 受管服务；查询 music_service_status 就绪后续办原任务。", `{"type":"object","properties":{},"additionalProperties":false}`))
-		tools = append(tools, agentTool("station_tool_manage", "公共工具状态与恢复：status 列目录；ensure_ready 启动已启用工具；repair 在空闲时修复，不重做原任务；start/restart/stop/enable 为显式操作。音乐桥接用 tool_id=music-bridge。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","start","restart","stop","enable"]},"tool_id":{"type":"string"}},"required":["action"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("station_tool_manage", "查询并启停实际执行的公共工具。status 列微信和工作站实例；同名工具默认管理微信已安装实例，可用 execution_host 指定。ensure_ready 启动已启用工具，repair 在空闲时修复；不重做原任务。音乐桥用 tool_id=music-bridge。", `{"type":"object","properties":{"action":{"type":"string","enum":["status","ensure_ready","repair","start","restart","stop","enable"]},"tool_id":{"type":"string"},"execution_host":{"type":"string","enum":["auto","wechat","station"]}},"required":["action"],"additionalProperties":false}`))
 	}
 	projectTools := p.projectPluginTools(context.Background())
 	tools = append(tools, projectTools...)
@@ -71,7 +71,7 @@ func (p *permittedTools) workspaceAgentTools() []mcptools.Tool {
 	tools = append(tools, agentTool("agent_clock", "Read current local time and timezone before scheduling. Create reminders only for an explicit future time; immediate work continues in its current task. Input {}.", `{"type":"object","properties":{},"additionalProperties":false}`))
 	if c.TasksEnabled {
 		tools = append(tools, reminderTool())
-		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；pending/waiting 按 delay_seconds 续办，completed/cancelled/needs_review 结束。来源默认为当前消息；续办先前消息时传已读取的 origin_message_id。跨会话主人任务传真实 source IDs 和 delivery_thread_id；target_task_id 用于取消旧任务。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"}},"required":["checkpoint","state"],"additionalProperties":false}`))
+		tools = append(tools, agentTool("agent_tasks", "查询持久任务：active（默认，含检查点）或 history（已结束，可搜索、分页）。续办旧主题时先查已有任务。主人可跨会话，其他人限本会话。", `{"type":"object","properties":{"status":{"type":"string","enum":["active","history"]},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`), agentTool("agent_task", "用 key 创建或 id 更新持续任务；当前任务续办沿用 ID。pending/waiting 仅用于已有异步作业或待确认投递；普通搜索失败当轮处理，不建延迟任务。用户更换视频参考图时，以 origin_message_id、图片和纠错消息 source_message_ids 及 corrected_request=true 重开原任务。completed/cancelled/needs_review 结束。", `{"type":"object","properties":{"id":{"type":"string"},"key":{"type":"string"},"title":{"type":"string"},"checkpoint":{"type":"string"},"state":{"type":"string","enum":["pending","waiting","completed","cancelled","needs_review"]},"delay_seconds":{"type":"integer","minimum":0},"origin_message_id":{"type":"string"},"source_thread_id":{"type":"string"},"source_message_ids":{"type":"array","items":{"type":"string"},"maxItems":50},"delivery_thread_id":{"type":"string"},"target_task_id":{"type":"string"},"corrected_request":{"type":"boolean"}},"required":["checkpoint","state"],"additionalProperties":false}`))
 	}
 	if !p.privileged() {
 		return tools
@@ -272,6 +272,9 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			query := strings.ToLower(strings.TrimSpace(in.Query))
 			matches := []map[string]any{}
 			for _, task := range m.agent.list(p.trace.Account, thread) {
+				if freshRoundHidesTask(p.trace, task) {
+					continue
+				}
 				if task.State == "pending" || task.State == "waiting" || task.State == "running" || task.State == "waiting_delivery" || query != "" && !strings.Contains(strings.ToLower(task.Title), query) {
 					continue
 				}
@@ -287,13 +290,16 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		tasks := m.agent.active(p.trace.Account, thread)
 		visible := tasks[:0]
 		for _, task := range tasks {
+			if freshRoundHidesTask(p.trace, task) {
+				continue
+			}
 			if task.Reminder == nil || task.Sender == p.trace.Sender {
 				visible = append(visible, task)
 			}
 		}
 		tasks = visible
 		for i := range tasks {
-			tasks[i] = copyTask(tasks[i])
+			tasks[i] = modelTaskView(tasks[i])
 			if tasks[i].PluginJob != nil {
 				// Origin is host recovery evidence, not conversation-visible data.
 				tasks[i].PluginJob.Origin = nil
@@ -339,6 +345,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 			TargetTaskID     string   `json:"target_task_id"`
 			OriginMessageID  string   `json:"origin_message_id"`
 			DelaySeconds     int      `json:"delay_seconds"`
+			CorrectedRequest bool     `json:"corrected_request"`
 		}
 		if json.Unmarshal(args, &in) != nil || len(in.Checkpoint) > 6000 || len(in.Title) > 200 || !contains([]string{"pending", "waiting", "completed", "cancelled", "needs_review"}, in.State) {
 			return "", toolInputError("任务参数无效")
@@ -350,8 +357,8 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if origin == "" {
 			origin = p.trace.TraceID
 		}
-		if in.OriginMessageID != "" && (in.ID != "" || in.TargetTaskID != "" || p.trace.TaskID != "") {
-			return "", toolInputError("origin_message_id只用于新建独立任务")
+		if in.OriginMessageID != "" && in.TargetTaskID != "" {
+			return "", toolInputError("取消任务时不需要指定来源消息")
 		}
 		if in.TargetTaskID != "" {
 			if in.ID != "" || in.State != "cancelled" || !p.privileged() || !p.manager.agent.config().CrossConversation {
@@ -362,7 +369,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", toolInputError("指定任务不存在、不是本人任务或投递目标已撤权")
 			}
 			if target.State == "cancelled" {
-				return encode(target, nil)
+				return encode(modelTaskView(target), nil)
 			}
 			target.State = "cancelled"
 			target.LastResult = "已由原请求管理员取消；未提交部分停止，已提交部分仅核对回执"
@@ -374,7 +381,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				return "", err
 			}
 			m.record(bot.Record{Event: "agent_task_cancelled", Category: "decision", ThreadID: taskDeliveryThread(target), Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: target.Title, Status: "cancelled", Reason: "owner_cross_conversation_task_cancelled", Origin: "agent"})
-			return encode(target, nil)
+			return encode(modelTaskView(target), nil)
 		}
 
 		sourceThread := in.SourceThread
@@ -389,7 +396,13 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		var selectedOriginText, selectedOriginServerID string
 		if in.OriginMessageID != "" {
-			if sourceThread != p.trace.Thread || !p.trustedTaskSourceMessages(sourceThread, []string{in.OriginMessageID}) {
+			trustedOrigin := p.trustedTaskSourceMessages(sourceThread, []string{in.OriginMessageID})
+			if !trustedOrigin && p.trace.TaskID != "" {
+				if current, ok := m.agent.lookupTask(p.trace.TaskID, p.trace.Account, p.trace.Thread); ok {
+					trustedOrigin = current.OriginTrace == in.OriginMessageID && current.Sender == p.trace.Sender && taskSourceThread(current) == sourceThread
+				}
+			}
+			if sourceThread != p.trace.Thread || !trustedOrigin {
 				return "", mcptools.ArgumentError("$.origin_message_id", "先在当前会话读取真实原请求，再使用返回的消息ID")
 			}
 			message, err := m.native.Message(ctx, in.OriginMessageID)
@@ -420,6 +433,110 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if !p.conversationReadAllowed(deliveryThread) || sourceThread != p.trace.Thread && !p.privileged() {
 			return "", toolInputError("任务投递目标未获授权")
 		}
+		if in.CorrectedRequest {
+			if in.OriginMessageID == "" || in.State != "pending" || sourceThread != p.trace.Thread || deliveryThread != sourceThread || len(in.SourceMessageIDs) < 3 {
+				return "", toolInputError("纠错视频需原请求、参考图片及纠错消息，并沿用原会话任务")
+			}
+			var previous agentTask
+			found := false
+			for _, candidate := range m.agent.list(p.trace.Account, deliveryThread) {
+				if candidate.OriginTrace != origin || candidate.Sender != p.trace.Sender || taskSourceThread(candidate) != sourceThread || candidate.Reminder != nil || candidate.PluginJob != nil {
+					continue
+				}
+				if in.ID != "" && candidate.ID != in.ID {
+					continue
+				}
+				if found {
+					return "", toolInputError("原消息对应多个任务，请指定原任务 id")
+				}
+				previous, found = candidate, true
+			}
+			if !found || previous.State == "cancelled" {
+				return "", toolInputError("未找到可纠错的原视频任务")
+			}
+			// The model chooses whether this is a correction; native records prove
+			// that a new reference image and a separate user message really exist.
+			hasCorrectionText := false
+			for _, id := range in.SourceMessageIDs {
+				if id == origin {
+					continue
+				}
+				message, err := m.native.Message(ctx, id)
+				if err == nil && message.ID == id && message.AccountID == p.trace.Account && message.ThreadID == sourceThread && message.SenderID == p.trace.Sender && message.Direction == "incoming" && message.Type == 1 && strings.TrimSpace(message.Body) != "" {
+					hasCorrectionText = true
+				}
+			}
+			if !hasCorrectionText {
+				return "", toolInputError("请提供原请求者的纠错消息")
+			}
+			note := strings.TrimSpace(in.Checkpoint)
+			if len([]rune(note)) > 480 {
+				note = string([]rune(note)[:480])
+			}
+			for i := len(previous.Actions) - 1; i >= 0; i-- {
+				action := previous.Actions[i]
+				if action.Tool != "station_comfy" || !strings.Contains(action.Arguments, `"action":"run"`) {
+					continue
+				}
+				var result struct {
+					JobID string `json:"job_id"`
+				}
+				if json.Unmarshal([]byte(action.Result), &result) == nil && result.JobID != "" {
+					note += "；先取消旧 Comfy 作业 job_id=" + result.JobID
+					break
+				}
+			}
+			corrected, err := m.prepareTaskCorrection(ctx, previous, note, in.SourceMessageIDs, "video")
+			if err != nil {
+				return "", err
+			}
+			if previous.State == "completed" {
+				corrected, err = m.agent.reopenArchivedCorrectedTask(corrected)
+			} else {
+				var saved bool
+				saved, err = m.agent.transitionSnapshot(corrected, true)
+				if err == nil && !saved {
+					err = toolInputError("原任务状态已变化，请重新读取后纠错")
+				}
+				if err == nil {
+					corrected, _ = m.agent.lookupTask(previous.ID, previous.Account, previous.Thread)
+				}
+			}
+			if err != nil {
+				return "", err
+			}
+			m.record(bot.Record{Event: "agent_task_corrected", Category: "decision", ThreadID: corrected.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, RelatedMessageID: corrected.ID, Status: corrected.State, Reason: "original_requester_explicit_correction", Origin: "agent"})
+			return encode(modelTaskView(corrected), nil)
+		}
+		// A continuation already has a durable task identity. A fresh key or
+		// title in that turn updates its checkpoint instead of creating a second
+		// timer for the same work. Cross-thread tasks still get their own record.
+		if in.ID == "" && p.trace.TaskID != "" {
+			if current, ok := m.agent.lookupTask(p.trace.TaskID, p.trace.Account, deliveryThread); ok &&
+				current.Sender == p.trace.Sender && taskSourceThread(current) == sourceThread &&
+				current.Reminder == nil && current.PluginJob == nil {
+				in.ID = current.ID
+			}
+		}
+		if in.ID == "" && in.OriginMessageID != "" {
+			// A corrected request may be handled in a later conversation turn.
+			// Reuse its one live task when the caller cites the verified original
+			// message; a changed key or title must not create another timer.
+			candidate := ""
+			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
+				if old.OriginTrace != in.OriginMessageID || old.Sender != p.trace.Sender ||
+					taskSourceThread(old) != sourceThread || old.Reminder != nil || old.PluginJob != nil ||
+					!unfinishedExecutionTask(old.State) {
+					continue
+				}
+				if candidate != "" {
+					candidate = ""
+					break
+				}
+				candidate = old.ID
+			}
+			in.ID = candidate
+		}
 		t := agentTask{ParentID: p.trace.TaskID, OriginTrace: origin, OwnerRequested: p.privileged(), ID: in.ID, Account: p.trace.Account, Thread: deliveryThread, RequestThread: p.trace.Thread, SourceThread: sourceThread, SourceMessageIDs: append([]string(nil), in.SourceMessageIDs...), DeliveryThread: deliveryThread, Sender: p.trace.Sender, Title: in.Title}
 		if sourceThread == p.trace.Thread && p.trace.OriginalText != nil && !p.trace.BackgroundResult {
 			t.RequestedText = *p.trace.OriginalText
@@ -447,7 +564,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		}
 		if t.ID != "" {
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
-				return encode(old, nil)
+				return encode(modelTaskView(old), nil)
 			}
 			found := false
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
@@ -482,7 +599,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 				t.ID = legacyID
 			}
 			if old, ok := m.agent.lookupTask(t.ID, p.trace.Account, deliveryThread); ok && (old.State == "completed" || old.State == "cancelled") {
-				return encode(old, nil)
+				return encode(modelTaskView(old), nil)
 			}
 			for _, old := range m.agent.list(p.trace.Account, deliveryThread) {
 				if old.ID == t.ID {
@@ -494,12 +611,19 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if t.PluginJob != nil {
 			if in.State == "cancelled" {
 				updated, err := m.cancelPluginTask(ctx, t)
-				return encode(updated, err)
+				return encode(modelTaskView(updated), err)
 			}
 			return "", toolInputError("工具任务由其持久生命周期管理，请使用plugin_job_status或plugin_job_cancel；不改写为已完成")
 		}
 		if t.Reminder != nil {
 			return "", toolInputError("这是独立提醒任务；请用agent_reminder查询或取消，不能改写为其他程序任务")
+		}
+		if in.ID != "" {
+			for _, id := range in.SourceMessageIDs {
+				if !contains(t.SourceMessageIDs, id) {
+					t.SourceMessageIDs = append(t.SourceMessageIDs, id)
+				}
+			}
 		}
 		t.Checkpoint = in.Checkpoint
 		t.State = in.State
@@ -533,7 +657,7 @@ func (p *permittedTools) callAgent(ctx context.Context, name string, args json.R
 		if t.OwnerRequested {
 			requirements = "continuation of an authenticated owner request; current owner and conversation authorization rechecked; pending is not delivery"
 		}
-		return encode(map[string]any{"task": t, "background_requires": requirements, "storage_file": m.agent.dir + "/agent-state.json", "due_at": t.Next}, nil)
+		return encode(map[string]any{"task": modelTaskView(t), "background_requires": requirements, "storage_file": m.agent.dir + "/agent-state.json", "due_at": t.Next}, nil)
 	case "wechat_send_text":
 		return wechatapp.SendText(ctx, args, &wechatTextHost{p: p, raw: args})
 	case "wechat_account_action":
@@ -557,4 +681,20 @@ func (p *permittedTools) rememberAgentSend(thread, text, key string) {
 	if err := p.manager.memory.AcceptedDelivery(in, text, key, c, time.Now()); err != nil {
 		p.manager.log("agent_send_memory_failed")
 	}
+}
+
+// Retry bookkeeping belongs to the host scheduler and must not become model
+// evidence through task lookup or checkpoint tool results.
+func modelTaskView(task agentTask) agentTask {
+	task = copyTask(task)
+	task.RoundRetry = false
+	task.RoundRetryFresh = false
+	task.RoundRetryLineage = false
+	task.RoundRetryFreshLineage = false
+	task.RoundRetryPriorTrace = ""
+	task.RoundRetryPriorTaskID = ""
+	task.RoundRetryMedia = nil
+	task.RoundRetryQuote = nil
+	task.RoundRetryUnread = nil
+	return task
 }

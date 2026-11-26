@@ -12,6 +12,13 @@ import (
 
 type diagnosticModel struct{ calls int }
 
+func TestFailedToolDiagnosticKeepsFailureCodeForExecutionView(t *testing.T) {
+	record := toolDiagnosticRecord("filehelper", "turn", companion.ToolDiagnostic{Event: "tool_failed", Status: "failed", Tool: "web_audio_search", Code: "search_sources_unavailable"})
+	if record.Category != "error" || record.Reason != "search_sources_unavailable" || record.ToolCode != record.Reason {
+		t.Fatalf("failed tool lost its reason: %+v", record)
+	}
+}
+
 func (model *diagnosticModel) Chat(context.Context, string, []map[string]string) (string, error) {
 	model.calls++
 	if model.calls == 1 {

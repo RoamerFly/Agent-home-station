@@ -101,13 +101,15 @@ func newHandler(manager *Manager, auth *websession.Store, root bool) (http.Handl
 			s.logsByDate(w, r)
 			return
 		}
-		items := s.manager.displayLogs(r.Context())
+		items := s.projectCrossMediaLogOrigins(s.manager.displayLogs(r.Context()))
 		inbox, plans, loaded := s.logRuntimeStates()
 		respond(w, 200, map[string]any{"items": items, "task_states": s.logTaskStates(items), "send_states": s.logSendStates(r.Context(), items), "inbox_states": inbox, "plan_states": plans, "inbox_loaded": loaded})
 	}))
 	mux.HandleFunc("POST /api/logs/round/manual-complete", s.protected(s.manualRoundCompletion))
 	mux.HandleFunc("POST /api/logs/round/close", s.protected(s.manualRoundClose))
 	mux.HandleFunc("POST /api/logs/round/process", s.protected(s.manualRoundProcess))
+	mux.HandleFunc("POST /api/logs/round/retry", s.protected(s.retryRound))
+	mux.HandleFunc("POST /api/logs/round/cancel", s.protected(s.cancelRound))
 	mux.HandleFunc("POST /api/bot/start", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, true) }))
 	mux.HandleFunc("POST /api/bot/stop", s.protected(func(w http.ResponseWriter, r *http.Request) { s.toggle(w, r, false) }))
 	mux.HandleFunc("POST /api/model/test", s.protected(s.testModel))

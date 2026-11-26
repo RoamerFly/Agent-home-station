@@ -9,10 +9,113 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from update_windows_release import EXE, MIGRATION, SERVER, Replacement, payload, probe_health, stop_release_for_update, update
+from update_windows_release import EXE, MIGRATION, SERVER, BotConsole, Replacement, payload, probe_health, restore_bot_state, stop_release_for_update, update
 
 
 class UpdateTests(unittest.TestCase):
+    def test_bot_state_uses_local_session_and_csrf_without_persisting_credentials(self):
+        release = Path(tempfile.gettempdir()) / "synthetic-release"
+
+        class Response(io.BytesIO):
+            status = 200
+
+        class Opener:
+            def __init__(self):
+                self.calls = []
+                self.started = False
+
+            def open(self, request, timeout):
+                self.calls.append(request)
+                path = request.full_url.rsplit("/", 1)[-1]
+                if path == "session":
+                    return Response(b'{"authenticated":true,"csrf":"synthetic-csrf"}')
+                if path == "diagnostics":
+                    return Response(json.dumps({"log_directory": str(release / "data/main_setting/logs")}).encode())
+                if path == "config":
+                    return Response(b'{"enabled":true}')
+                if path == "status":
+                    return Response(b'{"bot":{"state":"running"}}' if self.started else b'{"bot":{"state":"stopped"}}')
+                if path == "start":
+                    self.started = True
+                    return Response(b'{"ok":true}')
+                raise AssertionError(path)
+
+        opener = Opener()
+        with patch("update_windows_release.urllib.request.build_opener", return_value=opener):
+            self.assertEqual(BotConsole(release).state(), {"enabled": True, "running": False})
+            self.assertTrue(restore_bot_state(release, {"enabled": True, "running": True}, 1))
+        start = [call for call in opener.calls if call.full_url.endswith("/api/bot/start")]
+        self.assertEqual(len(start), 1)
+        self.assertEqual(start[0].get_header("X-csrf-token"), "synthetic-csrf")
+        self.assertEqual(start[0].get_header("Origin"), "http://127.0.0.1:8080")
+        self.assertEqual(start[0].data, b"{}")
+
+    def test_disabled_bot_is_not_started_after_update(self):
+        with patch("update_windows_release.BotConsole") as console:
+            self.assertFalse(restore_bot_state(Path("synthetic-release"), {"enabled": False, "running": False}, 1))
+        console.assert_not_called()
+
+    def test_rollback_restores_previously_enabled_bot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release, candidate, work = root / "release", root / "candidate", root / "work"
+            release.mkdir()
+            candidate.mkdir()
+            (release / EXE).write_bytes(b"old")
+            (candidate / EXE).write_bytes(b"new")
+
+            def stop_with_snapshot(_release, _timeout, on_running):
+                on_running()
+
+            with (
+                patch("update_windows_release.payload", return_value={Path(EXE): candidate / EXE}),
+                patch("update_windows_release.check", side_effect=[{"applications": [], "public_tools": []}, ValueError("injected")]),
+                patch("update_windows_release.validate", return_value={"ok": True}),
+                patch("update_windows_release.stop_release_for_update", side_effect=stop_with_snapshot),
+                patch("update_windows_release.read_bot_state", return_value={"enabled": True, "running": True}),
+                patch("update_windows_release.listeners", return_value=False),
+                patch("update_windows_release.subprocess.Popen"),
+                patch("update_windows_release.probe_health", return_value=True),
+                patch("update_windows_release.restore_bot_state", return_value=True) as restore,
+            ):
+                with self.assertRaisesRegex(ValueError, "injected"):
+                    update(SimpleNamespace(candidate=candidate, apply=True, keep_stopped=False,
+                                           timeout=1, native_account="desktop"), release, work)
+            self.assertEqual((release / EXE).read_bytes(), b"old")
+            self.assertEqual(json.loads((work / "bot-before.json").read_text(encoding="utf-8")),
+                             {"enabled": True, "running": True})
+            restore.assert_called_once_with(release, {"enabled": True, "running": True}, 1)
+
+    def test_successful_update_restores_previously_enabled_bot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release, candidate, work = root / "release", root / "candidate", root / "work"
+            release.mkdir()
+            candidate.mkdir()
+            (release / EXE).write_bytes(b"old")
+            (candidate / EXE).write_bytes(b"new")
+            (release / "manifest.json").write_text("{}", encoding="utf-8")
+
+            def stop_with_snapshot(_release, _timeout, on_running):
+                on_running()
+
+            with (
+                patch("update_windows_release.payload", return_value={Path(EXE): candidate / EXE}),
+                patch("update_windows_release.check", return_value={"applications": [], "public_tools": []}),
+                patch("update_windows_release.validate", return_value={"ok": True}),
+                patch("update_windows_release.migration_manifest", return_value={"schema_version": 1}),
+                patch("update_windows_release.stop_release_for_update", side_effect=stop_with_snapshot),
+                patch("update_windows_release.read_bot_state", return_value={"enabled": True, "running": True}),
+                patch("update_windows_release.subprocess.Popen"),
+                patch("update_windows_release.probe_health", return_value=True),
+                patch("update_windows_release.restore_bot_state", return_value=True) as restore,
+                patch("update_windows_release.sync_installed_wechat_tools", return_value=0),
+            ):
+                update(SimpleNamespace(candidate=candidate, apply=True, keep_stopped=False,
+                                       timeout=1, native_account="desktop"), release, work)
+            self.assertEqual((release / EXE).read_bytes(), b"new")
+            restore.assert_called_once_with(release, {"enabled": True, "running": True}, 1)
+
     def test_running_release_exits_before_replacement(self):
         with tempfile.TemporaryDirectory() as directory:
             release = Path(directory)

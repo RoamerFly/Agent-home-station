@@ -1,8 +1,8 @@
 # 联网检索
 
-独立 Python MCP stdio 服务，提供 `web.search`、`web.read` 和 `web.discover`。`search_backend=public` 依次使用 Bing RSS、360 与 Brave 公共搜索，只在前一来源不可用或没有相关候选时继续。B站音源搜索先用 B站公开搜索，再使用同一组独立公开索引。`search_backend=deepseek` 只请求宿主声明的 DeepSeek 官方 `https://api.deepseek.com/v1/tools/search` 路由，使用宿主持有的 `search_key`。网页读取提取正文并支持字符分页和内容哈希校验。只需项目内 Python 标准库，不需要模型接口或额外依赖。
+独立 Python MCP stdio 服务，提供 `web.search`、`web.read` 和 `web.discover`。`search_backend=public` 依次使用 Bing RSS、360 与 Brave 公共搜索，只在前一来源不可用或没有相关候选时继续。B站音源搜索先用 B站公开搜索，再使用同一组独立公开索引。`search_backend=deepseek` 优先请求宿主声明的 DeepSeek 官方 `https://api.deepseek.com/v1/tools/search` 路由，使用宿主持有的 `search_key`；路由或服务商失败时在同一次调用中回退公共索引。网页读取提取正文并支持字符分页和内容哈希校验。只需项目内 Python 标准库，不需要模型接口或额外依赖。
 
-后端切换必须由管理员配置，工具和 Agent 参数均不能改写。DeepSeek 的既有请求结构为 `{"query":...,"count":...,"need_content":false}`；工具默认 `count=6`，显式候选数会原样交给服务商，不会静默压缩或退回公共索引。响应会报告 `backend`、`requested_count` 与 `effective_provider_count`；服务商若拒绝某个参数，会返回实际失败而不是被伪装成一般不可用。
+首选后端由管理员配置，工具和 Agent 参数均不能改写。DeepSeek 的既有请求结构为 `{"query":...,"count":...,"need_content":false}`；工具默认 `count=6`，显式候选数会原样交给服务商，回退时也沿用显式参数。响应会报告实际 `backend`、`fallback_used`、`requested_count` 与 `effective_provider_count`；参数无效或调用被取消时直接报错，服务端错误才触发有界的公共索引回退。
 
 在工具中心导入本目录，确认摘要与 `network` 权限，再启动。Agent 可通过 `service_plugins` 发现工具，使用 `service_plugin_call` 调用。安装和启用是两个操作；没有隔离执行器时不会退回普通进程。
 

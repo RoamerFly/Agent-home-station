@@ -11,7 +11,6 @@ import (
 	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/sharespec"
-	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 	catalog "wechat-bot/plugins"
 )
@@ -43,7 +42,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 		websession.Fail(w, 503, "工具宿主不可用")
 		return
 	}
-	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": stationruntime.ToolRuntimeReady(s.shareOptions, s.workspaceRoot)}
+	view := map[string]any{"installed": false, "enabled": false, "runtime_ready": false}
 	if worker == nil {
 		websession.Respond(w, 200, view)
 		return
@@ -170,6 +169,7 @@ func (s *stationWechat) stationMediaSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	view["installed"], view["enabled"], view["revision"], view["version"] = true, item.Enabled, item.Revision, item.Package.Version
+	view["runtime_ready"] = stationShareRuntimeReady(ctx, host, s.shareOptions, s.workspaceRoot, item)
 	view["configuration"] = configuration
 	if backend, _ := stationASRBackend(configuration.Values); plugin == localasr.PluginID && backend == "local" {
 		_, err := host.localASR.ready(ctx)

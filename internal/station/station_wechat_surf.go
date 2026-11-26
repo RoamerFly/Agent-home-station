@@ -19,7 +19,6 @@ import (
 	"wechat-bot/internal/identity"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
-	"wechat-bot/internal/stationruntime"
 	"wechat-bot/internal/websession"
 	"wechat-bot/internal/workspacefs"
 )
@@ -267,7 +266,7 @@ func (s *stationWechat) surfRoute(w http.ResponseWriter, r *http.Request) {
 	state := stationSurfDefaults(connection.AccountID)
 	ready, appReady := false, false
 	if worker != nil {
-		ready = stationruntime.ToolRuntimeReady(s.shareOptions, s.workspaceRoot) && s.surfPluginReady(ctx, worker, connection.AccountID)
+		ready = s.surfPluginReady(ctx, worker, connection.AccountID)
 		appReady = s.activeSurfAppsGrant(ctx, worker, connection.AccountID) != nil
 		if writing {
 			canRun := ready || appReady
@@ -326,8 +325,8 @@ func (s *stationWechat) surfPluginReady(ctx context.Context, worker *stationWech
 	if err != nil {
 		return false
 	}
-	_, err = surfInstallation(ctx, host)
-	return err == nil
+	item, err := surfInstallation(ctx, host)
+	return err == nil && stationShareRuntimeReady(ctx, host, s.shareOptions, s.workspaceRoot, item)
 }
 
 func (w *stationWechatWorker) claimSurf(ctx context.Context, account string, now time.Time, allowed func() error, prepare func(context.Context, stationSurfSchedule) (func(context.Context, string) (companion.ToolAccess, error), error)) (*bot.SurfTask, error) {

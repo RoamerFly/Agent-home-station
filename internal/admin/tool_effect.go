@@ -58,6 +58,13 @@ func (p *permittedTools) toolEffect(name string, args json.RawMessage, result st
 	path := ""
 	verb := ""
 	switch name {
+	case "music_local_start", "music_rvc_start":
+		if id, ok := output["job_id"].(string); ok && validID(id) {
+			if output["existing_job"] == true {
+				return "复用歌曲任务：job_id=" + id
+			}
+			return "已提交歌曲任务：job_id=" + id
+		}
 	case "server_write":
 		path, _ = input["path"].(string)
 		verb = "已创建文件"

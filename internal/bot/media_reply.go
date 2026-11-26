@@ -58,7 +58,7 @@ func (w *Worker) deferMediaReply(in companion.Input, messages []string, expected
 		r.ReplyContexts = append([]companion.ReplyContext(nil), followup[0].ReplyContexts...)
 		r.WakeAfterSeconds, r.WaitForReply, r.WakeReason = followup[0].WakeAfterSeconds, followup[0].WaitForReply, followup[0].WakeReason
 	}
-	if in.QuoteServerID != "" && in.TraceID != "" && (in.QuoteSharedMessage || in.Directed && w.config.Options.QuoteReplies) {
+	if in.QuoteServerID != "" && in.TraceID != "" {
 		r.Quote = replyQuote(in)
 	}
 	w.runtime.MediaReplies = append(w.runtime.MediaReplies, r)
@@ -94,10 +94,13 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if total < r.Expected && time.Since(r.Created) > 30*time.Second {
 			failed = true
 		}
-		if failed || !w.taskActive(r.Input) || !w.allowed[r.Input.Thread] || !c.Config.Permissions.ReplyText || r.Input.Mode != "direct" && c.Config.Quiet(time.Now()) || r.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(r.Input.Thread) {
+		if failed || !w.taskActive(r.Input) || !w.allowed[r.Input.Thread] || !c.Config.Permissions.ReplyText || r.Input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(r.Input.Thread) {
 			r.State = "stopped"
 			w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: r.Input.Thread, MessageID: r.Trace, Reason: "media_not_confirmed_no_success_caption", Status: "stopped"})
 			w.refreshMediaParent(r.Trace)
+			continue
+		}
+		if r.Input.Mode == "proactive" && c.Config.Quiet(time.Now()) {
 			continue
 		}
 		if total != r.Expected || accepted != total {

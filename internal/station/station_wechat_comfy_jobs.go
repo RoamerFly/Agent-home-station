@@ -29,6 +29,7 @@ type stationWechatComfyJob struct {
 	MediaGrant                                            time.Time
 	Submission                                            publicComfySubmission
 	State                                                 string
+	CancelRequested                                       bool
 	Products                                              []stationWechatComfyProduct
 }
 
@@ -123,7 +124,7 @@ func (t *stationAttachmentTools) writeComfyJob(j stationWechatComfyJob) error {
 
 func (t *stationAttachmentTools) comfyJobView(j stationWechatComfyJob) string {
 	view := map[string]any{"job_id": j.ID, "state": j.State}
-	if j.State == "completed" {
+	if j.State == "completed" && !j.CancelRequested {
 		media := make([]companion.GeneratedMedia, 0, len(j.Products))
 		for i := range j.Products {
 			item := j.media(i)
@@ -160,7 +161,7 @@ func (t *stationAttachmentTools) comfyMediaAllowed(in companion.Input, asset str
 		return empty, 0, false
 	}
 	j, err := t.readComfyJob(value[:64])
-	return j, index, err == nil && j.State == "completed" && index >= 0 && index < len(j.Products) && t.comfyJobAllowed(in, j)
+	return j, index, err == nil && j.State == "completed" && !j.CancelRequested && index >= 0 && index < len(j.Products) && t.comfyJobAllowed(in, j)
 }
 
 func (t *stationAttachmentTools) callPublicComfyRun(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -179,6 +180,11 @@ func (t *stationAttachmentTools) callPublicComfyRun(ctx context.Context, raw jso
 	}
 	if strictLocalMemoryDecode(raw, &in) != nil || in.Workflow == "" || !safeRVCDisplay(strings.TrimSpace(in.Title), 100) && in.Title != "" {
 		return "", mcptools.ArgumentError("$", "请提供有效的工作流编号、参数和标题")
+	}
+	if strings.Contains(t.trace.Text, "只用这张参考图") || strings.Contains(t.trace.Text, "只用这张图") {
+		if in.Workflow == "h3-text-to-video" || in.Workflow == "qwen21-text-to-image-hq" {
+			return "", mcptools.ArgumentError("$.workflow_id", "这条请求指定了参考图，请改用图像参考工作流并传入该图片")
+		}
 	}
 	source, ok := t.store.SourceForInput(t.trace)
 	if !ok {
@@ -258,17 +264,40 @@ func (t *stationAttachmentTools) callPublicComfyJob(ctx context.Context, raw jso
 		return "", mcptools.ArgumentError("$", "请提供 ComfyUI 任务编号和 status 或 cancel")
 	}
 	j, err := t.readComfyJob(in.ID)
-	if err != nil || !t.comfyJobAllowed(t.trace, j) || !t.comfyJobAvailable(ctx) {
+	if err != nil || !t.comfyJobAllowed(t.trace, j) || in.Action == "status" && !j.CancelRequested && !t.comfyJobAvailable(ctx) {
 		return "", wechatapp.ErrAttachmentDenied
 	}
-	if j.State == "completed" || j.State == "failed" || j.State == "cancelled" {
-		return t.comfyJobView(j), nil
-	}
 	if in.Action == "cancel" {
+		if j.State == "cancelled" || j.State == "failed" {
+			return t.comfyJobView(j), nil
+		}
+		// Revoke the application's send capability before contacting the
+		// backend. A completed render may already have been staged; its bytes
+		// remain on disk, but the media delivery gate reads this durable flag.
+		if !j.CancelRequested {
+			j.CancelRequested = true
+			if j.State == "completed" || j.Submission.Binding == "" {
+				j.State = "cancelled"
+			} else {
+				j.State = "cancelling"
+			}
+			if err := t.writeComfyJob(j); err != nil {
+				return "", err
+			}
+		}
+		if j.State == "cancelled" {
+			return t.comfyJobView(j), nil
+		}
 		if err := t.projects.cancelPublicComfy(ctx, j.Fish, j.ID, j.Submission); err != nil {
-			return "", err
+			// A later status query retries the remote cancellation. The old
+			// output remains blocked from attachment in the meantime.
+			return t.comfyJobView(j), nil
 		}
 		j.State = "cancelled"
+	} else if j.CancelRequested {
+		return t.callPublicComfyCancelLocked(ctx, j)
+	} else if j.State == "completed" || j.State == "failed" || j.State == "cancelled" {
+		return t.comfyJobView(j), nil
 	} else if j.Submission.Binding != "" {
 		state, product, err := t.projects.publicComfyStatus(ctx, j.Fish, j.ID, j.Submission)
 		if err != nil {
@@ -298,6 +327,21 @@ func (t *stationAttachmentTools) callPublicComfyJob(ctx context.Context, raw jso
 	}
 	if j.State == "completed" {
 		_ = t.projects.settlePublicComfy(ctx, j.Fish, j.ID, j.Submission)
+	}
+	return t.comfyJobView(j), nil
+}
+
+// The caller holds comfyMu. A cancelled application's record never becomes
+// completed again even if the backend finished before it observed the cancel.
+func (t *stationAttachmentTools) callPublicComfyCancelLocked(ctx context.Context, j stationWechatComfyJob) (string, error) {
+	if j.State != "cancelled" && j.Submission.Binding != "" {
+		if err := t.projects.cancelPublicComfy(ctx, j.Fish, j.ID, j.Submission); err != nil {
+			return t.comfyJobView(j), nil
+		}
+	}
+	j.State = "cancelled"
+	if err := t.writeComfyJob(j); err != nil {
+		return "", err
 	}
 	return t.comfyJobView(j), nil
 }

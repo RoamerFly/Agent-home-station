@@ -76,6 +76,34 @@ func TestWechatExecutionHostBindsOriginalTextClaimAndReceipt(t *testing.T) {
 	}
 }
 
+func TestWechatExecutionHostDoesNotBlockAcceptedGroupReplyAtQuietBoundary(t *testing.T) {
+	f, p := trustedAgent(t)
+	defer p.hub.Close()
+	settings := f.manager.agent.config()
+	settings.PrivilegedThreads = append(settings.PrivilegedThreads, "room@chatroom")
+	settings.CrossConversation = true
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.mu.Lock()
+	f.manager.config.GroupRules = []GroupRule{{ID: "room@chatroom", Mode: "all"}}
+	f.manager.config.Behavior.RandomDelay = false
+	loc, _ := time.LoadLocation(f.manager.config.Companion.Timezone)
+	now := time.Now().In(loc)
+	f.manager.config.Companion.QuietStart = now.Add(-time.Hour).Format("15:04")
+	f.manager.config.Companion.QuietEnd = now.Add(time.Hour).Format("15:04")
+	f.manager.mu.Unlock()
+	p.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "wxid_owner", TraceID: "mentioned-request", Mode: "direct"})
+	h := &wechatTextHost{p: p, raw: json.RawMessage(`{"thread_id":"room@chatroom","text":"收到","request_key":"mentioned-reply"}`), claimed: true,
+		prepared: &linuxnative.ToolSend{ThreadID: "room@chatroom", Kind: "text", Text: "收到"}}
+	if !f.manager.Config().Companion.Quiet(time.Now()) {
+		t.Fatal("synthetic quiet interval not active")
+	}
+	if err := h.BeforeSubmit(t.Context(), "room@chatroom"); err != nil {
+		t.Fatal("accepted group reply was treated as a quiet-hours ban", err, "privileged", p.privileged(), "tool", p.agentToolEnabled("wechat_send_text"), "read", p.conversationReadAllowed("room@chatroom"), "active", p.manager.agentTaskActive(p.trace))
+	}
+}
+
 type recoveredTextNative struct {
 	*fakeTools
 	status linuxnative.ToolStatus

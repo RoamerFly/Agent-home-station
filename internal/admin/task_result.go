@@ -46,6 +46,17 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	}
 	t.Constraints = copyTask(current).Constraints
 	t.OwnerRequested = t.OwnerRequested || current.OwnerRequested
+	if !resume && !current.CorrectionAt.IsZero() {
+		t.CorrectionAt = current.CorrectionAt
+		t.CorrectionRequiredMediaKind = current.CorrectionRequiredMediaKind
+		t.CorrectionReferenceImageID = current.CorrectionReferenceImageID
+		t.CorrectionOldDeliveryTrace = current.CorrectionOldDeliveryTrace
+		t.CorrectionTraces = append([]string(nil), current.CorrectionTraces...)
+		t.CorrectionWorkStartedAt = current.CorrectionWorkStartedAt
+		t.CorrectionMediaPreparedAt = current.CorrectionMediaPreparedAt
+		t.CorrectionPreparedMediaID = current.CorrectionPreparedMediaID
+		t.CorrectionCompletionRequested = current.CorrectionCompletionRequested
+	}
 	if err := validateTaskConstraints(t); err != nil {
 		return false, err
 	}
@@ -53,6 +64,26 @@ func (a *agentControl) transitionSnapshot(t agentTask, resume bool) (bool, error
 	if t.State == "completed" && len(t.PendingOperations) > 0 {
 		t.WorkCompleted = true
 		t.State = "waiting_delivery"
+	}
+	if t.State == "completed" && !t.correctedDeliveryComplete() {
+		if t.correctedWorkPrepared() {
+			t.CorrectionCompletionRequested = true
+			if t.Delivery == nil && len(t.PendingOperations) == 0 || t.Delivery != nil && t.Delivery.State == "accepted" {
+				t.State = "waiting"
+				t.WorkCompleted = false
+				t.Next = time.Now().Add(2 * time.Minute)
+				t.LastResult = "新视频已准备，但尚无本代视频发送回执；稍后核对成品与发送"
+			} else {
+				t.State = "waiting_delivery"
+				t.WorkCompleted = t.Delivery != nil && t.Delivery.VideoExpected > 0
+				t.Next = time.Time{}
+				t.LastResult = "新视频已准备，等待本代微信发送回执"
+			}
+		} else {
+			t.State = "waiting"
+			t.WorkCompleted = false
+			t.Next = time.Now().Add(bot.DeliveryRetryBackoff(t.Runs))
+		}
 	}
 	t.Actions = current.Actions
 	if current.Goal != "" {

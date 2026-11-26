@@ -26,28 +26,34 @@ import (
 )
 
 type publicShareObservation struct {
-	OK                      bool     `json:"ok"`
-	Platform                string   `json:"platform"`
-	SourceURL               string   `json:"source_url"`
-	Title                   string   `json:"title"`
-	ObjectID                string   `json:"object_id"`
-	DurationMS              *int64   `json:"duration_ms"`
-	Text                    string   `json:"text"`
-	SHA                     string   `json:"content_sha256"`
-	Offset                  int      `json:"offset"`
-	RequestedLimit          int      `json:"requested_limit"`
-	TotalCharacters         int      `json:"total_characters"`
-	NextOffset              *int     `json:"next_offset"`
-	CandidateOffset         int      `json:"candidate_offset"`
-	RequestedCandidateLimit int      `json:"requested_candidate_limit"`
-	TotalCandidates         int      `json:"total_candidates"`
-	NextCandidateOffset     *int     `json:"next_candidate_offset"`
-	Locators                []string `json:"private_media_locators"`
-	Coverage                string   `json:"coverage"`
-	Observed                *bool    `json:"video_observed"`
-	Downloaded              *bool    `json:"media_downloaded"`
-	Untrusted               bool     `json:"untrusted_external_content"`
-	Complete                bool     `json:"complete"`
+	OK                      bool                    `json:"ok"`
+	Platform                string                  `json:"platform"`
+	SourceURL               string                  `json:"source_url"`
+	Title                   string                  `json:"title"`
+	ObjectID                string                  `json:"object_id"`
+	DurationMS              *int64                  `json:"duration_ms"`
+	Text                    string                  `json:"text"`
+	SHA                     string                  `json:"content_sha256"`
+	Offset                  int                     `json:"offset"`
+	RequestedLimit          int                     `json:"requested_limit"`
+	TotalCharacters         int                     `json:"total_characters"`
+	NextOffset              *int                    `json:"next_offset"`
+	CandidateOffset         int                     `json:"candidate_offset"`
+	RequestedCandidateLimit int                     `json:"requested_candidate_limit"`
+	TotalCandidates         int                     `json:"total_candidates"`
+	NextCandidateOffset     *int                    `json:"next_candidate_offset"`
+	Locators                []string                `json:"private_media_locators"`
+	StreamPairs             []publicShareStreamPair `json:"private_stream_pairs"`
+	Coverage                string                  `json:"coverage"`
+	Observed                *bool                   `json:"video_observed"`
+	Downloaded              *bool                   `json:"media_downloaded"`
+	Untrusted               bool                    `json:"untrusted_external_content"`
+	Complete                bool                    `json:"complete"`
+}
+
+type publicShareStreamPair struct {
+	VideoURL string `json:"video_url"`
+	AudioURL string `json:"audio_url"`
 }
 
 type publicShareRead func(context.Context, string, int64, time.Duration) ([]byte, string, string, error)
@@ -64,6 +70,8 @@ type publicSharePolicy struct {
 	pages         map[string]string
 	locators      map[string]bool
 	allowedReads  map[string]bool
+	streamPairs   map[publicShareStreamPair]bool
+	fetchedReads  map[string]bool
 }
 
 func decodeShareJSON(raw []byte) (any, error) { return strictjson.Decode(raw) }
@@ -75,7 +83,7 @@ func (m *Manager) newPublicSharePolicy(ctx context.Context, message linuxnative.
 	if err != nil {
 		return nil, err
 	}
-	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: message.Link.URL, videoRequired: *message.AppMessageType == 4, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}}, nil
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: message.Link.URL, videoRequired: message.AppMessageType != nil && *message.AppMessageType == 4 || mcptools.IsPublicVideoPage(message.Link.URL), read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}, streamPairs: map[publicShareStreamPair]bool{}}, nil
 }
 
 // newExplicitPublicSharePolicy keeps an actual incoming source as evidence,
@@ -91,7 +99,7 @@ func (m *Manager) newExplicitPublicSharePolicy(ctx context.Context, source linux
 		return nil, err
 	}
 	base.requestSuffix = agentID("explicit-public-url", requestedURL, strconv.FormatBool(videoRequired))
-	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: requestedURL, videoRequired: videoRequired, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}}, nil
+	return &publicSharePolicy{receivedSharePolicy: base, requestedURL: requestedURL, videoRequired: videoRequired, read: mcptools.ReadPublicPluginShareSource, media: mcptools.GetPublicPluginMedia, pages: map[string]string{}, locators: map[string]bool{}, allowedReads: map[string]bool{}, streamPairs: map[publicShareStreamPair]bool{}}, nil
 }
 
 func (p *publicSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
@@ -141,6 +149,136 @@ var publicShareJSONString = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 var publicShareLiteralURL = regexp.MustCompile(`https?://[^\s<>"'\\]+`)
 var publicShareHTMLAttribute = regexp.MustCompile(`(?is)(?:src|href|content)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 var publicShareErrorCode = regexp.MustCompile(`^[a-z_]{1,96}$`)
+var publicBiliPagePath = regexp.MustCompile(`^/video/(BV[0-9A-Za-z]{10})/?$`)
+
+func publicBiliPage(raw string) (string, int, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" || (u.Hostname() != "www.bilibili.com" && u.Hostname() != "bilibili.com") {
+		return "", 0, false
+	}
+	match := publicBiliPagePath.FindStringSubmatch(u.Path)
+	if match == nil {
+		return "", 0, false
+	}
+	part := 1
+	if values := u.Query()["p"]; len(values) > 0 {
+		if len(values) != 1 {
+			return "", 0, false
+		}
+		part, err = strconv.Atoi(values[0])
+		if err != nil || part < 1 {
+			return "", 0, false
+		}
+	}
+	return match[1], part, true
+}
+
+func publicBiliViewURL(raw string) string {
+	if bvid, _, ok := publicBiliPage(raw); ok {
+		return "https://api.bilibili.com/x/web-interface/view?bvid=" + bvid
+	}
+	return ""
+}
+
+func publicBiliPlaybackURLs(bvid string, cid int64) []string {
+	if !publicBiliPagePath.MatchString("/video/"+bvid) || cid <= 0 {
+		return nil
+	}
+	base := "https://api.bilibili.com/x/player/playurl?bvid=" + bvid + "&cid=" + strconv.FormatInt(cid, 10) + "&qn=32&fnval="
+	return []string{base + "0&fourk=0", base + "16&fourk=0"}
+}
+
+func (p *publicSharePolicy) allowBiliViewPlayback(raw string, body []byte) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != "api.bilibili.com" || u.Path != "/x/web-interface/view" {
+		return
+	}
+	values := u.Query()
+	if len(values) != 1 || len(values["bvid"]) != 1 || len(values["bvid"][0]) != 12 {
+		return
+	}
+	bvid := values.Get("bvid")
+	part := 0
+	for page := range p.pages {
+		pageBV, pagePart, ok := publicBiliPage(page)
+		if ok && pageBV == bvid {
+			part = pagePart
+			break
+		}
+	}
+	if part == 0 {
+		return
+	}
+	var view struct {
+		Code int `json:"code"`
+		Data struct {
+			BVID  string `json:"bvid"`
+			CID   int64  `json:"cid"`
+			Pages []struct {
+				CID int64 `json:"cid"`
+			} `json:"pages"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &view) != nil || view.Code != 0 || view.Data.BVID != bvid || view.Data.CID <= 0 {
+		return
+	}
+	cid := view.Data.CID
+	if part > 1 {
+		if part > len(view.Data.Pages) || view.Data.Pages[part-1].CID <= 0 {
+			return
+		}
+		cid = view.Data.Pages[part-1].CID
+	}
+	for _, playback := range publicBiliPlaybackURLs(bvid, cid) {
+		p.allowedReads[playback] = true
+	}
+}
+
+func (p *publicSharePolicy) recordBiliStreamPairs(raw string, body []byte) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != "api.bilibili.com" || u.Path != "/x/player/playurl" || !p.allowedReads[raw] {
+		return
+	}
+	var result struct {
+		Code int `json:"code"`
+		Data struct {
+			Dash struct {
+				Video []struct {
+					BaseURL    string `json:"baseUrl"`
+					BaseURLAlt string `json:"base_url"`
+				} `json:"video"`
+				Audio []struct {
+					BaseURL    string `json:"baseUrl"`
+					BaseURLAlt string `json:"base_url"`
+				} `json:"audio"`
+			} `json:"dash"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &result) != nil || result.Code != 0 {
+		return
+	}
+	if p.streamPairs == nil {
+		p.streamPairs = map[publicShareStreamPair]bool{}
+	}
+	for _, video := range result.Data.Dash.Video[:min(len(result.Data.Dash.Video), 4)] {
+		v := video.BaseURL
+		if v == "" {
+			v = video.BaseURLAlt
+		}
+		if originalPublicShareURL(v) != v || !p.locators[v] {
+			continue
+		}
+		for _, audio := range result.Data.Dash.Audio[:min(len(result.Data.Dash.Audio), 4)] {
+			a := audio.BaseURL
+			if a == "" {
+				a = audio.BaseURLAlt
+			}
+			if originalPublicShareURL(a) == a && p.locators[a] {
+				p.streamPairs[publicShareStreamPair{VideoURL: v, AudioURL: a}] = true
+			}
+		}
+	}
+}
 
 // Record literal locations from actual reads, including JSON-escaped URLs and
 // HTML attributes. The approved parser verifies platform/work identity; this
@@ -213,7 +351,7 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 	if p.reads == 0 && requested != originalPublicShareURL(p.requestedURL) {
 		return nil, errors.New("share_initial_source_mismatch")
 	}
-	_, knownPage := p.pages[sharePublicURL(requested)]
+	knownPage := p.fetchedReads[requested]
 	if p.reads > 0 && !p.locators[requested] && !knownPage && !p.allowedReads[requested] {
 		return nil, errors.New("share_followup_source_unverified")
 	}
@@ -242,14 +380,25 @@ func (p *publicSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 	p.bytes += int64(len(body))
 	p.reads++
 	p.pages[sharePublicURL(final)] = kind
+	if p.fetchedReads == nil {
+		p.fetchedReads = map[string]bool{}
+	}
+	p.fetchedReads[requested] = true
+	p.fetchedReads[originalPublicShareURL(final)] = true
 	if strings.Contains(strings.ToLower(kind), "html") {
+		if view := publicBiliViewURL(final); view != "" {
+			p.allowedReads[view] = true
+		}
 		if playback := mcptools.VerifiedBilibiliPlaybackURL(final, body); playback != "" {
 			p.allowedReads[playback] = true
+			p.allowedReads[strings.Replace(playback, "&fnval=0&", "&fnval=16&", 1)] = true
 		}
 	}
+	p.allowBiliViewPlayback(final, body)
 	for locator := range publicShareLocations(body, final) {
 		p.locators[locator] = true
 	}
+	p.recordBiliStreamPairs(final, body)
 	if strings.HasPrefix(kind, "video/") || strings.HasPrefix(kind, "image/") {
 		p.locators[originalPublicShareURL(final)] = true
 	}
@@ -292,12 +441,12 @@ func (p *publicSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap 
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_result_invalid")
 	}
 	hash, err := hex.DecodeString(result.SHA)
-	kind := strings.ToLower(p.pages[result.SourceURL])
+	kind := strings.ToLower(p.pages[sharePublicURL(result.SourceURL)])
 	pageKind := strings.HasPrefix(kind, "text/") || strings.Contains(kind, "html") || strings.HasPrefix(kind, "video/") || strings.HasPrefix(kind, "image/")
 	if err != nil || len(hash) != 32 || !pageKind || sharePublicURL(result.SourceURL) != result.SourceURL || result.DurationMS != nil && *result.DurationMS <= 0 {
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_source_unverified")
 	}
-	if !validSharePage(result.Offset, result.RequestedLimit, result.TotalCharacters, utf8.RuneCountInString(result.Text), result.NextOffset) || !validSharePage(result.CandidateOffset, result.RequestedCandidateLimit, result.TotalCandidates, len(result.Locators), result.NextCandidateOffset) || result.Complete != (result.NextOffset == nil && result.NextCandidateOffset == nil) {
+	if len(result.StreamPairs) > 1 || !validSharePage(result.Offset, result.RequestedLimit, result.TotalCharacters, utf8.RuneCountInString(result.Text), result.NextOffset) || !validSharePage(result.CandidateOffset, result.RequestedCandidateLimit, result.TotalCandidates, len(result.Locators)+len(result.StreamPairs), result.NextCandidateOffset) || result.Complete != (result.NextOffset == nil && result.NextCandidateOffset == nil) {
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_pagination_invalid")
 	}
 	args := struct {
@@ -312,14 +461,19 @@ func (p *publicSharePolicy) Validate(ctx context.Context, j pluginhost.Job, cap 
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_arguments_changed")
 	}
 	if result.Coverage == "page_text" {
-		if result.Text == "" || len(result.Locators) != 0 || p.videoRequired {
+		if result.Text == "" || len(result.Locators) != 0 || len(result.StreamPairs) != 0 || p.videoRequired {
 			return pluginruntime.VerifiedResult{}, errors.New("share_public_video_not_observed")
 		}
-	} else if result.Coverage != "media_locator_only" || result.Text != "" || len(result.Locators) == 0 {
+	} else if result.Coverage != "media_locator_only" || result.Text != "" || len(result.Locators)+len(result.StreamPairs) == 0 {
 		return pluginruntime.VerifiedResult{}, errors.New("share_public_coverage_invalid")
 	}
 	for _, locator := range result.Locators {
 		if !p.locators[locator] {
+			return pluginruntime.VerifiedResult{}, errors.New("share_public_media_unverified")
+		}
+	}
+	for _, pair := range result.StreamPairs {
+		if !p.streamPairs[pair] || !p.locators[pair.VideoURL] || !p.locators[pair.AudioURL] {
 			return pluginruntime.VerifiedResult{}, errors.New("share_public_media_unverified")
 		}
 	}
@@ -444,6 +598,50 @@ func (p *publicSharePolicy) handoff(ctx context.Context, result publicShareObser
 			continue
 		}
 		out.Data, out.ContentType = data, kind
+		return out, nil
+	}
+	for _, pair := range result.StreamPairs {
+		if err := p.Check(ctx, job, pluginhost.Capability{}); err != nil {
+			return mcptools.PublicShare{}, err
+		}
+		video, videoKind, err := p.media(ctx, pair.VideoURL, result.SourceURL, limit)
+		if err != nil {
+			last = err
+			continue
+		}
+		if _, err = mcptools.ValidateMediaType("video", videoKind, video); err != nil {
+			last = err
+			continue
+		}
+		if int64(len(video)) >= limit {
+			last = errors.New("share_media_limit_exceeded")
+			continue
+		}
+		audio, audioKind, err := p.media(ctx, pair.AudioURL, result.SourceURL, limit-int64(len(video)))
+		if err != nil {
+			last = err
+			continue
+		}
+		if _, err = mcptools.ValidateMediaType("file", audioKind, audio); err != nil {
+			last = err
+			continue
+		}
+		if err = p.Check(ctx, job, pluginhost.Capability{}); err != nil {
+			return mcptools.PublicShare{}, err
+		}
+		merged, err := muxPublicStreamPair(ctx, p.manager.dir, video, audio, limit)
+		if err != nil {
+			last = err
+			continue
+		}
+		if err = p.Check(ctx, job, pluginhost.Capability{}); err != nil {
+			return mcptools.PublicShare{}, err
+		}
+		if _, err = mcptools.ValidateMediaType("video", "video/mp4", merged); err != nil {
+			last = err
+			continue
+		}
+		out.Kind, out.ContentType, out.Data = "video", "video/mp4", merged
 		return out, nil
 	}
 	if result.NextCandidateOffset != nil {

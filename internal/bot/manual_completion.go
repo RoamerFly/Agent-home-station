@@ -12,6 +12,7 @@ import (
 type manualCompletionRequest struct {
 	thread string
 	trace  string
+	taskID string
 	done   chan error
 }
 
@@ -54,11 +55,40 @@ func (w *Worker) ManuallyCompleteRound(ctx context.Context, thread, trace string
 	}
 }
 
+// ManuallyCompleteTask stops every in-flight attempt of one persisted task.
+// A continuation can have several task-<id>-<time> traces, each with its own
+// text/media queue. The task state itself is cancelled by the admin store.
+func (w *Worker) ManuallyCompleteTask(ctx context.Context, thread, taskID string) error {
+	if w == nil || w.manualCompletions == nil {
+		return errors.New("bot_manual_completion_unavailable")
+	}
+	if strings.TrimSpace(thread) == "" || strings.TrimSpace(taskID) == "" || len(thread) > 256 || len(taskID) > 128 {
+		return errors.New("bot_manual_completion_task_invalid")
+	}
+	done := make(chan error, 1)
+	select {
+	case w.manualCompletions <- manualCompletionRequest{thread: thread, taskID: taskID, done: done}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (w *Worker) drainManualCompletions(ctx context.Context) error {
 	for {
 		select {
 		case request := <-w.manualCompletions:
-			err := w.completeTrace(request.thread, request.trace)
+			var err error
+			if request.taskID != "" {
+				err = w.completeTask(request.thread, request.taskID)
+			} else {
+				err = w.completeTrace(request.thread, request.trace)
+			}
 			request.done <- err
 		case <-ctx.Done():
 			return nil
@@ -89,7 +119,58 @@ func inputBelongsToRound(in companion.Input, thread, trace string) bool {
 }
 
 func (w *Worker) inputRoundClosed(in companion.Input) bool {
-	return w.roundClosed(in.Thread, in.TraceID) || in.OriginTraceID != "" && w.roundClosed(inputOriginThread(in), in.OriginTraceID)
+	return w.roundClosed(in.Thread, in.TraceID) || in.TaskID != "" && !w.taskActive(in) ||
+		!in.ExplicitRoundRetry && in.OriginTraceID != "" && w.roundClosed(inputOriginThread(in), in.OriginTraceID)
+}
+
+func (w *Worker) completeTask(thread, taskID string) error {
+	if w.runtime == nil {
+		return errors.New("bot_manual_completion_not_ready")
+	}
+	traces := map[string]bool{}
+	add := func(in companion.Input) {
+		if in.TaskID == taskID && in.Thread == thread && in.TraceID != "" {
+			traces[in.TraceID] = true
+		}
+	}
+	for _, p := range w.runtime.Plans {
+		if p != nil {
+			add(p.Input)
+		}
+	}
+	for _, d := range w.runtime.Deliveries {
+		if d != nil {
+			add(d.Input)
+		}
+	}
+	for _, d := range w.runtime.Media {
+		if d != nil {
+			add(d.Input)
+		}
+	}
+	for _, d := range w.runtime.MediaReplies {
+		if d != nil {
+			add(d.Input)
+		}
+	}
+	for _, wake := range w.runtime.Wakes {
+		if wake != nil {
+			add(wake.Input)
+		}
+	}
+	if w.generation != nil {
+		for _, job := range w.generation.jobs {
+			if job != nil {
+				add(job.input)
+			}
+		}
+	}
+	for trace := range traces {
+		if err := w.completeTrace(thread, trace); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) completeTrace(thread, trace string) error {

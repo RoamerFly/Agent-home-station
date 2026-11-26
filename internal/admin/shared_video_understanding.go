@@ -37,8 +37,13 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	if e != nil {
 		return "", e
 	}
-	page, err = policy.readShare(bounded, 50<<20)
-	if err == nil {
+	in := companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID, TraceID: m.ID, Sender: m.SenderID, Text: "收到的视频分享：" + logText(m.Link.Title, 300), MessageTime: m.CreatedAt}
+	if asset, data, found := a.manager.cachedWebMedia(in, m.Link.URL, "video", true, 50<<20); found {
+		video = mcptools.PublicVideo{Data: data, ContentType: asset.MIME, PageURL: asset.URL, Title: asset.Title}
+	} else {
+		page, err = policy.readShare(bounded, 50<<20)
+	}
+	if err == nil && len(video.Data) == 0 {
 		switch page.Kind {
 		case "page":
 			if body := strings.TrimSpace(page.Text); body != "" && a.evidence != nil {
@@ -69,6 +74,20 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	if err != nil {
 		return "", err
 	}
+	cache := ""
+	// Persist the verified original before sampling or model calls. A failed
+	// observation can then resume from the same bytes without another download.
+	in.Text = "收到的视频分享：" + logText(video.Title, 300)
+	originalURL := video.PageURL
+	if mcptools.IsPublicVideoPage(m.Link.URL) {
+		originalURL = m.Link.URL
+	}
+	asset, e := a.manager.rememberAssetFormats(in, assetOriginal{InboundMessage: &m, Data: video.Data, MIME: video.ContentType, URL: originalURL, RequestURL: m.Link.URL, Filename: "分享视频.mp4"}, nil)
+	if e == nil {
+		cache = "[已缓存本会话原视频素材：" + asset.ID + "，可按用户后续要求复用，尚未发送附件]\n"
+	} else {
+		a.manager.record(bot.Record{Event: "shared_video_cache_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: "shared_video_cache_unavailable", Origin: "media"})
+	}
 	sample, err := sampleVideo(bounded, a.manager.dir, video.Data)
 	if err != nil && (sample.Seconds == 0 || bounded.Err() != nil) {
 		return "", err
@@ -76,24 +95,6 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 	observation, err := a.observeVideo(bounded, m, video.Data, sample, false)
 	if err != nil {
 		return "", err
-	}
-	cache := ""
-	// Keep the original received work scoped to this conversation for a later
-	// request such as "send that original video"; observation never uploads/sends.
-	if a.manager.Config().Companion.Permissions.Remember {
-		in := companion.Input{Channel: "wechat", Account: m.AccountID, Thread: m.ThreadID, TraceID: m.ID, Sender: m.SenderID, Text: "收到的视频分享：" + logText(video.Title, 300), MessageTime: m.CreatedAt}
-		originalURL := video.PageURL
-		if mcptools.IsPublicVideoPage(m.Link.URL) {
-			// A canonical display page may omit parameters needed to retrieve
-			// this exact shared work. Keep its verified native source for reuse.
-			originalURL = m.Link.URL
-		}
-		asset, e := a.manager.rememberAssetFormats(in, assetOriginal{InboundMessage: &m, Data: video.Data, MIME: video.ContentType, URL: originalURL, Filename: "分享视频.mp4"}, nil)
-		if e == nil {
-			cache = "[已缓存本会话原视频素材：" + asset.ID + "，可按用户后续要求复用，尚未发送附件]\n"
-		} else {
-			a.manager.record(bot.Record{Event: "shared_video_cache_unavailable", Category: "decision", ThreadID: m.ThreadID, MessageID: m.ID, Status: "unavailable", Reason: "shared_video_cache_unavailable", Origin: "media"})
-		}
 	}
 	return cache + observedShareDescription(m) + "\n" + observation, nil
 }

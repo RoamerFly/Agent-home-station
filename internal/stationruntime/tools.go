@@ -8,6 +8,7 @@ import (
 
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/workspacefs"
 )
 
 // PackagedToolOptions resolves the tool-runtime layout beside the station
@@ -62,12 +63,10 @@ func ToolRuntimeReady(options pluginruntime.Options, workspace string) bool {
 	if !toolRuntimeOutsideWorkspace(options, workspace) {
 		return false
 	}
-	for _, path := range []string{
-		options.Python,
-		options.Pythonw,
-		options.WindowsHelper,
-		filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py"),
-	} {
+	if !toolBrokerReady(options, workspace) {
+		return false
+	}
+	for _, path := range []string{options.Python, options.Pythonw} {
 		file, err := openHostFile(path)
 		if err != nil {
 			return false
@@ -85,12 +84,79 @@ func InstalledToolExecutor(store *pluginhost.Store, options pluginruntime.Option
 	executor := pluginruntime.InstalledExecutor(store, options)
 	resolve := executor.Resolve
 	executor.Resolve = func(ctx context.Context, p pluginhost.Package, g pluginhost.Grant) (pluginruntime.LaunchSpec, error) {
-		if !ToolRuntimeReady(options, workspace) {
+		if !toolBrokerReady(options, workspace) {
 			return pluginruntime.LaunchSpec{}, errToolRuntimeUnavailable
 		}
-		return resolve(ctx, p, g)
+		spec, err := resolve(ctx, p, g)
+		if err != nil {
+			return pluginruntime.LaunchSpec{}, err
+		}
+		return prepareToolLaunchSpec(options, spec, workspace)
 	}
 	return executor
+}
+
+// A package with a verified bundled interpreter must not mount or depend on
+// the legacy shared interpreter. Keep other runtime roots, such as an optional
+// document backend, and validate the exact files that will actually launch.
+func prepareToolLaunchSpec(options pluginruntime.Options, spec pluginruntime.LaunchSpec, workspace string) (pluginruntime.LaunchSpec, error) {
+	if spec.Python != options.Python {
+		shared := make(map[string]bool, 2)
+		for _, path := range []string{options.Python, options.Pythonw} {
+			if path != "" {
+				shared[filepath.Clean(filepath.Dir(path))] = true
+			}
+		}
+		roots := make([]string, 0, len(spec.RuntimeRoots))
+		for _, root := range spec.RuntimeRoots {
+			if !shared[filepath.Clean(root)] {
+				roots = append(roots, root)
+			}
+		}
+		spec.RuntimeRoots = roots
+	}
+	for _, path := range []string{spec.Python, spec.Pythonw} {
+		if withinWorkspace(workspace, path) || overlapsWorkspace(workspace, filepath.Dir(path)) {
+			return pluginruntime.LaunchSpec{}, errToolRuntimeUnavailable
+		}
+		file, err := openHostFile(path)
+		if err != nil {
+			return pluginruntime.LaunchSpec{}, errToolRuntimeUnavailable
+		}
+		file.Close()
+	}
+	for _, root := range spec.RuntimeRoots {
+		if !filepath.IsAbs(root) || filepath.Clean(root) != root || overlapsWorkspace(workspace, root) {
+			return pluginruntime.LaunchSpec{}, errToolRuntimeUnavailable
+		}
+		dir, err := workspacefs.OpenPath(root)
+		if err != nil {
+			return pluginruntime.LaunchSpec{}, errToolRuntimeUnavailable
+		}
+		dir.Close()
+	}
+	return spec, nil
+}
+
+func toolBrokerReady(options pluginruntime.Options, workspace string) bool {
+	if withinWorkspace(workspace, options.WindowsHelper) || overlapsWorkspace(workspace, filepath.Dir(options.WindowsHelper)) {
+		return false
+	}
+	for _, path := range []string{options.WindowsHelper, filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py")} {
+		file, err := openHostFile(path)
+		if err != nil {
+			return false
+		}
+		file.Close()
+	}
+	return true
+}
+
+// ToolBrokerReady checks the shared Windows LPAC host without requiring the
+// legacy shared Python interpreter. Installed stdio tools may ship their own
+// verified interpreter.
+func ToolBrokerReady(options pluginruntime.Options, workspace string) bool {
+	return toolBrokerReady(options, workspace)
 }
 
 // toolRuntimeOutsideWorkspace ensures the executable helpers and every

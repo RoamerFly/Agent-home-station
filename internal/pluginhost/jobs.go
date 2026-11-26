@@ -247,6 +247,19 @@ func (s *Store) RequestJobCancel(ctx context.Context, id string, revision int) (
 	})
 }
 
+// RevokeCompletedJob withdraws the delivery capability of an already
+// completed project output while retaining its immutable bytes and receipt.
+// Artifact reads check CancelRequested against the committed job record.
+func (s *Store) RevokeCompletedJob(ctx context.Context, id string, revision int) (Job, error) {
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.State != "completed" {
+			return errors.New("job is not completed")
+		}
+		j.CancelRequested = true
+		return nil
+	})
+}
+
 // FailJobPreparation closes work that the host verified was never claimed for
 // submission. The revision check prevents replacing a concurrent claim.
 func (s *Store) FailJobPreparation(ctx context.Context, id string, revision int, stage JobFailureStage) (Job, error) {

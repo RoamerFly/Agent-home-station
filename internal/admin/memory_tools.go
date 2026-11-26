@@ -102,6 +102,44 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 	if e != nil {
 		return "", toolInputError(e.Error())
 	}
+	freshCurrentScope := (p.trace.FreshRoundRetry || p.trace.FreshRoundLineage) && scope == companion.ScopeID(p.trace.Channel, p.trace.Account, p.trace.Thread)
+	freshUnbound := freshCurrentScope && (p.trace.Source == nil || p.trace.Source.EventID == "")
+	if freshUnbound && name == "memory_read" {
+		return "", memoryRecordUnavailable{}
+	}
+	freshSources := map[string]bool{}
+	if freshCurrentScope {
+		in.MemoryQuery.FreshExcludeUnsourced = true
+		if p.trace.Source != nil && p.trace.Source.EventID != "" {
+			freshSources[p.trace.Source.EventID] = true
+			in.MemoryQuery.FreshExcludeEventIDs = append(in.MemoryQuery.FreshExcludeEventIDs, p.trace.Source.EventID)
+		}
+		for _, unread := range p.trace.UnreadMessages {
+			if unread.Source != nil && unread.Source.EventID != "" && !freshSources[unread.Source.EventID] {
+				freshSources[unread.Source.EventID] = true
+				in.MemoryQuery.FreshExcludeEventIDs = append(in.MemoryQuery.FreshExcludeEventIDs, unread.Source.EventID)
+			}
+		}
+		for _, id := range p.trace.FreshRoundExcludedEventIDs {
+			if id != "" && !freshSources[id] {
+				freshSources[id] = true
+				in.MemoryQuery.FreshExcludeEventIDs = append(in.MemoryQuery.FreshExcludeEventIDs, id)
+			}
+		}
+		traces := []string{p.trace.FreshRoundPriorTraceID, p.trace.OriginTraceID}
+		if p.trace.Source != nil {
+			traces = append(traces, p.trace.Source.MessageID)
+		}
+		traces = append(traces, p.trace.FreshRoundSourceMessageIDs...)
+		for _, trace := range traces {
+			if trace != "" {
+				in.MemoryQuery.FreshExcludeTraces = append(in.MemoryQuery.FreshExcludeTraces, trace)
+			}
+		}
+		if p.trace.FreshRoundPriorTaskID != "" {
+			in.MemoryQuery.FreshExcludeTracePrefix = "task-" + p.trace.FreshRoundPriorTaskID + "-"
+		}
+	}
 	store := p.manager.memory
 	var value any
 	var queryEpoch string
@@ -134,6 +172,14 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 	switch name {
 	case "memory_search":
 		in.Scopes = []string{scope}
+		if freshUnbound {
+			queryEpoch, e = store.DataEpoch(ctx)
+			if e != nil {
+				return "", e
+			}
+			value = companion.MemoryPage{Items: []companion.MemoryHit{}, Coverage: "current_source_only", EffectiveLimit: in.Limit}
+			break
+		}
 		if !in.Originals && in.Query != "" {
 			cfg, err := p.manager.loadMemoryServices()
 			if err != nil {
@@ -168,6 +214,20 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 			}
 			if in.Expected > 0 && in.Expected != ev.Revision {
 				return "", companion.ErrMemoryConflict
+			}
+			if freshSources[ev.ID] {
+				if ev.Role == "assistant" {
+					return "", memoryRecordUnavailable{}
+				}
+				ev.Text = companion.UserRequestText(ev.Text)
+				for i := range ev.IncomingMedia {
+					ev.IncomingMedia[i].Observation = ""
+					ev.IncomingMedia[i].ObservationExcerpt = ""
+					ev.IncomingMedia[i].ObservationParts = nil
+					ev.IncomingMedia[i].ObservationState = ""
+					ev.IncomingMedia[i].ObservationVersion = 0
+					ev.IncomingMedia[i].ObservedRange = ""
+				}
 			}
 			part := in.Part
 			if part == "" {
@@ -239,6 +299,16 @@ func (p *permittedTools) callMemory(ctx context.Context, name string, raw json.R
 			}
 			if in.Expected > 0 && in.Expected != m.Version {
 				return "", companion.ErrMemoryConflict
+			}
+			if freshCurrentScope && m.Manual && len(m.Sources) == 0 {
+				return "", memoryRecordUnavailable{}
+			}
+			if len(freshSources) > 0 {
+				for _, source := range m.Sources {
+					if freshSources[source.EventID] {
+						return "", memoryRecordUnavailable{}
+					}
+				}
 			}
 			if in.Offset < 0 || in.Offset > len(m.Detail) || in.Length < 0 || in.SourceOffset < 0 || in.SourceOffset > len(m.Sources) || in.SourceLimit < 0 {
 				return "", toolInputError("记忆分页位置无效")

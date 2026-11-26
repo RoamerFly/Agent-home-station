@@ -62,6 +62,41 @@ func TestObservationCacheUsesPhysicalSpaceNotAggregateIndexQuota(t *testing.T) {
 	}
 }
 
+func TestPreparingInspectedVideoKeepsAssetEvidenceAndAddsRequest(t *testing.T) {
+	f := setup(t)
+	data := []byte("synthetic shared video bytes")
+	firstInput := companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "owner", TraceID: "inspect-video"}
+	firstURL := "https://www.bilibili.com/video/BV0123456789/"
+	first, err := f.manager.rememberAssetFormats(firstInput, assetOriginal{
+		Data: data, MIME: "video/mp4", Filename: "分享视频.mp4", URL: firstURL,
+		RequestURL: "https://b23.tv/first",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := assetEvidenceEpochs(t, f.manager)
+	secondInput := firstInput
+	secondInput.TraceID = "prepare-video"
+	second, err := f.manager.rememberAssetFormats(secondInput, assetOriginal{
+		Data: data, MIME: "video/mp4", Filename: "收到的视频.mp4",
+		URL:        "https://www.bilibili.com/video/BV0123456789/?p=1",
+		RequestURL: "https://b23.tv/second",
+	}, []stagedUpload{{UploadSource: linuxnative.UploadSource{ID: "synthetic-video-upload"}, Kind: "video"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := assetEvidenceEpochs(t, f.manager)
+	if before != after || first.ID != second.ID {
+		t.Fatalf("preparing the inspected bytes changed generation evidence: %q -> %q, %s %s", before, after, first.ID, second.ID)
+	}
+	if second.Title != first.Title || second.Filename != first.Filename || second.URL != firstURL {
+		t.Fatalf("later tool alias replaced first source identity: %+v", second)
+	}
+	if len(second.Requests) != 2 || len(second.RequestURLHashes) != 4 || second.Sources["video"] != "synthetic-video-upload" {
+		t.Fatalf("preparing video lost the new request or upload association: %+v", second)
+	}
+}
+
 func TestCachedPublicSharePreservesPlaybackParametersOnlyOnKnownPage(t *testing.T) {
 	f := setup(t)
 	in := companion.Input{Channel: "wechat", Account: "test", Thread: "filehelper", TraceID: "synthetic-share"}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -170,8 +171,7 @@ func (s *session) serviceReply(ctx context.Context, id json.RawMessage, method s
 	}
 	frame := map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id)}
 	if err != nil {
-		// Arbitrary errors can contain URLs, credentials or host paths.
-		frame["error"] = map[string]any{"code": -32001, "message": "host_service_failed"}
+		frame["error"] = hostServiceFailure(method, err)
 	} else {
 		if !json.Valid(result) {
 			return errors.New("invalid host service response")
@@ -187,4 +187,21 @@ func (s *session) serviceReply(ctx context.Context, id json.RawMessage, method s
 	}
 	_, err = s.in.Write(append(raw, '\n'))
 	return err
+}
+
+func hostServiceFailure(method string, err error) map[string]any {
+	// Arbitrary host errors can contain URLs, credentials or private paths.
+	failure := map[string]any{"code": -32001, "message": "host_service_failed"}
+	if method != "wechat/http_route" {
+		return failure
+	}
+	var web *mcptools.WebError
+	if !errors.As(err, &web) {
+		return failure
+	}
+	switch web.Code {
+	case "plugin_route_network_failed", "plugin_route_http_rejected", "plugin_route_response_failed", "plugin_route_response_invalid", "response_too_large":
+		failure["data"] = map[string]string{"code": web.Code, "stage": web.Stage}
+	}
+	return failure
 }

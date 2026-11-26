@@ -3,6 +3,7 @@ package station
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -72,6 +73,14 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 			}
 			if item.Digest != "" {
 				busy, e := host.store.HasUnfinishedJobs(ctx, id)
+				if e == nil && busy && id == localComfyPackage && !s.isActive(id) && host.controller.Status(id).ActiveCalls == 0 {
+					// ComfyUI keeps its queue in the owned process. Once that process
+					// exits, old-generation jobs cannot be resumed. Settle them in
+					// place so a package update does not hide the entire tool group.
+					if _, e = s.settleInterruptedComfyJobs(ctx, host, item.Digest); e == nil {
+						busy, e = host.store.HasUnfinishedJobs(ctx, id)
+					}
+				}
 				if e != nil || busy || s.isActive(id) || host.controller.Status(id).ActiveCalls > 0 {
 					notes[id] = "新版已发现，等待在途任务结束后重载。"
 					continue
@@ -133,6 +142,46 @@ func (s *localProjectTools) syncDirectoryTools(ctx context.Context, host *localP
 		}
 	}
 	return notes
+}
+
+// settleInterruptedComfyJobs runs only during a verified package migration.
+// It never starts a backend or replays a request. Jobs from the old package
+// remain queryable with their original IDs and a concrete failure reason.
+func (s *localProjectTools) settleInterruptedComfyJobs(ctx context.Context, host *localProjectToolHost, digest string) (bool, error) {
+	if s.comfy == nil || host == nil || digest == "" {
+		return false, nil
+	}
+	deployment, err := s.comfy.Info(ctx, host.store.Account())
+	if err != nil || deployment.Running || deployment.Busy {
+		return false, err
+	}
+	var changed bool
+	var cursor int64
+	for {
+		page, err := host.store.Jobs(ctx, localComfyPackage, cursor, 100)
+		if err != nil {
+			return changed, err
+		}
+		for _, job := range page.Items {
+			if job.PackageDigest != digest || job.Recovery() == "terminal" {
+				continue
+			}
+			if job.State == "pending" {
+				_, err = host.store.FailJobPreparation(ctx, job.ID, job.Revision, pluginhost.JobFailureDispatch)
+			} else {
+				_, err = host.store.FailJob(ctx, job.ID, job.Revision,
+					json.RawMessage(`{"reason":"original_backend_not_running"}`))
+			}
+			if err != nil {
+				return changed, err
+			}
+			changed = true
+		}
+		if !page.HasMore {
+			return changed, nil
+		}
+		cursor = page.Next
+	}
 }
 
 func officialProjectToolGrants(id string, declared []string) []string {

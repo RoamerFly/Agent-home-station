@@ -348,6 +348,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "conversation_not_allowed", Status: "skipped"})
 		return
 	}
+	if w.quietUnmentionedGroupMessage(message) {
+		w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "quiet_unmentioned_group_message", Status: "skipped"})
+		w.queuePhase(message.ID, "skipped")
+		return
+	}
 	quoteContext := ""
 	mediaObservationState := "pending"
 	mediaObservationEvidence := MediaObservationEvidence{}
@@ -615,6 +620,9 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 	if strings.HasSuffix(message.ThreadID, "@chatroom") {
 		rule := w.config.GroupRules[message.ThreadID]
 		if message.Direction != "incoming" {
+			return "", false
+		}
+		if w.quietUnmentionedGroupMessage(message) {
 			return "", false
 		}
 		if rule.Mode == "social" && !w.addressed(message) {
@@ -901,10 +909,6 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			return
 		case <-time.After(w.replyDelay(character)):
 		}
-		if input.Mode != "direct" && character.Config.Quiet(time.Now()) {
-			w.config.Log("character_quiet_hours")
-			return
-		}
 		text := strings.TrimSpace(body)
 		if input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
 			return
@@ -944,7 +948,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
 			return
 		}
-		if ctx.Err() != nil || input.Mode != "direct" && character.Config.Quiet(time.Now()) {
+		if ctx.Err() != nil {
 			return
 		}
 		bound, proofErr := w.prepareMediaEvidence(ctx, input)
@@ -987,7 +991,7 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 		if input.Surf && w.config.SurfAllowed != nil && !w.config.SurfAllowed(input.Thread) {
 			return
 		}
-		if ctx.Err() != nil || input.Mode != "direct" && character.Config.Quiet(time.Now()) {
+		if ctx.Err() != nil {
 			return
 		}
 		media, ok := character.Media(id)

@@ -91,7 +91,11 @@ func TestEveryMessageJudgedWhileSendBudgetPermissionsAndQuietHoursRemain(t *test
 	if d.Reason != "model_chose_silence" || model.calls != 4 {
 		t.Fatal("quiet hours blocked incoming message judgement", d)
 	}
+	if err := e.Claim(input); err != nil {
+		t.Fatal("an already accepted group conversation lost its reply", err)
+	}
+	input.Mode = "proactive"
 	if err := e.Claim(input); err == nil || err.Error() != "quiet hours" {
-		t.Fatal("quiet hours did not protect outgoing delivery", err)
+		t.Fatal("quiet hours did not defer autonomous work", err)
 	}
 }

@@ -14,6 +14,11 @@ import (
 //go:embed comfy_starters/registry.json comfy_starters/image/*.json comfy_starters/video/*.json
 var localComfyStarters embed.FS
 
+// The first published H3 image-to-video starter used a reference-video node.
+// That node treats the picture as a visual reference, not as the first frame.
+// Migrate only the exact shipped graph; a user-edited graph remains theirs.
+const oldH3ImageToVideoSHA = "3a9c40671db56920fd0e0cc98b2816d4f39f08ce34463690fc05e30e92928314"
+
 // Install new templates once per home. Existing user graphs and records win.
 func localComfyInstallStarters(root string) error {
 	raw, err := localComfyStarters.ReadFile("comfy_starters/registry.json")
@@ -45,13 +50,21 @@ func localComfyInstallStarters(root string) error {
 	if registry.SchemaVersion != 1 || registry.ComfyVersion != comfyui.ReferenceVersion {
 		return errors.New("现有 ComfyUI 工作流登记版本无效")
 	}
-	seen := make(map[string]bool, len(registry.Workflows))
-	for _, item := range registry.Workflows {
-		seen[item.ID] = true
+	seen := make(map[string]int, len(registry.Workflows))
+	for i, item := range registry.Workflows {
+		seen[item.ID] = i + 1
 	}
 	changed := false
 	for _, item := range starter.Workflows {
-		if seen[item.ID] {
+		if index := seen[item.ID]; index != 0 {
+			migrated, err := localComfyMigrateStarter(root, registry.Workflows[index-1], item)
+			if err != nil {
+				return err
+			}
+			if migrated {
+				registry.Workflows[index-1] = item
+				changed = true
+			}
 			continue
 		}
 		if !localComfyGraphName(item.Graph) {
@@ -94,4 +107,55 @@ func localComfyInstallStarters(root string) error {
 	}
 	defer os.Remove(tmp)
 	return os.Rename(tmp, target)
+}
+
+func localComfyMigrateStarter(root string, previous, next localComfyWorkflowRecord) (bool, error) {
+	if previous.ID != "h3-image-to-video" || previous.Graph != "video/h3-image-to-video.json" ||
+		previous.SHA256 != oldH3ImageToVideoSHA || next.ID != previous.ID || next.Graph != previous.Graph {
+		return false, nil
+	}
+	path := filepath.Join(root, filepath.FromSlash(previous.Graph))
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false, nil
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	digest := localComfyDigest(current)
+	if digest != oldH3ImageToVideoSHA && digest != next.SHA256 {
+		return false, nil
+	}
+	if digest == oldH3ImageToVideoSHA {
+		updated, err := localComfyStarters.ReadFile("comfy_starters/" + next.Graph)
+		if err != nil || localComfyDigest(updated) != next.SHA256 {
+			return false, errors.New("ComfyUI 图生视频模板校验失败")
+		}
+		file, err := os.CreateTemp(filepath.Dir(path), "h3-image-to-video-migrate-*.json")
+		if err != nil {
+			return false, err
+		}
+		tmp := file.Name()
+		defer os.Remove(tmp)
+		if _, err := file.Write(updated); err != nil {
+			_ = file.Close()
+			return false, err
+		}
+		if err := file.Close(); err != nil {
+			return false, err
+		}
+		validation := next
+		validation.Graph = filepath.ToSlash(filepath.Join("video", filepath.Base(tmp)))
+		if _, err := localComfyBuildWorkflow(root, comfyui.ReferenceVersion, validation); err != nil {
+			return false, err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return false, err
+		}
+	}
+	if _, err := localComfyBuildWorkflow(root, comfyui.ReferenceVersion, next); err != nil {
+		return false, err
+	}
+	return true, nil
 }

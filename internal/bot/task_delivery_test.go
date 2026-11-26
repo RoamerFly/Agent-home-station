@@ -69,3 +69,23 @@ func TestTaskDeliveryCountsPartialVoiceAndWaitsForCaption(t *testing.T) {
 		t.Fatal("silence invented a missing attachment receipt", got)
 	}
 }
+
+func TestTaskDeliveryCountsAcceptedVideoSeparatelyFromOtherMedia(t *testing.T) {
+	w, _, _, in := mediaWorker(t)
+	in.TaskID = "corrected-video"
+	var got TaskDelivery
+	w.config.AgentTaskDelivery = func(_ companion.Input, d TaskDelivery) error { got = d; return nil }
+	w.runtime.Media = []*mediaDelivery{
+		{Trace: in.TraceID, Input: in, Kind: "image", State: "accepted"},
+		{Trace: in.TraceID, Input: in, SourceID: "new-media", Kind: "video", State: "running"},
+	}
+	w.publishTaskDelivery(in.TraceID)
+	if got.VideoExpected != 1 || got.VideoAccepted != 0 || got.Accepted != 1 {
+		t.Fatalf("image receipt counted as video: %+v", got)
+	}
+	w.runtime.Media[1].State = "accepted"
+	w.publishTaskDelivery(in.TraceID)
+	if got.State != "accepted" || got.VideoExpected != 1 || got.VideoAccepted != 1 || got.VideoSourceID != "new-media" || got.Accepted != 2 {
+		t.Fatalf("native video receipt missing: %+v", got)
+	}
+}

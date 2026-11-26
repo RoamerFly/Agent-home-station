@@ -2,14 +2,14 @@
   "1": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot-视频扩散-视频生成.safetensors",
+      "unet_name": "Minimax-h3_Singularity_ref2va_v2_pruned_int8-参考视频模型.safetensors",
       "weight_dtype": "default"
     }
   },
   "2": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq-文本编码器-文本理解.safetensors",
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "type": "minimax",
       "device": "default"
     }

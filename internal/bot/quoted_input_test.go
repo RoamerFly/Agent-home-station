@@ -254,6 +254,35 @@ func TestQuotedShareSelectsOriginalForAnalysisAndMediaProvenance(t *testing.T) {
 	}
 }
 
+func TestQuotedShareWithNewVideoURLAnalyzesCurrentReply(t *testing.T) {
+	type57 := 57
+	current := fixtureMessage("quoted-new-video", "room@chatroom", "看这条 https://b23.tv/eqZkIxJ", "incoming")
+	current.Type, current.AppMessageType = 49, &type57
+	original := fixtureMessage("original-share", current.ThreadID, "", "incoming")
+	original.Type = 49
+	original.Link = &linuxnative.LinkCard{Title: "旧分享", URL: "https://b23.tv/HrIgMVh"}
+	current.ResolvedQuote = &original
+	analysis, selectedOriginal := quotedAnalysisMessage(current)
+	if selectedOriginal || analysis.ID != current.ID || analysis.Body != current.Body {
+		t.Fatalf("new link should remain the analysis target: original=%v analysis=%+v", selectedOriginal, analysis)
+	}
+	_, _, c, _ := mediaWorker(t)
+	engine, err := companion.New(c.Config, c.Store, &quotedLiteralModel{}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := companion.Input{Channel: "wechat", Account: "test", Thread: current.ThreadID, Sender: current.SenderID, TraceID: current.ID, OriginalText: &current.Body}
+	bindInputSource(&input, current, engine)
+	if input.QuotedSource == nil || len(input.IncomingMedia) != 0 {
+		t.Fatalf("old quoted share must be context only when a new link is present: %+v", input)
+	}
+	current.Body = "总结引用的视频"
+	analysis, selectedOriginal = quotedAnalysisMessage(current)
+	if !selectedOriginal || analysis.ID != original.ID {
+		t.Fatalf("quoted card should remain the target without a new link: original=%v analysis=%+v", selectedOriginal, analysis)
+	}
+}
+
 func TestQuotedNativeVideoPreservesCurrentLiteralAndChecksOriginalPermission(t *testing.T) {
 	for _, scenario := range []struct {
 		name    string

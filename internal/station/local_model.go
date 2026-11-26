@@ -9,6 +9,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"wechat-bot/internal/characterrefs"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/hostfile"
@@ -151,7 +152,7 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 			return nil, settings, errors.New("角色文档不可读")
 		}
 		if readErr == nil {
-			settings.Persona = string(content)
+			settings.Persona = characterrefs.Append(s.personaPath, string(content), 32000)
 			record.Persona = settings.Persona
 		}
 	}

@@ -80,8 +80,10 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	options.HostMetadata = m.localASRPluginMetadata
 	ready := false
 	if runtime.GOOS == "windows" {
-		ready = options.Pythonw != "" && options.WindowsHelper != ""
-		for _, p := range []string{options.Pythonw, options.WindowsHelper} {
+		// Bundled stdio tools choose their own interpreter at launch. The
+		// shared Python is only a fallback for older installed snapshots.
+		ready = options.WindowsHelper != ""
+		for _, p := range []string{options.WindowsHelper, filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py")} {
 			if st, e := os.Stat(p); e != nil || !st.Mode().IsRegular() {
 				ready = false
 			}

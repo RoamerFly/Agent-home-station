@@ -374,6 +374,7 @@ func (s *Store) Context(input Input, c Config, now time.Time) Scope {
 		}
 	}
 	scope.Messages = scope.Messages[min(scope.CompressedCount, len(scope.Messages)):]
+	scope = freshRoundScope(scope, input)
 	if !c.Permissions.Remember {
 		scope.Summary = ""
 		scope.Messages = []Turn{}

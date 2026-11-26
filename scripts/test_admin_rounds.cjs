@@ -8,6 +8,19 @@ const project = (items, states, now, inbox, sendStates, planStates) => projectRo
 const at = n => new Date(Date.UTC(2026, 9, 27, 1, 0, n)).toISOString();
 const entry = (n, fields = {}) => ({ id: String(n), time: at(n), thread_id: 'fixture@chatroom', message_id: 'message-1', source_kind: 'group', source: '合成测试群', ...fields });
 
+test('system and legacy entries without a thread still project alongside conversation rounds', () => {
+ const startup = { id:'startup', time:at(1), event:'bot_starting', category:'system' };
+ const legacyQueue = { id:'legacy', time:at(2), message_id:'unlinked', event:'message_queued', category:'decision' };
+ const groupMessage = entry(3, { event:'message_received', category:'received', status:'received' });
+ const followup = entry(4, { message_id:'group-followup', event:'message_queued', category:'received', status:'queued' });
+ const rounds = project([startup, legacyQueue, groupMessage, followup], {}, undefined, {
+  loaded:true, states:{ 'message-1':{ phase:'tool_running' } },
+ });
+ assert.equal(rounds.length, 2);
+ assert.deepEqual(rounds.find(round => round.source_kind === 'system').entries, [startup, legacyQueue]);
+ assert.deepEqual(rounds.find(round => round.source_kind === 'group').entries, [groupMessage, followup]);
+});
+
 test('status filters group terminal failures separately from unresolved receipts and active retries',()=>{
  const cases=[
   ['message_received','received','received','','pending'],
@@ -16,7 +29,7 @@ test('status filters group terminal failures separately from unresolved receipts
   ['task_delivery_updated','decision','partially_cancelled','','done'],
   ['task_delivery_updated','decision','partially_completed','','done'],
   ['task_delivery_updated','decision','waiting_tool_retry','','pending'],
-  ['generation_paused','decision','needs_review','generation_evidence_changed','done'],
+  ['generation_paused','decision','needs_review','generation_evidence_changed','pending'],
   ['reminder_overdue','decision','expired','reminder_overdue_while_offline','done'],
   ['send_failed','error','failed','send_outcome_unknown','pending'],
   ['message_sent','sent','accepted','','done']
@@ -26,10 +39,25 @@ test('status filters group terminal failures separately from unresolved receipts
   assert.equal(r.group,group,event);assert.equal(r.entries[0].status,status);
   if(status==='needs_review'){
    const processed=entry(2,{event:'message_processed',category:'decision',status:'completed'});
-   assert.equal(project([...r.entries,processed])[0].group,'done');
+   assert.equal(project([...r.entries,processed])[0].group,'pending');
   }
   if(reason==='send_outcome_unknown') assert.equal(project([...r.entries,entry(2,{event:'message_processed',category:'decision',status:'completed'})])[0].group,'pending');
  }
+});
+
+test('a paused model after a successful download remains pending until its reply is sent',()=>{
+ const rows=[
+  entry(1,{event:'message_received',category:'received',status:'received'}),
+  entry(2,{event:'generation_started',category:'decision',status:'processing'}),
+  entry(3,{event:'plugin_output_ready',category:'tool',status:'succeeded'}),
+  entry(4,{event:'generation_paused',category:'decision',status:'needs_review',reason:'generation_evidence_changed'}),
+ ];
+ const [round]=project(rows,{},undefined,{loaded:true,states:{'message-1':{phase:'needs_review'}}});
+ assert.equal(round.status,'needs_review');
+ assert.equal(round.group,'pending');
+ assert.equal(round.lifecycle,'待处理');
+ assert.equal(round.sent.length,0);
+ assert(round.timeline.some(item=>item.event==='generation_paused'));
 });
 
 test('an unsent semantic reply cannot make its execution round completed',()=>{
@@ -73,7 +101,7 @@ test('orphan receipt wait without an inbound turn is settled instead of shown as
  const row=entry(1,{thread_id:'wxid-owner',source_kind:'private',source:'主人',event:'delivery_waiting',category:'decision',status:'waiting',retry_at:at(12),content:'未提交的旧草稿'});
  const [round]=project([row]);
  assert.equal(round.status,'needs_review');
- assert.equal(round.group,'done');
+ assert.equal(round.group,'pending');
  assert.equal(round.orphanReceipt,true);
 });
 test('receipt-only continuation remains unfinished until a verified receipt',()=>{
@@ -237,6 +265,29 @@ test('one group collection window has one queued card and keeps the actual batch
  const batch=rows.find(r=>r.triggerMessageID==='window-b');
  assert.equal(batch.entries.length,6);
  assert.equal(batch.group,'done');
+});
+
+test('independent speakers stay in one card and an unsent child keeps it pending',()=>{
+ const rows=[
+  entry(1,{message_id:'request-a',event:'message_received',category:'received',content:'search again'}),
+  entry(2,{message_id:'image-b',event:'message_received',category:'received',content:'[image]'}),
+  entry(3,{message_id:'followup-b',event:'message_received',category:'received',content:'which one'}),
+  entry(4,{message_id:'image-b',related_message_id:'request-a',event:'message_aggregated',category:'decision',status:'deferred'}),
+  entry(5,{message_id:'followup-b',related_message_id:'request-a',event:'message_aggregated',category:'decision',status:'deferred'}),
+  entry(6,{message_id:'request-a',event:'message_sent',category:'sent',status:'accepted',content:'first reply',send_id:'send-a'}),
+ ];
+ const states={loaded:true,states:{'request-a':{phase:'replied'},'image-b':{phase:'received'},'followup-b':{phase:'received'}}};
+ let rounds=project(rows,{},undefined,states);
+ assert.equal(rounds.length,1);
+ assert.equal(rounds[0].group,'pending');
+ rounds=project([...rows,
+  entry(7,{message_id:'image-b',related_message_id:'followup-b',event:'message_aggregated',category:'decision',status:'aggregated'}),
+  entry(8,{message_id:'followup-b',event:'generation_started',category:'decision',status:'processing'}),
+  entry(9,{message_id:'followup-b',event:'message_sent',category:'sent',status:'accepted',content:'image reply',send_id:'send-b'}),
+ ],{},undefined,{loaded:true,states:{'request-a':{phase:'replied'},'image-b':{phase:'replied'},'followup-b':{phase:'replied'}}});
+ assert.equal(rounds.length,1);
+ assert.equal(rounds[0].sent.length,2);
+ assert.equal(rounds[0].group,'done');
 });
 test('messages queued during an active group turn join it before and after receipt',()=>{
  const root=entry(1,{message_id:'active-root',event:'generation_started',category:'decision',status:'running'});

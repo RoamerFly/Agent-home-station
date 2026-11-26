@@ -13,6 +13,7 @@ type taskAction struct {
 	Arguments string    `json:"arguments"`
 	Result    string    `json:"result"`
 	State     string    `json:"state"`
+	ComfyRun  bool      `json:"comfy_run,omitempty"`
 	ErrorCode string    `json:"error_code,omitempty"`
 	At        time.Time `json:"at"`
 }
@@ -55,6 +56,57 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 		}
 	}
 	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, ErrorCode: code, At: time.Now().UTC()}
+	// A long video prompt can cut the stored arguments in the middle of a
+	// JSON string. Preserve the verified action type alongside the excerpt.
+	if name == "station_comfy" && err == nil && state == "running" && !json.Valid([]byte(entry.Arguments)) {
+		var input struct{ Action string }
+		entry.ComfyRun = json.Unmarshal(args, &input) == nil && input.Action == "run"
+	}
+	if (name == "station_comfy" || name == "artifact_publish") && err == nil && state != "failed" && !t.CorrectionAt.IsZero() && contains(t.CorrectionTraces, p.trace.TraceID) && entry.At.After(t.CorrectionAt) {
+		var input struct {
+			Action          string `json:"action"`
+			SourceMessageID string `json:"source_message_id"`
+		}
+		_ = json.Unmarshal(args, &input)
+		switch input.Action {
+		case "run":
+			jobID, _ := out["job_id"].(string)
+			if jobID != "" && input.SourceMessageID != "" && input.SourceMessageID == t.CorrectionReferenceImageID {
+				t.CorrectionWorkStartedAt = entry.At
+			}
+		case "attach":
+			var prepared struct {
+				Media []struct {
+					Kind string `json:"kind"`
+					ID   string `json:"id"`
+				} `json:"media"`
+			}
+			if json.Unmarshal([]byte(result), &prepared) == nil {
+				for _, media := range prepared.Media {
+					if media.Kind == t.CorrectionRequiredMediaKind && media.ID != "" && !t.CorrectionWorkStartedAt.IsZero() {
+						t.CorrectionMediaPreparedAt = entry.At
+						t.CorrectionPreparedMediaID = media.ID
+					}
+				}
+			}
+		}
+		if name == "artifact_publish" && out["staged_only"] == true && !t.CorrectionWorkStartedAt.IsZero() {
+			var prepared struct {
+				Media []struct {
+					Kind string `json:"kind"`
+					ID   string `json:"id"`
+				} `json:"media"`
+			}
+			if json.Unmarshal([]byte(result), &prepared) == nil {
+				for _, media := range prepared.Media {
+					if media.Kind == t.CorrectionRequiredMediaKind && media.ID != "" {
+						t.CorrectionMediaPreparedAt = entry.At
+						t.CorrectionPreparedMediaID = media.ID
+					}
+				}
+			}
+		}
+	}
 	if name == "wechat_operation_status" {
 		if err != nil {
 			return
@@ -113,7 +165,7 @@ func recordsTaskAction(name string) bool {
 	case "server_read", "server_list", "server_search", "server_status":
 		return false
 	case "agent_task", "agent_reminder", "music_local_start", "music_local_resume", "music_rvc_start",
-		"wechat_send_text", "wechat_send_media", "wechat_forward_file", "wechat_operation_status":
+		"wechat_send_text", "wechat_send_media", "wechat_forward_file", "wechat_operation_status", "station_comfy", "artifact_publish":
 		return true
 	default:
 		return strings.HasPrefix(name, "server_")

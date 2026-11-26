@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 )
 
 func historicalReminderSettled(t agentTask) bool {
@@ -140,9 +142,102 @@ func (a *agentControl) loadTaskArchive() error {
 		if e != nil || json.Unmarshal(b, &task) != nil || entry.Name() != agentID(task.ID)+".json" {
 			return errors.New("任务历史不可读，未覆盖")
 		}
+		// A restart after persisting a reopened task but before removing its
+		// archive file must use the active copy of that same task ID.
+		if _, active := a.data.Tasks[task.ID]; active {
+			continue
+		}
 		a.archived[task.ID] = task
 	}
 	return nil
+}
+
+// reopenArchivedTask is only called by the authenticated administrator route.
+// Persist the original task ID in the active store before removing its archive
+// copy; the active copy wins if a restart interrupts that cleanup.
+func (a *agentControl) reopenArchivedTask(id, account, continuationNote string) (agentTask, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, active := a.data.Tasks[id]; active {
+		return agentTask{}, errors.New("任务仍在活跃队列")
+	}
+	t, ok := a.archived[id]
+	if !ok || t.Account != account || t.State != "completed" || t.Reminder != nil || t.ReminderDue {
+		return agentTask{}, errors.New("未找到可恢复的已完成任务")
+	}
+	if len(t.PendingOperations) > 0 || t.resultKind() != "" || t.DeliveryJob != "" || t.RecoveryMessageID != "" || t.Delivery != nil && t.Delivery.State != "accepted" {
+		return agentTask{}, errors.New("原任务仍有待核对的工具或发送结果，请先处理原记录")
+	}
+	note := strings.TrimSpace(continuationNote)
+	if len([]rune(note)) > 600 || strings.ContainsRune(note, 0) {
+		return agentTask{}, errors.New("续办说明最多 600 字且不能包含空字符")
+	}
+	if t.Delivery != nil && note == "" {
+		return agentTask{}, errors.New("原任务已有发送回执，请说明尚需续做的部分")
+	}
+	now := time.Now().UTC()
+	if note != "" {
+		if t.Checkpoint != "" {
+			t.Checkpoint += "\n"
+		}
+		t.Checkpoint += "管理员最新续办说明（取代此前无法继续的状态；原请求不变，" + now.Format(time.RFC3339) + "）：" + note
+	}
+	if t.Delivery != nil {
+		// The existing receipt remains intact until the next claim. The claim
+		// path clears accepted receipts to permit a new send, so retain its
+		// exact values in the durable checkpoint for the continuation.
+		b, _ := json.Marshal(t.Delivery)
+		t.Checkpoint += "\n已接受发送回执（已发送部分勿重复发送）：" + string(b)
+	}
+	t.State = "pending"
+	t.WorkCompleted = false
+	t.Next = now
+	t.Updated = now
+	t.NoProgressKey = ""
+	t.NoProgressRuns = 0
+	t.NoProgressObservedRun = 0
+	t.LastResult = "管理员明确恢复原任务，沿用原消息、已有回执和已创建的工具作业，仅续做未完成部分"
+	a.data.Tasks[id] = copyTask(t)
+	if err := a.persist(); err != nil {
+		delete(a.data.Tasks, id)
+		return agentTask{}, err
+	}
+	delete(a.archived, id)
+	// Removal is cleanup only. If it fails, loadTaskArchive still prefers the
+	// persisted active copy and a later retirement overwrites this archive.
+	_ = os.Remove(filepath.Join(a.dir, "archive", "agent-tasks", agentID(id)+".json"))
+	return copyTask(t), nil
+}
+
+// Reopen a completed task as a new correction generation. The caller has
+// already verified the added native messages and prepared the replacement
+// checkpoint; this method commits that snapshot before removing the archive.
+func (a *agentControl) reopenArchivedCorrectedTask(t agentTask) (agentTask, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, active := a.data.Tasks[t.ID]; active {
+		return agentTask{}, errors.New("任务仍在活跃队列")
+	}
+	old, ok := a.archived[t.ID]
+	if !ok || old.Account != t.Account || old.Thread != t.Thread || old.Sender != t.Sender ||
+		old.State != "completed" || !old.Updated.Equal(t.Updated) || t.CorrectionAt.IsZero() ||
+		old.Reminder != nil || old.ReminderDue || len(old.PendingOperations) > 0 {
+		return agentTask{}, errors.New("已完成任务状态已变化，无法纠错恢复")
+	}
+	t.State = "pending"
+	t.WorkCompleted = false
+	t.Delivery = nil
+	t.Next = time.Now().UTC()
+	t.Updated = t.Next
+	t.Runs = 0
+	a.data.Tasks[t.ID] = copyTask(t)
+	if err := a.persist(); err != nil {
+		delete(a.data.Tasks, t.ID)
+		return agentTask{}, err
+	}
+	delete(a.archived, t.ID)
+	_ = os.Remove(filepath.Join(a.dir, "archive", "agent-tasks", agentID(t.ID)+".json"))
+	return copyTask(t), nil
 }
 
 // Completion and delivery remain separate. Incomplete/uncertain delivery never

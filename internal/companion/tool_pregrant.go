@@ -3,6 +3,8 @@ package companion
 import (
 	"encoding/json"
 	"strings"
+
+	"wechat-bot/internal/mcptools"
 )
 
 // A missing observation on a non-file incoming attachment already points to
@@ -45,4 +47,57 @@ func supportedIncomingReadType(messageType int) bool {
 		return true
 	}
 	return false
+}
+
+func needsMediaForward(turns []map[string]string) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i]["role"] != "user" {
+			continue
+		}
+		var packet struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil {
+			return false
+		}
+		if packet.Kind != "current_message" {
+			continue
+		}
+		return (strings.Contains(packet.Text, "转发") || strings.Contains(strings.ToLower(packet.Text), "forward")) &&
+			(strings.Contains(packet.Text, "视频") || strings.Contains(packet.Text, "图片") || strings.Contains(packet.Text, "文件") || strings.Contains(packet.Text, "语音") || strings.Contains(packet.Text, "这个") || strings.Contains(packet.Text, "这条"))
+	}
+	return false
+}
+
+func needsComfyVideo(turns []map[string]string) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i]["role"] != "user" {
+			continue
+		}
+		var packet struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil || packet.Kind != "current_message" {
+			continue
+		}
+		text := strings.ToLower(packet.Text)
+		return strings.Contains(text, "生成视频") || strings.Contains(text, "生视频") || strings.Contains(text, "做视频") ||
+			strings.Contains(text, "制作视频") || strings.Contains(text, "做成视频")
+	}
+	return false
+}
+
+// A public video URL in the new message can be inspected directly. Only read
+// current_message.text: a quoted card may contain an older, different URL.
+func currentPublicVideoURL(turns []map[string]string) string {
+	literal, _, _ := strings.Cut(currentMessage(turns), "\n以下是本条引用所指")
+	for _, raw := range publicURLs.FindAllString(literal, 8) {
+		candidate := resourceURL(strings.TrimRight(raw, ".,;)]}，。；"))
+		if mcptools.IsPublicVideoPage(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }

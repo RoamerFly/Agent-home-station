@@ -87,7 +87,13 @@ def bili_metadata(body, identity):
         raise ValueError("video_page_metadata_unavailable")
     try:
         data, _ = json.JSONDecoder(object_pairs_hook=unique_object).raw_decode(body[marker.end():])
-        video = data["videoData"]
+        return bili_video_data(data["videoData"], identity)
+    except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
+        raise ValueError("video_page_metadata_unavailable") from None
+
+
+def bili_video_data(video, identity):
+    try:
         bvid, part = identity
         cid, title, pages = video.get("cid"), video.get("title"), video.get("pages", [])
         if video.get("bvid") != bvid:
@@ -111,8 +117,53 @@ def bili_metadata(body, identity):
         if len(title.encode("utf8")) > 4096:
             raise TypeError()
         return cid, title
+    except (KeyError, TypeError, AttributeError):
+        raise ValueError("video_page_metadata_unavailable") from None
+
+
+def bili_view(body, identity):
+    try:
+        result = json.loads(body, object_pairs_hook=unique_object)
+        if type(result.get("code")) is not int or result["code"] != 0:
+            raise ValueError("video_page_metadata_unavailable")
+        return bili_video_data(result["data"], identity)
     except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
         raise ValueError("video_page_metadata_unavailable") from None
+
+
+def bili_playback_url(bvid, cid, fnval):
+    return "https://api.bilibili.com/x/player/playurl?" + urlencode({"bvid": bvid, "cid": cid, "qn": 32, "fnval": fnval, "fourk": 0})
+
+
+def bili_media_url(raw):
+    # Bilibili rotates CDN providers. The URL is accepted only when it comes
+    # from this work's verified official playurl response; the host separately
+    # binds it to the response body and rejects cross-origin redirects.
+    locator = public_url(raw)
+    p = urlsplit(locator)
+    if p.scheme != "https":
+        raise ValueError("video_public_playback_unavailable")
+    return locator
+
+
+def bili_media_candidates(item):
+    raw = [item.get("url") or item.get("baseUrl") or item.get("base_url")]
+    for key in ("backup_url", "backupUrl"):
+        backups = item.get(key, [])
+        if isinstance(backups, list):
+            raw.extend(backups[:6])
+    urls = []
+    for value in raw:
+        try:
+            locator = bili_media_url(value)
+            if locator not in urls:
+                urls.append(locator)
+        except (TypeError, ValueError):
+            continue
+    # The provider can return a primary on an unreachable alternate port.
+    # Try the ordinary HTTPS endpoints first; retain the primary as fallback.
+    urls.sort(key=lambda value: urlsplit(value).port not in (None, 443))
+    return urls[:4]
 
 
 def bili_playback(body):
@@ -120,7 +171,7 @@ def bili_playback(body):
         result = json.loads(body, object_pairs_hook=unique_object)
         data = result["data"]
         preview = data.get("is_preview", False)
-        if type(result.get("code")) is not int or result["code"] != 0 or type(preview) not in (bool, int) or preview not in (False, 0):
+        if type(result.get("code")) is not int or result["code"] != 0 or preview is not None and (type(preview) not in (bool, int) or preview not in (False, 0)):
             raise ValueError("video_public_playback_unavailable")
         files = data.get("durl")
         if not isinstance(files, list) or len(files) != 1:
@@ -128,11 +179,48 @@ def bili_playback(body):
         duration, size = data.get("timelength"), files[0].get("size")
         if type(duration) is not int or not 0 < duration <= 2**63-1 or type(size) is not int or size <= 0:
             raise TypeError()
-        locator = public_url(files[0]["url"])
-        p = urlsplit(locator)
-        if p.scheme != "https" or p.port is not None or not p.hostname.endswith(".bilivideo.com"):
+        locators = bili_media_candidates(files[0])
+        if not locators:
             raise ValueError("video_public_playback_unavailable")
-        return duration, [locator]
+        return duration, locators
+    except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
+        raise ValueError("video_page_metadata_unavailable") from None
+
+
+def bili_dash(body):
+    try:
+        result = json.loads(body, object_pairs_hook=unique_object)
+        data = result["data"]
+        preview = data.get("is_preview", False)
+        if type(result.get("code")) is not int or result["code"] != 0 or preview is not None and (type(preview) not in (bool, int) or preview not in (False, 0)):
+            raise ValueError("video_public_playback_unavailable")
+        duration = data.get("timelength")
+        if type(duration) is not int or duration <= 0:
+            raise TypeError()
+        dash = data["dash"]
+        videos, audios = dash["video"], dash["audio"]
+        if not isinstance(videos, list) or not isinstance(audios, list) or not videos or not audios or len(videos) > 100 or len(audios) > 30:
+            raise ValueError("video_dash_unavailable")
+
+        def choices(items):
+            selected = []
+            for item in items:
+                if not isinstance(item, dict) or type(item.get("id")) is not int:
+                    continue
+                urls = bili_media_candidates(item)
+                if urls:
+                    selected.append((item["id"], urls[0]))
+            return selected
+
+        video_choices, audio_choices = choices(videos), choices(audios)
+        if not video_choices or not audio_choices:
+            raise ValueError("video_dash_unavailable")
+        # qn=32 is a 480p starting quality. If the site returns only other
+        # representations, use the lowest available instead of an unrelated URL.
+        eligible = [item for item in video_choices if item[0] <= 32]
+        video = max(eligible, key=lambda item: item[0]) if eligible else min(video_choices, key=lambda item: item[0])
+        audio = max(audio_choices, key=lambda item: item[0])
+        return duration, [{"video_url": video[1], "audio_url": audio[1]}]
     except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
         raise ValueError("video_page_metadata_unavailable") from None
 
@@ -405,6 +493,57 @@ class ShareHTML(HTMLParser):
             walk(value)
 
 
+class WechatArticleHTML(HTMLParser):
+    """Read only the article container, never a verification page's chrome."""
+
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    BLOCK = {"article", "blockquote", "br", "div", "h1", "h2", "h3", "h4", "li", "p", "section"}
+
+    def __init__(self, base):
+        super().__init__(convert_charrefs=True)
+        self.base, self.depth, self.hidden, self.found = base, 0, 0, False
+        self.parts, self.images = [], []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if not self.depth:
+            if values.get("id") == "js_content" and tag in {"article", "div", "section"}:
+                self.depth, self.found = 1, True
+            return
+        if tag in self.BLOCK and not self.hidden:
+            self.parts.append("\n")
+        if tag in {"script", "style", "template", "noscript"}:
+            self.hidden += 1
+        if tag == "img" and not self.hidden:
+            raw = values.get("data-src") or values.get("src")
+            if raw:
+                try:
+                    image = public_url(urljoin(self.base, raw))
+                    if image not in self.images:
+                        self.images.append(image)
+                except ValueError:
+                    pass
+        if tag not in self.VOID:
+            self.depth += 1
+
+    def handle_endtag(self, tag):
+        if not self.depth or tag in self.VOID:
+            return
+        if tag in {"script", "style", "template", "noscript"}:
+            self.hidden = max(0, self.hidden - 1)
+        if tag in self.BLOCK and not self.hidden:
+            self.parts.append("\n")
+        self.depth -= 1
+
+    def handle_data(self, value):
+        if self.depth and not self.hidden:
+            self.parts.append(value)
+
+    def body(self):
+        text = re.sub(r"[ \t\r\f\v]+", " ", "".join(self.parts))
+        return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
 def resolve(args, get):
     allowed = {"url", "video_required", "offset", "limit", "expected_sha256", "max_bytes", "timeout_seconds", "candidate_offset", "candidate_limit"}
     if not isinstance(args, dict) or set(args) - allowed or type(args.get("video_required", False)) is not bool:
@@ -433,17 +572,35 @@ def resolve(args, get):
     content_type = response.get("content_type", "").lower()
     kind = content_type.split(";", 1)[0].strip()
     title, text, locators, duration = "", "", [], None
+    stream_pairs = []
     platform = "public"
     if final_bili:
         if not (kind.startswith("text/") or "html" in kind):
             raise ValueError("video_page_metadata_unavailable")
-        cid, title = bili_metadata(body.decode("utf8", errors="replace"), final_bili)
+        page = body.decode("utf8", errors="replace")
         bvid, part = final_bili
-        api = "https://api.bilibili.com/x/player/playurl?" + urlencode({"bvid": bvid, "cid": cid, "qn": 32, "fnval": 0, "fourk": 0})
+        if BILI_STATE.search(page):
+            cid, title = bili_metadata(page, final_bili)
+        else:
+            view = "https://api.bilibili.com/x/web-interface/view?" + urlencode({"bvid": bvid})
+            view_final, view_body = read_response(get(view, maximum, timeout), maximum)
+            if view_final != view:
+                raise ValueError("share_identity_conflict")
+            cid, title = bili_view(view_body, final_bili)
+        api = bili_playback_url(bvid, cid, 0)
         api_final, playback = read_response(get(api, maximum, timeout), maximum)
         if api_final != api:
             raise ValueError("share_identity_conflict")
-        duration, locators = bili_playback(playback)
+        try:
+            duration, locators = bili_playback(playback)
+        except ValueError as error:
+            if str(error) != "video_progressive_unavailable":
+                raise
+            dash_api = bili_playback_url(bvid, cid, 16)
+            dash_final, dash_body = read_response(get(dash_api, maximum, timeout), maximum)
+            if dash_final != dash_api:
+                raise ValueError("share_identity_conflict")
+            duration, stream_pairs = bili_dash(dash_body)
         identity, platform = bvid, "bilibili"
         actual = urlsplit(final)
         final = urlunsplit((actual.scheme, actual.netloc, actual.path, "p=" + str(part) if part > 1 or "p" in parse_qs(actual.query) else "", ""))
@@ -486,35 +643,60 @@ def resolve(args, get):
                 raise ValueError("share_content_empty")
         else:
             host = urlsplit(final).hostname
-            if is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
+            if host == "mp.weixin.qq.com" and urlsplit(final).path == "/s":
+                if args.get("video_required"):
+                    raise ValueError("share_requires_browser")
+                article = WechatArticleHTML(final)
+                article.feed(decoded)
+                if not article.found:
+                    raise ValueError("share_requires_browser")
+                parser = ShareHTML(final)
+                parser.feed(decoded)
+                title = " ".join(" ".join(parser.title).split())
+                text = article.body()
+                if article.images and len(text) < 120:
+                    locators, text = article.images, ""
+                if not text and not locators:
+                    raise ValueError("share_content_empty")
+                platform = "wechat_article"
+            elif is_kuaishou_host(host) or host in {"v.kuaishou.com", "weixin.qq.com", "channels.weixin.qq.com", "www.bilibili.com", "bilibili.com", "b23.tv"}:
                 # These pages need a platform adapter. App landing text is never
                 # a substitute for the received video's actual content.
                 raise ValueError("share_platform_adapter_required")
-            parser = ShareHTML(final)
-            parser.feed(decoded)
-            parser.structured_media()
-            title = " ".join(" ".join(parser.title).split())
-            text = " ".join(" ".join(parser.parts).split())
-            locators = parser.media
-            if locators or args.get("video_required"):
-                text = ""
-            if not locators and (args.get("video_required") or len(text) < 120):
-                raise ValueError("share_requires_browser")
+            else:
+                parser = ShareHTML(final)
+                parser.feed(decoded)
+                parser.structured_media()
+                title = " ".join(" ".join(parser.title).split())
+                text = " ".join(" ".join(parser.parts).split())
+                locators = parser.media
+                if locators or args.get("video_required"):
+                    text = ""
+                if not locators and (args.get("video_required") or len(text) < 120):
+                    raise ValueError("share_requires_browser")
     else:
         raise ValueError("share_content_unsupported")
     source_url = final if platform == "bilibili" else display_url(final)
-    digest = hashlib.sha256(json.dumps([source_url, title, text, locators, duration, identity], ensure_ascii=False, separators=(",", ":")).encode("utf8")).hexdigest()
+    content = [source_url, title, text, locators, duration, identity]
+    if stream_pairs:
+        content.append(stream_pairs)
+    digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf8")).hexdigest()
     if args.get("expected_sha256") and args["expected_sha256"] != digest:
         raise ValueError("share_content_changed")
-    if offset > len(text) or candidate_offset > len(locators):
+    candidates = locators + stream_pairs
+    if offset > len(text) or candidate_offset > len(candidates):
         raise ValueError("offset_outside_share")
-    end, candidate_end = min(len(text), offset + limit), min(len(locators), candidate_offset + candidate_limit)
-    return {"ok": True, "platform": platform, "source_url": source_url, "title": title,
+    end, candidate_end = min(len(text), offset + limit), min(len(candidates), candidate_offset + candidate_limit)
+    selected = candidates[candidate_offset:candidate_end]
+    result = {"ok": True, "platform": platform, "source_url": source_url, "title": title,
             "object_id": identity, "duration_ms": duration, "text": text[offset:end], "content_sha256": digest,
             "offset": offset, "requested_limit": limit, "total_characters": len(text), "next_offset": end if end < len(text) else None,
-            "candidate_offset": candidate_offset, "requested_candidate_limit": candidate_limit, "total_candidates": len(locators),
-            "next_candidate_offset": candidate_end if candidate_end < len(locators) else None,
-            "private_media_locators": locators[candidate_offset:candidate_end],
+            "candidate_offset": candidate_offset, "requested_candidate_limit": candidate_limit, "total_candidates": len(candidates),
+            "next_candidate_offset": candidate_end if candidate_end < len(candidates) else None,
+            "private_media_locators": [value for value in selected if isinstance(value, str)],
             "coverage": "page_text" if text else "media_locator_only", "video_observed": False,
             "media_downloaded": False, "untrusted_external_content": True,
-            "complete": end == len(text) and candidate_end == len(locators)}
+            "complete": end == len(text) and candidate_end == len(candidates)}
+    if stream_pairs:
+        result["private_stream_pairs"] = [value for value in selected if isinstance(value, dict)]
+    return result

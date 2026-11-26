@@ -15,6 +15,9 @@ func (t *stationAttachmentTools) Media(id string) (companion.GeneratedMedia, boo
 		if j, index, allowed := t.comfyMediaAllowed(t.trace, asset); allowed {
 			return j.media(index), true
 		}
+		// A completed job can be superseded after its handle was cached in
+		// prepared. Never let that cache bypass the durable job state.
+		return companion.GeneratedMedia{}, false
 	}
 	if asset, ok := strings.CutPrefix(id, "reply-"); ok {
 		if j, allowed := t.yueMediaAllowed(t.trace, asset); allowed {

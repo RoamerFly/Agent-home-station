@@ -124,21 +124,32 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	if listPartial {
 		system += "\n工具目录不完整，按实际列出的工具继续。"
 	}
-	// Keep common request-specific guidance when selecting native functions.
-	// Previously baseSystem was captured before resource guidance was appended.
-	baseSystem := system
 	activeTools := []mcptools.Tool{}
 	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
+	pregrantMediaForward := nativeFunctions && !localHost && needsMediaForward(turns)
+	pregrantComfyVideo := nativeFunctions && !localHost && needsComfyVideo(turns)
+	pregrantPublicVideo := nativeFunctions && !localHost && currentPublicVideoURL(turns) != ""
 	if nativeFunctions {
 		for _, t := range tools {
-			// Keep an ordinary turn small.  History retrieval and reading retained
-			// outputs are the only common primitives; all execution, project and
-			// diagnostic capabilities are deliberately discovered on demand.
-			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			// Current media forwarding needs the exact source message and its
+			// operation receipt immediately; other tools remain on demand.
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || pregrantMediaForward && (t.Name == "wechat_read" || t.Name == "wechat_conversations" || t.Name == "wechat_send_media" || t.Name == "wechat_operation_status") || pregrantComfyVideo && t.Name == "station_comfy" || pregrantPublicVideo && t.Name == "video_inspect" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
 	}
+	if pregrantMediaForward {
+		system += "\n转发刚发的媒体时，先读本会话真实已发消息，按媒体消息编号转发；文字请求编号不是媒体来源。已有 operation_id 只查原操作。"
+	}
+	if pregrantComfyVideo {
+		system += "\n生视频可直接用 station_comfy(run, workflow_id, source_message_id 或 own_mini, duration_seconds, inputs)；指定参考图就用原图。h3-image-to-video 固定首帧，h3-image-reference-to-video 用单图角色参考；按剧情选择。多片段作品分别设置每段时长，再核对合成总长。"
+	}
+	if pregrantPublicVideo {
+		system += "\n当前消息正文有公开视频链接；读取视频画面和音轨可直接用 video_inspect(action=observe,url=当前正文链接)，视频会保存到微信工作目录并返回 asset_id。引用消息里的旧链接只作背景。"
+	}
+	// Preserve request-specific hints when native function mode replaces the
+	// generic tool catalog below with its compact discovery contract.
+	baseSystem := system
 	var catalog []byte
 	if nativeFunctions {
 		catalog = []byte("其他工具用discover_tools查找，详细参数见下一轮schema。")
@@ -1177,26 +1188,15 @@ func parameterReadFailure(err error) bool {
 func retryReadOnlyTool(ctx context.Context, call func(context.Context) (string, error)) (string, error) {
 	var result string
 	var err error
-	attemptCtx := ctx
 	for attempt := 0; attempt < 3; attempt++ { // first attempt + two retries
 		if err = ctx.Err(); err != nil {
 			return "", err
 		}
-		result, err = call(attemptCtx)
+		result, err = call(ctx)
 		if err == nil {
 			return result, nil
 		}
 		delay, retryable := transientReadRetry(err)
-		var web *mcptools.WebError
-		if errors.As(err, &web) && web.Code == "search_sources_unavailable" {
-			// The package has already tried its independent public indexes.
-			// Retry the read once, using a different observation key only after
-			// the original read returned this definitive failure.
-			if attempt > 0 {
-				return result, err
-			}
-			attemptCtx = context.WithValue(ctx, publicIndexRetryKey{}, true)
-		}
 		if !retryable || attempt == 2 {
 			return result, err
 		}
@@ -1208,22 +1208,15 @@ func retryReadOnlyTool(ctx context.Context, call func(context.Context) (string, 
 	return result, err
 }
 
-type publicIndexRetryKey struct{}
-
-// RetryingPublicIndex reports an authorized re-observation following a
-// terminal read-only failure. It must never change a mutation's identity.
-func RetryingPublicIndex(ctx context.Context) bool {
-	retry, _ := ctx.Value(publicIndexRetryKey{}).(bool)
-	return retry
-}
-
 func transientReadRetry(err error) (time.Duration, bool) {
 	var web *mcptools.WebError
 	if !errors.As(err, &web) {
 		return 0, false
 	}
+	// The web-search package has already tried the Bilibili endpoint and each
+	// independent public index. Repeating that whole chain adds no new source.
 	if web.Code == "search_sources_unavailable" {
-		return max(time.Second, web.RetryAfter), true
+		return 0, false
 	}
 	retryable := web.Code == "network_unavailable" || web.Code == "network_closed" || web.Code == "network_timeout" || web.Code == "dns_failed" || web.Code == "http_status" && (web.Status == 408 || web.Status == 429 || web.Status == 500 || web.Status == 502 || web.Status == 503 || web.Status == 504)
 	if !retryable {

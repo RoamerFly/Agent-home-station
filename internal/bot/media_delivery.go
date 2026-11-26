@@ -280,7 +280,8 @@ func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
 	}
 	routeAllowed := w.allowed[d.Input.Thread]
 	if d.CrossRequester != "" {
-		if w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{OriginInput: d.OriginInput, Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask}) {
+		media := companion.GeneratedMedia{VoiceProfile: d.VoiceProfile, VoiceID: d.VoiceID, VoiceEngine: d.VoiceEngine, SynthesisText: d.SynthesisText, SynthesisTextKnown: d.SynthesisTextKnown, ParentAssetID: d.ParentAssetID, CachedMIME: d.CachedMIME, DurationMS: d.DurationMS, URL: d.URL, Description: d.Description, AssetID: d.AssetID, Kind: d.Kind, Title: d.Title}
+		if w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{OriginInput: d.OriginInput, Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Media: media, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask}) {
 			return false
 		}
 		// An authenticated owner task may target a known account conversation
@@ -289,14 +290,15 @@ func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
 	}
 	c, ok := w.model.(*companion.Engine)
 	explicitAction := d.Input.Mode == "direct"
-	if !explicitAction && d.CrossRequester != "" && d.OriginInput != nil && hostActionProof(*d.OriginInput) {
-		// A protected GUI click is an explicit delivery request. Its origin
-		// proof and canonical route must both remain valid; the mode string
-		// alone never grants a quiet-hours exception.
+	if !explicitAction && d.CrossRequester != "" && d.OriginInput != nil && d.OriginInput.Sender == d.CrossRequester && (hostActionProof(*d.OriginInput) || d.OriginInput.Mode == "social") {
+		// An owner-requested cross-conversation send is an explicit action even
+		// when the request arrived in a group. Its original source must still
+		// be valid before quiet hours can be bypassed.
 		explicitAction = w.validateMediaEvidence(context.Background(), d) == nil
 	}
+	incomingConversation := d.CrossRequester == "" && d.Input.Mode == "social" && d.Input.Source != nil
 	return ok && routeAllowed && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
-		(explicitAction || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
+		(explicitAction || incomingConversation || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
 }
 
 // mediaTraceCancelled is the durable tombstone used by late plugin callbacks,
@@ -989,7 +991,12 @@ func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
 	if memory.TotalParts > 0 {
 		content += fmt.Sprintf(" · 已接受 %d/%d 段", memory.AcceptedParts, memory.TotalParts)
 	}
-	w.activity(Record{RelatedMessageID: d.Input.OriginTraceID, Event: event, Category: category, ThreadID: d.Input.Thread, MessageID: d.Trace, Content: content, SendID: d.ID, Status: d.State, Reason: d.Reason, Origin: "bot"})
+	thread, message, related := d.Input.Thread, d.Trace, d.Input.OriginTraceID
+	if d.CrossRequester != "" && d.CrossOrigin != "" && d.Input.OriginTraceID != "" {
+		// The destination is a delivery route, not a new incoming turn there.
+		thread, message, related = d.CrossOrigin, d.Input.OriginTraceID, ""
+	}
+	w.activity(Record{RelatedMessageID: related, Event: event, Category: category, ThreadID: thread, MessageID: message, Content: content, SendID: d.ID, Status: d.State, Reason: d.Reason, Origin: "bot"})
 	if !d.terminal() {
 		w.markSending(d.Trace)
 	}
@@ -1337,6 +1344,48 @@ func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, i
 			r.State = "stopped"
 			w.activity(Record{Event: "media_reply_stopped", Category: "decision", ThreadID: in.Thread, MessageID: r.Trace, Reason: "media_superseded_by_new_request", Status: "stopped"})
 			w.refreshMediaParent(r.Trace)
+		}
+	}
+	w.persistErr = w.saveRuntime()
+}
+
+// An explicit correction of a creative request also closes its already
+// prepared media delivery. This is the last durable gate after a Comfy output
+// has been staged into the native sender; backend cancellation alone cannot
+// stop a previously queued WeChat upload.
+func (w *Worker) cancelCreativeMediaForCorrection(m linuxnative.Message) {
+	if w.runtime == nil {
+		return
+	}
+	native, ok := w.sender.(mediaNative)
+	if !ok {
+		return
+	}
+	var trace string
+	var latest time.Time
+	for _, d := range w.runtime.Media {
+		if d == nil || d.Kind != "image" && d.Kind != "video" || d.State == "accepted" || d.State == "stopped" ||
+			!explicitCorrectionToPriorInput(d.Input, m) {
+			continue
+		}
+		if trace == "" || d.Created.After(latest) {
+			trace, latest = d.Trace, d.Created
+		}
+	}
+	if trace == "" {
+		return
+	}
+	for _, d := range w.runtime.Media {
+		if d == nil || d.Trace != trace || d.Kind != "image" && d.Kind != "video" || d.State == "accepted" || d.State == "stopped" {
+			continue
+		}
+		d.CancelTrace, d.CancelSender, d.CancelledAt = m.ID, m.SenderID, time.Now().UTC()
+		w.cancelMedia(native, d, true, "media_superseded_by_corrected_reference")
+	}
+	for _, reply := range w.runtime.MediaReplies {
+		if reply != nil && reply.Trace == trace && !reply.terminal() {
+			reply.State = "stopped"
+			w.refreshMediaParent(trace)
 		}
 	}
 	w.persistErr = w.saveRuntime()

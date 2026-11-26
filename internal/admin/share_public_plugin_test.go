@@ -221,6 +221,9 @@ func TestPublicBVPagePermitsOnlyItsVerifiedPlaybackRead(t *testing.T) {
 	if err := read(playback); err != nil || reads != 2 {
 		t.Fatal("verified playback URL rejected", err)
 	}
+	if read(strings.Replace(playback, "cid=12", "cid=13", 1)) == nil || reads != 2 {
+		t.Fatal("different playback query accepted after first API read")
+	}
 }
 
 func TestExplicitPublicURLPolicyRejectsForgottenSource(t *testing.T) {

@@ -9,8 +9,8 @@ OUT = Path(__file__).resolve().parents[1] / "internal/station/comfy_starters"
 QWEN = "qwen_image_2.1_int8_convrot.safetensors"
 QWEN_CLIP = "qwen3vl_8b_int8_convrot-文本编码器-提示理解.safetensors"
 QWEN_VAE = "qwen_image_2.1_vae_bf16-解码VAE-图像解码.safetensors"
-H3 = "minimax_h3_ref2va_pruned_int8_convrot-视频扩散-视频生成.safetensors"
-H3_CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq-文本编码器-文本理解.safetensors"
+H3 = "Minimax-h3_Singularity_ref2va_v2_pruned_int8-参考视频模型.safetensors"
+H3_CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 H3_VAE = "minimax_h3_video_vae_int8_convrot-解码VAE-视频VAE-视频解码.safetensors"
 H3_AUDIO = "minimax_h3_audio_vae_fp32-解码VAE-视频VAE-视频解码.safetensors"
 
@@ -60,7 +60,7 @@ def qwen_graph(mode):
         params += [parameter("input_image", "参考底图", "image", 9, "image", required=True),
                    parameter("resolution", "参考图处理分辨率", "integer", 4, "resolution", minimum=256, maximum=2048),
                    parameter("denoise", "改动强度", "number", 6, "denoise", minimum=0, maximum=1)]
-        g["6"]["inputs"]["denoise"] = 0.65 if mode == "image-to-image" else 0.8
+        g["6"]["inputs"]["denoise"] = 1.0 if mode == "image-to-image" else 0.8
     return g, params
 
 

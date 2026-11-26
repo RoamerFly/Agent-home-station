@@ -785,6 +785,13 @@ func publicReadRangeOnce(ctx context.Context, raw string, maxBytes int64, timeou
 		return nil, "", "", rangeHeaders{}, e
 	}
 	req.Header.Set("User-Agent", "wechat-bot-web-tool/1.0")
+	// Bilibili's public search endpoint returns HTTP 412 to the generic tool
+	// identity while serving the same unauthenticated request to its browser
+	// client. Keep this fixed profile limited to that exact search endpoint.
+	if req.URL.Hostname() == "api.bilibili.com" && req.URL.Path == "/x/web-interface/search/type" {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+		req.Header.Set("Referer", "https://www.bilibili.com/")
+	}
 	if source, ok := ctx.Value(publicPluginMediaKey{}).(publicPluginMediaOrigin); ok {
 		if req.URL.Scheme+"://"+req.URL.Host != source.destination {
 			return nil, "", "", rangeHeaders{}, &WebError{Code: "share_media_redirect_changed"}

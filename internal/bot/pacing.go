@@ -35,6 +35,21 @@ func (w *Worker) addressed(m linuxnative.Message) bool {
 	}
 	return false
 }
+
+func (w *Worker) quietUnmentionedGroupMessage(m linuxnative.Message) bool {
+	if m.Direction != "incoming" || !strings.HasSuffix(m.ThreadID, "@chatroom") {
+		return false
+	}
+	if m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self {
+		return false
+	}
+	c, ok := w.model.(*companion.Engine)
+	if !ok {
+		return false
+	}
+	when, err := time.Parse(time.RFC3339, m.CreatedAt)
+	return err == nil && c.Config.Quiet(when)
+}
 func (w *Worker) maxMessageAge() time.Duration {
 	if w.recovering && w.config.Options != nil && w.config.Options.RecoverBacklog {
 		return time.Duration(w.config.Options.BacklogHours) * time.Hour

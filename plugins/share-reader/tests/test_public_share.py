@@ -42,6 +42,30 @@ def init_state():
 
 
 class PublicShareTests(unittest.TestCase):
+    def test_wechat_verification_page_is_not_article_body(self):
+        url = "https://mp.weixin.qq.com/s?__biz=synthetic&mid=1&idx=1&sn=synthetic"
+        challenge = "<title>环境异常</title><main>" + "请验证后继续访问。" * 80 + "</main><script>id='js_content'; verify()</script>"
+        with self.assertRaisesRegex(ValueError, "share_requires_browser"):
+            parser.resolve({"url": url}, lambda *a: response(challenge, url))
+
+    def test_wechat_public_article_reads_only_real_content_container(self):
+        url = "https://mp.weixin.qq.com/s?__biz=synthetic&mid=1&idx=1&sn=synthetic"
+        article = "真实文章正文。" * 35
+        html = "<title>合成文章</title><nav>无关导航" + "广告" * 100 + "</nav><div id='js_content'><p>" + article + "</p></div><footer>无关页脚</footer>"
+        result = parser.resolve({"url": url}, lambda *a: response(html, url))
+        self.assertEqual(result["platform"], "wechat_article")
+        self.assertEqual(result["coverage"], "page_text")
+        self.assertEqual(result["text"], article)
+        self.assertNotIn("无关导航", result["text"])
+
+    def test_wechat_image_article_returns_actual_image_candidate(self):
+        url = "https://mp.weixin.qq.com/s?__biz=synthetic&mid=1&idx=1&sn=synthetic"
+        html = "<div id='js_content'><p>请看图</p><img data-src='//mmbiz.qpic.cn/mmbiz_png/synthetic/640'></div>"
+        result = parser.resolve({"url": url}, lambda *a: response(html, url))
+        self.assertEqual(result["coverage"], "media_locator_only")
+        self.assertEqual(result["private_media_locators"], ["https://mmbiz.qpic.cn/mmbiz_png/synthetic/640"])
+        self.assertEqual(result["text"], "")
+
     def test_jsonld_video_content_url_is_observed_locator_not_description(self):
         page = 'https://public.example/article'
         body = '<script type="application/ld+json">'+json.dumps({'@graph':[

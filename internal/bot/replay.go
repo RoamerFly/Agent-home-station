@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -206,6 +207,11 @@ func (w *Worker) triggerRoundProcessing(ctx context.Context, threadID, messageID
 		}
 	}
 	if inbox.ToolStarted {
+		if resumed, resumeErr := w.resumePausedPublicVideo(ctx, inbox, false); resumeErr != nil {
+			return ReplayItem{}, resumeErr
+		} else if resumed {
+			return ReplayItem{MessageID: messageID, Status: "queued", Reason: "已保留原工具结果，继续完成未发送的回复"}, nil
+		}
 		item.Status, item.Reason = "unavailable", "原回合已有工具操作，不能重复执行"
 		return item, nil
 	}
@@ -316,7 +322,7 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		}
 		var found *inboxItem
 		for i := range w.runtime.Inbox {
-			if w.runtime.Inbox[i].Event.Data.MessageID == id {
+			if w.runtime.Inbox[i].Event.Data.MessageID == id && w.runtime.Inbox[i].Event.Data.ThreadID == message.ThreadID {
 				found = &w.runtime.Inbox[i]
 				break
 			}
@@ -331,6 +337,22 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		}
 		candidates = append(candidates, candidate{item: found, msg: message})
 	}
+	if len(candidates) == 0 {
+		return report, nil
+	}
+	oldInbox := slices.Clone(w.runtime.Inbox)
+	replayedRounds := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		replayedRounds[roundKey(c.msg.ThreadID, c.msg.ID)] = true
+	}
+	// A replay is a new review of selected messages. Other members of the
+	// old batch must keep their prior state when its anchor advances again.
+	for i := range w.runtime.Inbox {
+		item := &w.runtime.Inbox[i]
+		if replayedRounds[roundKey(item.Event.Data.ThreadID, item.BacklogParent)] {
+			item.BacklogParent = ""
+		}
+	}
 	for _, c := range candidates {
 		c.item.ReplayNonce = replayNonce("share-read-replay", c.msg.ID, time.Now().UTC().Format(time.RFC3339Nano))
 		c.item.Phase = "received"
@@ -344,14 +366,14 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		c.item.CollectedAt = time.Time{}
 		c.item.RetryAfter = time.Time{}
 		c.item.Updated = time.Now().UTC()
-		w.activity(Record{Event: "message_replay_queued", Category: "decision", ThreadID: c.msg.ThreadID, Sender: c.msg.SenderID, MessageID: c.msg.ID, Reason: "administrator_replay_of_original_native_message", Status: "queued", Origin: "admin"})
-		report.Items = append(report.Items, ReplayItem{MessageID: c.msg.ID, Status: "queued", Reason: "原消息已重新纳入 Agent 处理队列"})
-	}
-	if len(candidates) == 0 {
-		return report, nil
 	}
 	if err := w.saveRuntime(); err != nil {
+		w.runtime.Inbox = oldInbox
 		return report, err
+	}
+	for _, c := range candidates {
+		w.activity(Record{Event: "message_replay_queued", Category: "decision", ThreadID: c.msg.ThreadID, Sender: c.msg.SenderID, MessageID: c.msg.ID, Reason: "administrator_replay_of_original_native_message", Status: "queued", Origin: "admin"})
+		report.Items = append(report.Items, ReplayItem{MessageID: c.msg.ID, Status: "queued", Reason: "原消息已重新纳入 Agent 处理队列"})
 	}
 	if err := w.drainInbox(ctx); err != nil {
 		return report, err

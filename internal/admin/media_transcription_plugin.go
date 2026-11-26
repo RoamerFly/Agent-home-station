@@ -97,6 +97,32 @@ func (m *Manager) newMediaTranscriptionPolicy(ctx context.Context, message linux
 	return p, nil
 }
 
+// An incoming text or quoted share may carry a public video URL. The audio
+// submitted for transcription is bound to that explicit URL and the unchanged
+// native message, rather than reclassifying the message as an attachment.
+func (m *Manager) newPublicURLMediaTranscriptionPolicy(ctx context.Context, message linuxnative.Message, rawURL string, wav []byte) (*mediaTranscriptionPolicy, error) {
+	requested := sharePublicURL(rawURL)
+	if requested == "" {
+		return nil, errors.New("share_public_url_invalid")
+	}
+	base, err := m.newReceivedSharePolicyInner(ctx, message, "media.transcribe", true)
+	if err != nil {
+		return nil, err
+	}
+	base.requestSuffix = agentID("public-video-audio", requested)
+	p, err := m.newMediaTranscriptionPolicyForOrigin(ctx, base.store, base.source.Revision, wav)
+	if err != nil {
+		return nil, err
+	}
+	p.receivedSharePolicy = base
+	p.invocationValue = base.invocation()
+	p.originCheck = func(checkCtx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
+		return base.Check(checkCtx, j, cap)
+	}
+	base.requestSuffix = agentID(base.requestSuffix, string(p.Arguments()), strconv.Itoa(p.ConfigRevision()))
+	return p, nil
+}
+
 func (m *Manager) newMediaTranscriptionPolicyForOrigin(ctx context.Context, store *pluginhost.Store, sourceRevision int, wav []byte) (*mediaTranscriptionPolicy, error) {
 
 	if m == nil || store == nil {

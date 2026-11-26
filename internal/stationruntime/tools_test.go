@@ -112,6 +112,51 @@ func TestInstalledToolExecutorChecksRuntimeOnEachLaunch(t *testing.T) {
 	check(executor, errToolRuntimeUnavailable)
 }
 
+func TestBundledToolInterpreterDoesNotNeedSharedInterpreter(t *testing.T) {
+	base := t.TempDir()
+	options := PackagedToolOptionsAt(filepath.Join(base, "release"))
+	workspace := filepath.Join(base, "fish-home")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{options.WindowsHelper, filepath.Join(filepath.Dir(options.WindowsHelper), "windows_lpac.py")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("synthetic"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ownedRoot := filepath.Join(base, "release", "publictools", "sample", "runtime", "python")
+	for _, path := range []string{filepath.Join(ownedRoot, "python.exe"), filepath.Join(ownedRoot, "pythonw.exe")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("synthetic"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ToolRuntimeReady(options, workspace) {
+		t.Fatal("shared interpreter fixture is intentionally absent")
+	}
+	helperRoot := filepath.Dir(options.WindowsHelper)
+	options.RuntimeRoots = append(options.RuntimeRoots, helperRoot)
+	spec := pluginruntime.LaunchSpec{Python: filepath.Join(ownedRoot, "python.exe"), Pythonw: filepath.Join(ownedRoot, "pythonw.exe"), RuntimeRoots: []string{options.RuntimeRoots[0], helperRoot, ownedRoot}}
+	prepared, err := prepareToolLaunchSpec(options, spec, workspace)
+	if err != nil {
+		t.Fatalf("bundled interpreter should be ready: %v", err)
+	}
+	if len(prepared.RuntimeRoots) != 2 || prepared.RuntimeRoots[0] != helperRoot || prepared.RuntimeRoots[1] != ownedRoot {
+		t.Fatalf("shared Python root must be removed while keeping the LPAC helper mount: %#v", prepared.RuntimeRoots)
+	}
+	if _, err := prepareToolLaunchSpec(options, pluginruntime.LaunchSpec{Python: options.Python, Pythonw: options.Pythonw, RuntimeRoots: options.RuntimeRoots}, workspace); !errors.Is(err, errToolRuntimeUnavailable) {
+		t.Fatalf("missing shared interpreter should not be accepted: %v", err)
+	}
+	if _, err := prepareToolLaunchSpec(options, pluginruntime.LaunchSpec{Python: filepath.Join(workspace, "python.exe"), Pythonw: filepath.Join(ownedRoot, "pythonw.exe"), RuntimeRoots: []string{ownedRoot}}, workspace); !errors.Is(err, errToolRuntimeUnavailable) {
+		t.Fatalf("workspace interpreter should not be accepted: %v", err)
+	}
+}
+
 type toolFixtureOptions struct {
 	options   pluginruntime.Options
 	workspace string

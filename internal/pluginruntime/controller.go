@@ -79,6 +79,14 @@ func InstalledExecutor(store *pluginhost.Store, options Options) *Executor {
 		if runtime.GOOS == "windows" && p.Runtime.Transport == "mcp-stdio" {
 			if root := packagePythonRoot(options.CatalogDirectory, p); root != "" {
 				python, pythonw = filepath.Join(root, "python.exe"), filepath.Join(root, "pythonw.exe")
+				sharedPythonRoot := filepath.Clean(filepath.Dir(options.Python))
+				filtered := runtimeRoots[:0]
+				for _, candidate := range runtimeRoots {
+					if filepath.Clean(candidate) != sharedPythonRoot {
+						filtered = append(filtered, candidate)
+					}
+				}
+				runtimeRoots = filtered
 				runtimeRoots = append(runtimeRoots, root)
 				if p.ID == "document-workshop" {
 					if native := filepath.Join(filepath.Dir(root), "native"); packageDocumentRuntimeReady(native) {

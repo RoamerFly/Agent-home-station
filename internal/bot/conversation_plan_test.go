@@ -71,6 +71,20 @@ func readyPlans(w *Worker) {
 		p.Next = time.Time{}
 	}
 }
+func TestUndirectedGroupReplyPlanRetainsOriginalQuoteAcrossRestart(t *testing.T) {
+	w, engine, _, _ := planWorker(t, &planReviewModel{})
+	in := companion.Input{Thread: "room@chatroom", TraceID: "original-video", QuoteServerID: "native-server-88", Mode: "social", IsGroup: true}
+	if !w.queueUtterancePlan(engine, in, companion.Decision{Messages: []string{"第一段", "第二段"}}) {
+		t.Fatal("group reply plan not queued")
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	quote := w.runtime.Plans[0].Quote
+	if quote == nil || quote.MessageID != in.TraceID || quote.ServerID != in.QuoteServerID {
+		t.Fatalf("group reply quote lost: %+v", quote)
+	}
+}
 func TestSourceFreeSurfPlanDoesNotAcquireQuoteFromNewGroupMessage(t *testing.T) {
 	w, engine, _, in := planWorker(t, &planReviewModel{})
 	in.Thread = "room@chatroom"

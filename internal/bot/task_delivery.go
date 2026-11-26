@@ -13,6 +13,9 @@ type TaskDelivery struct {
 	State          string `json:"state"`
 	Expected       int    `json:"expected"`
 	Accepted       int    `json:"accepted"`
+	VideoExpected  int    `json:"video_expected,omitempty"`
+	VideoAccepted  int    `json:"video_accepted,omitempty"`
+	VideoSourceID  string `json:"video_source_id,omitempty"`
 	AcceptedParts  int    `json:"accepted_parts"`
 	TotalParts     int    `json:"total_parts"`
 }
@@ -30,8 +33,15 @@ func (w *Worker) publishTaskDelivery(trace string) {
 		}
 		input = d.Input
 		result.Expected++
+		if d.Kind == "video" {
+			result.VideoExpected++
+		}
 		if d.State == "accepted" {
 			result.Accepted++
+			if d.Kind == "video" {
+				result.VideoAccepted++
+				result.VideoSourceID = d.SourceID
+			}
 		}
 		failed = failed || d.State == "stopped" || d.UserCancelled
 		unknown = unknown || d.State == "needs_review"

@@ -353,18 +353,15 @@ func TestDiscoveryRanksExactNamesAndChineseActions(t *testing.T) {
 	}
 }
 
-func TestPublicIndexRetryOnlyAfterUnavailableSources(t *testing.T) {
+func TestPublicIndexUnavailableSourcesDoNotRepeatWholeSearch(t *testing.T) {
 	for _, tc := range []struct {
 		code     string
 		attempts int
 	}{
-		{"search_sources_unavailable", 2}, {"search_no_relevant_results", 1},
+		{"search_sources_unavailable", 1}, {"search_no_relevant_results", 1},
 	} {
 		n := 0
 		_, err := retryReadOnlyTool(t.Context(), func(ctx context.Context) (string, error) {
-			if RetryingPublicIndex(ctx) != (n > 0) {
-				t.Fatal("incorrect retry identity", n)
-			}
 			n++
 			return "", &mcptools.WebError{Code: tc.code, Stage: "plugin"}
 		})

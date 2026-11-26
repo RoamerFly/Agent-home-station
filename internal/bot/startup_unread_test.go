@@ -198,19 +198,23 @@ func TestGroupCollectionDeadlineIsFixedPerRoom(t *testing.T) {
 	}
 }
 
-func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
+func TestLiveMixedGroupWindowDecidesPerSpeakerAndReadsTheirMedia(t *testing.T) {
 	const room = "room@chatroom"
 	for _, permanent := range []bool{true, false} {
 		t.Run(fmt.Sprintf("permanent_%t", permanent), func(t *testing.T) {
 			var calls, videoReads, reports int
-			var current struct {
+			var packets []struct {
 				Unread []json.RawMessage `json:"unread_messages"`
 			}
 			w, c, n := backgroundWorker(t, generationModelFunc(func(_ context.Context, _ string, turns []map[string]string) (string, error) {
 				calls++
+				var current struct {
+					Unread []json.RawMessage `json:"unread_messages"`
+				}
 				if err := json.Unmarshal([]byte(turns[len(turns)-1]["content"]), &current); err != nil {
 					t.Error(err)
 				}
+				packets = append(packets, current)
 				return `{"action":"silent"}`, nil
 			}))
 			c.Config.Permissions.ObserveGroups, c.Config.Permissions.AutonomousGroups = true, true
@@ -254,15 +258,25 @@ func TestLiveMixedGroupWindowReadsAllInputsBeforeDecision(t *testing.T) {
 				t.Fatal(err)
 			}
 			pumpGeneration(t, w, func() bool { return w.generation.occupied() == 0 })
+			if calls != 1 || len(packets[0].Unread) != 2 || w.runtime.Inbox[1].Phase != "received" || !w.runtime.Inbox[1].GroupDeferred {
+				t.Fatalf("other speaker incorrectly settled by first decision: calls=%d unread=%d phase=%s deferred=%t", calls, len(packets[0].Unread), w.runtime.Inbox[1].Phase, w.runtime.Inbox[1].GroupDeferred)
+			}
+			if err := w.drainInbox(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			pumpGeneration(t, w, func() bool { return w.generation.occupied() == 0 })
+			if calls != 2 || len(packets[1].Unread) != 1 || !strings.Contains(string(packets[1].Unread[0]), "verified-window-1") || w.runtime.Inbox[1].GroupDeferred {
+				t.Fatalf("second speaker's image was not decided independently: calls=%d packets=%d phase=%s", calls, len(packets), w.runtime.Inbox[1].Phase)
+			}
 			if permanent {
-				if calls != 1 || reports != 0 || videoReads != 1 || len(current.Unread) != 3 || !strings.Contains(string(current.Unread[2]), "附件读取未完成") || len(n.submissions) != 0 {
-					t.Fatal("unreadable video should remain marked within the batch", calls, reports, videoReads, len(current.Unread), len(n.submissions))
+				if reports != 0 || videoReads != 1 || !strings.Contains(string(packets[0].Unread[1]), "附件读取未完成") || len(n.submissions) != 0 {
+					t.Fatal("unreadable video should remain marked in its speaker's batch", reports, videoReads, len(n.submissions))
 				}
-				if err := w.drainInbox(t.Context()); err != nil || reports != 0 || calls != 1 {
+				if err := w.drainInbox(t.Context()); err != nil || reports != 0 || calls != 2 {
 					t.Fatal("failed turn replayed", err, reports)
 				}
-			} else if calls != 1 || reports != 0 || videoReads != 2 || len(current.Unread) != 3 || !strings.Contains(string(current.Unread[1]), "verified-window-1") || !strings.Contains(string(current.Unread[2]), "verified-window-2") {
-				t.Fatalf("mixed window not recovered in source order: calls=%d reports=%d video=%d items=%+v", calls, reports, videoReads, current.Unread)
+			} else if reports != 0 || videoReads != 2 || !strings.Contains(string(packets[0].Unread[1]), "verified-window-2") {
+				t.Fatalf("first speaker's video was not read: reports=%d video=%d", reports, videoReads)
 			}
 		})
 	}

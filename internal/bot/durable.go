@@ -15,6 +15,7 @@ import (
 type inboxItem struct {
 	Backlog                  bool                              `json:"backlog,omitempty"`
 	BacklogParent            string                            `json:"backlog_parent,omitempty"`
+	GroupDeferred            bool                              `json:"group_deferred,omitempty"`
 	BacklogRecoveryAttempted bool                              `json:"backlog_recovery_attempted,omitempty"`
 	FollowupParent           string                            `json:"followup_parent,omitempty"`
 	FollowupConsumed         bool                              `json:"followup_consumed,omitempty"`
@@ -23,6 +24,7 @@ type inboxItem struct {
 	AggregateUntil           time.Time                         `json:"aggregate_until,omitempty"`
 	CollectedAt              time.Time                         `json:"collected_at,omitempty"`
 	ToolStarted              bool                              `json:"tool_started,omitempty"`
+	EvidenceResumeAttempted  bool                              `json:"evidence_resume_attempted,omitempty"`
 	Event                    linuxnative.Event                 `json:"event"`
 	Phase                    string                            `json:"phase"`
 	Updated                  time.Time                         `json:"updated"`
@@ -399,6 +401,22 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		if w.roundClosed(item.Event.Data.ThreadID, item.Event.Data.MessageID) || item.BacklogParent != "" && w.roundClosed(item.Event.Data.ThreadID, item.BacklogParent) {
 			continue
 		}
+		if item.GroupDeferred && item.Phase == "received" {
+			if w.pendingConversationThread(item.Event.Data.ThreadID) {
+				continue
+			}
+			ids := map[string]bool{}
+			for j := range w.runtime.Inbox {
+				peer := &w.runtime.Inbox[j]
+				if peer.GroupDeferred && peer.Phase == "received" && peer.Event.Data.ThreadID == item.Event.Data.ThreadID && peer.AggregateUntil.Equal(item.AggregateUntil) {
+					ids[peer.Event.Data.MessageID] = true
+				}
+			}
+			if err := w.processConversationBatch(ctx, item.Event.Data.ThreadID, ids); err != nil {
+				return err
+			}
+			continue
+		}
 		if item.Backlog && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
 			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
 				return err
@@ -540,6 +558,9 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 		}
 	}
 	if err := w.saveRuntime(); err != nil {
+		return err
+	}
+	if err := w.resumePausedPublicVideos(ctx); err != nil {
 		return err
 	}
 	if w.config.Options.RecoverBacklog {

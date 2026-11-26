@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,14 +46,30 @@ func (h *wechatMediaHost) Authorize(ctx context.Context, in wechatapp.MediaReque
 	h.verified = nil
 	if request.Message != "" {
 		msg, err := p.manager.native.Message(ctx, request.Message)
-		if err != nil || msg.ID != request.Message || msg.AccountID != p.trace.Account || msg.ThreadID != request.Source || msg.FileAttachmentName() == "" {
-			return toolInputError("source_message_not_owned_file")
+		if err != nil || msg.ID != request.Message || msg.AccountID != p.trace.Account || msg.ThreadID != request.Source {
+			return toolInputError("source_message_unavailable")
+		}
+		if !mediaMessageMatchesKind(msg, request.Kind) {
+			return toolInputError("source_message_not_requested_media")
 		}
 		h.verified = &msg
 	}
 	h.selected = request
 	h.authorized = true
 	return nil
+}
+
+func mediaMessageMatchesKind(msg linuxnative.Message, kind string) bool {
+	switch kind {
+	case "file":
+		return msg.FileAttachmentName() != ""
+	case "image":
+		return msg.Type == 3
+	case "video":
+		return msg.Type == 43
+	default:
+		return false
+	}
 }
 func (h *wechatMediaHost) ClaimMedia(ctx context.Context, in wechatapp.MediaRequest, fn func(wechatapp.MediaSession) (any, error)) (string, error) {
 	encoded, _ := json.Marshal(in)
@@ -123,8 +140,10 @@ func (s *wechatMediaSession) Resolve(ctx context.Context) error {
 	if in.Message != "" {
 		msg := *verified
 		var e error
-		if _, e = (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName()); e != nil {
-			return e
+		if in.Kind == "file" {
+			if _, e = (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName()); e != nil {
+				return e
+			}
 		}
 		m.assetMu.Lock()
 		assets, e := m.loadAssets()
@@ -141,6 +160,53 @@ func (s *wechatMediaSession) Resolve(ctx context.Context) error {
 				in.Asset = a.ID
 				break
 			}
+		}
+		if in.Asset == "" {
+			if in.Kind == "file" {
+				return toolInputError("source_message_file_unavailable")
+			}
+			reader, ok := m.native.(incomingReader)
+			if !ok {
+				return toolInputError("source_message_media_unavailable")
+			}
+			var data []byte
+			var mime, filename string
+			switch in.Kind {
+			case "video":
+				var variant string
+				data, variant, e = readIncomingVideo(ctx, reader, msg.ID, 50<<20)
+				mime, filename = "video/mp4", "微信视频.mp4"
+				if variant == linuxnative.VideoCDNRendition {
+					filename = "微信视频-转码版.mp4"
+				}
+			case "image":
+				data, _, e = reader.IncomingMedia(ctx, msg.ID, 25<<20)
+				if e != nil || len(data) == 0 {
+					return toolInputError("source_message_media_unavailable")
+				}
+				mime = http.DetectContentType(data)
+				if mime != "image/png" && mime != "image/jpeg" && mime != "image/webp" && mime != "image/gif" {
+					return toolInputError("source_message_image_format_unavailable")
+				}
+				filename = "微信图片"
+				if mime == "image/png" {
+					filename += ".png"
+				} else if mime == "image/webp" {
+					filename += ".webp"
+				} else if mime == "image/gif" {
+					filename += ".gif"
+				} else {
+					filename += ".jpg"
+				}
+			}
+			if e != nil || len(data) == 0 {
+				return toolInputError("source_message_media_unavailable")
+			}
+			asset, cacheErr := m.rememberAssetFormats(companion.Input{Channel: "wechat", Account: msg.AccountID, Thread: msg.ThreadID, TraceID: msg.ID, Sender: msg.SenderID, MessageTime: msg.CreatedAt}, assetOriginal{InboundMessage: &msg, Data: data, MIME: mime, Filename: filename}, nil)
+			if cacheErr != nil {
+				return cacheErr
+			}
+			in.Asset = asset.ID
 		}
 	}
 
@@ -342,6 +408,6 @@ func (s *wechatMediaSession) Queue(ctx context.Context) (any, error) {
 	if e := m.queueCrossBatch(batch); e != nil {
 		return nil, e
 	}
-	m.record(bot.Record{Event: "cross_media_queued", Category: "decision", ThreadID: in.Target, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: "[" + in.Kind + "] " + outputs[0].Title, Reason: "explicit_destination_persisted", Status: "queued", Origin: "agent"})
+	m.record(bot.Record{Event: "cross_media_queued", Category: "decision", ThreadID: p.trace.Thread, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: "[" + in.Kind + "] " + outputs[0].Title, Reason: "explicit_destination_persisted", Status: "queued", Origin: "agent"})
 	return map[string]any{"operation_id": id, "state": "queued", "source_thread_id": in.Source, "target_thread_id": in.Target, "asset_id": in.Asset, "parts": len(batch.Parts), "effective_conversion": in.Conversion.effective(), "instruction": "附件已排入明确目标会话的持久队列，尚未确认送达。用wechat_operation_status核对。不要把附件再加入当前私聊reply.media_ids，不重复生成或发送。"}, nil
 }

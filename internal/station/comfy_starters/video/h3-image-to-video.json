@@ -2,14 +2,14 @@
   "1": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot-视频扩散-视频生成.safetensors",
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot-视频扩散-视频生成.safetensors",
       "weight_dtype": "default"
     }
   },
   "2": {
     "class_type": "CLIPLoader",
     "inputs": {
-      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq-文本编码器-文本理解.safetensors",
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "type": "minimax",
       "device": "default"
     }
@@ -27,7 +27,7 @@
     }
   },
   "5": {
-    "class_type": "MiniMaxH3ReferenceToVideo",
+    "class_type": "MiniMaxH3ImageToVideo",
     "inputs": {
       "clip": [
         "2",
@@ -37,16 +37,11 @@
         "3",
         0
       ],
-      "audio_vae": [
-        "4",
-        0
-      ],
       "prompt": "A cinematic scene with coherent movement and natural sound",
-      "width": 1344,
+      "width": 768,
       "height": 768,
       "length": 124,
-      "ref_image_size": "match",
-      "ref_images.ref_image_0": [
+      "first_frame": [
         "20",
         0
       ]

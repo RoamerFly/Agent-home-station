@@ -67,6 +67,15 @@ func (s *stationWechat) shareHost(w *stationWechatWorker, account string) (*stat
 	return w.share, nil
 }
 
+func stationShareRuntimeReady(ctx context.Context, host *stationShareHost, options pluginruntime.Options, workspace string, item pluginhost.InstalledPackage) bool {
+	if host == nil || !item.Enabled || item.Removed {
+		return false
+	}
+	grant := pluginhost.Grant{Account: host.store.Account(), Plugin: item.Package.ID, Version: item.Package.Version, Permissions: item.Permissions}
+	_, err := stationruntime.InstalledToolExecutor(host.store, options, workspace).Resolve(ctx, item.Package, grant)
+	return err == nil
+}
+
 type stationSharePolicy struct {
 	host        *stationShareHost
 	binding     *wechatapp.BoundChannelsRoute
