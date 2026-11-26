@@ -60,13 +60,16 @@ func grantExecutionNoticeMemory(t *testing.T, f *localHomeFixture, view map[stri
 
 func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.T) {
 	f, m, view := syntheticExecutionRoundFixture(t, false)
+	// A web notice saying "评论了你的作品" may refer to a child comment. Even
+	// mixed list text cannot establish a per-notice target or parent author.
+	const syntheticNoticeText = "有人评论了你的作品\n有人回复了你的评论"
 	reads := 0
 	m.readNotice = func(_ context.Context, _ string, in stationbrowser.DouyinNoticeRequest, check func() error) (stationbrowser.DouyinNoticePage, error) {
 		reads++
 		if err := check(); err != nil {
 			return stationbrowser.DouyinNoticePage{}, err
 		}
-		return stationbrowser.DouyinNoticePage{Account: in.Account, PagesRead: 1, RenderedText: "合成私有通知正文", Items: []stationbrowser.DouyinNotice{
+		return stationbrowser.DouyinNoticePage{Account: in.Account, PagesRead: 1, RenderedText: syntheticNoticeText, Items: []stationbrowser.DouyinNotice{
 			{ID: "n-1", Type: 7, WorkID: "w-1", CreatedAt: 1700000000},
 			{ID: "n-2", Type: 8, WorkID: "w-2"},
 			{ID: "n-3", Type: 9},
@@ -108,7 +111,7 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 			t.Fatalf("unverified notice became actionable: %v", row)
 		}
 	}
-	if bytes.Contains([]byte(localAppObservationJSONString(page)), []byte("合成私有通知正文")) {
+	if bytes.Contains([]byte(localAppObservationJSONString(page)), []byte(syntheticNoticeText)) {
 		t.Fatal("notification body entered execution response")
 	}
 	code, next := f.request("GET", path+"&limit=2&before="+page["next_before"].(string), nil, false)
@@ -136,7 +139,7 @@ func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.
 	}
 	database := filepath.Join(stationApplicationsDir(f.dir), "douyin", "execution-rounds", "rounds.sqlite")
 	raw, err := os.ReadFile(database)
-	if err != nil || bytes.Contains(raw, []byte("合成私有通知正文")) || bytes.Contains(raw, []byte(strings.Repeat("a", 64))) {
+	if err != nil || bytes.Contains(raw, []byte(syntheticNoticeText)) || bytes.Contains(raw, []byte(strings.Repeat("a", 64))) {
 		t.Fatalf("ledger contains content or account material: %v", err)
 	}
 	for _, bad := range []string{path + "&limit=1001", path + "&limit=-1", path + "&limit=", path + "&before=garbage", path + "&before=", localDouyinExecutionRoundsPath + "?date=2026-02-30"} {

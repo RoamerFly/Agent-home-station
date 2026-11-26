@@ -3506,7 +3506,7 @@
     const panel = appElement("section", "", "configuration-rounds douyin-rounds");
     panel.setAttribute("aria-label", "抖音执行回合");
     const intro = appElement("p", "这里仅查看本机已保存的抖音互动通知元数据；记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
-    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。当前记录缺少评论编号和父评论归属，不能根据通知类型或页面文字自动分类，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。当前记录缺少评论编号和父评论归属，不能根据通知类型或页面文字自动分类，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
     const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
     const dateLabel = appElement("label", "首次观察日期（北京时间）");
     const date = document.createElement("input");
@@ -3544,7 +3544,8 @@
         ["平台时间", douyinRoundTime(item.created_at)],
         ["本机首次观察", douyinRoundTime(item.observed_at)],
         ["来源范围", "已保存通知元数据，单条来源未记录"],
-        ["判定证据", item.reason + "：缺少评论编号和父评论归属"],
+        ["评论定位", "待核对：缺少目标评论编号、层级和直接父评论归属"],
+        ["回复资格", item.reason + " · 不会回复"],
       ]) facts.append(appElement("dt", name), appElement("dd", value));
       card.append(header, facts);
       return card;
@@ -4546,16 +4547,19 @@
         next.hidden = !continuation;
         if (typeof page.rendered_text === "string" && page.rendered_text) {
           const rendered = appElement("article", "", "douyin-read-chunk");
-          rendered.append(appElement("strong", "平台页面可见文字（可能包含前批）"), appElement("p", page.rendered_text));
+          rendered.append(appElement("strong", "整批平台页面可见文字（无法逐条对应通知编号，可能包含前批）"), appElement("p", page.rendered_text));
           output.append(rendered);
         } else if (page.items.length) {
           output.append(appElement("p", "本次仅取得通知编号及元数据，页面文字未能核对。", "app-scope-note"));
         }
         for (const row of page.items) {
           const card = appElement("div", "", "douyin-read-chunk");
-          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type));
-          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "作品 " + row.work_id : ""].filter(Boolean);
+          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type + "（未分类）"));
+          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "关联作品编号 " + row.work_id + "（归属待核对）" : ""].filter(Boolean);
           if (details.length) card.append(appElement("p", details.join(" · "), "publication-reference"));
+          card.append(appElement("p", "逐条正文：未取得；整批页面文字不能对应本通知。", "publication-reference"),
+            appElement("p", "评论定位：待核对；缺少目标评论编号、层级和直接父评论归属。", "publication-reference"),
+            appElement("p", "回复资格：证据不足 · 不会回复。", "publication-reference"));
           output.append(card);
         }
         const coverage = page.has_more ? "平台报告还有后续通知。" : "平台报告已读到末批。";
