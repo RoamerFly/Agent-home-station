@@ -475,8 +475,22 @@ namespace WechatAgent.Desktop {
                 ApplicationWorkbenchDialog current;
                 if (applicationWorkbenches.TryGetValue(appID, out current) && current == dialog) applicationWorkbenches.Remove(appID);
             });
+            if (appID == "douyin") {
+                dialog.ChatDraftRequested = text => RouteWorkbenchMessage(Deployment.Json.Serialize(new { type = "prepare-douyin-creation-chat", text = text }));
+                dialog.PublicToolsRequested = () => RouteWorkbenchMessage("{\"type\":\"open-douyin-project-tools\"}");
+            }
             applicationWorkbenches[appID] = dialog;
             dialog.Show(this);
+        }
+        bool RouteWorkbenchMessage(string payload) {
+            var target = web;
+            if (target == null || !CurrentPage(target, webGeneration) || target.CoreWebView2 == null ||
+                !ManagementPage(target.Source == null ? "" : target.Source.ToString())) return false;
+            try {
+                target.CoreWebView2.PostWebMessageAsJson(payload);
+                RestoreWindow();
+                return true;
+            } catch (InvalidOperationException) { return false; }
         }
         void CloseApplicationWorkbenches() {
             foreach (var dialog in applicationWorkbenches.Values.ToArray()) if (!dialog.IsDisposed) dialog.CloseForServiceStop();

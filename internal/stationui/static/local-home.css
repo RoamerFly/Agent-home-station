@@ -345,6 +345,9 @@ h3 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-strong); line-
 .app-action-row p { margin: 0; max-width: 62ch; }
 .app-action-row .button { flex: 0 0 auto; }
 .publication-detail { min-width: 0; }
+.douyin-creation-row .settings-field { display: grid; gap: var(--s-1); margin-top: var(--s-3); }
+.douyin-creation-row textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 10rem; }
+.douyin-creation-row .publication-actions { margin-top: var(--s-2); }
 .memory-source { display: flex; align-items: center; gap: var(--s-1); max-width: 100%; min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); }
 .memory-source select { min-width: 0; max-width: min(40rem, 65vw); padding: var(--s-1) var(--s-2); }
 .memory-source[hidden] { display: none; }
@@ -1603,6 +1606,14 @@ body.is-home-ready.standalone-workbench #app-configuration {
 .is-home-ready .douyin-workbench-skin .douyin-rounds > .button { min-height:40px; justify-self:start; }
 .is-home-ready .douyin-workbench-skin .douyin-round-feedback { margin:0; }
 .is-home-ready .douyin-workbench-skin .douyin-round-feedback:focus { outline:2px solid var(--accent); outline-offset:3px; }
+.is-home-ready .douyin-workbench-skin .douyin-round-section-title { margin:var(--s-2) 0 0; font-size:var(--fs-body); }
+.is-home-ready .douyin-workbench-skin .douyin-round-groups { display:flex; flex-wrap:wrap; gap:var(--s-2); min-width:0; }
+.is-home-ready .douyin-workbench-skin .douyin-round-group { max-width:100%; overflow-wrap:anywhere; text-align:start; }
+.is-home-ready .douyin-workbench-skin .douyin-round-group[aria-pressed="true"] { border-color:var(--accent); background:var(--surface-raised); }
+.is-home-ready .douyin-workbench-skin .douyin-round-context { padding:var(--s-3); border:1px solid var(--border); border-radius:var(--r-sm); }
+.is-home-ready .douyin-workbench-skin .douyin-round-context p { margin:0 0 var(--s-2); }
+.is-home-ready .douyin-workbench-skin .douyin-round-context pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; margin:var(--s-2) 0; }
+.is-home-ready .douyin-workbench-skin .douyin-round-media-page { padding:var(--s-2) 0; border-top:1px solid var(--border); }
 .is-home-ready .douyin-workbench-skin .douyin-round-records {
   display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:var(--s-3);
 }

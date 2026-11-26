@@ -3,6 +3,8 @@ package station
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -20,6 +22,7 @@ import (
 
 const (
 	localDouyinExecutionRoundsPath = "/api/local/apps/douyin/execution-rounds"
+	localDouyinExecutionWorksPath  = localDouyinExecutionRoundsPath + "/works"
 	localDouyinExecutionRoundLimit = 20
 	localDouyinExecutionRoundBatch = 1000
 )
@@ -28,9 +31,9 @@ var localDouyinExecutionZone = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 // This ledger is deliberately limited to notification metadata. Neither a
 // notification type nor a work ID proves whose comment it is or which comment
-// it replies to. A reply decision needs the comment ID, parent comment ID,
-// parent author and the current account's author identity from a verified
-// source; none of those are available here.
+// it replies to. The private creator-account digest records the browser account
+// at capture time, but does not prove work ownership or comment parentage.
+// Reply decisions still require verified comment and parent identities.
 type localDouyinExecutionRound struct {
 	NoticeID      string                                 `json:"notice_id"`
 	Type          int                                    `json:"type"`
@@ -49,7 +52,32 @@ type localDouyinExecutionRoundsResult struct {
 	NextBefore     string                      `json:"next_before"`
 	EffectiveLimit int                         `json:"effective_limit"`
 	Coverage       string                      `json:"coverage"`
+	GroupSelected  bool                        `json:"group_selected"`
+	SelectedWorkID string                      `json:"selected_work_id"`
 }
+
+type localDouyinExecutionWorkGroup struct {
+	WorkID      string `json:"work_id"`
+	NoticeCount int    `json:"notice_count"`
+	Ownership   string `json:"ownership"`
+}
+
+type localDouyinExecutionWorkGroupsResult struct {
+	Date           string                          `json:"date"`
+	Groups         []localDouyinExecutionWorkGroup `json:"groups"`
+	NextCursor     string                          `json:"next_cursor"`
+	EffectiveLimit int                             `json:"effective_limit"`
+	Coverage       string                          `json:"coverage"`
+}
+
+type localDouyinExecutionWorksCursor struct {
+	Anchor int64  `json:"anchor"`
+	Before int64  `json:"before"`
+	Date   string `json:"date"`
+	Scope  string `json:"scope"`
+}
+
+var errLocalDouyinExecutionWorksCursor = errors.New("作品分组续页位置无效")
 
 const localDouyinExecutionSchema = `
 CREATE TABLE IF NOT EXISTS rounds (
@@ -70,6 +98,12 @@ CREATE TABLE IF NOT EXISTS round_candidates (
   path TEXT NOT NULL,
   candidate_id TEXT NOT NULL,
   PRIMARY KEY(scope, notice_id, path, candidate_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS round_creator_accounts (
+  scope TEXT NOT NULL,
+  notice_id TEXT NOT NULL,
+  creator_account TEXT NOT NULL,
+  PRIMARY KEY(scope, notice_id)
 ) WITHOUT ROWID;`
 
 func validDouyinRoundCandidate(candidate stationbrowser.DouyinNoticeCandidate) bool {
@@ -145,6 +179,9 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 	if record.FishID != fish || record.NoticeAccount == "" || page.Account != record.NoticeAccount || !validDouyinNoticeAccount(record.NoticeAccount) {
 		return errLocalDouyinNoticeGrant
 	}
+	if page.CreatorAccount != "" && !validDouyinNoticeAccount(page.CreatorAccount) {
+		return errLocalDouyinNoticeGrant
+	}
 	if len(page.Items) == 0 {
 		return nil
 	}
@@ -181,6 +218,19 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
 			scope, item.ID, item.Type, item.WorkID, created, stamp, day); err != nil {
 			return err
+		}
+		if page.CreatorAccount != "" {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO round_creator_accounts(scope,notice_id,creator_account) VALUES(?,?,?)`,
+				scope, item.ID, page.CreatorAccount); err != nil {
+				return err
+			}
+			var recorded string
+			if err := tx.QueryRowContext(ctx, `SELECT creator_account FROM round_creator_accounts WHERE scope=? AND notice_id=?`, scope, item.ID).Scan(&recorded); err != nil {
+				return err
+			}
+			if recorded != page.CreatorAccount {
+				return errLocalDouyinNoticeGrant
+			}
 		}
 		if len(item.Candidates) > 16 {
 			continue
@@ -246,23 +296,17 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 func (m *localDouyinWebLogin) executionRoundRoutes(owner *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET "+localDouyinExecutionRoundsPath, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		identity, err := m.home.identity.Read()
-		if err != nil || identity.LocalOwner == nil || !fishidentity.ValidFishID(identity.FishID) {
-			websession.Fail(w, http.StatusConflict, "请先准备本机主人身份")
-			return
-		}
-		session, _, ok := owner.Lookup(r)
+		scope, current, ok := m.executionRoundReadScope(owner, w, r)
 		if !ok {
-			websession.Fail(w, http.StatusUnauthorized, "请重新登录工作站")
 			return
 		}
 		query := r.URL.Query()
-		if len(query) != 1 && len(query) != 2 && len(query) != 3 {
+		if len(query) < 1 || len(query) > 4 {
 			websession.Fail(w, http.StatusBadRequest, "执行回合查询参数无效")
 			return
 		}
 		for key, values := range query {
-			if (key != "date" && key != "before" && key != "limit") || len(values) != 1 {
+			if (key != "date" && key != "before" && key != "limit" && key != "work_id") || len(values) != 1 {
 				websession.Fail(w, http.StatusBadRequest, "执行回合查询参数无效")
 				return
 			}
@@ -293,24 +337,13 @@ func (m *localDouyinWebLogin) executionRoundRoutes(owner *websession.Store, mux 
 				return
 			}
 		}
-		record, _, err := m.noticeState(identity.FishID)
-		if err != nil || record.NoticeAccount == "" {
-			websession.Fail(w, http.StatusForbidden, "请先绑定并启用当前抖音互动通知账号")
-			return
-		}
-		current := func() error {
-			if token, _, ok := owner.Lookup(r); !ok || token != session {
-				return errLocalDouyinNoticeGrant
+		var workFilter *string
+		if values, explicit := query["work_id"]; explicit {
+			if values[0] != "" && !validLocalDouyinCommentID(values[0]) {
+				websession.Fail(w, http.StatusBadRequest, "作品编号无效")
+				return
 			}
-			actual, err := m.home.identity.Read()
-			if err != nil || actual.LocalOwner == nil || actual.FishID != identity.FishID || actual.LocalOwner.ID != identity.LocalOwner.ID {
-				return errLocalDouyinNoticeGrant
-			}
-			latest, _, err := m.noticeProfile(identity.FishID, record.Revision)
-			if err != nil || latest != record || latest.NoticeAccount == "" {
-				return errLocalDouyinNoticeGrant
-			}
-			return nil
+			workFilter = &values[0]
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -318,7 +351,7 @@ func (m *localDouyinWebLogin) executionRoundRoutes(owner *websession.Store, mux 
 			localDouyinNoticeFailure(w, err)
 			return
 		}
-		result, err := m.listExecutionRounds(ctx, localDouyinExecutionScope(identity.FishID, identity.LocalOwner.ID, record), day, before, limit)
+		result, err := m.listExecutionRoundsForWork(ctx, scope, day, before, limit, workFilter)
 		if err != nil {
 			websession.Fail(w, http.StatusServiceUnavailable, "执行回合账本读取失败")
 			return
@@ -329,10 +362,108 @@ func (m *localDouyinWebLogin) executionRoundRoutes(owner *websession.Store, mux 
 		}
 		websession.Respond(w, http.StatusOK, result)
 	}))
+	mux.HandleFunc("GET "+localDouyinExecutionWorksPath, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		scope, current, ok := m.executionRoundReadScope(owner, w, r)
+		if !ok {
+			return
+		}
+		query := r.URL.Query()
+		if len(query) < 1 || len(query) > 3 {
+			websession.Fail(w, http.StatusBadRequest, "作品分组查询参数无效")
+			return
+		}
+		for key, values := range query {
+			if (key != "date" && key != "limit" && key != "cursor") || len(values) != 1 {
+				websession.Fail(w, http.StatusBadRequest, "作品分组查询参数无效")
+				return
+			}
+		}
+		day := query.Get("date")
+		parsed, err := time.Parse("2006-01-02", day)
+		if err != nil || parsed.Format("2006-01-02") != day {
+			websession.Fail(w, http.StatusBadRequest, "请提供有效的 YYYY-MM-DD 日期")
+			return
+		}
+		limit := localDouyinExecutionRoundLimit
+		if values, explicit := query["limit"]; explicit {
+			limit, err = strconv.Atoi(values[0])
+			if err != nil || limit < 1 || limit > localDouyinExecutionRoundBatch {
+				websession.Fail(w, http.StatusBadRequest, "每页作品分组数须为 1–1000")
+				return
+			}
+		}
+		cursor := query.Get("cursor")
+		if _, explicit := query["cursor"]; explicit && (cursor == "" || len(cursor) > 256) {
+			websession.Fail(w, http.StatusBadRequest, "作品分组续页位置无效")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := current(); err != nil {
+			localDouyinNoticeFailure(w, err)
+			return
+		}
+		result, err := m.listExecutionWorkGroups(ctx, scope, day, limit, cursor)
+		if err != nil {
+			if errors.Is(err, errLocalDouyinExecutionWorksCursor) {
+				websession.Fail(w, http.StatusBadRequest, "作品分组续页位置无效")
+			} else {
+				websession.Fail(w, http.StatusServiceUnavailable, "执行回合账本读取失败")
+			}
+			return
+		}
+		if err := current(); err != nil {
+			localDouyinNoticeFailure(w, err)
+			return
+		}
+		websession.Respond(w, http.StatusOK, result)
+	}))
+}
+
+func (m *localDouyinWebLogin) executionRoundReadScope(owner *websession.Store, w http.ResponseWriter, r *http.Request) (string, func() error, bool) {
+	identity, err := m.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil || !fishidentity.ValidFishID(identity.FishID) {
+		websession.Fail(w, http.StatusConflict, "请先准备本机主人身份")
+		return "", nil, false
+	}
+	session, _, ok := owner.Lookup(r)
+	if !ok {
+		websession.Fail(w, http.StatusUnauthorized, "请重新登录工作站")
+		return "", nil, false
+	}
+	record, _, err := m.noticeState(identity.FishID)
+	if err != nil || record.NoticeAccount == "" {
+		websession.Fail(w, http.StatusForbidden, "请先绑定并启用当前抖音互动通知账号")
+		return "", nil, false
+	}
+	current := func() error {
+		if token, _, ok := owner.Lookup(r); !ok || token != session {
+			return errLocalDouyinNoticeGrant
+		}
+		actual, err := m.home.identity.Read()
+		if err != nil || actual.LocalOwner == nil || actual.FishID != identity.FishID || actual.LocalOwner.ID != identity.LocalOwner.ID {
+			return errLocalDouyinNoticeGrant
+		}
+		latest, _, err := m.noticeProfile(identity.FishID, record.Revision)
+		if err != nil || latest != record || latest.NoticeAccount == "" {
+			return errLocalDouyinNoticeGrant
+		}
+		return nil
+	}
+	return localDouyinExecutionScope(identity.FishID, identity.LocalOwner.ID, record), current, true
 }
 
 func (m *localDouyinWebLogin) listExecutionRounds(ctx context.Context, scope, day string, before int64, limit int) (localDouyinExecutionRoundsResult, error) {
+	return m.listExecutionRoundsForWork(ctx, scope, day, before, limit, nil)
+}
+
+func (m *localDouyinWebLogin) listExecutionRoundsForWork(ctx context.Context, scope, day string, before int64, limit int, workFilter *string) (localDouyinExecutionRoundsResult, error) {
 	result := localDouyinExecutionRoundsResult{Date: day, Rounds: []localDouyinExecutionRound{}, EffectiveLimit: limit, Coverage: "notice_metadata"}
+	if workFilter != nil {
+		result.GroupSelected = true
+		result.SelectedWorkID = *workFilter
+	}
 	db, err := openLocalDouyinExecutionDB(ctx, m.home, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return result, nil
@@ -342,7 +473,11 @@ func (m *localDouyinWebLogin) listExecutionRounds(ctx context.Context, scope, da
 	}
 	defer db.Close()
 	var rows *sql.Rows
-	if before == 0 {
+	if workFilter != nil && before == 0 {
+		rows, err = db.QueryContext(ctx, `SELECT sequence,notice_id,type,work_id,created_at,observed_at FROM rounds WHERE scope=? AND observed_date=? AND work_id=? ORDER BY sequence DESC LIMIT ?`, scope, day, *workFilter, limit+1)
+	} else if workFilter != nil {
+		rows, err = db.QueryContext(ctx, `SELECT sequence,notice_id,type,work_id,created_at,observed_at FROM rounds WHERE scope=? AND observed_date=? AND work_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?`, scope, day, *workFilter, before, limit+1)
+	} else if before == 0 {
 		rows, err = db.QueryContext(ctx, `SELECT sequence,notice_id,type,work_id,created_at,observed_at FROM rounds WHERE scope=? AND observed_date=? ORDER BY sequence DESC LIMIT ?`, scope, day, limit+1)
 	} else {
 		rows, err = db.QueryContext(ctx, `SELECT sequence,notice_id,type,work_id,created_at,observed_at FROM rounds WHERE scope=? AND observed_date=? AND sequence<? ORDER BY sequence DESC LIMIT ?`, scope, day, before, limit+1)
@@ -374,6 +509,72 @@ func (m *localDouyinWebLogin) listExecutionRounds(ctx context.Context, scope, da
 		return result, err
 	}
 	return result, readLocalDouyinRoundCandidates(ctx, db, scope, result.Rounds)
+}
+
+func (m *localDouyinWebLogin) listExecutionWorkGroups(ctx context.Context, scope, day string, limit int, cursor string) (localDouyinExecutionWorkGroupsResult, error) {
+	result := localDouyinExecutionWorkGroupsResult{Date: day, Groups: []localDouyinExecutionWorkGroup{}, EffectiveLimit: limit, Coverage: "notice_work_groups"}
+	position := localDouyinExecutionWorksCursor{Date: day, Scope: localCheckpointKey("douyin-execution-works-cursor", scope)}
+	if cursor != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil || len(raw) > 192 || base64.RawURLEncoding.EncodeToString(raw) != cursor || strictLocalMemoryDecode(raw, &position) != nil ||
+			position.Anchor < 1 || position.Before < 1 || position.Before > position.Anchor || position.Date != day || position.Scope != localCheckpointKey("douyin-execution-works-cursor", scope) {
+			return result, errLocalDouyinExecutionWorksCursor
+		}
+	}
+	db, err := openLocalDouyinExecutionDB(ctx, m.home, false)
+	if errors.Is(err, os.ErrNotExist) {
+		if cursor != "" {
+			return result, errLocalDouyinExecutionWorksCursor
+		}
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	defer db.Close()
+	if cursor == "" {
+		if err := db.QueryRowContext(ctx, `SELECT coalesce(max(sequence),0) FROM rounds WHERE scope=? AND observed_date=?`, scope, day).Scan(&position.Anchor); err != nil {
+			return result, err
+		}
+		if position.Anchor == 0 {
+			return result, nil
+		}
+	}
+	var rows *sql.Rows
+	if position.Before == 0 {
+		rows, err = db.QueryContext(ctx, `SELECT work_id,count(*),max(sequence) FROM rounds WHERE scope=? AND observed_date=? AND sequence<=? GROUP BY work_id ORDER BY max(sequence) DESC LIMIT ?`,
+			scope, day, position.Anchor, limit+1)
+	} else {
+		rows, err = db.QueryContext(ctx, `SELECT work_id,count(*),max(sequence) FROM rounds WHERE scope=? AND observed_date=? AND sequence<=? GROUP BY work_id HAVING max(sequence)<? ORDER BY max(sequence) DESC LIMIT ?`,
+			scope, day, position.Anchor, position.Before, limit+1)
+	}
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	var last int64
+	for rows.Next() {
+		group := localDouyinExecutionWorkGroup{Ownership: "unverified"}
+		var latest int64
+		if err := rows.Scan(&group.WorkID, &group.NoticeCount, &latest); err != nil {
+			return result, err
+		}
+		if len(result.Groups) == limit {
+			position.Before = last
+			raw, err := json.Marshal(position)
+			if err != nil {
+				return result, err
+			}
+			result.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+			break
+		}
+		result.Groups = append(result.Groups, group)
+		last = latest
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	return result, rows.Close()
 }
 
 func readLocalDouyinRoundCandidates(ctx context.Context, db *sql.DB, scope string, rounds []localDouyinExecutionRound) error {

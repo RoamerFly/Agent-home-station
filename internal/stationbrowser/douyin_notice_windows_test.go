@@ -110,7 +110,7 @@ function loadMore() {
 		return readDouyinNotice(t.Context(), filepath.Join(t.TempDir(), "profile"), server.URL+"/help", input, func() error { return nil }, true)
 	}
 	account, err := read(nil)
-	if err != nil || len(account.Account) != 64 || listCalls.Load() != 0 {
+	if err != nil || len(account.Account) != 64 || account.CreatorAccount != creatorWorksDigest("1234567890") || listCalls.Load() != 0 {
 		t.Fatalf("account-only probe unexpectedly read notifications: %+v %v, calls=%d", account, err, listCalls.Load())
 	}
 	if _, err := read(&DouyinNoticeRequest{Account: "other", AllowMarkRead: true}); !errors.Is(err, ErrDouyinNoticeAccountChanged) || listCalls.Load() != 0 {
@@ -120,7 +120,7 @@ function loadMore() {
 		t.Fatalf("mark-read attempted without authorization: %v, calls=%d", err, listCalls.Load())
 	}
 	page, err := read(&DouyinNoticeRequest{Account: account.Account, AllowMarkRead: true})
-	if err != nil || page.Account != account.Account || len(page.Items) != 1 || page.Items[0].ID != "9182736450" || !page.HasMore || page.MaxTime != 1700000000 ||
+	if err != nil || page.Account != account.Account || page.CreatorAccount != account.CreatorAccount || len(page.Items) != 1 || page.Items[0].ID != "9182736450" || !page.HasMore || page.MaxTime != 1700000000 ||
 		page.RenderedText != "合成用户评论了你的作品" {
 		t.Fatalf("bound inbox read: %+v %v", page, err)
 	}

@@ -59,6 +59,141 @@ func grantExecutionNoticeMemory(t *testing.T, f *localHomeFixture, view map[stri
 	return next
 }
 
+func TestLocalDouyinExecutionRoundsWorkGroupsAndFilteredPagination(t *testing.T) {
+	f, m, _ := syntheticExecutionRoundFixture(t, false)
+	platformReads := 0
+	m.readNotice = func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error) {
+		platformReads++
+		return stationbrowser.DouyinNoticePage{}, nil
+	}
+	identity, err := m.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		t.Fatal(err)
+	}
+	record, _, err := m.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creatorAccount := strings.Repeat("c", 64)
+	capture := func(account string, items ...stationbrowser.DouyinNotice) {
+		t.Helper()
+		if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record,
+			stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: account, Items: items}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture(creatorAccount,
+		stationbrowser.DouyinNotice{ID: "n1", WorkID: "101"},
+		stationbrowser.DouyinNotice{ID: "n2"},
+		stationbrowser.DouyinNotice{ID: "n3", WorkID: "202"},
+		stationbrowser.DouyinNotice{ID: "n4", WorkID: "101"},
+		stationbrowser.DouyinNotice{ID: "n5", WorkID: "303"},
+		stationbrowser.DouyinNotice{ID: "n6"},
+		stationbrowser.DouyinNotice{ID: "n7", WorkID: "202"},
+	)
+	base := localDouyinExecutionWorksPath + "?date=" + executionRoundDay() + "&limit=2"
+	code, first := f.request("GET", base, nil, false)
+	groups, ok := first["groups"].([]any)
+	if code != http.StatusOK || !ok || len(groups) != 2 || first["next_cursor"] == "" || first["effective_limit"] != float64(2) || first["coverage"] != "notice_work_groups" {
+		t.Fatalf("first work groups page: %d %v", code, first)
+	}
+	assertGroup := func(raw any, wantWork string, wantCount float64) {
+		t.Helper()
+		group := raw.(map[string]any)
+		if group["work_id"] != wantWork || group["notice_count"] != wantCount || group["ownership"] != "unverified" {
+			t.Fatalf("group should retain unverified work boundary: %v", group)
+		}
+	}
+	assertGroup(groups[0], "202", 2)
+	assertGroup(groups[1], "", 2)
+	// New notices may arrive between group pages. The cursor keeps the first
+	// page's sequence boundary, including an older group refreshed later.
+	capture(creatorAccount,
+		stationbrowser.DouyinNotice{ID: "n8", WorkID: "404"},
+		stationbrowser.DouyinNotice{ID: "n9", WorkID: "101"},
+	)
+	code, second := f.request("GET", base+"&cursor="+first["next_cursor"].(string), nil, false)
+	groups, ok = second["groups"].([]any)
+	if code != http.StatusOK || !ok || len(groups) != 2 || second["next_cursor"] != "" {
+		t.Fatalf("second anchored work groups page: %d %v", code, second)
+	}
+	assertGroup(groups[0], "303", 1)
+	assertGroup(groups[1], "101", 2)
+	code, fresh := f.request("GET", base, nil, false)
+	if code != http.StatusOK {
+		t.Fatalf("fresh groups page: %d %v", code, fresh)
+	}
+	groups = fresh["groups"].([]any)
+	assertGroup(groups[0], "101", 3)
+	assertGroup(groups[1], "404", 1)
+	if strings.Contains(localAppObservationJSONString(fresh), creatorAccount) {
+		t.Fatal("creator account digest leaked in work groups API")
+	}
+	filtered := localDouyinExecutionRoundsPath + "?date=" + executionRoundDay() + "&work_id=101&limit=1"
+	seen := []string{}
+	for next := filtered; next != ""; {
+		code, page := f.request("GET", next, nil, false)
+		if code != http.StatusOK || page["group_selected"] != true || page["selected_work_id"] != "101" {
+			t.Fatalf("selected work page: %d %v", code, page)
+		}
+		for _, raw := range page["rounds"].([]any) {
+			row := raw.(map[string]any)
+			if row["work_id"] != "101" || row["reply_eligible"] != false {
+				t.Fatalf("mixed or actionable work notice: %v", row)
+			}
+			seen = append(seen, row["notice_id"].(string))
+		}
+		next = ""
+		if before := page["next_before"].(string); before != "" {
+			next = filtered + "&before=" + before
+		}
+	}
+	if strings.Join(seen, ",") != "n9,n4,n1" {
+		t.Fatalf("selected work lost or duplicated notices: %v", seen)
+	}
+	code, missing := f.request("GET", localDouyinExecutionRoundsPath+"?date="+executionRoundDay()+"&work_id=", nil, false)
+	if code != http.StatusOK || missing["group_selected"] != true || missing["selected_work_id"] != "" || len(missing["rounds"].([]any)) != 2 {
+		t.Fatalf("missing work ID group mixed: %d %v", code, missing)
+	}
+	for _, raw := range missing["rounds"].([]any) {
+		if raw.(map[string]any)["work_id"] != "" {
+			t.Fatalf("missing work ID group contains another work: %v", raw)
+		}
+	}
+	for _, bad := range []string{base + "&cursor=garbage", base + "&cursor=", localDouyinExecutionRoundsPath + "?date=" + executionRoundDay() + "&work_id=bad"} {
+		if code, _ := f.request("GET", bad, nil, false); code != http.StatusBadRequest {
+			t.Fatalf("accepted invalid group query %s: %d", bad, code)
+		}
+	}
+	if code, _ := f.request("GET", localDouyinExecutionWorksPath+"?date=2026-01-01&cursor="+first["next_cursor"].(string), nil, false); code != http.StatusBadRequest {
+		t.Fatalf("accepted cursor from a different date: %d", code)
+	}
+	// A notice captured before the browser exposed a creator UID digest stays
+	// unverified. A conflicting digest for an existing notice cannot replace it.
+	capture("", stationbrowser.DouyinNotice{ID: "n10", WorkID: "505"})
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record,
+		stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: strings.Repeat("d", 64),
+			Items: []stationbrowser.DouyinNotice{{ID: "n1", WorkID: "101"}}}); err != errLocalDouyinNoticeGrant {
+		t.Fatalf("conflicting creator digest accepted: %v", err)
+	}
+	if platformReads != 0 {
+		t.Fatalf("ledger reads contacted Douyin: %d", platformReads)
+	}
+	db, err := openLocalDouyinExecutionDB(t.Context(), m.home, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var saved int
+	if err := db.QueryRow(`SELECT count(*) FROM round_creator_accounts WHERE creator_account=?`, creatorAccount).Scan(&saved); err != nil || saved != 9 {
+		t.Fatalf("creator digest was not kept privately per notice: %d %v", saved, err)
+	}
+	var missingProof string
+	if err := db.QueryRow(`SELECT creator_account FROM round_creator_accounts WHERE notice_id='n10'`).Scan(&missingProof); err != sql.ErrNoRows {
+		t.Fatalf("missing creator proof was inferred: %q %v", missingProof, err)
+	}
+}
+
 func TestLocalDouyinExecutionRoundsManualReadPaginationAndRevocation(t *testing.T) {
 	f, m, view := syntheticExecutionRoundFixture(t, false)
 	// A web notice saying "评论了你的作品" may refer to a child comment. Even
@@ -221,7 +356,7 @@ func TestLocalDouyinExecutionRoundsReadsLegacyLedgerWithoutWriting(t *testing.T)
 	}
 	defer db.Close()
 	var created int
-	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='round_candidates'`).Scan(&created); err != nil || created != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('round_candidates','round_creator_accounts')`).Scan(&created); err != nil || created != 0 {
 		t.Fatalf("read created candidate table: %d %v", created, err)
 	}
 }

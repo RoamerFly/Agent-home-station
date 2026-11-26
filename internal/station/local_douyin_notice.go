@@ -87,6 +87,7 @@ func (m *localDouyinWebLogin) noticeState(fish string) (localDouyinWebRecord, st
 
 func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.ServeMux) {
 	m.executionRoundRoutes(owner, mux)
+	m.executionRoundContextRoutes(owner, mux)
 	mux.HandleFunc("POST "+localDouyinNoticePath, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		identity, err := m.home.identity.Read()

@@ -21,6 +21,19 @@ namespace WechatAgent.Desktop {
         readonly WebView2 view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White };
         DouyinAuthorizationDialog authorization;
         bool terminal;
+        internal Func<string, bool> ChatDraftRequested;
+        internal Func<bool> PublicToolsRequested;
+
+        internal static bool TryReadChatDraft(string app, Dictionary<string, object> input, out string draft) {
+            draft = "";
+            object raw;
+            if (app != "douyin" || input == null || Deployment.Text(input, "type") != "application-workbench-chat-draft" ||
+                !input.TryGetValue("text", out raw) || !(raw is string)) return false;
+            string value = (string)raw;
+            if (value.Length > 6000 || value.IndexOf('\0') >= 0) return false;
+            draft = value.Trim();
+            return draft.Length > 0;
+        }
 
         internal ApplicationWorkbenchDialog(Deployment deployment, ServiceController controller, string appID, Action closed) {
             if (appID != "douyin" && appID != "bilibili") throw new ArgumentException("Unknown application workbench.", "appID");
@@ -117,6 +130,18 @@ namespace WechatAgent.Desktop {
             if (input == null) return;
             string type = Deployment.Text(input, "type");
             if (type == "application-workbench-close") { Finish(); return; }
+            if (type == "application-workbench-chat-draft") {
+                string draft;
+                if (!TryReadChatDraft(appID, input, out draft)) { PostRouteError("创作请求为空或过长，请修改后重试。"); return; }
+                if (ChatDraftRequested == null || !ChatDraftRequested(draft)) { PostRouteError("主工作站聊天暂不可用，请稍后重试。"); return; }
+                Finish();
+                return;
+            }
+            if (type == "application-workbench-project-tools" && appID == "douyin") {
+                if (PublicToolsRequested == null || !PublicToolsRequested()) { PostRouteError("主工作站项目工具暂不可用，请稍后重试。"); return; }
+                Finish();
+                return;
+            }
             if (type != "douyin-auth-open" || appID != "douyin") return;
             string authorizationURL = Deployment.Text(input, "url");
             DouyinAuthorizationAttempt attempt;
@@ -136,6 +161,12 @@ namespace WechatAgent.Desktop {
         void PostAuthorization(string type, string state, string callback, string error) {
             if (terminal || IsDisposed || view.CoreWebView2 == null || !AllowsNavigation(view.Source == null ? "" : view.Source.ToString())) return;
             try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = type, state = state, callback_url = callback, error = error })); }
+            catch (InvalidOperationException) { }
+        }
+
+        void PostRouteError(string message) {
+            if (terminal || IsDisposed || view.CoreWebView2 == null || !AllowsNavigation(view.Source == null ? "" : view.Source.ToString())) return;
+            try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = "application-workbench-route-error", message = message })); }
             catch (InvalidOperationException) { }
         }
 

@@ -121,7 +121,11 @@ func (p *localDouyinWebObservation) readVisual(ctx context.Context, a localDouyi
 	if err != nil || strings.TrimSpace(text) == "" {
 		return empty, apphost.ErrObservationVisualAnalysis
 	}
-	return douyinVisualPage(sample, limit, hash, target.url, text), nil
+	page := douyinVisualPage(sample, limit, hash, target.url, text)
+	if err := p.captureCreatorMediaContext(ctx, a, target, apphost.ObservationVisual, page); err != nil {
+		return empty, err
+	}
+	return page, nil
 }
 
 func douyinVisualPage(sample mediaobserve.FrameSamplePage, limit int, hash, url, text string) apphost.ObservationPage {

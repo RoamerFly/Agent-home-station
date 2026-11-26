@@ -306,7 +306,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
 	var world int64
-	var account string
+	var account, creatorAccount string
 	for until := time.Now().Add(20 * time.Second); time.Now().Before(until); {
 		if err := authorize(); err != nil {
 			return DouyinNoticePage{}, err
@@ -315,7 +315,8 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 			world, _ = createPlaybackWorld(ctx, session, id, nav.FrameID)
 		}
 		if world != 0 {
-			account = noticePageState(ctx, session, id, world, target, false).Account
+			state := noticePageState(ctx, session, id, world, target, false)
+			account, creatorAccount = state.Account, state.CreatorAccount
 			if account != "" {
 				break
 			}
@@ -328,7 +329,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 		return DouyinNoticePage{}, ErrDouyinWebLoginRequired
 	}
 	if input == nil {
-		return DouyinNoticePage{Account: account}, authorize()
+		return DouyinNoticePage{Account: account, CreatorAccount: creatorAccount}, authorize()
 	}
 	if account != input.Account {
 		return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
@@ -337,7 +338,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 		return DouyinNoticePage{}, err
 	}
 	control := noticePageState(ctx, session, id, world, target, true)
-	if control.Account != "" && control.Account != account {
+	if control.Account != "" && (control.Account != account || control.CreatorAccount != creatorAccount) {
 		return DouyinNoticePage{}, ErrDouyinNoticeAccountChanged
 	}
 	if control.Account != account {
@@ -347,7 +348,7 @@ func readDouyinNoticeSession(ctx context.Context, session readerSession, target 
 	if session.Call(ctx, id, "Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": control.X, "y": control.Y}, nil) != nil {
 		return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 	}
-	collected := DouyinNoticePage{Account: account, HasMore: true}
+	collected := DouyinNoticePage{Account: account, CreatorAccount: creatorAccount, HasMore: true}
 	seenIDs := map[string]bool{}
 	for {
 		wait, stop := context.WithTimeout(ctx, 8*time.Second)
@@ -485,8 +486,8 @@ func noticeRenderedText(ctx context.Context, session readerSession, id string, w
 }
 
 type douyinNoticeControl struct {
-	Account string
-	X, Y    float64
+	Account, CreatorAccount string
+	X, Y                    float64
 }
 
 func noticePageState(ctx context.Context, session readerSession, id string, world int64, target string, requireControl bool) douyinNoticeControl {
@@ -513,6 +514,8 @@ func noticePageState(ctx context.Context, session readerSession, id string, worl
 		!douyinVideoID.MatchString(out.Result.Value.Account) {
 		return douyinNoticeControl{}
 	}
-	out.Result.Value.Account = creatorWorksDigest("douyin-notice-account\x00" + out.Result.Value.Account)
+	uid := out.Result.Value.Account
+	out.Result.Value.Account = creatorWorksDigest("douyin-notice-account\x00" + uid)
+	out.Result.Value.CreatorAccount = creatorWorksDigest(uid)
 	return out.Result.Value
 }

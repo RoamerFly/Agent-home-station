@@ -44,7 +44,10 @@ type DouyinNoticeCandidate struct {
 }
 
 type DouyinNoticePage struct {
-	Account          string
+	Account string
+	// CreatorAccount uses the same domain as DouyinCreatorWorksPage.Account.
+	// It is a digest of the signed-in UID, never the UID or a session token.
+	CreatorAccount   string
 	Items            []DouyinNotice
 	MinTime, MaxTime int64
 	HasMore          bool
