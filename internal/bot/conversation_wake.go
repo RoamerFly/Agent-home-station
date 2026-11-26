@@ -119,7 +119,7 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 			// wakes may proceed only after that exact result is settled.
 			continue
 		}
-		if c.Config.Quiet(time.Now()) {
+		if wake.Input.Mode == "proactive" && c.Config.Quiet(time.Now()) {
 			continue
 		}
 		in := wake.Input

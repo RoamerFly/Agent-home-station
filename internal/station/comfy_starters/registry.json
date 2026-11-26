@@ -300,14 +300,14 @@
     },
     {
       "id": "h3-image-to-video",
-      "label": "图生视频 · MiniMax H3",
+      "label": "首帧图生视频 · MiniMax H3",
       "graph": "video/h3-image-to-video.json",
-      "sha256": "3a9c40671db56920fd0e0cc98b2816d4f39f08ce34463690fc05e30e92928314",
+      "sha256": "67cf4bb3ae8a71f0155a4e37ad856a3785cd5c53161d74e222201b0012a3f9a9",
       "save_node": "14",
       "parameters": [
         {
           "id": "prompt",
-          "label": "视频描述，可用 <Picture 1> 和 <Video 1>",
+          "label": "视频描述，首帧来自参考图片",
           "kind": "string",
           "node": "5",
           "input": "prompt",
@@ -361,6 +361,76 @@
         {
           "id": "input_image_1",
           "label": "参考图 1",
+          "kind": "image",
+          "node": "20",
+          "input": "image",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "h3-image-reference-to-video",
+      "label": "单图角色参考生视频 · MiniMax H3",
+      "graph": "video/h3-image-reference-to-video.json",
+      "sha256": "3a9c40671db56920fd0e0cc98b2816d4f39f08ce34463690fc05e30e92928314",
+      "save_node": "14",
+      "parameters": [
+        {
+          "id": "prompt",
+          "label": "视频描述，可用 <Picture 1>",
+          "kind": "string",
+          "node": "5",
+          "input": "prompt",
+          "max_length": 8192
+        },
+        {
+          "id": "width",
+          "label": "宽度",
+          "kind": "integer",
+          "node": "5",
+          "input": "width",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "height",
+          "label": "高度",
+          "kind": "integer",
+          "node": "5",
+          "input": "height",
+          "minimum": 256,
+          "maximum": 1344
+        },
+        {
+          "id": "length",
+          "label": "帧数，124 约为 5 秒",
+          "kind": "integer",
+          "node": "5",
+          "input": "length",
+          "minimum": 5,
+          "maximum": 362
+        },
+        {
+          "id": "steps",
+          "label": "采样步数",
+          "kind": "integer",
+          "node": "9",
+          "input": "steps",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "id": "seed",
+          "label": "随机种子",
+          "kind": "integer",
+          "node": "6",
+          "input": "noise_seed",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        {
+          "id": "input_image_1",
+          "label": "角色参考图 1",
           "kind": "image",
           "node": "20",
           "input": "image",

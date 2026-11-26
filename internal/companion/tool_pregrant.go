@@ -67,3 +67,22 @@ func needsMediaForward(turns []map[string]string) bool {
 	}
 	return false
 }
+
+func needsComfyVideo(turns []map[string]string) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i]["role"] != "user" {
+			continue
+		}
+		var packet struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(turns[i]["content"]), &packet) != nil || packet.Kind != "current_message" {
+			continue
+		}
+		text := strings.ToLower(packet.Text)
+		return strings.Contains(text, "生成视频") || strings.Contains(text, "生视频") || strings.Contains(text, "做视频") ||
+			strings.Contains(text, "制作视频") || strings.Contains(text, "做成视频")
+	}
+	return false
+}

@@ -405,8 +405,8 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	if input.Mode == "social" {
 		input.ReviewRequired = input.ReviewRequired || NeedsQuestionReview(input.Text)
 	}
-	// Quiet hours govern delivery, not whether an incoming message is read and
-	// understood. Claim checks the live schedule before any reply is sent.
+	// The host filters unmentioned incoming group messages during quiet hours.
+	// An already accepted incoming message may finish after the clock changes.
 	if input.Mode == "proactive" && len(scope.Messages) == 0 && len(scope.Notes) == 0 && !input.Preview && !input.Surf {
 		return silent("no_reliable_context"), nil
 	}
@@ -740,7 +740,9 @@ func (e *Engine) Claim(input Input) error {
 	if !e.Config.Permissions.ReplyText && !e.Config.Permissions.SendImage && !e.Config.Permissions.SendVoice && !e.Config.Permissions.SendVideo && !e.Config.Permissions.SendFile {
 		return errors.New("reply permission denied")
 	}
-	if input.Mode != "direct" && e.Config.Quiet(time.Now()) {
+	// Quiet hours select incoming group messages and autonomous starts. Once
+	// an incoming conversation was accepted, its reply may finish later.
+	if input.Mode == "proactive" && e.Config.Quiet(time.Now()) {
 		return errors.New("quiet hours")
 	}
 	return e.Store.ClaimReply(e.Config, time.Now())

@@ -123,6 +123,9 @@ func (w *Worker) skipReason(m linuxnative.Message, now time.Time) string {
 		return "ai_label_loop_prevention"
 	}
 	if strings.HasSuffix(m.ThreadID, "@chatroom") {
+		if w.quietUnmentionedGroupMessage(m) {
+			return "quiet_unmentioned_group_message"
+		}
 		rule := w.config.GroupRules[m.ThreadID]
 		mentioned := m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self
 		if rule.Mode == "social" && !mentioned {

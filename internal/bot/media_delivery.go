@@ -296,8 +296,9 @@ func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
 		// be valid before quiet hours can be bypassed.
 		explicitAction = w.validateMediaEvidence(context.Background(), d) == nil
 	}
+	incomingConversation := d.CrossRequester == "" && d.Input.Mode == "social" && d.Input.Source != nil
 	return ok && routeAllowed && companion.MediaPermitted(c.Config.Permissions, d.Kind) &&
-		(explicitAction || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
+		(explicitAction || incomingConversation || !c.Config.Quiet(time.Now())) && (!d.Input.Surf || w.config.SurfAllowed == nil || w.config.SurfAllowed(d.Input.Thread))
 }
 
 // mediaTraceCancelled is the durable tombstone used by late plugin callbacks,

@@ -158,6 +158,10 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(m.ID, "completed")
 			continue
 		}
+		if w.quietUnmentionedGroupMessage(m) {
+			w.queuePhase(m.ID, "skipped")
+			continue
+		}
 		working := m
 		cardLabel, _ := m.CardContext()
 		isMedia := cardLabel == "" && (m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText())

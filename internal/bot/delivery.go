@@ -572,7 +572,7 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			w.persistErr = w.saveRuntime()
 			continue
 		}
-		if c, ok := w.model.(*companion.Engine); ok && (!c.Config.Permissions.ReplyText || c.Config.Quiet(time.Now()) && d.Input.Mode != "direct") {
+		if c, ok := w.model.(*companion.Engine); ok && (!c.Config.Permissions.ReplyText || c.Config.Quiet(time.Now()) && d.Input.Mode == "proactive") {
 			continue
 		}
 		if w.deliveryCancelled(d) {

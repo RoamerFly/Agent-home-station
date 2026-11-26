@@ -13,7 +13,7 @@ func (a pregrantAccess) List(context.Context) ([]mcptools.Tool, error) {
 	if !a.grant {
 		return nil, nil
 	}
-	return []mcptools.Tool{{Name: "incoming_media_read", InputSchema: json.RawMessage(`{"type":"object"}`)}}, nil
+	return []mcptools.Tool{{Name: "incoming_media_read", InputSchema: json.RawMessage(`{"type":"object"}`)}, {Name: "station_comfy", InputSchema: json.RawMessage(`{"type":"object"}`)}}, nil
 }
 func (pregrantAccess) Call(context.Context, string, json.RawMessage) (string, error) {
 	return "", nil
@@ -66,6 +66,25 @@ func TestMediaForwardPregrantMatchesCurrentRequest(t *testing.T) {
 			t.Fatalf("text=%q pregrant=%v want=%v", tc.text, got, tc.want)
 		}
 	}
+}
+
+func TestVideoCreationPregrantsComfyWithoutToolDiscovery(t *testing.T) {
+	model := &pregrantModel{}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools = pregrantAccess{grant: true}
+	packet, _ := json.Marshal(map[string]string{"kind": "current_message", "text": "生成视频：素材是你自己的形象，9:16，15s"})
+	if _, err := e.decide(t.Context(), "policy", []map[string]string{{"role": "user", "content": string(packet)}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range model.firstTools {
+		if tool.Name == "station_comfy" {
+			return
+		}
+	}
+	t.Fatal("station_comfy was not available in the first model call")
 }
 
 func TestIncomingMediaReaderIsPregrantedOnlyWhenAuthorized(t *testing.T) {

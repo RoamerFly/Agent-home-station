@@ -7,7 +7,6 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
@@ -230,9 +229,6 @@ func (h *wechatTextHost) BeforeSubmit(ctx context.Context, thread string) error 
 	}
 	p := h.p
 	cfg := p.manager.Config()
-	if strings.HasSuffix(thread, "@chatroom") && cfg.Companion.Quiet(time.Now()) {
-		return errors.New("目标群处于安静时段")
-	}
 	if cfg.Behavior.RandomDelay {
 		delay := cfg.Behavior.DelayMinSeconds
 		if n := cfg.Behavior.DelayMaxSeconds - delay; n > 0 {

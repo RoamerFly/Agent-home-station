@@ -252,6 +252,7 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 
 func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/chat", s.Protect(h.history))
+	mux.HandleFunc("POST /api/local/project-tools/comfyui/action", s.Protect(h.comfyDirect))
 	mux.HandleFunc("GET /api/local/memory/palace", s.Protect(h.memoryPalace))
 	mux.HandleFunc("GET /api/local/memory/palace/sources", s.Protect(h.memoryPalaceSources))
 	mux.HandleFunc("GET /api/local/memory/palace/{id}", s.Protect(h.memoryPalace))

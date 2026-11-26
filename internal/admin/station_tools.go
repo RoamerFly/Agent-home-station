@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"wechat-bot/internal/characterrefs"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/plugins"
@@ -153,7 +155,7 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 		timeout = 5 * time.Minute
 		limit = 45 << 20
 	}
-	if path == "/api/local/chat" && method == http.MethodPost {
+	if (path == "/api/local/chat" || path == "/api/local/project-tools/comfyui/action") && method == http.MethodPost {
 		timeout = 3 * time.Minute
 	}
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
@@ -193,14 +195,20 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		Goal            string                     `json:"goal"`
 		SourceMessageID string                     `json:"source_message_id"`
 		SourcePath      string                     `json:"source_path"`
+		OwnMini         bool                       `json:"own_mini"`
 		FishHome        bool                       `json:"fish_home"`
+		DurationSeconds float64                    `json:"duration_seconds"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&in) != nil {
 		return "", toolInputError("station_comfy_arguments_invalid")
 	}
+	if in.DurationSeconds < 0 {
+		return "", toolInputError("station_comfy_duration_invalid")
+	}
 	var instruction string
+	var effectiveFrames int
 	switch in.Action {
 	case "workflows":
 		instruction = "只调用本机 project_comfy_workflows，逐项返回工作流编号、用途和参数，不发送到微信。"
@@ -218,9 +226,76 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		if in.WorkflowID == "" || len(in.WorkflowID) > 96 || !validID(in.WorkflowID) {
 			return "", toolInputError("station_comfy_workflow_required")
 		}
+		imageInput := stationComfyImageInput(in.WorkflowID)
+		if in.OwnMini && (in.SourceMessageID != "" || in.SourcePath != "") {
+			return "", toolInputError("station_comfy_image_source_ambiguous")
+		}
+		if in.OwnMini {
+			in.SourcePath = filepath.Join(characterrefs.Directory(p.manager.personaDocumentPath()), "大肥鱼-mini可爱版.jpg")
+		}
+		if in.SourceMessageID == "" && in.SourcePath == "" && imageInput != "" {
+			if messageID := stationComfyCurrentImage(p.trace); messageID != "" {
+				in.SourceMessageID = messageID
+			} else if stationComfyOwnImageRequested(p.trace.Text) {
+				in.SourcePath = filepath.Join(characterrefs.Directory(p.manager.personaDocumentPath()), "大肥鱼-mini可爱版.jpg")
+			}
+		}
+		if in.SourceMessageID != "" || in.SourcePath != "" {
+			if imageInput == "" || in.Inputs[imageInput] != nil {
+				return "", toolInputError("station_comfy_image_input_ambiguous")
+			}
+			upload, _ := json.Marshal(map[string]any{"action": "upload", "source_message_id": in.SourceMessageID, "source_path": in.SourcePath, "fish_home": in.FishHome})
+			result, err := p.callStationComfy(ctx, upload)
+			if err != nil {
+				return "", err
+			}
+			var staged struct {
+				Filename string `json:"filename"`
+			}
+			if json.Unmarshal([]byte(result), &staged) != nil || staged.Filename == "" {
+				return "", toolInputError("station_comfy_image_stage_failed")
+			}
+			if in.Inputs == nil {
+				in.Inputs = map[string]json.RawMessage{}
+			}
+			in.Inputs[imageInput], _ = json.Marshal(staged.Filename)
+		}
+		if strings.HasPrefix(in.WorkflowID, "h3-") {
+			// A conversation can request a 15-second finished film made from
+			// two shorter shots. Only an explicit per-run duration controls this
+			// workflow; the agent may also set inputs.length directly.
+			if in.DurationSeconds > 0 {
+				frames := int(math.Round(in.DurationSeconds * 24))
+				if frames < 5 || frames > 362 {
+					return "", toolInputError("station_comfy_duration_outside_h3_range")
+				}
+				if in.Inputs == nil {
+					in.Inputs = map[string]json.RawMessage{}
+				}
+				if existing, ok := in.Inputs["length"]; ok {
+					var specified int
+					if json.Unmarshal(existing, &specified) != nil || specified != frames {
+						return "", toolInputError("station_comfy_duration_conflicts_with_length")
+					}
+				}
+				in.Inputs["length"], _ = json.Marshal(frames)
+				effectiveFrames = frames
+			}
+		} else if in.DurationSeconds != 0 {
+			return "", toolInputError("station_comfy_duration_requires_video_workflow")
+		}
 		parameters, _ := json.Marshal(in.Inputs)
-		instruction = "调用本机 project_comfy_run，workflow_id=" + in.WorkflowID + "，inputs=" + string(parameters) + "。返回实际 job_id 和状态；若已完成也返回 artifact_id。不发送到微信。"
+		instruction = "调用本机 project_comfy_run，workflow_id=" + in.WorkflowID + "，inputs=" + string(parameters) + "。返回实际 job_id、状态和有效参数；若已完成也返回 artifact_id。不发送到微信。"
+		if effectiveFrames > 0 {
+			instruction += fmt.Sprintf(" 目标时长 %.2f 秒，必须保留 inputs.length=%d 帧。", float64(effectiveFrames)/24, effectiveFrames)
+		}
 	case "upload":
+		if in.OwnMini {
+			if in.SourceMessageID != "" || in.SourcePath != "" {
+				return "", toolInputError("station_comfy_image_source_ambiguous")
+			}
+			in.SourcePath = filepath.Join(characterrefs.Directory(p.manager.personaDocumentPath()), "大肥鱼-mini可爱版.jpg")
+		}
 		if (in.SourceMessageID == "") == (in.SourcePath == "") {
 			return "", toolInputError("station_comfy_upload_requires_one_source")
 		}
@@ -250,7 +325,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 			// A verified owner can upload the fish's shared character references
 			// from any authorized conversation, without mounting the rest of home.
 			root := ""
-			if p.privileged() && characterrefs.Contains(p.manager.personaDocumentPath(), in.SourcePath) {
+			if characterrefs.Contains(p.manager.personaDocumentPath(), in.SourcePath) {
 				root = characterrefs.Directory(p.manager.personaDocumentPath())
 			} else {
 				cfg, err := p.scopedHostConfig(raw)
@@ -314,7 +389,43 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 	if err != nil {
 		return "", err
 	}
+	if in.Action == "run" || in.Action == "job" || in.Action == "workflows" {
+		requestID := "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw))
+		if in.Action != "run" {
+			// Status and catalog are read-only snapshots. A later poll must
+			// observe new state instead of replaying the first result.
+			requestID = "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw), fmt.Sprint(time.Now().UnixNano()))
+		}
+		request := map[string]any{"request_id": requestID, "action": in.Action}
+		if in.Action == "run" {
+			request["workflow_id"], request["inputs"] = in.WorkflowID, in.Inputs
+		}
+		if in.Action == "job" {
+			request["job_id"] = in.JobID
+		}
+		data, err := p.stationToolRequest(ctx, session, http.MethodPost, "/api/local/project-tools/comfyui/action", request)
+		if err != nil {
+			// An in-flight request created by an older release already owns this
+			// ID in local chat. Re-read that exact request through its old route;
+			// do not create a second ComfyUI job under a new ID.
+			if err.Error() == "同一 ComfyUI 请求编号的参数已变化" {
+				return p.stationComfyLegacyChat(ctx, session, requestID, instruction)
+			}
+			return "", err
+		}
+		var reply struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if json.Unmarshal(data, &reply) != nil || !json.Valid(reply.Result) {
+			return "", errors.New("station_comfy_result_unavailable")
+		}
+		return string(reply.Result), nil
+	}
 	requestID := "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw))
+	return p.stationComfyLegacyChat(ctx, session, requestID, instruction)
+}
+
+func (p *permittedTools) stationComfyLegacyChat(ctx context.Context, session stationToolSession, requestID, instruction string) (string, error) {
 	data, err := p.stationToolRequest(ctx, session, http.MethodPost, "/api/local/chat", map[string]string{"request_id": requestID, "text": instruction})
 	if err != nil {
 		return "", err
@@ -327,6 +438,40 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		return "", errors.New("station_comfy_result_unavailable")
 	}
 	return strings.Join(result.Messages, "\n"), nil
+}
+
+func stationComfyImageInput(workflowID string) string {
+	switch workflowID {
+	case "qwen21-image-to-image-hq", "qwen21-mask-inpaint-hq":
+		return "input_image"
+	case "h3-image-to-video", "h3-image-reference-to-video", "h3-universal-single", "h3-universal-multi", "h3-image-to-video-singularity":
+		return "input_image_1"
+	}
+	return ""
+}
+
+func stationComfyCurrentImage(in companion.Input) string {
+	var selected string
+	for _, media := range in.IncomingMedia {
+		if media.Kind != "image" || media.Source.MessageID == "" || media.Source.Thread != in.Thread {
+			continue
+		}
+		if selected != "" && selected != media.Source.MessageID {
+			return ""
+		}
+		selected = media.Source.MessageID
+	}
+	return selected
+}
+
+func stationComfyOwnImageRequested(text string) bool {
+	text = strings.ToLower(text)
+	for _, phrase := range []string{"你自己", "你的形象", "自己的形象", "大肥鱼形象", "mini可爱版", "mini q版", "mini q 版"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // Station owns generated artifacts while the existing WeChat worker owns its
