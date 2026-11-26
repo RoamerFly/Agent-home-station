@@ -45,7 +45,7 @@
   function markSaved(){state.dirty=false;$('#unsaved-bar').hidden=!state.personaDirty}
   function markPersonaDirty(){state.personaDirty=true;$('#unsaved-bar').hidden=false}
   function validateFields(){
-    for(const field of document.querySelectorAll('#config-form input,#config-form textarea,#config-form select,#companion input,#companion textarea,#agent input,#permissions input')){
+    for(const field of document.querySelectorAll('#config-form input,#config-form textarea,#config-form select,#companion input,#companion textarea,#rules .mention-context-setting input,#agent input,#permissions input')){
       if(field.disabled||field.closest('#agent-workspace-panel')||field.id==='preview-text'||field.id==='memory-note')continue;
       field.removeAttribute('aria-invalid');
       if(!field.checkValidity()){
@@ -70,7 +70,104 @@
   async function refreshModels(){const button=$('#model-refresh');setLoading(button,true,'获取中…');try{const r=await api('/api/model/models');const selected=$('#model').value;$('#model').replaceChildren();for(const id of r.items||[]){const o=document.createElement('option');o.value=id;o.textContent=id;$('#model').append(o)}setModelValue(selected);notice('模型列表已更新。')}catch(e){notice(e.message)}finally{setLoading(button,false)}}
   function configToForm(c){$('#provider-select').value=c.provider||'deepseek';$('#base-url').value=c.base_url||'';setModelValue(c.model||'deepseek-flash');$('#default-prefix').value=c.prefix||'';$('#max-tokens').value=c.max_tokens??4096;$('#thinking-enabled').checked=!!c.thinking_enabled;$('#reasoning-effort').value=c.reasoning_effort||'low';$('#task-reasoning').value=c.companion?.task_reasoning||'auto';$('#direct-image-input').checked=!!c.behavior?.direct_image_input;$('#reasoning-effort').disabled=!$('#thinking-enabled').checked;$('#filehelper-enabled').checked=!!c.filehelper_enabled;$('#private-enabled').checked=!!c.private_enabled;$('#private-all-friends').checked=!!c.private_all_friends;$('#direct-ids').value=(c.direct_ids||[]).join('\n');$('#api-key').value='';$('#api-key').placeholder=c.key_configured?'已配置（留空则保持）':'未配置';$('#key-hint').textContent=c.key_configured?'已配置密钥；留空保存不会覆盖。':'尚未配置密钥。'; companionToForm(c.companion);renderRules();window.dispatchEvent(new CustomEvent('wechat-admin:config-changed')); }
   function formToConfig(){ const c=state.config||{};return {...c,provider:$('#provider-select').value,base_url:$('#base-url').value.trim(),model:$('#model').value.trim(),prefix:$('#default-prefix').value, max_tokens:Number($('#max-tokens').value),thinking_enabled:$('#thinking-enabled').checked,reasoning_effort:$('#reasoning-effort').value,filehelper_enabled:$('#filehelper-enabled').checked,private_enabled:$('#private-enabled').checked,private_all_friends:$('#private-all-friends').checked,direct_ids:$('#direct-ids').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),group_rules:(c.group_rules||[]),behavior:{...behaviorDefaults,...c.behavior,direct_image_input:$('#direct-image-input').checked},companion:{...companionFromForm(),task_reasoning:$('#task-reasoning').value,grounding:{...(c.companion?.grounding||{}),enabled:false}}}; }
-  function renderRules(){const box=$('#group-rules');box.replaceChildren();const rules=(state.config&&state.config.group_rules)||[];if(!rules.length){const p=document.createElement('p');p.className='empty';p.textContent='尚未添加群聊规则。';box.append(p);return}rules.forEach((rule,index)=>{const row=document.createElement('div');row.className='rule-row';row.dataset.threadId=rule.id;const name=document.createElement('span');name.className='rule-name';name.textContent=rule.name||rule.id;name.title=rule.id;const meta=document.createElement('div');meta.className='rule-meta';const mode=document.createElement('select');mode.className='mini-select';mode.setAttribute('aria-label',(rule.name||rule.id)+' 回复模式');[['mention','仅@回复'],['all','回复全部'],['social','自主接话']].forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;o.selected=rule.mode===v;mode.append(o)});mode.addEventListener('change',()=>{state.config.group_rules[index].mode=mode.value;markDirty()});const prefix=document.createElement('input');prefix.className='mini-input';prefix.setAttribute('aria-label',(rule.name||rule.id)+' 触发前缀');prefix.maxLength=64;prefix.placeholder='触发前缀';prefix.value=rule.prefix||'';prefix.addEventListener('input',()=>{state.config.group_rules[index].prefix=prefix.value;markDirty()});const persona=document.createElement('input');persona.className='mini-input';persona.setAttribute('aria-label',(rule.name||rule.id)+' 补充人设');persona.maxLength=4000;persona.placeholder='群内补充人设（可选）';persona.value=rule.persona||'';persona.addEventListener('input',()=>{state.config.group_rules[index].persona=persona.value;markDirty()});const remove=document.createElement('button');remove.className='danger-text';remove.type='button';remove.textContent='移除';remove.addEventListener('click',()=>{state.config.group_rules.splice(index,1);markDirty();renderRules();window.WechatProactive?.render()});const force=document.createElement('label');force.className='mention-force';const check=document.createElement('input');check.type='checkbox';check.checked=!!rule.force_reply_when_mentioned;check.addEventListener('change',()=>{state.config.group_rules[index].force_reply_when_mentioned=check.checked;markDirty()});const forceText=document.createElement('span');forceText.textContent='被 @ 后必须回复';force.append(check,forceText);meta.append(mode,prefix,persona,force,remove);row.append(name,meta);box.append(row)}); }
+  function renderRules(){
+    const box=$('#group-rules');
+    box.replaceChildren();
+    const rules=(state.config&&state.config.group_rules)||[];
+    if(!rules.length){
+      const p=document.createElement('p');
+      p.className='empty';
+      p.textContent='尚未添加群聊规则。';
+      box.append(p);
+      return;
+    }
+    rules.forEach((rule,index)=>{
+      const row=document.createElement('div');
+      row.className='rule-row';
+      row.dataset.threadId=rule.id;
+      const name=document.createElement('span');
+      name.className='rule-name';
+      name.textContent=rule.name||rule.id;
+      name.title=rule.id;
+      const meta=document.createElement('div');
+      meta.className='rule-meta';
+      const mode=document.createElement('select');
+      mode.className='mini-select';
+      mode.setAttribute('aria-label',(rule.name||rule.id)+' 回复模式');
+      [['mention','仅@回复'],['all','回复全部'],['social','自主接话']].forEach(([v,l])=>{
+        const o=document.createElement('option');
+        o.value=v;
+        o.textContent=l;
+        o.selected=rule.mode===v;
+        mode.append(o);
+      });
+      const mentionContextLabel=document.createElement('label');
+      mentionContextLabel.className='mention-context-setting';
+      mentionContextLabel.textContent='提及上下文：前后各 N 条';
+      const mentionContext=document.createElement('input');
+      mentionContext.className='mini-input';
+      mentionContext.type='number';
+      mentionContext.min='0';
+      mentionContext.max='200';
+      mentionContext.step='1';
+      mentionContext.required=true;
+      mentionContext.value=String(rule.mention_context_each_side??5);
+      mentionContext.setAttribute('aria-label',(rule.name||rule.id)+' 提及上下文前后各 N 条');
+      mentionContext.addEventListener('input',()=>{
+        if(!mentionContext.checkValidity())return;
+        state.config.group_rules[index].mention_context_each_side=mentionContext.valueAsNumber;
+        markDirty();
+      });
+      mentionContextLabel.append(mentionContext);
+      const syncMentionContext=()=>{
+        const visible=mode.value==='mention';
+        mentionContextLabel.hidden=!visible;
+        mentionContext.disabled=!visible;
+      };
+      syncMentionContext();
+      mode.addEventListener('change',()=>{
+        state.config.group_rules[index].mode=mode.value;
+        syncMentionContext();
+        markDirty();
+      });
+      const prefix=document.createElement('input');
+      prefix.className='mini-input';
+      prefix.setAttribute('aria-label',(rule.name||rule.id)+' 触发前缀');
+      prefix.maxLength=64;
+      prefix.placeholder='触发前缀';
+      prefix.value=rule.prefix||'';
+      prefix.addEventListener('input',()=>{state.config.group_rules[index].prefix=prefix.value;markDirty()});
+      const persona=document.createElement('input');
+      persona.className='mini-input';
+      persona.setAttribute('aria-label',(rule.name||rule.id)+' 补充人设');
+      persona.maxLength=4000;
+      persona.placeholder='群内补充人设（可选）';
+      persona.value=rule.persona||'';
+      persona.addEventListener('input',()=>{state.config.group_rules[index].persona=persona.value;markDirty()});
+      const remove=document.createElement('button');
+      remove.className='danger-text';
+      remove.type='button';
+      remove.textContent='移除';
+      remove.addEventListener('click',()=>{
+        state.config.group_rules.splice(index,1);
+        markDirty();
+        renderRules();
+        window.WechatProactive?.render();
+      });
+      const force=document.createElement('label');
+      force.className='mention-force';
+      const check=document.createElement('input');
+      check.type='checkbox';
+      check.checked=!!rule.force_reply_when_mentioned;
+      check.addEventListener('change',()=>{state.config.group_rules[index].force_reply_when_mentioned=check.checked;markDirty()});
+      const forceText=document.createElement('span');
+      forceText.textContent='被 @ 后必须回复';
+      force.append(check,forceText);
+      meta.append(mode,mentionContextLabel,prefix,persona,force,remove);
+      row.append(name,meta);
+      box.append(row);
+    });
+  }
   const connectionText={unavailable:'服务不可用',disconnected:'未连接',reconnecting:'正在重连',online:'已在线'};
   const eventText={bot_started_history_skipped:'机器人已启动，已跳过历史消息',bot_resumed_saved_cursor:'机器人已恢复保存的处理进度',eligible_message_received:'收到符合规则的消息',reply_server_accepted:'回复已被微信服务端接受',message_skipped_cooldown:'消息因冷却时间跳过',model_call_failed_not_retried:'模型调用失败，未自动重试',reply_outcome_unknown_not_retried:'回复结果未知，未自动重试',reply_outcome_unknown_queued_for_reconciliation:'回复结果未知，已进入持久回执核对',reply_failed_not_retried:'回复失败，未自动重试',waiting_for_native_login:'正在等待微信登录',memory_saved:'已保存本地角色记忆',character_silent:'角色选择安静',character_permission_denied:'角色权限不足，未行动',character_budget_limited:'角色预算已用尽',proactive_claimed:'已领取主动发言机会',proactive_silent:'主动发言选择安静',proactive_reply_accepted:'主动回复已被微信服务端接受'};
   Object.assign(eventText,{delivery_memory_conflict:'已发送回复与旧记忆编号冲突，原记录保留',bot_event_read_failed:'微信事件读取失败，请检查连接后启动',bot_state_already_owned:'另一个 Agent 正在使用这些数据',bot_saved_state_unavailable:'处理进度暂不可用，原始数据保留',bot_state_processing_failed:'恢复处理失败，原始数据保留',bot_stopped_check_connection_or_checkpoint:'Agent 已停止，请查看执行记录'});

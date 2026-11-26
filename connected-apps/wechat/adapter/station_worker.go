@@ -284,6 +284,9 @@ func (r *WorkerRun) queueConfig(account string, queue WorkerQueue, checkActivati
 			return kind == "file" && m.Direction == "incoming" && !r.Blocked() && m.AccountID == account && !grant.IsZero() && err == nil && !stamp.Before(grant)
 		},
 		AuthorizeReply: func(in companion.Input) bool { return groups.AllowsReply(account, in) },
+		MentionHistoryAllowed: func(ctx context.Context, m linuxnative.Message) bool {
+			return !r.Blocked() && ctx.Err() == nil && checkActivation() == nil && groups.AllowsMentionHistory(account, m)
+		},
 	}
 	if queue.ReadGroupShare != nil {
 		config.PreferredGroupShare = func(m linuxnative.Message) bool {

@@ -360,7 +360,8 @@ func (w *Worker) replayMessages(ctx context.Context, ids []string) (ReplayReport
 		c.item.BacklogParent = ""
 		c.item.FollowupParent = ""
 		c.item.FollowupConsumed = false
-		c.item.OwnerModelReview = false
+		c.item.OwnerModelReview = w.mentionRoom(c.msg.ThreadID)
+		c.item.Mention = nil
 		c.item.ReceivedRecorded = false
 		c.item.AggregateUntil = time.Time{}
 		c.item.CollectedAt = time.Time{}

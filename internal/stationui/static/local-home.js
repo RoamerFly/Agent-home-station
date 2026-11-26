@@ -512,7 +512,8 @@
         mode: ["all", "social"].includes(settings.mode) ? settings.mode : "mention",
         prefix: typeof settings.prefix === "string" ? settings.prefix : "",
         persona: typeof settings.persona === "string" ? settings.persona : "",
-        force_reply_when_mentioned: settings.force_reply_when_mentioned === true
+        force_reply_when_mentioned: settings.force_reply_when_mentioned === true,
+        mention_context_each_side: Number.isInteger(settings.mention_context_each_side) ? settings.mention_context_each_side : 5
       };
     };
     const configuredRules = new Map((status.configured_policy?.group_rules || [])
@@ -561,7 +562,7 @@
         advanced.className = "group-rule-advanced";
         advanced.append(appElement("summary", "触发方式与角色（可选）"));
         const settings = value.reply_settings;
-        const effective = settings || { mode: "mention", prefix: "", persona: "", force_reply_when_mentioned: false };
+        const effective = settings || { mode: "mention", prefix: "", persona: "", force_reply_when_mentioned: false, mention_context_each_side: 5 };
         const fields = appElement("div", "", "details-grid");
         const mode = document.createElement("select");
         mode.setAttribute("aria-label", threadID + " 群聊触发方式");
@@ -572,6 +573,18 @@
           mode.append(option);
         }
         mode.value = effective.mode;
+        const mentionContext = document.createElement("input");
+        mentionContext.type = "number";
+        mentionContext.min = "0";
+        mentionContext.max = "200";
+        mentionContext.step = "1";
+        mentionContext.required = true;
+        mentionContext.value = String(effective.mention_context_each_side);
+        mentionContext.setAttribute("aria-label", threadID + " 被提及时上下文前后各 N 条");
+        const mentionContextLabel = appElement("label", "被提及时上下文：前后各 N 条");
+        mentionContextLabel.append(mentionContext);
+        const syncMentionContext = () => { mentionContextLabel.hidden = mode.value !== "mention"; };
+        syncMentionContext();
         const prefix = document.createElement("input");
         prefix.value = effective.prefix;
         prefix.placeholder = "可选触发前缀，保留末尾空格";
@@ -589,9 +602,12 @@
           mode: ["all", "social"].includes(mode.value) ? mode.value : "mention",
           prefix: prefix.value,
           persona: persona.value,
-          force_reply_when_mentioned: force.checked
+          force_reply_when_mentioned: force.checked,
+          mention_context_each_side: mentionContext.validity.valid && mentionContext.value !== "" ? Number(mentionContext.value) :
+            (readGroupRule(threadID).reply_settings?.mention_context_each_side ?? effective.mention_context_each_side)
         } });
-        mode.addEventListener("change", writeSettings);
+        mode.addEventListener("change", () => { syncMentionContext(); writeSettings(); });
+        mentionContext.addEventListener("input", writeSettings);
         prefix.addEventListener("input", writeSettings);
         persona.addEventListener("input", writeSettings);
         force.addEventListener("change", writeSettings);
@@ -603,10 +619,10 @@
         personaLabel.append(persona);
         const forceLabel = appElement("label", "", "switch-row");
         forceLabel.append(force, appElement("span", "被提及时强制回复"));
-        fields.append(modeLabel, prefixLabel, personaLabel, forceLabel);
+        fields.append(modeLabel, mentionContextLabel, prefixLabel, personaLabel, forceLabel);
         if (settings) {
           const reset = appSetupButton("恢复默认触发方式", () => {
-            updateGroupRule(threadID, { reply_settings: { mode: "mention" } });
+            updateGroupRule(threadID, { reply_settings: { mode: "mention", mention_context_each_side: 5 } });
             renderGroupRules();
           });
           fields.append(reset);
@@ -628,6 +644,9 @@
     renderGroupRules();
     syncObservationOptions();
     const save = appSetupButton("保存回复范围", () => {
+      for (const input of groupRules.querySelectorAll('input[type="number"]')) {
+        if (!input.closest("label")?.hidden && !input.reportValidity()) return;
+      }
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachmentThreadIDs();

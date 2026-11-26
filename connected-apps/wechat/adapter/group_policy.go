@@ -19,6 +19,7 @@ type GroupRule struct {
 	Prefix                  string    `json:"prefix,omitempty"`
 	Persona                 string    `json:"persona,omitempty"`
 	ForceReplyWhenMentioned bool      `json:"force_reply_when_mentioned,omitempty"`
+	MentionContextEachSide  *int      `json:"mention_context_each_side,omitempty"`
 	// ReplySince is an authorization epoch for replies. It prevents inputs
 	// queued before an explicit reply-policy change from being revived later.
 	ReplySince time.Time `json:"reply_since,omitzero"`
@@ -29,6 +30,7 @@ type GroupRule struct {
 type GroupPolicy struct {
 	Replies     map[string]time.Time
 	Attachments map[string]time.Time
+	History     map[string]time.Time
 	Rules       map[string]GroupRule
 }
 
@@ -58,11 +60,38 @@ func (rule GroupRule) replyRule() bot.GroupRule {
 	if mode == "" {
 		mode = "mention"
 	}
-	return bot.GroupRule{Mode: mode, Prefix: rule.Prefix, Persona: rule.Persona, ForceReplyWhenMentioned: rule.ForceReplyWhenMentioned}
+	return bot.GroupRule{Mode: mode, Prefix: rule.Prefix, Persona: rule.Persona, ForceReplyWhenMentioned: rule.ForceReplyWhenMentioned, MentionContextEachSide: rule.MentionContextEachSide}
 }
 
 func (rule GroupRule) HasReplySettings() bool {
-	return rule.Mode == "all" || rule.Mode == "social" || rule.Prefix != "" || rule.Persona != "" || rule.ForceReplyWhenMentioned
+	return rule.Mode == "all" || rule.Mode == "social" || rule.Prefix != "" || rule.Persona != "" || rule.ForceReplyWhenMentioned || effectiveMentionContextEachSide(rule.MentionContextEachSide) != defaultMentionContextEachSide
+}
+
+const defaultMentionContextEachSide = 5
+const maxMentionContextEachSide = 200
+
+func effectiveMentionContextEachSide(value *int) int {
+	if value == nil {
+		return defaultMentionContextEachSide
+	}
+	return *value
+}
+
+func validMentionContextEachSide(value *int) bool {
+	return value == nil || *value >= 0 && *value <= maxMentionContextEachSide
+}
+
+func sameEffectiveReplyRule(left, right bot.GroupRule) bool {
+	return left.Mode == right.Mode && left.Prefix == right.Prefix && left.Persona == right.Persona &&
+		left.ForceReplyWhenMentioned == right.ForceReplyWhenMentioned &&
+		effectiveMentionContextEachSide(left.MentionContextEachSide) == effectiveMentionContextEachSide(right.MentionContextEachSide)
+}
+
+// EqualGroupRules compares persisted rules by their effective behavior, not
+// the addresses of optional count fields decoded from separate policy files.
+func EqualGroupRules(left, right GroupRule) bool {
+	return left.Note == right.Note && left.SummarizeSince.Equal(right.SummarizeSince) &&
+		left.ReplySince.Equal(right.ReplySince) && sameEffectiveReplyRule(left.replyRule(), right.replyRule())
 }
 
 func validGroupReplyValues(mode, prefix, persona string) bool {
@@ -75,7 +104,7 @@ func validGroupReplyValues(mode, prefix, persona string) bool {
 }
 
 func ValidGroupReplySettings(settings apphost.ConnectionGroupReplySettings) bool {
-	return validGroupReplyValues(settings.Mode, settings.Prefix, settings.Persona)
+	return validGroupReplyValues(settings.Mode, settings.Prefix, settings.Persona) && validMentionContextEachSide(settings.MentionContextEachSide)
 }
 
 // SetReplySettings validates and normalizes a requested reply policy. Empty
@@ -89,10 +118,14 @@ func (rule *GroupRule) SetReplySettings(settings apphost.ConnectionGroupReplySet
 	previous := rule.replyRule()
 	rule.Mode, rule.Prefix, rule.Persona = "", settings.Prefix, settings.Persona
 	rule.ForceReplyWhenMentioned = settings.ForceReplyWhenMentioned
+	if settings.MentionContextEachSide != nil {
+		value := *settings.MentionContextEachSide
+		rule.MentionContextEachSide = &value
+	}
 	if settings.Mode == "all" || settings.Mode == "social" {
 		rule.Mode = settings.Mode
 	}
-	if rule.replyRule() != previous {
+	if !sameEffectiveReplyRule(rule.replyRule(), previous) {
 		rule.ReplySince = now
 	}
 	return nil
@@ -101,7 +134,7 @@ func (rule *GroupRule) SetReplySettings(settings apphost.ConnectionGroupReplySet
 func ValidGroupRule(thread string, rule GroupRule, replies, attachments map[string]time.Time) bool {
 	parent := replies[thread]
 	if !ValidGroup(thread) || parent.IsZero() || len(rule.Note) > 4000 || !utf8.ValidString(rule.Note) ||
-		!validGroupReplyValues(rule.Mode, rule.Prefix, rule.Persona) || (!rule.ReplySince.IsZero() && rule.ReplySince.Before(parent)) {
+		!validGroupReplyValues(rule.Mode, rule.Prefix, rule.Persona) || !validMentionContextEachSide(rule.MentionContextEachSide) || (!rule.ReplySince.IsZero() && rule.ReplySince.Before(parent)) {
 		return false
 	}
 	if rule.SummarizeSince.IsZero() {
@@ -181,6 +214,17 @@ func (p GroupPolicy) AllowsReply(account string, in companion.Input) bool {
 	return err == nil && !when.Before(granted)
 }
 
+// AllowsMentionHistory requires explicit current history and reply grants.
+// Their epochs authorize the read now; they do not hide older native history
+// that the owner explicitly granted access to.
+func (p GroupPolicy) AllowsMentionHistory(account string, m linuxnative.Message) bool {
+	if account == "" || m.ID == "" || m.AccountID != account || !ValidGroup(m.ThreadID) || p.Rules[m.ThreadID].replyRule().Mode != "mention" {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+	return err == nil && !p.History[m.ThreadID].IsZero() && !p.Replies[m.ThreadID].IsZero()
+}
+
 func (p GroupPolicy) ConversationNote(account string, in companion.Input) (string, bool) {
 	if in.Preview || in.Channel != ID || in.Account != account || !ValidGroup(in.Thread) || p.Replies[in.Thread].IsZero() {
 		return "", false
@@ -193,7 +237,7 @@ func (rule GroupRule) View(thread string) apphost.ConnectionGroupRule {
 	if rule.HasReplySettings() {
 		reply := rule.replyRule()
 		view.ReplySettings = &apphost.ConnectionGroupReplySettings{
-			Mode: reply.Mode, Prefix: reply.Prefix, Persona: reply.Persona, ForceReplyWhenMentioned: reply.ForceReplyWhenMentioned,
+			Mode: reply.Mode, Prefix: reply.Prefix, Persona: reply.Persona, ForceReplyWhenMentioned: reply.ForceReplyWhenMentioned, MentionContextEachSide: reply.MentionContextEachSide,
 		}
 	}
 	return view

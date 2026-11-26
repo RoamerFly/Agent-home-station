@@ -38,6 +38,7 @@ type Record struct {
 
 func (w *Worker) activity(record Record) {
 	if record.MessageID != "" {
+		w.startMentionObservation(record)
 		switch record.Event {
 		case "message_skipped", "character_decision", "model_failed":
 			w.queuePhase(record.MessageID, record.Status)

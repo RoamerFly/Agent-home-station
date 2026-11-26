@@ -125,6 +125,29 @@ func (e *Engine) compressSnapshot(ctx context.Context, in Input, force bool, gua
 	if len(selected) == 0 {
 		return false, nil
 	}
+	// Compression boundaries are indexes in the persisted arrival order. Keep
+	// those boundaries intact, but give the model each selected batch in the
+	// original message-time order, including late native receipts.
+	order := make([]int, len(selected))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		left, right := selected[order[i]], selected[order[j]]
+		if !left.Time.Equal(right.Time) {
+			return left.Time.Before(right.Time)
+		}
+		if left.Source != nil && right.Source != nil && left.Source.Sequence > 0 && right.Source.Sequence > 0 {
+			return left.Source.Sequence < right.Source.Sequence
+		}
+		return false
+	})
+	chronologicalTurns := make([]Turn, len(selected))
+	chronologicalEvidence := make([]map[string]any, len(evidence))
+	for i, index := range order {
+		chronologicalTurns[i], chronologicalEvidence[i] = selected[index], evidence[index]
+	}
+	selected, evidence = chronologicalTurns, chronologicalEvidence
 	var previous contextSummary
 	var prior any = visible.Summary
 	if json.Unmarshal([]byte(visible.Summary), &previous) == nil && previous.Version == 1 {

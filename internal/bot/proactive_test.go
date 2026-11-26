@@ -43,7 +43,7 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 				}
 				engine, _ := companion.New(c, store, m, "test")
 				sender := &fakeSender{}
-				worker, err := New(Config{Channel: "wechat", StateDir: t.TempDir(), AllowedThreads: []string{thread}}, &fakeSource{}, engine, sender)
+				worker, err := New(Config{Channel: "wechat", StateDir: t.TempDir(), AllowedThreads: []string{thread}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "social"}}}, &fakeSource{}, engine, sender)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -73,7 +73,7 @@ func TestProactiveWorkerSendsToSelectedGroupAndFriendOrChoosesSilence(t *testing
 	}
 }
 
-func TestUntriggeredGroupActivityDoesNotPostponeAutonomyOrMemorizeBody(t *testing.T) {
+func TestDormantMentionGroupDoesNotScheduleProactiveEvaluation(t *testing.T) {
 	c := companion.Defaults()
 	c.Enabled = true
 	c.Permissions.Remember = true
@@ -91,15 +91,16 @@ func TestUntriggeredGroupActivityDoesNotPostponeAutonomyOrMemorizeBody(t *testin
 	m := &proactiveModel{answer: `{"action":"silent","messages":[]}`}
 	engine, _ := companion.New(c, store, m, "test")
 	message := fixtureMessage("ambient", "room@chatroom", "群友互聊，不需要回复", "incoming")
+	message.SenderID = "member"
 	source := &fakeSource{messages: map[string]linuxnative.Message{"ambient": message}}
 	worker, _ := New(Config{Channel: "wechat", StateDir: t.TempDir(), AllowedThreads: []string{"room@chatroom"}, GroupRules: map[string]GroupRule{"room@chatroom": {Mode: "mention"}}}, source, engine, &fakeSender{})
 	worker.handle(context.Background(), fixtureEvent("1", "ambient", "room@chatroom", "incoming", "remote"))
 	worker.tickCharacter(context.Background())
-	if m.calls != 1 {
-		t.Fatal("active group did not get autonomous evaluation")
+	if m.calls != 0 {
+		t.Fatal("dormant group started an autonomous evaluation")
 	}
 	scope := store.Context(input, c, time.Now())
-	if len(scope.Messages) != 1 || scope.Messages[0].Text != "原有上下文" || scope.LastActivity.IsZero() {
-		t.Fatal("ambient body memorized or activity missing", scope)
+	if len(scope.Messages) != 2 || scope.Messages[1].Text != message.Body {
+		t.Fatal("ambient receipt missing from local history", scope)
 	}
 }

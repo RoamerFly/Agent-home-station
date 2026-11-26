@@ -41,7 +41,7 @@ func (w *Worker) quietUnmentionedGroupMessage(m linuxnative.Message) bool {
 	if m.Direction != "incoming" || !strings.HasSuffix(m.ThreadID, "@chatroom") {
 		return false
 	}
-	if m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self {
+	if m.Mentions.State == "known" && m.Mentions.Self != nil && *m.Mentions.Self || w.mentionRoom(m.ThreadID) && m.ReplyToSelf {
 		return false
 	}
 	c, ok := w.model.(*companion.Engine)

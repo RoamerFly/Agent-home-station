@@ -105,6 +105,7 @@ func TestPassiveNoticesAreRecordedWithoutModelOrReply(t *testing.T) {
 			source := &fakeSource{messages: map[string]linuxnative.Message{tc.message.ID: tc.message}}
 			model, sender := &fakeModel{}, &fakeSender{}
 			worker := newTestWorker(t, source, model, sender)
+			worker.config.GroupRules = map[string]GroupRule{"room@chatroom": {Mode: "all"}}
 			var records []Record
 			worker.config.Record = func(record Record) { records = append(records, record) }
 			worker.handle(t.Context(), fixtureEvent("1", tc.message.ID, tc.message.ThreadID, tc.message.Direction, "wechat"))
@@ -218,8 +219,8 @@ func TestMentionModeRequiresVerifiedGroupAddress(t *testing.T) {
 	}
 	w.config.GroupRules[m.ThreadID] = GroupRule{Mode: "mention"}
 	m.ReplyToSelf = false
-	if prompt, ok := w.promptWithSharePreference(m, time.Now(), true); !ok || prompt != m.Body {
-		t.Fatalf("preferred share exception rejected: prompt=%q eligible=%t", prompt, ok)
+	if prompt, ok := w.promptWithSharePreference(m, time.Now(), true); ok {
+		t.Fatalf("unmentioned preferred share woke dormant room: %q", prompt)
 	}
 }
 

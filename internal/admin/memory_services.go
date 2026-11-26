@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 )
@@ -207,7 +209,7 @@ func (m *Manager) runMemoryMaintenance(ctx context.Context, engine *companion.En
 							break
 						}
 						stored, e := m.memory.Read(scope.ID, worker.Config, time.Now())
-						if e != nil || stored.Account != m.native.Account() || stored.Channel != "wechat" {
+						if e != nil || stored.Account != m.native.Account() || stored.Channel != "wechat" || !m.automaticMemoryScopeAllowed(stored.Account, stored.Thread) {
 							continue
 						}
 						_, e = m.memory.IndexArchives(ctx, scope.ID, 5)
@@ -228,4 +230,31 @@ func (m *Manager) runMemoryMaintenance(ctx context.Context, engine *companion.En
 		case <-ticker.C:
 		}
 	}
+}
+
+// A mention-only group sleeps between directed requests. Old scopes and
+// unrelated incoming rows must not wake its background model maintenance.
+// Existing unfinished tasks still need their memory available to continue.
+func (m *Manager) automaticMemoryScopeAllowed(account, thread string) bool {
+	if !wechatapp.ValidGroup(thread) {
+		return true
+	}
+	for _, rule := range m.Config().GroupRules {
+		if rule.ID != thread {
+			continue
+		}
+		if rule.Mode != "mention" {
+			return true
+		}
+		for _, task := range m.agent.active(account, thread) {
+			switch task.State {
+			case "pending", "waiting", "running", "waiting_delivery":
+				return true
+			}
+		}
+		return false
+	}
+	// A revoked group must not consume model or embedding tokens from its
+	// retained scope either.
+	return false
 }

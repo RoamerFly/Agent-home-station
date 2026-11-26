@@ -747,7 +747,7 @@ func (m *Manager) start(c Config) {
 		}
 		rules := map[string]bot.GroupRule{}
 		for _, r := range c.GroupRules {
-			rules[r.ID] = bot.GroupRule{Mode: r.Mode, Prefix: r.Prefix, Persona: r.Persona, ForceReplyWhenMentioned: r.ForceReplyWhenMentioned}
+			rules[r.ID] = bot.GroupRule{Mode: r.Mode, Prefix: r.Prefix, Persona: r.Persona, ForceReplyWhenMentioned: r.ForceReplyWhenMentioned, MentionContextEachSide: r.MentionContextEachSide}
 		}
 		friendCtx, cancelFriends := context.WithTimeout(ctx, 8*time.Second)
 		m.warmFriends(friendCtx)
@@ -759,7 +759,7 @@ func (m *Manager) start(c Config) {
 			m.log("bot_saved_state_unavailable")
 			return
 		}
-		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTaskReplyReady: m.taskReplyReady, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, ClosedRounds: closedRounds, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record, Usage: func(thread, message string, u deepseek.Usage) {
+		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTaskReplyReady: m.taskReplyReady, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, MentionHistoryAllowed: m.mentionHistoryAllowed, StateDir: m.stateDir, ClosedRounds: closedRounds, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record, Usage: func(thread, message string, u deepseek.Usage) {
 			m.recordModelUsage(thread, message, modelForBilling(c), u)
 		}}, m.native, model, m.native)
 		if err != nil {

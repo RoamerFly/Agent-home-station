@@ -15,6 +15,18 @@ func (s *Store) LegacyHistoryAllowed(account, thread string) bool {
 		s.data.Scopes[ScopeID("wechat", account, thread)].RecallGeneration == 0
 }
 
+// NativeRecallGeneration identifies the current whole-conversation clear
+// generation. The host can bind newly received context to this generation
+// without resurrecting messages from an earlier one.
+func (s *Store) NativeRecallGeneration(account, thread string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if account == "" || thread == "" || s.db == nil {
+		return 0
+	}
+	return s.data.Scopes[ScopeID("wechat", account, thread)].RecallGeneration
+}
+
 // NativeRecallAllowed prevents an exact native re-read from bypassing local
 // forgetting or source quarantine. Unseen native history may be read, but this
 // method never observes/imports it or changes the memory lifecycle.
