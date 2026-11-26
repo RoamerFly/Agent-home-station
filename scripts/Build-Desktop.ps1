@@ -490,7 +490,19 @@ if($LocalStation){
   if($LASTEXITCODE -ne 0){throw 'LocalStation server build failed.'}
   if($revision){
    $metadata=& go version -m $station
-   if($LASTEXITCODE -ne 0 -or -not ($metadata -match ('\bvcs\.revision='+[regex]::Escape($revision)+'$'))){throw 'LocalStation server build revision does not match the worktree.'}
+   if($LASTEXITCODE -ne 0){throw 'LocalStation server build metadata is unavailable.'}
+   $vcsLines=@($metadata | Where-Object {$_ -match '\bvcs\.revision='})
+   if($vcsLines.Count){
+    if(-not ($vcsLines -match ('\bvcs\.revision='+[regex]::Escape($revision)+'$'))){throw 'LocalStation server build revision does not match the worktree.'}
+   } elseif(Test-Path -LiteralPath (Join-Path $workspace '.git') -PathType Leaf){
+    # Go on this Windows linked worktree builds successfully with
+    # -buildvcs=true but omits vcs.* from the binary metadata. The exact
+    # package above was built from this worktree, so require a clean source
+    # revision before accepting the unstamped artifact.
+    $changes=& git status --porcelain
+    if($LASTEXITCODE -ne 0 -or $changes){throw 'Unstamped LocalStation build requires a clean linked worktree.'}
+    Write-Output ('Verified clean linked-worktree source revision: '+$revision)
+   } else {throw 'LocalStation server build revision does not match the worktree.'}
   }
  } finally {
   $env:GOOS=$oldOS; $env:GOARCH=$oldArch

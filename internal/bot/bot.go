@@ -33,6 +33,7 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
+	MentionHistoryAllowed func(context.Context, linuxnative.Message) bool
 	// ProtectQuote hides a verified outgoing message whose body belongs to a
 	// private, request-scoped host reply.
 	ProtectQuote func(context.Context, linuxnative.Message) bool
@@ -130,6 +131,7 @@ var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 type MediaObservationEvidence = companion.MediaObservationEvidence
 
 type GroupRule struct {
+	MentionContextEachSide  *int
 	Mode, Prefix, Persona   string
 	ForceReplyWhenMentioned bool
 }
@@ -297,11 +299,15 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.activity(Record{Event: "message_read_pending", Category: "error", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, Reason: "message_read_pending", Status: "queued"})
 		return
 	}
-	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
+	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction || message.ID != event.Data.MessageID || message.AccountID != "" && message.AccountID != w.source.Account() {
 		return
 	}
 	if message.Direction == "outgoing" {
 		w.reconcilePausedOutgoing(ctx, message)
+	}
+	if message.IsPassiveNotice() && w.mentionRoom(message.ThreadID) {
+		w.queuePhase(message.ID, "skipped")
+		return
 	}
 	if message.IsPassiveNotice() {
 		// A notice has no participant request to answer, but it is still an
@@ -317,6 +323,42 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if !w.authorizedMessage(message) {
 		w.queuePhase(message.ID, "skipped")
 		return
+	}
+	quoteContext := ""
+	mentionMode := w.mentionRoom(message.ThreadID) && message.Direction == "incoming"
+	var mention *mentionReceipt
+	if mentionMode {
+		if message.IsQuotedText() {
+			quoteContext = w.readQuoteContext(ctx, &message)
+		}
+		if item := w.mentionItem(message.ThreadID, message.ID); item != nil {
+			mention = item.Mention
+			if mention != nil {
+				// A clear, forget, or suppression may occur during collection.
+				if c, ok := w.model.(*companion.Engine); ok && c.Store != nil {
+					check := NativeMessageInput(message)
+					if message.Type == 1 {
+						check.OriginalText = &message.Body
+					}
+					visible, err := c.Store.NativeRecallAllowed(ctx, check)
+					if err != nil {
+						w.persistErr = err
+						return
+					}
+					if !visible || c.Store.NativeRecallGeneration(check.Account, check.Thread) != item.RecallGeneration {
+						w.queuePhase(message.ID, "skipped")
+						return
+					}
+				}
+			}
+		}
+		if !verifiedGroupAddressed(message) && mention == nil && !w.ownerModelReview(message.ID) && !w.mentionTaskInterruption(message) {
+			if w.runtime == nil {
+				_, w.persistErr = w.archiveMentionReceipt(ctx, message, event, w.mentionRecallGeneration(message.ThreadID))
+			}
+			w.queuePhase(message.ID, "skipped")
+			return
+		}
 	}
 	// Historical reviews are processed in order. A later recovered message
 	// must not interrupt a previous review before it has had a model decision
@@ -353,10 +395,9 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		w.queuePhase(message.ID, "skipped")
 		return
 	}
-	quoteContext := ""
 	mediaObservationState := "pending"
 	mediaObservationEvidence := MediaObservationEvidence{}
-	if message.IsQuotedText() {
+	if message.IsQuotedText() && !mentionMode {
 		quoteContext = w.readQuoteContext(ctx, &message)
 	}
 	analysisMessage, quotedMedia := quotedAnalysisMessage(message)
@@ -373,8 +414,13 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if quotedMedia && !w.observationAllowed(analysisMessage) {
 		isMedia = false
 	}
-	preferredShare := w.preferredGroupShare(analysisMessage)
+	preferredShare := (!mentionMode || verifiedGroupAddressed(message) || w.ownerModelReview(message.ID)) && w.preferredGroupShare(analysisMessage)
 	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
+	review := mention != nil && mention.Kind == mentionReview
+	if review && isMedia {
+		working.Type, working.Body = 1, messageSummary(message)
+		isMedia, groupFile = false, false
+	}
 	canAnalyze := isMedia && w.mediaAnalyzer(ctx, analysisMessage) != nil
 	if isMedia && !message.IsQuotedText() && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
@@ -534,7 +580,11 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 				input.QuoteSharedMessage = true
 			}
 		}
-		w.aggregateConversation(ctx, character, message, &input)
+		if mentionMode {
+			w.addMentionContext(ctx, character, message, mention, &input)
+		} else {
+			w.aggregateConversation(ctx, character, message, &input)
+		}
 		if w.persistErr != nil {
 			return
 		}
@@ -631,11 +681,11 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 				return "", false
 			}
 		}
-		if rule.Mode != "all" && rule.Mode != "social" && !preferredShare && !w.addressed(message) {
+		if rule.Mode != "all" && rule.Mode != "social" && !verifiedGroupAddressed(message) && !w.mentionTurnAllowed(message) {
 			return "", false
 		}
-		// Display names are not trusted as evidence of a mention. Remove only
-		// leading display mentions after structured self=true has passed.
+		// Display names are not evidence of a mention. Strip leading display
+		// tokens only after this group's reply rule admits the message.
 		for strings.HasPrefix(text, "@") {
 			i := strings.IndexAny(text, " \u2005\t\n")
 			if i < 0 {
@@ -645,6 +695,9 @@ func (w *Worker) promptWithSharePreference(message linuxnative.Message, now time
 		}
 		if preferredShare {
 			// Considering a share does not manufacture a mention or a user command.
+			return text, text != ""
+		}
+		if w.mentionTurnAllowed(message) && !verifiedGroupAddressed(message) {
 			return text, text != ""
 		}
 		if rule.Prefix != "" {
@@ -1082,7 +1135,7 @@ func (w *Worker) tickCharacter(ctx context.Context) {
 		w.lastMaintenance = time.Now()
 	}
 	for _, input := range character.Proactive(w.config.Channel, w.source.Account()) {
-		if w.pendingAutonomyWork(input.Thread) {
+		if w.mentionRoom(input.Thread) || w.pendingAutonomyWork(input.Thread) {
 			continue
 		}
 		if !w.allowed[input.Thread] {

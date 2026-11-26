@@ -84,7 +84,7 @@ func TestGroupReplySettingsPreserveLegacyAndAdvanceEpoch(t *testing.T) {
 	// A caller from before reply_settings existed must not erase it.
 	legacy := []apphost.ConnectionGroupRule{{ThreadID: room, Note: "旧客户端"}}
 	rules, err := UpdateGroupRules(previous, &legacy, replies, nil, now)
-	if err != nil || rules[room].replyRule() != previous[room].replyRule() || !rules[room].ReplySince.Equal(previous[room].ReplySince) {
+	if err != nil || !sameEffectiveReplyRule(rules[room].replyRule(), previous[room].replyRule()) || !rules[room].ReplySince.Equal(previous[room].ReplySince) {
 		t.Fatal(rules, err)
 	}
 	unchanged := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "all", Prefix: "问： ", Persona: "群聊人格", ForceReplyWhenMentioned: true}}}
@@ -123,6 +123,62 @@ func TestGroupReplySettingsPreserveLegacyAndAdvanceEpoch(t *testing.T) {
 	invalid := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "unsupported"}}}
 	if _, err := UpdateGroupRules(rules, &invalid, replies, nil, now); err != apphost.ErrInvalidConnectionPolicy {
 		t.Fatal("unknown mode was accepted", err)
+	}
+}
+
+func TestMentionContextSettingsPreserveOmissionAndExplicitZero(t *testing.T) {
+	const room = "synthetic-room@chatroom"
+	now := time.Now().UTC()
+	grants := map[string]time.Time{room: now.Add(-time.Hour)}
+	zero, five, other := 0, 5, 201
+	settings := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "mention", MentionContextEachSide: &zero}}}
+	rules, err := UpdateGroupRules(nil, &settings, grants, nil, now)
+	if err != nil || rules[room].MentionContextEachSide == nil || *rules[room].MentionContextEachSide != 0 || !rules[room].ReplySince.Equal(now) {
+		t.Fatal("explicit zero was lost", rules, err)
+	}
+	view := rules[room].View(room)
+	if view.ReplySettings == nil || view.ReplySettings.MentionContextEachSide == nil || *view.ReplySettings.MentionContextEachSide != 0 {
+		t.Fatal("zero was omitted from the settings view", view)
+	}
+	// An older client can still edit another reply field without resetting N.
+	oldClient := []apphost.ConnectionGroupRule{{ThreadID: room, ReplySettings: &apphost.ConnectionGroupReplySettings{Mode: "mention", Prefix: "问："}}}
+	rules, err = UpdateGroupRules(rules, &oldClient, grants, nil, now.Add(time.Second))
+	if err != nil || rules[room].MentionContextEachSide == nil || *rules[room].MentionContextEachSide != 0 {
+		t.Fatal("omitting the new field reset an existing zero", rules, err)
+	}
+	// A fresh old policy has the effective default five. Sending five explicitly
+	// does not advance the reply epoch merely because it creates a pointer.
+	defaultRule := GroupRule{ReplySince: now}
+	if effectiveMentionContextEachSide(defaultRule.MentionContextEachSide) != 5 || defaultRule.HasReplySettings() {
+		t.Fatal("legacy default changed", defaultRule)
+	}
+	if err = defaultRule.SetReplySettings(apphost.ConnectionGroupReplySettings{Mode: "mention", MentionContextEachSide: &five}, now.Add(time.Second)); err != nil || !defaultRule.ReplySince.Equal(now) || defaultRule.HasReplySettings() {
+		t.Fatal("equivalent default advanced the epoch", defaultRule, err)
+	}
+	if !EqualGroupRules(defaultRule, GroupRule{ReplySince: now}) {
+		t.Fatal("equal effective rules compared optional pointer addresses")
+	}
+	if ValidGroupReplySettings(apphost.ConnectionGroupReplySettings{Mode: "mention", MentionContextEachSide: &other}) ||
+		ValidGroupReplySettings(apphost.ConnectionGroupReplySettings{Mode: "mention", MentionContextEachSide: func() *int { n := -1; return &n }()}) {
+		t.Fatal("out of range context count was accepted")
+	}
+}
+
+func TestMentionHistoryGrantAllowsOlderAuthorizedMessages(t *testing.T) {
+	const room = "synthetic-room@chatroom"
+	now := time.Now().UTC()
+	p := GroupPolicy{Replies: map[string]time.Time{room: now.Add(-time.Minute)}, History: map[string]time.Time{room: now},
+		Rules: map[string]GroupRule{room: {ReplySince: now}}}
+	m := linuxnative.Message{ID: "old-message", AccountID: "one", ThreadID: room, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)}
+	if !p.AllowsMentionHistory("one", m) {
+		t.Fatal("explicit history grant could not read a message before the mode change")
+	}
+	if p.AllowsMentionHistory("two", m) {
+		t.Fatal("foreign account read group history")
+	}
+	delete(p.History, room)
+	if p.AllowsMentionHistory("one", m) {
+		t.Fatal("revoked history grant still exposed context")
 	}
 }
 

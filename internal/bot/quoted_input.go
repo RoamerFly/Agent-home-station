@@ -38,6 +38,10 @@ func (w *Worker) readQuoteContext(ctx context.Context, m *linuxnative.Message) s
 		return "\n[引用指向需重新核对来源的私聊回复；请按当前文字处理]"
 	}
 	m.ReplyToSelf = original.Direction == "outgoing"
+	if w.mentionRoom(m.ThreadID) && !w.mentionHistoryVisible(ctx, *original, m.ThreadID) {
+		m.ResolvedQuote = nil
+		return "\n[已核实引用关系，原消息内容当前不可读取]"
+	}
 	m.ResolvedQuote = original
 	text := original.Body
 	if original.Link != nil {

@@ -177,6 +177,7 @@ func TestQuotedReplyKeepsUserTextAndVerifiedBotReferenceWithoutFakeMention(t *te
 	m.Mentions.State = "known"
 	m.Mentions.Self = &no
 	original := fixtureMessage("bot-original", "room@chatroom", "这首音乐可以发原文件", "outgoing")
+	original.SenderID = "test"
 	original.ServerID = "777"
 	w.source = &quotedTestSource{fakeSource: &fakeSource{}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: m.ID, ThreadID: m.ThreadID, State: "resolved", Message: &original}}
 	quoteText := w.readQuoteContext(context.Background(), &m)
@@ -203,7 +204,7 @@ func TestQuotedShareRetainsExactSourceWithoutNeedingCachedAsset(t *testing.T) {
 	m := fixtureMessage("quote-card", "room@chatroom", "把这个原视频发我", "incoming")
 	m.Quote = &linuxnative.QuoteReference{ServerID: "777", Type: 49}
 	original := fixtureMessage("original-card", m.ThreadID, "", "outgoing")
-	original.Type, original.ServerID = 49, "777"
+	original.Type, original.ServerID, original.SenderID = 49, "777", "test"
 	original.Link = &linuxnative.LinkCard{Title: "猫咪看雪", Description: "公开播放卡片", URL: "https://www.bilibili.com/video/BV1425hzpEtn/?p=2"}
 	w.source = &quotedTestSource{fakeSource: &fakeSource{}, resolution: linuxnative.QuoteResolution{AccountID: "test", MessageID: m.ID, ThreadID: m.ThreadID, State: "resolved", Message: &original}}
 	w.runtime.Media = []*mediaDelivery{{Input: companion.Input{Thread: m.ThreadID, Sender: "alice"}, Kind: "share", Title: original.Link.Title, URL: original.Link.URL, Status: linuxnative.ToolStatus{ServerID: "777"}}}

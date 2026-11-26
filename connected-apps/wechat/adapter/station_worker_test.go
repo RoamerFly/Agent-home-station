@@ -13,6 +13,32 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+var _ interface {
+	MessageWindow(context.Context, string, string, int, int) (linuxnative.MessageWindow, error)
+} = activationCheckedSource{}
+
+func TestStationMentionHistoryCallbackChecksCurrentGrants(t *testing.T) {
+	const room = "synthetic@chatroom"
+	now := time.Now().UTC()
+	policy := GroupPolicy{Replies: map[string]time.Time{room: now}, History: map[string]time.Time{room: now},
+		Rules: map[string]GroupRule{room: {}}}
+	run := &WorkerRun{}
+	_, config := run.queueConfig("one", WorkerQueue{Groups: policy}, func() error { return nil })
+	m := linuxnative.Message{ID: "old-message", AccountID: "one", ThreadID: room, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)}
+	if config.MentionHistoryAllowed == nil || !config.MentionHistoryAllowed(context.Background(), m) {
+		t.Fatal("current history grant did not authorize older group context")
+	}
+	delete(policy.History, room)
+	if config.MentionHistoryAllowed(context.Background(), m) {
+		t.Fatal("revoked history grant still authorized group context")
+	}
+	policy.History[room] = now
+	m.AccountID = "another"
+	if config.MentionHistoryAllowed(context.Background(), m) {
+		t.Fatal("foreign account obtained group context")
+	}
+}
+
 func TestWorkerLifecycleDrainsBeforeCleanupAndRejectsLateWork(t *testing.T) {
 	cleaned := make(chan struct{})
 	lifecycle := NewWorkerLifecycle(func() { close(cleaned) })

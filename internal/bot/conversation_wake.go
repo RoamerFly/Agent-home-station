@@ -20,7 +20,7 @@ type conversationWake struct {
 
 func (w *Worker) scheduleConversationWake(c *companion.Engine, in companion.Input, seconds int, wait bool, purpose ...string) {
 	settings := c.Config.ConversationConfig()
-	if w.runtime == nil || !settings.Enabled || !settings.AllowWake || seconds <= 0 || int64(seconds) > int64((time.Duration(1<<63-1))/time.Second) || in.Preview || in.ReportOnly || !w.taskActive(in) {
+	if w.mentionRoom(in.Thread) || w.runtime == nil || !settings.Enabled || !settings.AllowWake || seconds <= 0 || int64(seconds) > int64((time.Duration(1<<63-1))/time.Second) || in.Preview || in.ReportOnly || !w.taskActive(in) {
 		return
 	}
 	// A wake is a one-shot re-evaluation, not a self-perpetuating timer.  The
@@ -86,7 +86,7 @@ func (w *Worker) tickConversationWake(ctx context.Context) bool {
 		for _, id := range c.Config.ProactiveThreads {
 			selected = selected || id == wake.Input.Thread
 		}
-		if !c.Config.Permissions.Proactive || !selected {
+		if w.mentionRoom(wake.Input.Thread) || !c.Config.Permissions.Proactive || !selected {
 			wake.State = "stopped"
 			w.persistErr = w.saveRuntime()
 			w.activity(Record{Event: "conversation_wake_stopped", Category: "decision", ThreadID: wake.Input.Thread, MessageID: wake.Parent, Status: "stopped", Reason: "autonomous_conversation_disabled"})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -42,6 +43,29 @@ func TestEventCursorValidationAndMessageIdentity(t *testing.T) {
 			_, err := testSender(t, server.URL).Message(context.Background(), "msg_one")
 			if (err == nil) != (account == "test") {
 				t.Fatalf("cross-account result: %v", err)
+			}
+		})
+	}
+}
+
+func TestMessagePreservesNativeAndLegacyMentionIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, mentions string
+		wantIDs        []string
+		wantSelf       bool
+	}{
+		{"native userIds", `{"state":"known","self":true,"userIds":["self","other"]}`, []string{"self", "other"}, true},
+		{"legacy ids", `{"state":"known","self":false,"ids":["other"]}`, []string{"other"}, false},
+		{"empty ids with native userIds", `{"state":"known","self":true,"ids":[],"userIds":["self"]}`, []string{"self"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				write(w, `{"id":"msg_one","accountId":"test","mentions":`+tc.mentions+`}`)
+			}))
+			defer server.Close()
+			message, err := testSender(t, server.URL).Message(context.Background(), "msg_one")
+			if err != nil || message.Mentions.State != "known" || message.Mentions.Self == nil || *message.Mentions.Self != tc.wantSelf || !slices.Equal(message.Mentions.IDs, tc.wantIDs) {
+				t.Fatalf("mentions=%+v err=%v", message.Mentions, err)
 			}
 		})
 	}

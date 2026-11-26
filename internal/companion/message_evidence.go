@@ -2,8 +2,11 @@ package companion
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"wechat-bot/internal/agentrun"
@@ -431,7 +434,37 @@ func (e *Engine) safeCurrentEvidence(in Input) map[string]any {
 
 func (e *Engine) unreadEvidence(in Input) []map[string]any {
 	rows := []map[string]any{}
-	for _, event := range in.UnreadMessages {
+	events := in.UnreadMessages
+	allNative := len(events) > 0
+	for _, event := range events {
+		allNative = allNative && event.NativeWindow
+	}
+	if allNative {
+		events = append([]ConversationEvent(nil), events...)
+		sort.SliceStable(events, func(i, j int) bool {
+			left, leftErr := time.Parse(time.RFC3339Nano, events[i].At)
+			right, rightErr := time.Parse(time.RFC3339Nano, events[j].At)
+			if leftErr != nil || rightErr != nil {
+				return false
+			}
+			if !left.Equal(right) {
+				return left.Before(right)
+			}
+			// Native order is retained for equal timestamps unless both
+			// receipts provide a stable monotonically increasing sequence.
+			a, b := events[i].Source, events[j].Source
+			return a != nil && b != nil && a.Sequence > 0 && b.Sequence > 0 && a.Sequence < b.Sequence
+		})
+	}
+	for _, event := range events {
+		if event.NativeWindow {
+			if row, ok := e.nativeWindowEvidence(in, event); ok {
+				rows = append(rows, row)
+			} else {
+				rows = append(rows, map[string]any{"message_id": event.MessageID, "at": event.At, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference"})
+			}
+			continue
+		}
 		ref := event.Source
 		if ref == nil && event.MessageID != "" {
 			ref = &SourceRef{MessageID: event.MessageID, Sender: event.Sender, Account: in.Account, Thread: in.Thread}
@@ -459,6 +492,74 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 	return compactUnreadEvidence(rows, 48<<10)
 }
 
+// A native window is selected by the host around one directed group message.
+// It is context, never an additional request or a tool authorization. Check
+// source identity and the current clear/forget generation again at model time.
+func (e *Engine) nativeWindowEvidence(in Input, event ConversationEvent) (map[string]any, bool) {
+	ref := event.Source
+	if e.Store == nil || !in.IsGroup || in.Channel != "wechat" || ref == nil || event.NewRequest ||
+		in.Account == "" || in.Thread == "" || event.MessageID == "" || event.Sender == "" ||
+		ref.MessageID != event.MessageID || ref.Account != in.Account || ref.Thread != in.Thread || ref.Sender != event.Sender ||
+		ref.Integrity != "observed" || !nativeWindowRelation(event.Relation, event.Direction) ||
+		e.Store.NativeRecallGeneration(in.Account, in.Thread) != event.NativeRecallGeneration {
+		return nil, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, event.At)
+	if err != nil {
+		return nil, false
+	}
+	sourceAt, err := time.Parse(time.RFC3339Nano, ref.OccurredAt)
+	if err != nil || !at.Equal(sourceAt) {
+		return nil, false
+	}
+	var original *string
+	if ref.MessageType == 1 {
+		hash := sha256.Sum256([]byte(event.Text))
+		if ref.BodyHash != hex.EncodeToString(hash[:]) {
+			return nil, false
+		}
+		original = &event.Text
+	}
+	allowed, err := e.Store.NativeRecallAllowed(context.Background(), Input{Channel: in.Channel, Account: in.Account, Thread: in.Thread,
+		Sender: event.Sender, TraceID: event.MessageID, MessageTime: event.At, OriginalText: original, Source: ref})
+	if err != nil || !allowed {
+		return nil, false
+	}
+	row := map[string]any{"message_id": event.MessageID, "at": event.At, "direction": event.Direction,
+		"relation": event.Relation, "source": ref, "message_sender_id": event.Sender, "new_request": false,
+		"context_only": true, "role": "user", "text": "", "user_text_state": "unknown", "evidence_kind": "native_window_context"}
+	if event.SenderName != "" {
+		row["message_sender_name"] = event.SenderName
+	}
+	if event.Direction == "outgoing" {
+		row["role"] = "assistant"
+	}
+	if original != nil {
+		row["text"], row["user_text_state"] = boundedText(event.Text, max(512, e.Config.ContextConfig().MaxInputChars/4)), "verified_original"
+		if event.Direction == "outgoing" {
+			row["user_text_state"] = "assistant_statement"
+		} else {
+			row["speaker_id"] = event.Sender
+		}
+	} else {
+		row["evidence_kind"] = "native_media_context"
+		row["message_type"] = ref.MessageType
+	}
+	return row, true
+}
+
+func nativeWindowRelation(relation, direction string) bool {
+	if direction != "incoming" && direction != "outgoing" {
+		return false
+	}
+	for _, name := range []string{"request_before", "request_after", "quoted_message_before", "quoted_message_anchor", "quoted_message_after", "observation"} {
+		if relation == name+"_"+direction {
+			return true
+		}
+	}
+	return false
+}
+
 // A restart can collect dozens of messages into one current_message turn.
 // Keep every sender, time and message identity in that turn, while excerpting
 // older large bodies and media observations so the native function transcript
@@ -474,7 +575,7 @@ func compactUnreadEvidence(rows []map[string]any, limit int) []map[string]any {
 	perRow := max(96, (limit-2)/len(rows)-1)
 	for i, row := range rows {
 		short := map[string]any{}
-		for _, key := range []string{"message_id", "at", "message_sender_id", "message_sender_name", "user_text_state", "evidence_kind", "media_read_status"} {
+		for _, key := range []string{"message_id", "at", "message_sender_id", "message_sender_name", "user_text_state", "evidence_kind", "media_read_status", "direction", "relation", "role", "context_only", "new_request", "message_type"} {
 			if value, ok := row[key]; ok {
 				short[key] = value
 			}

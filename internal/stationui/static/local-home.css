@@ -625,7 +625,8 @@ p.publication-authorization-note,
 .group-rule-advanced summary { padding: var(--s-2) 0; cursor: pointer; color: var(--accent-deep); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .group-rule-advanced .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); padding: var(--s-1) 0 var(--s-2); }
 .group-rule-advanced .details-grid > label { display: grid; gap: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
-.group-rule-advanced .details-grid > textarea, .group-rule-advanced .details-grid > label:nth-child(3) { grid-column: 1 / -1; }
+.group-rule-advanced .details-grid > label[hidden] { display: none; }
+.group-rule-advanced .details-grid > textarea, .group-rule-advanced .details-grid > label:nth-child(4) { grid-column: 1 / -1; }
 .group-rule-advanced .switch-row { padding: var(--s-2) 0; font-size: var(--fs-caption); }
 .home-controls { padding-top: var(--s-1); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }

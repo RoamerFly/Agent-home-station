@@ -13,6 +13,9 @@ import (
 )
 
 type inboxItem struct {
+	RecallGeneration         int                               `json:"recall_generation,omitempty"`
+	ReceivedAt               time.Time                         `json:"received_at,omitzero"`
+	Mention                  *mentionReceipt                   `json:"mention,omitempty"`
 	Backlog                  bool                              `json:"backlog,omitempty"`
 	BacklogParent            string                            `json:"backlog_parent,omitempty"`
 	GroupDeferred            bool                              `json:"group_deferred,omitempty"`
@@ -390,6 +393,9 @@ func (w *Worker) pendingQueueParent(thread string) string {
 }
 
 func (w *Worker) drainInbox(ctx context.Context) error {
+	if err := w.prepareMentionReceipts(ctx); err != nil {
+		return err
+	}
 	for i := range w.runtime.Inbox {
 		if w.draining() {
 			return nil
@@ -401,7 +407,10 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		if w.roundClosed(item.Event.Data.ThreadID, item.Event.Data.MessageID) || item.BacklogParent != "" && w.roundClosed(item.Event.Data.ThreadID, item.BacklogParent) {
 			continue
 		}
-		if item.GroupDeferred && item.Phase == "received" {
+		if item.Mention != nil && item.Mention.Kind == mentionReview && item.Phase == "received" && w.pendingConversationThread(item.Event.Data.ThreadID) {
+			continue
+		}
+		if !w.mentionRoom(item.Event.Data.ThreadID) && item.GroupDeferred && item.Phase == "received" {
 			if w.pendingConversationThread(item.Event.Data.ThreadID) {
 				continue
 			}
@@ -417,7 +426,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 			}
 			continue
 		}
-		if item.Backlog && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
+		if item.Backlog && !w.mentionRoom(item.Event.Data.ThreadID) && !item.OwnerModelReview && (item.Phase == "received" || item.Phase == "read_pending" || item.Phase == "backlog_grouped") {
 			if err := w.processUnreadConversation(ctx, item.Event.Data.ThreadID); err != nil {
 				return err
 			}
@@ -445,7 +454,7 @@ func (w *Worker) drainInbox(ctx context.Context) error {
 		// one decision. Keep explicit reviews, active tasks and delayed retries
 		// on their own lifecycle, including their cancellation fast path.
 		thread := item.Event.Data.ThreadID
-		if w.generation != nil && item.Phase == "received" && !item.OwnerModelReview && !item.AggregateUntil.IsZero() && strings.HasSuffix(thread, "@chatroom") && !w.pendingConversationThread(thread) && w.generation.canGenerate() {
+		if !w.mentionRoom(thread) && w.generation != nil && item.Phase == "received" && !item.OwnerModelReview && !item.AggregateUntil.IsZero() && strings.HasSuffix(thread, "@chatroom") && !w.pendingConversationThread(thread) && w.generation.canGenerate() {
 			ids := map[string]bool{}
 			for j := i; j < len(w.runtime.Inbox); j++ {
 				next := &w.runtime.Inbox[j]
@@ -638,10 +647,11 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 						return errors.New("inbox full; no message cursor discarded")
 					}
 				}
-				item := inboxItem{Event: event, Phase: "received", Updated: time.Now().UTC()}
+				now := time.Now().UTC()
+				item := inboxItem{Event: event, Phase: "received", Updated: now, ReceivedAt: now, RecallGeneration: w.mentionRecallGeneration(event.Data.ThreadID)}
 				queueParent := ""
 				pending := w.pendingConversationThread(event.Data.ThreadID)
-				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !pending {
+				if c, ok := w.model.(*companion.Engine); ok && c.Config.ConversationConfig().Enabled && !pending && !w.mentionRoom(event.Data.ThreadID) {
 					item.AggregateUntil = w.collectionDeadline(event.Data.ThreadID, item.Updated, c.Config.ConversationConfig().CollectionWindow(event.Data.ThreadID))
 					if !item.AggregateUntil.IsZero() && strings.HasSuffix(event.Data.ThreadID, "@chatroom") {
 						item.CollectedAt = item.Updated
@@ -662,7 +672,9 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 				if err = w.saveRuntime(); err != nil {
 					return err
 				}
-				w.activity(Record{Event: "message_queued", Category: "received", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, RelatedMessageID: queueParent, Status: "queued", Reason: "durable_inbox", Origin: "wechat"})
+				if !w.mentionRoom(event.Data.ThreadID) {
+					w.activity(Record{Event: "message_queued", Category: "received", ThreadID: event.Data.ThreadID, MessageID: event.Data.MessageID, RelatedMessageID: queueParent, Status: "queued", Reason: "durable_inbox", Origin: "wechat"})
+				}
 			}
 			state.Cursor = event.Cursor
 			if event.Data.MessageID != "" {

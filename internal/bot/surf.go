@@ -49,7 +49,7 @@ func (w *Worker) tickSurf(ctx context.Context) bool {
 		w.config.Log("surf_schedule_failed")
 		return false
 	}
-	if task == nil {
+	if task == nil || !task.Manual && w.mentionRoom(task.Thread) {
 		return false
 	}
 	trace := "surf-" + time.Now().UTC().Format(time.RFC3339Nano)

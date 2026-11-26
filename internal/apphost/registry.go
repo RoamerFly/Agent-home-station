@@ -48,6 +48,9 @@ type ConnectionGroupReplySettings struct {
 	Prefix                  string `json:"prefix,omitempty"`
 	Persona                 string `json:"persona,omitempty"`
 	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned,omitempty"`
+	// Nil keeps the existing value on update and defaults to five messages on
+	// each side for old policies. A pointer to zero explicitly disables context.
+	MentionContextEachSide *int `json:"mention_context_each_side,omitempty"`
 }
 
 // ConnectionGroupRule configures one already-authorized conversation.

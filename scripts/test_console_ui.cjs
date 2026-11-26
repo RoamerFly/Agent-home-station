@@ -110,6 +110,14 @@ const log=(id,content,event='message_received')=>({id,time:dateKey+'T08:00:00Z',
   // Model settings keep execution/recovery policy fields untouched.
   await page.evaluate(()=>window.WechatAdmin.nav('companion'));await page.locator('#companion-name').fill(config.companion.name+' · 测试');await page.locator('#save-companion').click();await page.getByText('配置已保存并应用。',{exact:true}).waitFor();
   const saved=writes.find(x=>x.path==='/api/config').body;assert.deepEqual(saved.behavior,config.behavior);assert.deepEqual(saved.group_rules,config.group_rules);
+  await page.evaluate(()=>window.WechatAdmin.nav('rules'));
+  const mentionCount=page.getByRole('spinbutton',{name:'合成测试群 提及上下文前后各 N 条'});
+  assert.equal(await mentionCount.inputValue(),'5','old console rule must display the default five');
+  await mentionCount.fill('0');
+  await page.locator('#save-rules').click();
+  await page.getByText('配置已保存并应用。',{exact:true}).waitFor();
+  assert.equal(writes.filter(x=>x.path==='/api/config').at(-1).body.group_rules[0].mention_context_each_side,0);
+  assert.equal(await page.getByRole('spinbutton',{name:'合成测试群 提及上下文前后各 N 条'}).inputValue(),'0');
   await page.evaluate(()=>window.WechatAdmin.nav('memory'));await page.locator('.conversation-open').click();await page.locator('#memory-content .memory-message-body').waitFor();assert.equal(await page.locator('#memory-content .long-content-preview').textContent(),prose);
   await page.locator('#memory-content .long-content').click();assert((await page.locator('dialog.console-dialog .readable-full-text').textContent()).includes('【正文末尾完整保留】'));await page.keyboard.press('Escape');await page.locator('#sidebar-refresh').click();await page.waitForTimeout(250);assert(await page.locator('#memory-content .long-content').isVisible());
   await page.evaluate(()=>window.WechatAdmin.nav('logs'));await page.waitForFunction(()=>document.querySelectorAll('.round-card').length===76);assert.equal(await page.locator('#log-date').inputValue(),dateKey);assert.equal(await page.locator('#log-more').count(),0);await page.locator('.round-summary').first().click();assert(await page.locator('dialog.console-dialog').isVisible());const roundText=await page.locator('dialog.console-dialog').textContent();assert(roundText.includes('调用工具 · 在隔离环境执行命令'));assert(roundText.includes('失败原因：合成执行器不可用'));assert(roundText.includes('会话根目录/output/result.txt'));assert(roundText.includes('首次复核未完成'));await page.locator('dialog .conversation-summary').getByText('复核状态：最终复核未完成',{exact:false}).waitFor();assert(roundText.includes('解析模型响应'));assert(roundText.includes('HTTP 200'));assert(roundText.includes('格式校验轮次 2/2 次'));assert(!roundText.includes('角色选择保持安静'));assert.equal(await page.locator('dialog .round-technical,dialog .raw-details').count(),0);

@@ -54,8 +54,8 @@ func TestSharePreferenceConsidersCardsWithoutInventingMention(t *testing.T) {
 	working := m
 	working.Type = 1
 	working.Body = "分享内容"
-	if _, ok := w.promptWithSharePreference(working, time.Now(), true); !ok {
-		t.Fatal("authorized share blocked by mention mode")
+	if _, ok := w.promptWithSharePreference(working, time.Now(), true); ok {
+		t.Fatal("share preference woke mention-only mode")
 	}
 	if w.addressed(working) {
 		t.Fatal("fabricated mention")
@@ -87,7 +87,7 @@ func TestHostGroupShareStartupBatchCarriesAnchorEvidenceToModel(t *testing.T) {
 	}))
 	room := "startup-share@chatroom"
 	w.allowed[room] = true
-	w.config.GroupRules = map[string]GroupRule{room: {Mode: "mention"}}
+	w.config.GroupRules = map[string]GroupRule{room: {Mode: "all"}}
 	share := fixtureMessage("startup-channels", room, "", "incoming")
 	share.Type, share.SenderID = 49, "member-b"
 	subtype := 51
@@ -148,8 +148,12 @@ func TestHostGroupShareWorkerRegressionGatesAndEvidence(t *testing.T) {
 	}
 	working := channels
 	working.Type, working.Body = 1, "收到了一条分享，结合会话偏好判断是否读取内容并回复。"
+	if _, ok := w.promptWithSharePreference(working, time.Now(), true); ok {
+		t.Fatal("host share preference woke mention-only mode")
+	}
+	w.config.GroupRules[room] = GroupRule{Mode: "all"}
 	if _, ok := w.promptWithSharePreference(working, time.Now(), true); !ok {
-		t.Fatal("host-authorized Channels card was blocked by mention mode")
+		t.Fatal("active group lost its share policy")
 	}
 	old := working
 	old.CreatedAt = time.Now().Add(-24 * time.Hour).Format(time.RFC3339)

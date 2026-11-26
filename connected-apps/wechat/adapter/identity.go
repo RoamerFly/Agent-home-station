@@ -66,6 +66,7 @@ type LegacyGroupRule struct {
 	Prefix                  string `json:"prefix"`
 	Persona                 string `json:"persona"`
 	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned"`
+	MentionContextEachSide  *int   `json:"mention_context_each_side,omitempty"`
 }
 
 func ConnectionRef(account string) apphost.ConnectionRef {
