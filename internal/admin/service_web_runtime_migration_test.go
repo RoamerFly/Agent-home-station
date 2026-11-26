@@ -75,6 +75,25 @@ func TestWebPublicProxyBindsQueryBackendURLAndRequestedLimits(t *testing.T) {
 	}
 }
 
+func TestWebSearchDefaultPublicReadReachesHostTransport(t *testing.T) {
+	_, p, _, job, cap := deepSeekWebJob(t)
+	job.Arguments = json.RawMessage(`{"query":"测试 搜索"}`)
+	job.Tool, cap.ID = "web.search", "web.search"
+	calls := 0
+	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, read: func(_ context.Context, u string, maximum int64, timeout time.Duration) ([]byte, string, string, error) {
+		calls++
+		if maximum != 2<<20 || timeout != 6*time.Second {
+			t.Fatalf("unexpected effective public search limits: %d %s", maximum, timeout)
+		}
+		return []byte("synthetic rss"), "application/rss+xml", u, nil
+	}}
+	input := json.RawMessage(`{"url":"https://www.bing.com/search?q=%E6%B5%8B%E8%AF%95+%E6%90%9C%E7%B4%A2&format=rss","max_bytes":2097152,"timeout_seconds":6}`)
+	result, err := policy.Service(t.Context(), job, cap, "wechat/http_read", input)
+	if err != nil || calls != 1 || !bytes.Contains(result, []byte(`"ok":true`)) {
+		t.Fatalf("default public search did not reach host transport: calls=%d result=%s err=%v", calls, result, err)
+	}
+}
+
 func TestWebDeepSeekCannotFallBackToPublicHTTP(t *testing.T) {
 	_, p, _, job, cap := deepSeekWebJob(t)
 	policy := servicePluginPolicy{p: p, observed: map[string]bool{}, read: func(context.Context, string, int64, time.Duration) ([]byte, string, string, error) {

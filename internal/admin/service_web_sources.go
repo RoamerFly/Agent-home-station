@@ -104,6 +104,13 @@ func (s servicePluginPolicy) validatePublicWebRead(ctx context.Context, j plugin
 	case "web.read":
 		allowed = args.URL != "" && args.URL == rawURL
 	case "web.search":
+		// The installed search runtime gives each public index a six-second
+		// default budget when the Agent did not specify one. The host must bind
+		// the effective value, otherwise every fallback is rejected before any
+		// network request can start.
+		if args.Timeout == nil {
+			expectedTimeout = 6
+		}
 		var selection struct {
 			Source string `json:"source"`
 		}

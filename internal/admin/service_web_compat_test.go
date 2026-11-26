@@ -29,14 +29,17 @@ func TestWebSearchAllowsOnlyDeclaredThirdPublicIndex(t *testing.T) {
 	policy := servicePluginPolicy{p: p}
 	job := pluginhost.Job{Tool: "web.search", Arguments: args}
 	allowed := "https://search.brave.com/search?q=%E6%AD%8C%E6%89%8B+%E6%AD%8C%E5%90%8D+site%3Abilibili.com%2Fvideo"
-	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 20); err != nil {
+	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 6); err != nil {
 		t.Fatal("declared fallback index rejected", err)
 	}
-	if err := policy.validatePublicWebRead(t.Context(), job, "https://search.brave.com/search?q=changed", 2<<20, 20); err == nil {
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://search.brave.com/search?q=changed", 2<<20, 6); err == nil {
 		t.Fatal("changed fallback query accepted")
 	}
-	if err := policy.validatePublicWebRead(t.Context(), job, "https://example.test/search?q=anything", 2<<20, 20); err == nil {
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://example.test/search?q=anything", 2<<20, 6); err == nil {
 		t.Fatal("unlisted public index accepted")
+	}
+	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 20); err == nil {
+		t.Fatal("unrequested public search timeout accepted")
 	}
 }
 
@@ -62,11 +65,22 @@ func TestConfiguredDeepSeekMayUseBoundPublicSearchFallback(t *testing.T) {
 	policy := servicePluginPolicy{p: p}
 	job := pluginhost.Job{Plugin: "web-search", Tool: "web.search", Arguments: json.RawMessage(`{"query":"测试 搜索"}`)}
 	allowed := "https://www.bing.com/search?q=%E6%B5%8B%E8%AF%95+%E6%90%9C%E7%B4%A2&format=rss"
-	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 20); err != nil {
+	if err := policy.validatePublicWebRead(t.Context(), job, allowed, 2<<20, 6); err != nil {
 		t.Fatalf("bound public fallback rejected: %v", err)
 	}
-	if err := policy.validatePublicWebRead(t.Context(), job, "https://www.bing.com/search?q=changed&format=rss", 2<<20, 20); err == nil {
+	if err := policy.validatePublicWebRead(t.Context(), job, "https://www.bing.com/search?q=changed&format=rss", 2<<20, 6); err == nil {
 		t.Fatal("changed fallback query accepted")
+	}
+}
+
+func TestWebSearchRespectsExplicitPublicTimeout(t *testing.T) {
+	f, p := trustedAgent(t)
+	_, installed := installPublicWebFixture(t, f)
+	policy := servicePluginPolicy{p: p}
+	job := pluginhost.Job{Plugin: installed.Package.ID, Tool: "web.search", Arguments: json.RawMessage(`{"query":"测试 搜索","timeout_seconds":20}`)}
+	url := "https://www.bing.com/search?q=%E6%B5%8B%E8%AF%95+%E6%90%9C%E7%B4%A2&format=rss"
+	if err := policy.validatePublicWebRead(t.Context(), job, url, 2<<20, 20); err != nil {
+		t.Fatalf("explicit timeout rejected: %v", err)
 	}
 }
 
