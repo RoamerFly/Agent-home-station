@@ -29,6 +29,7 @@ func (h *localChatService) comfyDirect(w http.ResponseWriter, r *http.Request) {
 		WorkflowID string                     `json:"workflow_id"`
 		Inputs     map[string]json.RawMessage `json:"inputs"`
 		JobID      string                     `json:"job_id"`
+		JobAction  string                     `json:"job_action"`
 		Title      string                     `json:"title"`
 	}
 	if !websession.Decode(w, r, &request) {
@@ -59,8 +60,15 @@ func (h *localChatService) comfyDirect(w http.ResponseWriter, r *http.Request) {
 			websession.Fail(w, http.StatusBadRequest, "请指定 ComfyUI 作业编号")
 			return
 		}
+		if request.JobAction == "" {
+			request.JobAction = "status"
+		}
+		if request.JobAction != "status" && request.JobAction != "cancel" {
+			websession.Fail(w, http.StatusBadRequest, "ComfyUI 作业操作无效")
+			return
+		}
 		tool = localComfyJobTool
-		args, _ = json.Marshal(map[string]string{"job_id": request.JobID, "action": "status"})
+		args, _ = json.Marshal(map[string]string{"job_id": request.JobID, "action": request.JobAction})
 	default:
 		websession.Fail(w, http.StatusBadRequest, "ComfyUI 操作无效")
 		return

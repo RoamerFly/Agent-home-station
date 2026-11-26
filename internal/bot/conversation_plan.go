@@ -65,6 +65,18 @@ func explicitCorrectionToPriorInput(in companion.Input, m linuxnative.Message) b
 	if words == "" {
 		return false
 	}
+	// A new uploaded image followed by “只用这张参考图” explicitly replaces
+	// the source of an active image/video request. It is not a general request
+	// to recheck every new message in the thread.
+	creative := strings.ToLower(in.Text + " " + in.RequestedText)
+	if strings.Contains(creative, "图") || strings.Contains(creative, "画") || strings.Contains(creative, "视频") ||
+		strings.Contains(creative, "image") || strings.Contains(creative, "video") {
+		for _, phrase := range []string{"只用这张参考图", "只用这张图", "就用这张参考图", "以这张参考图为准", "只用我刚发的图", "就用我刚发的图"} {
+			if strings.Contains(words, phrase) {
+				return true
+			}
+		}
+	}
 	if _, after, ok := strings.Cut(words, "不是"); ok {
 		// "是 konan 的声线，不是柯南" directly corrects the prior
 		// request even without saying "刚才". Only the old requester's
@@ -270,6 +282,7 @@ func (w *Worker) noticeConversationMessage(m linuxnative.Message, eligible bool)
 	if m.Type != 1 && !m.IsQuotedText() {
 		return
 	}
+	w.cancelCreativeMediaForCorrection(m)
 	correction := w.correctionPlan(m)
 	if c.Config.ConversationConfig().RecheckOnMessage {
 		for _, r := range w.runtime.MediaReplies {

@@ -1348,6 +1348,48 @@ func (w *Worker) cancelVoiceForIntent(ctx context.Context, in companion.Input, i
 	}
 	w.persistErr = w.saveRuntime()
 }
+
+// An explicit correction of a creative request also closes its already
+// prepared media delivery. This is the last durable gate after a Comfy output
+// has been staged into the native sender; backend cancellation alone cannot
+// stop a previously queued WeChat upload.
+func (w *Worker) cancelCreativeMediaForCorrection(m linuxnative.Message) {
+	if w.runtime == nil {
+		return
+	}
+	native, ok := w.sender.(mediaNative)
+	if !ok {
+		return
+	}
+	var trace string
+	var latest time.Time
+	for _, d := range w.runtime.Media {
+		if d == nil || d.Kind != "image" && d.Kind != "video" || d.State == "accepted" || d.State == "stopped" ||
+			!explicitCorrectionToPriorInput(d.Input, m) {
+			continue
+		}
+		if trace == "" || d.Created.After(latest) {
+			trace, latest = d.Trace, d.Created
+		}
+	}
+	if trace == "" {
+		return
+	}
+	for _, d := range w.runtime.Media {
+		if d == nil || d.Trace != trace || d.Kind != "image" && d.Kind != "video" || d.State == "accepted" || d.State == "stopped" {
+			continue
+		}
+		d.CancelTrace, d.CancelSender, d.CancelledAt = m.ID, m.SenderID, time.Now().UTC()
+		w.cancelMedia(native, d, true, "media_superseded_by_corrected_reference")
+	}
+	for _, reply := range w.runtime.MediaReplies {
+		if reply != nil && reply.Trace == trace && !reply.terminal() {
+			reply.State = "stopped"
+			w.refreshMediaParent(trace)
+		}
+	}
+	w.persistErr = w.saveRuntime()
+}
 func rejectVoice(text string) bool {
 	return parseVoiceInterrupt(text).stop
 }

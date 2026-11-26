@@ -41,7 +41,13 @@ func (e localComfyInvocation) jobAction(ctx context.Context, raw json.RawMessage
 	}
 	if job.Recovery() == "terminal" {
 		if in.Action == "cancel" {
-			return localProcessJSON(map[string]any{"job_id": job.ID, "state": job.State})
+			if job.State == "completed" && !job.CancelRequested {
+				job, err = e.host.store.RevokeCompletedJob(ctx, job.ID, job.Revision)
+				if err != nil {
+					return "", err
+				}
+			}
+			return localProcessJSON(comfyJobView(job))
 		}
 		return localProcessJSON(e.finishedView(job))
 	}
@@ -205,7 +211,7 @@ func (e localComfyInvocation) failComfyJob(ctx context.Context, job pluginhost.J
 
 func (e localComfyInvocation) finishedView(job pluginhost.Job) map[string]any {
 	view := comfyJobView(job)
-	if len(job.Artifacts) == 0 {
+	if len(job.Artifacts) == 0 || job.CancelRequested {
 		return view
 	}
 	store := e.tool.access.home.artifacts

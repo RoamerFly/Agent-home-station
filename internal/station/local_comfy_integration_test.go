@@ -346,6 +346,39 @@ func TestWechatComfyImageUsesWorkstationAndApplicationDelivery(t *testing.T) {
 	if _, err := adapter.stageReply(t.Context(), in, "image", finished.Media[0].AssetID); err != nil || uploads != 1 {
 		t.Fatalf("application did not stage verified image: %v uploads=%d", err, uploads)
 	}
+	cancel, _ := json.Marshal(map[string]string{"job_id": started.ID, "action": "cancel"})
+	out, err = adapter.Call(t.Context(), localComfyJobTool, cancel)
+	if err != nil || !strings.Contains(out, `"state":"cancelled"`) {
+		t.Fatalf("completed render was not superseded: %s %v", out, err)
+	}
+	if _, ok := adapter.Media(finished.Media[0].ID); ok {
+		t.Fatal("superseded completed render remains sendable")
+	}
+	if _, err := adapter.stageReply(t.Context(), in, "image", finished.Media[0].AssetID); err == nil || uploads != 1 {
+		t.Fatalf("superseded render passed delivery gate: %v uploads=%d", err, uploads)
+	}
+	out, err = adapter.Call(t.Context(), localComfyStartTool, json.RawMessage(`{"workflow_id":"smoke","inputs":{"width":48}}`))
+	if err != nil || !strings.Contains(out, `"state":"cancelled"`) || backend.submits != 1 {
+		t.Fatalf("old request restarted after cancellation: %s %v submits=%d", out, err, backend.submits)
+	}
+	out, err = adapter.Call(t.Context(), localComfyStartTool, json.RawMessage(`{"workflow_id":"smoke","inputs":{"width":49}}`))
+	var replacement struct {
+		ID    string `json:"job_id"`
+		State string `json:"state"`
+	}
+	_ = json.Unmarshal([]byte(out), &replacement)
+	if err != nil || replacement.ID == "" || replacement.ID == started.ID || backend.submits != 2 {
+		t.Fatalf("corrected request did not create an independent render: %s %v submits=%d", out, err, backend.submits)
+	}
+	moreCancel, _ := json.Marshal(map[string]string{"job_id": replacement.ID, "action": "cancel"})
+	out, err = adapter.Call(t.Context(), localComfyJobTool, moreCancel)
+	if err != nil || !strings.Contains(out, `"state":"cancelled"`) || backend.cancels != 1 {
+		t.Fatalf("running render did not cancel: %s %v cancels=%d", out, err, backend.cancels)
+	}
+	adapter.trace.Text = "只用这张参考图"
+	if _, err := adapter.Call(t.Context(), localComfyStartTool, json.RawMessage(`{"workflow_id":"h3-text-to-video","inputs":{}}`)); err == nil {
+		t.Fatal("text-to-video ignored an explicit uploaded-image correction")
+	}
 	adapter.replies = nil
 	if _, ok := adapter.Media(finished.Media[0].ID); ok {
 		t.Fatal("revoked application grant still exposes generated media")
@@ -580,6 +613,53 @@ func TestLocalComfyChatJobsAndArtifacts(t *testing.T) {
 	}
 	if got := localArtifactDownload(t, f, ids[0]); !bytes.Equal(got, data.Bytes()) {
 		t.Fatal("disabling ComfyUI removed an already verified artifact")
+	}
+}
+
+func TestCompletedComfyCancellationRevokesOldArtifact(t *testing.T) {
+	f := localComfyFixture(t)
+	root := t.TempDir()
+	writeLocalComfyChatWorkflow(t, root)
+	fish, _, err := fishidentity.New(f.handler.home.dataDir).Bindings()
+	if err != nil || fish == "" {
+		t.Fatal(err)
+	}
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 48, 24))); err != nil {
+		t.Fatal(err)
+	}
+	backend := &syntheticLocalComfy{root: root, fish: fish, image: comfyui.Image{
+		Data: data.Bytes(), SHA256: localComfyDigest(data.Bytes()), Width: 48, Height: 24,
+	}}
+	setUpLocalComfyChat(t, f, backend)
+	jobID := requestLocalComfyJob(t, f, "comfy-completed-revocation")
+	backend.state = comfyui.Completed
+	ids := requestLocalComfyStatus(t, f, "comfy-completed-output", jobID, "status")
+	if len(ids) != 2 {
+		t.Fatal("fixture did not complete", ids)
+	}
+	if code, _ := f.request("GET", "/api/local/artifacts/"+ids[0], nil, true); code != http.StatusOK {
+		t.Fatalf("completed artifact was not readable before cancellation: %d", code)
+	}
+	if got := requestLocalComfyStatus(t, f, "comfy-completed-cancel", jobID, "cancel"); len(got) != 0 {
+		t.Fatalf("cancelled output still exposed artifacts: %v", got)
+	}
+	host, err := f.handler.chat.projectTools.forFish(fish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := host.store.Job(t.Context(), jobID)
+	if err != nil || job.State != "completed" || !job.CancelRequested {
+		t.Fatalf("completed cancellation was not persisted: %+v %v", job, err)
+	}
+	if code, _ := f.request("GET", "/api/local/artifacts/"+ids[0], nil, true); code != http.StatusNotFound {
+		t.Fatalf("cancelled artifact remained attachable: %d", code)
+	}
+	if code, _ := f.request("GET", "/api/local/artifacts/"+ids[0]+"/download", nil, true); code != http.StatusNotFound {
+		t.Fatalf("cancelled artifact remained downloadable: %d", code)
+	}
+	if got := requestLocalComfyStatus(t, f, "comfy-completed-cancel-again", jobID, "cancel"); len(got) != 0 || backend.submits != 1 {
+		t.Fatalf("retry revived superseded output: %v submits=%d", got, backend.submits)
 	}
 }
 

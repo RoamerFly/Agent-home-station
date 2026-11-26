@@ -188,6 +188,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		WorkflowID      string                     `json:"workflow_id"`
 		Inputs          map[string]json.RawMessage `json:"inputs"`
 		JobID           string                     `json:"job_id"`
+		JobAction       string                     `json:"job_action"`
 		ArtifactID      string                     `json:"artifact_id"`
 		Category        string                     `json:"category"`
 		Offset          int                        `json:"offset"`
@@ -227,6 +228,9 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 			return "", toolInputError("station_comfy_workflow_required")
 		}
 		imageInput := stationComfyImageInput(in.WorkflowID)
+		if imageInput == "" && (in.SourceMessageID != "" || in.SourcePath != "" || in.OwnMini || stationComfyExplicitReference(p.trace.Text)) {
+			return "", toolInputError("station_comfy_image_workflow_required")
+		}
 		if in.OwnMini && (in.SourceMessageID != "" || in.SourcePath != "") {
 			return "", toolInputError("station_comfy_image_source_ambiguous")
 		}
@@ -372,7 +376,13 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		if in.JobID == "" || len(in.JobID) > 128 || !validID(in.JobID) {
 			return "", toolInputError("station_comfy_job_required")
 		}
-		instruction = "只调用本机 project_comfy_job 查询 job_id=" + in.JobID + " 的 status，返回实际状态和已登记的 artifact_id。不发送到微信。"
+		if in.JobAction == "" {
+			in.JobAction = "status"
+		}
+		if in.JobAction != "status" && in.JobAction != "cancel" {
+			return "", toolInputError("station_comfy_job_action_invalid")
+		}
+		instruction = "只调用本机 project_comfy_job，对 job_id=" + in.JobID + " 执行 " + in.JobAction + "，返回实际状态。不发送到微信。"
 	case "attach":
 		if !strings.HasPrefix(in.ArtifactID, "work-") || len(in.ArtifactID) != len("work-")+64 || !validID(in.ArtifactID) {
 			return "", toolInputError("station_comfy_artifact_required")
@@ -391,7 +401,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 	}
 	if in.Action == "run" || in.Action == "job" || in.Action == "workflows" {
 		requestID := "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw))
-		if in.Action != "run" {
+		if in.Action != "run" && !(in.Action == "job" && in.JobAction == "cancel") {
 			// Status and catalog are read-only snapshots. A later poll must
 			// observe new state instead of replaying the first result.
 			requestID = "wechat-comfy-" + agentID(p.trace.Account, p.trace.Thread, p.trace.TraceID, string(raw), fmt.Sprint(time.Now().UnixNano()))
@@ -402,6 +412,7 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 		}
 		if in.Action == "job" {
 			request["job_id"] = in.JobID
+			request["job_action"] = in.JobAction
 		}
 		data, err := p.stationToolRequest(ctx, session, http.MethodPost, "/api/local/project-tools/comfyui/action", request)
 		if err != nil {
@@ -451,15 +462,42 @@ func stationComfyImageInput(workflowID string) string {
 }
 
 func stationComfyCurrentImage(in companion.Input) string {
-	var selected string
+	var selected, occurred string
+	captionAt, _ := time.Parse(time.RFC3339Nano, in.MessageTime)
 	for _, media := range in.IncomingMedia {
 		if media.Kind != "image" || media.Source.MessageID == "" || media.Source.Thread != in.Thread {
 			continue
 		}
-		if selected != "" && selected != media.Source.MessageID {
-			return ""
+		if !captionAt.IsZero() && media.Source.OccurredAt != "" {
+			imageAt, err := time.Parse(time.RFC3339Nano, media.Source.OccurredAt)
+			if err != nil || imageAt.After(captionAt) {
+				continue
+			}
 		}
-		selected = media.Source.MessageID
+		if selected == "" || media.Source.OccurredAt >= occurred {
+			selected, occurred = media.Source.MessageID, media.Source.OccurredAt
+		}
+	}
+	// A photo and its correcting caption can be aggregated into one WeChat
+	// input. In that shape the caption is the anchor while the photo lives in
+	// UnreadMessages. Only an explicit reference instruction selects it here;
+	// upload still verifies the exact native message and its thread.
+	if stationComfyExplicitReference(in.Text) {
+		for _, event := range in.UnreadMessages {
+			if event.Source == nil || event.Source.MessageType != 3 || event.Source.Thread != in.Thread ||
+				event.Sender != in.Sender || event.Source.MessageID == "" {
+				continue
+			}
+			if !captionAt.IsZero() {
+				imageAt, err := time.Parse(time.RFC3339Nano, event.Source.OccurredAt)
+				if err != nil || imageAt.After(captionAt) {
+					continue
+				}
+			}
+			if selected == "" || event.Source.OccurredAt >= occurred {
+				selected, occurred = event.Source.MessageID, event.Source.OccurredAt
+			}
+		}
 	}
 	return selected
 }
@@ -467,6 +505,16 @@ func stationComfyCurrentImage(in companion.Input) string {
 func stationComfyOwnImageRequested(text string) bool {
 	text = strings.ToLower(text)
 	for _, phrase := range []string{"你自己", "你的形象", "自己的形象", "大肥鱼形象", "mini可爱版", "mini q版", "mini q 版"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func stationComfyExplicitReference(text string) bool {
+	text = strings.ToLower(text)
+	for _, phrase := range []string{"只用这张参考图", "只用这张图", "就用这张参考图", "以这张参考图为准", "只用我刚发的图", "就用我刚发的图"} {
 		if strings.Contains(text, phrase) {
 			return true
 		}

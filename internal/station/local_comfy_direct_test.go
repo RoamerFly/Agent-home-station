@@ -50,6 +50,14 @@ func TestDirectComfyRunAndJobDoNotCallModel(t *testing.T) {
 	if code != http.StatusOK || status["result"] == nil {
 		t.Fatalf("direct job status: %d %#v", code, status)
 	}
+	code, cancelled := f.request("POST", route, map[string]any{"request_id": "wechat-comfy-cancel-1", "action": "job", "job_id": jobID, "job_action": "cancel"}, true)
+	if code != http.StatusOK || backend.cancels != 1 {
+		t.Fatalf("direct job cancel: %d %#v cancels=%d", code, cancelled, backend.cancels)
+	}
+	code, repeatedCancel := f.request("POST", route, map[string]any{"request_id": "wechat-comfy-cancel-1", "action": "job", "job_id": jobID, "job_action": "cancel"}, true)
+	if code != http.StatusOK || repeatedCancel["reused"] != true || backend.cancels != 1 {
+		t.Fatalf("direct cancel was not idempotent: %d %#v cancels=%d", code, repeatedCancel, backend.cancels)
+	}
 	code, catalog := f.request("POST", route, map[string]any{"request_id": "wechat-comfy-workflows-1", "action": "workflows"}, true)
 	if code != http.StatusOK || !strings.Contains(fmt.Sprint(catalog["result"]), "Offline smoke") {
 		t.Fatalf("direct workflows: %d %#v", code, catalog)

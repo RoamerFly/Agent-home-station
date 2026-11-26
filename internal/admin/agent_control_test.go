@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
@@ -59,6 +60,94 @@ func (n *taskOriginNative) Message(_ context.Context, id string) (linuxnative.Me
 		return n.message, nil
 	}
 	return linuxnative.Message{}, nil
+}
+
+type taskCorrectionNative struct {
+	*fakeNative
+	messages map[string]linuxnative.Message
+}
+
+func (n *taskCorrectionNative) Message(_ context.Context, id string) (linuxnative.Message, error) {
+	return n.messages[id], nil
+}
+
+func TestAdministratorResumesOriginalGroupVideoTaskWithVerifiedCorrection(t *testing.T) {
+	f := setup(t)
+	f.login()
+	f.manager.mu.Lock()
+	f.manager.config.GroupRules = append(f.manager.config.GroupRules, GroupRule{ID: "room@chatroom", Mode: "mention"})
+	f.manager.config.Companion.Enabled = true
+	f.manager.mu.Unlock()
+	settings := f.manager.agent.config()
+	settings.OwnerIDs = []string{"owner"}
+	settings.PrivilegedThreads = []string{"room@chatroom"}
+	if err := f.manager.agent.save(settings); err != nil {
+		t.Fatal(err)
+	}
+	f.manager.native = &taskCorrectionNative{fakeNative: f.native, messages: map[string]linuxnative.Message{
+		"new-image":  {ID: "new-image", AccountID: "test", ThreadID: "room@chatroom", SenderID: "owner", Direction: "incoming", Type: 3},
+		"correction": {ID: "correction", AccountID: "test", ThreadID: "room@chatroom", SenderID: "owner", Direction: "incoming", Type: 1, Body: "只用这张参考图"},
+	}}
+	oldReceipt := &bot.TaskDelivery{Trace: "old-text", State: "accepted", TextExpected: 3, TextAccepted: 3, Expected: 1, Accepted: 1}
+	old := agentTask{
+		ID: "group-video", Account: "test", Thread: "room@chatroom", Sender: "owner", OwnerRequested: true,
+		OriginTrace: "original", SourceMessageIDs: []string{"original"}, RequestedText: "原始两段共 15 秒视频请求", Goal: "原始两段共 15 秒视频请求",
+		Title: "两段视频", Checkpoint: "轮询 old-job-needle 并发送旧双人图", State: "needs_review", Delivery: oldReceipt,
+		Actions: []taskAction{{Tool: "station_comfy", Result: "old-job-needle", At: time.Now().Add(-time.Minute)}},
+	}
+	if err := f.manager.agent.task(old); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ := f.request("POST", "/api/agent/tasks/"+old.ID, map[string]any{
+		"action": "resume", "continuation_note": "取消旧双人图作业，只用新上传的 mini 参考图重做两段共 15 秒视频，最终成片发原群",
+		"source_message_ids": []string{"new-image", "correction"},
+	}, true, true)
+	if status != http.StatusOK {
+		t.Fatalf("correction resume: %d %s", status, body)
+	}
+	got, ok := f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+	if !ok || got.State != "pending" || got.ID != old.ID || got.Goal != old.Goal || got.RequestedText != old.RequestedText ||
+		!slices.Equal(got.SourceMessageIDs, []string{"original", "new-image", "correction"}) || got.Delivery == nil || *got.Delivery != *oldReceipt ||
+		got.WorkCompleted || got.CorrectionAt.IsZero() || strings.Contains(got.Checkpoint, "old-job-needle") ||
+		!strings.Contains(got.Checkpoint, "新上传的 mini 参考图") || !strings.Contains(got.Checkpoint, "old-text") || len(got.Actions) != 1 {
+		t.Fatalf("original task or accepted receipt was lost: %+v", got)
+	}
+	input, err := f.manager.claimAgentTask(time.Now().Add(time.Second), func(string) bool { return false })
+	if err != nil || input == nil || input.TaskID != old.ID || strings.Contains(input.Text, "old-job-needle") ||
+		!strings.Contains(input.Text, "new-image") || !strings.Contains(input.Text, "correction") || !strings.Contains(input.Text, "old-text") {
+		t.Fatalf("corrected task context reintroduced old work: %+v %v", input, err)
+	}
+}
+
+func TestAdministratorCorrectionRejectsForeignMessagesWithoutChangingTask(t *testing.T) {
+	f := setup(t)
+	f.login()
+	native := &taskCorrectionNative{fakeNative: f.native, messages: map[string]linuxnative.Message{}}
+	f.manager.native = native
+	old := agentTask{ID: "video", Account: "test", Thread: "room@chatroom", Sender: "owner", OriginTrace: "original", SourceMessageIDs: []string{"original"}, State: "needs_review", Checkpoint: "old checkpoint"}
+	if err := f.manager.agent.task(old); err != nil {
+		t.Fatal(err)
+	}
+	for name, message := range map[string]linuxnative.Message{
+		"other-sender":  {ID: "candidate", AccountID: "test", ThreadID: "room@chatroom", SenderID: "other", Direction: "incoming"},
+		"other-group":   {ID: "candidate", AccountID: "test", ThreadID: "other@chatroom", SenderID: "owner", Direction: "incoming"},
+		"other-account": {ID: "candidate", AccountID: "other", ThreadID: "room@chatroom", SenderID: "owner", Direction: "incoming"},
+		"outgoing":      {ID: "candidate", AccountID: "test", ThreadID: "room@chatroom", SenderID: "owner", Direction: "outgoing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			native.messages["candidate"] = message
+			status, _, _ := f.request("POST", "/api/agent/tasks/"+old.ID, map[string]any{
+				"action": "resume", "continuation_note": "只用新图", "source_message_ids": []string{"candidate"},
+			}, true, true)
+			if status != http.StatusConflict {
+				t.Fatalf("foreign correction accepted: %d", status)
+			}
+			got, ok := f.manager.agent.lookupTask(old.ID, old.Account, old.Thread)
+			if !ok || got.State != old.State || got.Checkpoint != old.Checkpoint || !slices.Equal(got.SourceMessageIDs, old.SourceMessageIDs) {
+				t.Fatalf("invalid correction changed task: %+v", got)
+			}
+		})
+	}
 }
 
 func TestTaskCanBindVerifiedEarlierRequestAndReuseCompletedWork(t *testing.T) {

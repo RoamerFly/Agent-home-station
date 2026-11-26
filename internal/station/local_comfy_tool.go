@@ -389,6 +389,10 @@ func localComfyStartupFailure(err error) (string, string) {
 
 func comfyJobView(job pluginhost.Job) map[string]any {
 	view := map[string]any{"job_id": job.ID, "state": job.State}
+	if job.State == "completed" && job.CancelRequested {
+		view["state"] = "cancelled"
+		view["reason"] = "completed_output_revoked"
+	}
 	if job.State == "submitting" {
 		view["state"] = "needs_review"
 	}
@@ -398,7 +402,7 @@ func comfyJobView(job pluginhost.Job) map[string]any {
 	if job.Diagnostic != nil {
 		view["reason"] = job.Diagnostic.Code
 	}
-	if len(job.Result) != 0 {
+	if len(job.Result) != 0 && !job.CancelRequested {
 		view["verification"] = job.Result
 	}
 	return view

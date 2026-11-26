@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"testing"
+	"time"
 	"wechat-bot/internal/companion"
 )
 
@@ -24,6 +25,29 @@ func TestOrdinaryNewMessageLeavesOldPlanAlone(t *testing.T) {
 	}
 }
 
+func TestCorrectedReferenceStopsAlreadyPreparedVideoDelivery(t *testing.T) {
+	w, n, _, in := mediaWorker(t)
+	in.Text = "生成大肥鱼形象视频"
+	w.runtime.Media = []*mediaDelivery{{Key: "old-video", Trace: in.TraceID, Input: in, SourceID: "old-source", Kind: "video", State: "prepared", Created: time.Now()}}
+	ordinary := fixtureMessage("ordinary", in.Thread, "我又发了一张图", "incoming")
+	ordinary.SenderID = in.Sender
+	w.cancelCreativeMediaForCorrection(ordinary)
+	if w.runtime.Media[0].State != "prepared" {
+		t.Fatal("ordinary message stopped old video")
+	}
+	correction := fixtureMessage("corrected-reference", in.Thread, "只用这张参考图", "incoming")
+	correction.SenderID = "another-member"
+	w.cancelCreativeMediaForCorrection(correction)
+	if w.runtime.Media[0].State != "prepared" {
+		t.Fatal("other group member stopped old video")
+	}
+	correction.SenderID = in.Sender
+	w.cancelCreativeMediaForCorrection(correction)
+	if d := w.runtime.Media[0]; d.State != "stopped" || !d.UserCancelled || d.CancelTrace != correction.ID || n.sends != 0 {
+		t.Fatalf("old prepared video remained deliverable: %+v sends=%d", d, n.sends)
+	}
+}
+
 func TestDirectNotCorrectionMatchesOriginalRequestOnly(t *testing.T) {
 	in := companion.Input{Thread: "room@chatroom", Sender: "member", Text: "请用柯南声线唱歌"}
 	corrected := fixtureMessage("correction", in.Thread, "是 konan 的声线，不是柯南", "incoming")
@@ -35,6 +59,29 @@ func TestDirectNotCorrectionMatchesOriginalRequestOnly(t *testing.T) {
 	other.SenderID = in.Sender
 	if explicitCorrectionToPriorInput(in, other) {
 		t.Fatal("unrelated negative sentence revisited the old request")
+	}
+}
+
+func TestSameSenderUploadedReferenceCorrectionSelectsCreativeTurn(t *testing.T) {
+	in := companion.Input{Thread: "103@chatroom", Sender: "owner", Text: "生成一段以大肥鱼自己形象为素材的视频"}
+	corrected := fixtureMessage("reference-rule", in.Thread, "只用这张参考图", "incoming")
+	corrected.SenderID = in.Sender
+	if !explicitCorrectionToPriorInput(in, corrected) {
+		t.Fatal("explicit new reference did not select active video request")
+	}
+	corrected.SenderID = "another-member"
+	if explicitCorrectionToPriorInput(in, corrected) {
+		t.Fatal("another member changed original video request")
+	}
+	corrected.SenderID = in.Sender
+	in.Text = "帮我查明天气"
+	if explicitCorrectionToPriorInput(in, corrected) {
+		t.Fatal("reference phrase selected unrelated turn")
+	}
+	corrected.Body = "我又发了一张图"
+	in.Text = "生成一段视频"
+	if explicitCorrectionToPriorInput(in, corrected) {
+		t.Fatal("ordinary image follow-up revisited video request")
 	}
 }
 
