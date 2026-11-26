@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"wechat-bot/internal/mcptools"
 )
@@ -19,14 +20,18 @@ func (pregrantAccess) Call(context.Context, string, json.RawMessage) (string, er
 	return "", nil
 }
 
-type pregrantModel struct{ firstTools []mcptools.Tool }
+type pregrantModel struct {
+	firstTools  []mcptools.Tool
+	firstSystem string
+}
 
 func (*pregrantModel) Chat(context.Context, string, []map[string]string) (string, error) {
 	panic("native functions required")
 }
-func (m *pregrantModel) ChatFunctions(_ context.Context, _ string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
+func (m *pregrantModel) ChatFunctions(_ context.Context, system string, _ []map[string]string, tools []mcptools.Tool) (string, error) {
 	if m.firstTools == nil {
 		m.firstTools = append([]mcptools.Tool{}, tools...)
+		m.firstSystem = system
 	}
 	return `{"action":"reply","messages":["收到"]}`, nil
 }
@@ -81,10 +86,29 @@ func TestVideoCreationPregrantsComfyWithoutToolDiscovery(t *testing.T) {
 	}
 	for _, tool := range model.firstTools {
 		if tool.Name == "station_comfy" {
+			if !strings.Contains(model.firstSystem, "生视频可直接用 station_comfy") {
+				t.Fatal("video request guidance was dropped from the native tool prompt")
+			}
 			return
 		}
 	}
 	t.Fatal("station_comfy was not available in the first model call")
+}
+
+func TestMediaForwardGuidanceSurvivesNativeToolCatalog(t *testing.T) {
+	model := &pregrantModel{}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools = pregrantAccess{grant: true}
+	packet, _ := json.Marshal(map[string]string{"kind": "current_message", "text": "把刚发的视频转发到103修仙群"})
+	if _, err := e.decide(t.Context(), "policy", []map[string]string{{"role": "user", "content": string(packet)}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(model.firstSystem, "转发刚发的媒体时") {
+		t.Fatal("forwarding guidance was dropped from the native tool prompt")
+	}
 }
 
 func TestIncomingMediaReaderIsPregrantedOnlyWhenAuthorized(t *testing.T) {

@@ -13,6 +13,7 @@ type taskAction struct {
 	Arguments string    `json:"arguments"`
 	Result    string    `json:"result"`
 	State     string    `json:"state"`
+	ComfyRun  bool      `json:"comfy_run,omitempty"`
 	ErrorCode string    `json:"error_code,omitempty"`
 	At        time.Time `json:"at"`
 }
@@ -55,6 +56,12 @@ func (p *permittedTools) rememberTaskAction(name string, args json.RawMessage, r
 		}
 	}
 	entry := taskAction{Tool: name, Arguments: logText(string(args), 1200), Result: logText(result, 2200), State: state, ErrorCode: code, At: time.Now().UTC()}
+	// A long video prompt can cut the stored arguments in the middle of a
+	// JSON string. Preserve the verified action type alongside the excerpt.
+	if name == "station_comfy" && err == nil && state == "running" && !json.Valid([]byte(entry.Arguments)) {
+		var input struct{ Action string }
+		entry.ComfyRun = json.Unmarshal(args, &input) == nil && input.Action == "run"
+	}
 	if (name == "station_comfy" || name == "artifact_publish") && err == nil && state != "failed" && !t.CorrectionAt.IsZero() && contains(t.CorrectionTraces, p.trace.TraceID) && entry.At.After(t.CorrectionAt) {
 		var input struct {
 			Action          string `json:"action"`

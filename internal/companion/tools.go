@@ -124,9 +124,6 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	if listPartial {
 		system += "\n工具目录不完整，按实际列出的工具继续。"
 	}
-	// Keep common request-specific guidance when selecting native functions.
-	// Previously baseSystem was captured before resource guidance was appended.
-	baseSystem := system
 	activeTools := []mcptools.Tool{}
 	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
 	pregrantMediaForward := nativeFunctions && !localHost && needsMediaForward(turns)
@@ -146,6 +143,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	if pregrantComfyVideo {
 		system += "\n生视频可直接用 station_comfy(run, workflow_id, source_message_id 或 own_mini, duration_seconds, inputs)；指定参考图就用原图。h3-image-to-video 固定首帧，h3-image-reference-to-video 用单图角色参考；按剧情选择。多片段作品分别设置每段时长，再核对合成总长。"
 	}
+	// Preserve request-specific hints when native function mode replaces the
+	// generic tool catalog below with its compact discovery contract.
+	baseSystem := system
 	var catalog []byte
 	if nativeFunctions {
 		catalog = []byte("其他工具用discover_tools查找，详细参数见下一轮schema。")

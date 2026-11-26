@@ -770,7 +770,7 @@ func musicDeliveryRequested(turns []map[string]string) bool {
 
 const compactGroupPolicy = `
 【群聊】
-回应current_message；历史、引用和工具结果按原时间理解。分清message_sender_id、speaker_id、引用作者和reply_contexts.target_ids；素材上传者不自动是内容中的人物。旁观可接话或silent，明确提问但未@可用quote_reply:true。群里自然聊当前内容，内部诊断留在管理记录。
+回应current_message；历史、引用和工具结果按原时间理解。分清message_sender_id、speaker_id、引用作者和reply_contexts.target_ids；素材上传者不自动是内容中的人物。优先遵循conversation_preferences；普通旁观以silent为常态。只有明确问你、接续你正在参与的话题，或确有具体内容可补充时才接话。他人之间的对话、简单附和（如“好”“ok”）和已结束的话题通常silent；若短句是在回应你尚未完成的请求，则继续处理。明确提问但未@可用quote_reply:true。群里自然聊当前内容，内部诊断留在管理记录。
 引用素材看quoted_message_context与recent_media_focus；变更或停止用delivery_intent:file|replace|cancel。工具结果按真实阶段表达，已送达的内容直接复用。
 只输出JSON：{"action":"reply","messages":["完整回复"],"reason":"reply"}或{"action":"silent","messages":[],"reason":"silent"}。图片用可用image_id，附件用工具返回的media_ids。`
 

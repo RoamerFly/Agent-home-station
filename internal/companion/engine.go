@@ -434,6 +434,11 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 	if reset, ok := e.Tools.(interface{ ResetMedia() }); ok {
 		reset.ResetMedia()
 	}
+	if e.socialPreflightEligible(input, scope) {
+		if d, decided := e.socialPreflight(ctx, input, scope); decided {
+			return d, nil
+		}
+	}
 	settings := c.ContextConfig()
 	if !input.Preview && len(input.UnreadMessages) == 0 && settings.AutoCompress && len(scope.Messages) >= settings.CompressAfter {
 		_, compressionErr := e.CompressContext(ctx, input, false)

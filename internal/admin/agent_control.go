@@ -1008,6 +1008,19 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		if !ownerContinuation && cfg.Companion.Quiet(now) {
 			continue
 		}
+		if t.State == "waiting" && !t.ReportOnly && !t.ReminderDue && (ownerContinuation || contains(cfg.Companion.ProactiveThreads, t.Thread)) {
+			if jobID := t.runningComfyJobID(); jobID != "" && access.workspaceExecutionAllowed() {
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				args, _ := json.Marshal(map[string]string{"action": "job", "job_id": jobID, "job_action": "status"})
+				access.trace.TraceID = "task-poll-" + t.ID
+				result, pollErr := access.callStationComfy(ctx, args)
+				cancel()
+				if err := m.agent.finishComfyPoll(t, jobID, args, result, pollErr, now); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
 		// Non-owner continuations retain proactive authorization and quiet checks;
 		// completed evaluations do not exhaust a daily allowance.
 		in := companion.Input{BackgroundResult: true, Channel: "wechat", Account: t.Account, Thread: t.Thread, Sender: t.Sender, Mode: "proactive", IsGroup: strings.HasSuffix(t.Thread, "@chatroom"), TraceID: "task-" + t.ID + "-" + time.Now().UTC().Format("20060102T150405.000000000"), TaskID: t.ID, OriginTraceID: t.OriginTrace, RequestedText: t.RequestedText}

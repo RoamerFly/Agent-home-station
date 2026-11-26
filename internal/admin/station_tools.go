@@ -61,6 +61,152 @@ type stationToolSession struct {
 	CSRF    string
 }
 
+// stationComfyFailure contains only locally chosen diagnostics. Station and
+// ComfyUI response bodies can include paths, prompts and provider errors, so
+// they must never be passed through to the WeChat tool transcript.
+type stationComfyFailure struct {
+	Code       string `json:"code"`
+	Action     string `json:"action"`
+	Field      string `json:"field,omitempty"`
+	NotStarted bool   `json:"not_started"`
+	NextAction string `json:"next_action"`
+	RequestID  string `json:"request_id,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+}
+
+func (e *stationComfyFailure) Error() string { return e.Code }
+
+func (e *stationComfyFailure) SafeToolFailure() (string, string) {
+	message, _ := json.Marshal(e)
+	return e.Code, string(message)
+}
+
+func (e *stationComfyFailure) ToolRecovery() (string, string) {
+	if e.NotStarted && e.Field != "" {
+		return "correct_arguments", ""
+	}
+	if e.NotStarted {
+		return "restore_dependency_before_submit", ""
+	}
+	return "check_original_operation", ""
+}
+
+func stationComfyRequestInfo(path string, body any) (action, requestID string, ok bool) {
+	switch {
+	case path == "/api/local/project-tools/comfyui/action":
+		action = "action"
+		if values, valid := body.(map[string]any); valid {
+			if value, valid := values["action"].(string); valid && (value == "run" || value == "job" || value == "workflows") {
+				action = value
+			}
+			if value, valid := values["request_id"].(string); valid {
+				requestID = value
+			}
+		}
+	case path == "/api/local/project-tools/comfyui/input":
+		action = "upload"
+	case path == "/api/local/chat":
+		action = "legacy_chat"
+		if values, valid := body.(map[string]string); valid {
+			requestID = values["request_id"]
+		}
+	case strings.HasPrefix(path, "/api/local/artifacts/"):
+		action = "attach"
+	default:
+		return "", "", false
+	}
+	if len(requestID) > 128 || requestID != "" && !validID(requestID) {
+		requestID = ""
+	}
+	return action, requestID, true
+}
+
+func stationComfySafeField(raw string) string {
+	if len(raw) == 0 || len(raw) > 80 {
+		return ""
+	}
+	field := strings.TrimPrefix(raw, "inputs.")
+	if len(field) == 0 || len(field) > 64 {
+		return ""
+	}
+	for i := 0; i < len(field); i++ {
+		c := field[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9' || i > 0 && c == '_' {
+			continue
+		}
+		return ""
+	}
+	if strings.HasPrefix(raw, "inputs.") {
+		return raw
+	}
+	if field == "workflow_id" || field == "job_id" || field == "request_id" || field == "action" {
+		return field
+	}
+	return "inputs." + field
+}
+
+func stationComfyHTTPFailure(status int, data []byte, action, requestID string) *stationComfyFailure {
+	var upstream struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+		Field string `json:"field"`
+	}
+	if json.Unmarshal(data, &upstream) != nil {
+		upstream.Error = strings.TrimSpace(string(data))
+	}
+	e := &stationComfyFailure{Code: "station_comfy_request_failed", Action: action, RequestID: requestID, HTTPStatus: status,
+		NextAction: "检查工作站 ComfyUI 工具状态；若是生成请求，先查原 request_id 和关联作业，再决定是否继续。"}
+	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+		e.Code, e.NotStarted = "station_comfy_arguments_invalid", true
+		e.Field = stationComfySafeField(upstream.Field)
+		e.NextAction = "修正指定字段，确认原请求没有创建作业后再提交。"
+		switch {
+		case upstream.Code == "missing_input" || upstream.Code == "comfy_input_missing" || upstream.Code == "missing_required_input" || strings.Contains(upstream.Error, "missing required input"):
+			e.Code = "station_comfy_input_missing"
+			if e.Field == "" {
+				e.Field = "inputs"
+			}
+		case upstream.Code == "invalid_input" || upstream.Code == "comfy_input_invalid" || upstream.Code == "workflow_input_invalid":
+			e.Code = "station_comfy_input_invalid"
+			if e.Field == "" {
+				e.Field = "inputs"
+			}
+		case strings.Contains(upstream.Error, "请指定 ComfyUI 工作流") || upstream.Code == "workflow_not_found":
+			e.Code, e.Field = "station_comfy_workflow_invalid", "workflow_id"
+			e.NextAction = "先读取工作流列表，再使用实际存在的 workflow_id。"
+		case strings.Contains(upstream.Error, "请求编号无效"):
+			e.Code, e.Field = "station_comfy_request_id_invalid", "request_id"
+		}
+		return e
+	}
+	if status == http.StatusConflict {
+		switch {
+		case strings.Contains(upstream.Error, "同一 ComfyUI 请求编号的参数已变化"):
+			e.Code = "station_comfy_request_id_conflict"
+		case strings.Contains(upstream.Error, "作业已执行但结果未能保存") || strings.Contains(upstream.Error, "原 ComfyUI 请求结果不可用"):
+			e.Code = "station_comfy_run_outcome_unknown"
+		case strings.Contains(upstream.Error, "当前工作站会话正在处理"):
+			e.Code, e.NotStarted = "station_comfy_busy", true
+		case strings.Contains(upstream.Error, "原 ComfyUI 请求来源不可用"):
+			e.Code, e.NotStarted = "station_comfy_source_unavailable", true
+		case strings.Contains(upstream.Error, "ComfyUI 工具执行未完成") || upstream.Code == "workflow_not_queued":
+			e.Code = "station_comfy_run_unfinished"
+		default:
+			e.Code = "station_comfy_conflict"
+		}
+	}
+	if status >= 500 {
+		e.Code = "station_comfy_service_unavailable"
+		if strings.Contains(upstream.Error, "工作站正在停止") || strings.Contains(upstream.Error, "请求未能保存") || strings.Contains(upstream.Error, "工具检查点不可用") {
+			e.NotStarted = true
+		}
+	}
+	if action == "run" && !e.NotStarted {
+		e.NextAction = "按原 request_id 查询工作站请求和关联 job_id；结果未明前不要重新提交生成。"
+	}
+	return e
+}
+
 func stationToolIDs(raw string) (string, error) {
 	id := strings.TrimSpace(raw)
 	if id == "" || len(id) > 96 || !validID(id) {
@@ -131,6 +277,7 @@ func (p *permittedTools) stationToolLogin(ctx context.Context) (stationToolSessi
 }
 
 func (p *permittedTools) stationToolRequest(ctx context.Context, session stationToolSession, method, path string, body any) ([]byte, error) {
+	comfyAction, comfyRequestID, comfyRequest := stationComfyRequestInfo(path, body)
 	var payload io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -160,11 +307,23 @@ func (p *permittedTools) stationToolRequest(ctx context.Context, session station
 	}
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
+		if comfyRequest {
+			failure := &stationComfyFailure{Code: "station_comfy_connection_unavailable", Action: comfyAction, RequestID: comfyRequestID,
+				NextAction: "检查本机工作站和 ComfyUI 状态后，沿原请求继续。"}
+			if comfyAction == "run" {
+				failure.Code = "station_comfy_run_outcome_unknown"
+				failure.NextAction = "按原 request_id 查询工作站请求和关联 job_id；结果未明前不要重新提交生成。"
+			}
+			return nil, failure
+		}
 		return nil, errors.New("station_tool_request_unavailable")
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if comfyRequest {
+			return nil, stationComfyHTTPFailure(resp.StatusCode, data, comfyAction, comfyRequestID)
+		}
 		var failure struct {
 			Error string `json:"error"`
 		}
@@ -426,7 +585,8 @@ func (p *permittedTools) callStationComfy(ctx context.Context, raw json.RawMessa
 			// An in-flight request created by an older release already owns this
 			// ID in local chat. Re-read that exact request through its old route;
 			// do not create a second ComfyUI job under a new ID.
-			if err.Error() == "同一 ComfyUI 请求编号的参数已变化" {
+			var conflict *stationComfyFailure
+			if (in.Action == "run" || in.JobAction == "cancel") && errors.As(err, &conflict) && conflict.Code == "station_comfy_request_id_conflict" {
 				return p.stationComfyLegacyChat(ctx, session, requestID, instruction)
 			}
 			return "", err
