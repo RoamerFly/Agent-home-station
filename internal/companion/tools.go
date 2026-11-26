@@ -128,11 +128,12 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	pregrantMediaReader := nativeFunctions && !localHost && needsIncomingMediaRead(turns)
 	pregrantMediaForward := nativeFunctions && !localHost && needsMediaForward(turns)
 	pregrantComfyVideo := nativeFunctions && !localHost && needsComfyVideo(turns)
+	pregrantPublicVideo := nativeFunctions && !localHost && currentPublicVideoURL(turns) != ""
 	if nativeFunctions {
 		for _, t := range tools {
 			// Current media forwarding needs the exact source message and its
 			// operation receipt immediately; other tools remain on demand.
-			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || pregrantMediaForward && (t.Name == "wechat_read" || t.Name == "wechat_conversations" || t.Name == "wechat_send_media" || t.Name == "wechat_operation_status") || pregrantComfyVideo && t.Name == "station_comfy" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
+			if t.Name == "task_reasoning" || t.Name == "tool_output_read" || t.Name == "memory_search" || t.Name == "memory_read" || t.Name == "agent_clock" || t.Name == "agent_reminder" || t.Name == "agent_tasks" || t.Name == "agent_task" || pregrantMediaReader && t.Name == "incoming_media_read" || pregrantMediaForward && (t.Name == "wechat_read" || t.Name == "wechat_conversations" || t.Name == "wechat_send_media" || t.Name == "wechat_operation_status") || pregrantComfyVideo && t.Name == "station_comfy" || pregrantPublicVideo && t.Name == "video_inspect" || !localHost && historyNeed != nil && (t.Name == "wechat_read" || t.Name == "wechat_read_legacy") {
 				activeTools = append(activeTools, t)
 			}
 		}
@@ -142,6 +143,9 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	}
 	if pregrantComfyVideo {
 		system += "\n生视频可直接用 station_comfy(run, workflow_id, source_message_id 或 own_mini, duration_seconds, inputs)；指定参考图就用原图。h3-image-to-video 固定首帧，h3-image-reference-to-video 用单图角色参考；按剧情选择。多片段作品分别设置每段时长，再核对合成总长。"
+	}
+	if pregrantPublicVideo {
+		system += "\n当前消息正文有公开视频链接；读取视频画面和音轨可直接用 video_inspect(action=observe,url=当前正文链接)，视频会保存到微信工作目录并返回 asset_id。引用消息里的旧链接只作背景。"
 	}
 	// Preserve request-specific hints when native function mode replaces the
 	// generic tool catalog below with its compact discovery contract.

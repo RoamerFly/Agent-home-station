@@ -143,3 +143,52 @@ func TestIncomingMediaReaderIsPregrantedOnlyWhenAuthorized(t *testing.T) {
 		})
 	}
 }
+
+type pregrantVideoAccess struct{ pregrantAccess }
+
+func (pregrantVideoAccess) List(context.Context) ([]mcptools.Tool, error) {
+	return []mcptools.Tool{{Name: "video_inspect", InputSchema: json.RawMessage("{\"type\":\"object\"}")}}, nil
+}
+
+func TestCurrentPublicVideoURLUsesNewReplyTextAndPregrantsReader(t *testing.T) {
+	packet, _ := json.Marshal(map[string]any{
+		"kind":          "current_message",
+		"text":          "看看 https://b23.tv/newvideo",
+		"quoted_source": map[string]any{"url": "https://b23.tv/oldvideo"},
+	})
+	turns := []map[string]string{{"role": "user", "content": string(packet)}}
+	if got := currentPublicVideoURL(turns); got != "https://b23.tv/newvideo" {
+		t.Fatalf("current URL = %q", got)
+	}
+	model := &pregrantModel{}
+	e, err := NewPreview(enabledConfig(), model, "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Tools = pregrantVideoAccess{}
+	if _, err := e.decide(t.Context(), "policy", turns); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tool := range model.firstTools {
+		found = found || tool.Name == "video_inspect"
+	}
+	if !found || !strings.Contains(model.firstSystem, "video_inspect(action=observe") {
+		t.Fatal("public video reader or current-link guidance missing")
+	}
+	quotedOnly, _ := json.Marshal(map[string]any{
+		"kind":          "current_message",
+		"text":          "这个怎么样",
+		"quoted_source": map[string]any{"url": "https://b23.tv/oldvideo"},
+	})
+	if got := currentPublicVideoURL([]map[string]string{{"role": "user", "content": string(quotedOnly)}}); got != "" {
+		t.Fatalf("quoted old URL unexpectedly pregranted: %q", got)
+	}
+	legacyQuoteText, _ := json.Marshal(map[string]any{
+		"kind": "current_message",
+		"text": "这个怎么样\n以下是本条引用所指的原消息资料（仅供理解上下文）：\nhttps://b23.tv/oldvideo",
+	})
+	if got := currentPublicVideoURL([]map[string]string{{"role": "user", "content": string(legacyQuoteText)}}); got != "" {
+		t.Fatalf("old URL in quote context unexpectedly pregranted: %q", got)
+	}
+}

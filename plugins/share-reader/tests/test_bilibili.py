@@ -22,6 +22,14 @@ def playback():
     return {"code": 0, "data": {"timelength": 720000, "durl": [{"url": MEDIA, "size": 1234}]}}
 
 
+def dash_playback():
+    return {"code": 0, "data": {"timelength": 720000, "dash": {
+        "video": [{"id": 16, "baseUrl": "https://synthetic.bilivideo.com/360p.m4s"},
+                  {"id": 32, "baseUrl": "https://synthetic.bilivideo.com/480p.m4s"}],
+        "audio": [{"id": 30216, "baseUrl": "https://synthetic.bilivideo.com/64k.m4s"},
+                  {"id": 30280, "baseUrl": "https://synthetic.bilivideo.com/192k.m4s"}]}}}
+
+
 def html(value):
     return "<script>window.__INITIAL_STATE__ = " + json.dumps(value) + ";neverExecute()</script>"
 
@@ -64,6 +72,63 @@ class BilibiliTests(unittest.TestCase):
                 parser.resolve({"url": "https://b23.tv/Synthetic"}, get)
             self.assertEqual(len(calls), 1)
 
+    def test_player_shell_falls_back_to_exact_bv_view_metadata(self):
+        calls = []
+        def get(url, maximum, timeout):
+            calls.append(url)
+            if len(calls) == 1:
+                return response("<html>player shell</html>", PAGE)
+            if len(calls) == 2:
+                return response(json.dumps({"code": 0, "data": metadata()["videoData"]}), url, "application/json")
+            return response(json.dumps(playback()), url, "application/json")
+        result = parser.resolve({"url": PAGE}, get)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[1], "https://api.bilibili.com/x/web-interface/view?bvid=" + BV)
+        self.assertEqual(parse_qs(urlsplit(calls[2]).query)["cid"], ["101"])
+        self.assertEqual(result["private_media_locators"], [MEDIA])
+        self.assertEqual(result["duration_ms"], 720000)
+
+    def test_dash_audio_video_pair_is_one_complete_candidate(self):
+        calls = []
+        def get(url, maximum, timeout):
+            calls.append(url)
+            if len(calls) == 1:
+                return response(html(metadata()), PAGE)
+            if len(calls) == 2:
+                return response(json.dumps({"code": 0, "data": {"timelength": 720000, "durl": []}}), url, "application/json")
+            return response(json.dumps(dash_playback()), url, "application/json")
+        result = parser.resolve({"url": PAGE, "video_required": True}, get)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(parse_qs(urlsplit(calls[1]).query)["fnval"], ["0"])
+        self.assertEqual(parse_qs(urlsplit(calls[2]).query)["fnval"], ["16"])
+        self.assertEqual(result["private_media_locators"], [])
+        self.assertEqual(result["private_stream_pairs"], [{
+            "video_url": "https://synthetic.bilivideo.com/480p.m4s",
+            "audio_url": "https://synthetic.bilivideo.com/192k.m4s"}])
+        self.assertEqual(result["total_candidates"], 1)
+        self.assertIsNone(result["next_candidate_offset"])
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["duration_ms"], 720000)
+
+    def test_dash_pair_requires_same_playback_response_and_audio(self):
+        body = dash_playback()
+        body["data"]["dash"]["audio"] = []
+        with self.assertRaisesRegex(ValueError, "video_dash_unavailable"):
+            parser.bili_dash(json.dumps(body))
+        body = dash_playback()
+        body["data"]["dash"]["video"][1]["baseUrl"] = "http://synthetic.bilivideo.com/480p.m4s"
+        duration, pair = parser.bili_dash(json.dumps(body))
+        self.assertEqual(duration, 720000)
+        self.assertEqual(pair[0]["video_url"], "https://synthetic.bilivideo.com/360p.m4s")
+
+    def test_alternate_https_cdn_is_tried_before_unreachable_custom_port(self):
+        p = playback()
+        p["data"]["durl"][0]["url"] = "https://rotating-cdn.example:4483/video.mp4"
+        p["data"]["durl"][0]["backup_url"] = ["https://backup-cdn.example/video.mp4"]
+        duration, locators = parser.bili_playback(json.dumps(p))
+        self.assertEqual(duration, 720000)
+        self.assertEqual(locators, ["https://backup-cdn.example/video.mp4", "https://rotating-cdn.example:4483/video.mp4"])
+
     def test_redirect_cannot_switch_work_or_selected_part(self):
         for final in [PAGE.replace(BV, "BV0000000002"), PAGE + "?p=2", "https://public.example/page"]:
             get, calls = self.provider(final)
@@ -101,7 +166,7 @@ class BilibiliTests(unittest.TestCase):
 
     def test_restricted_and_non_progressive_streams_fail_without_substitution(self):
         variants = []
-        for value in [True, 1, "1", "0", 0.0, None]:
+        for value in [True, 1, "1", "0", 0.0]:
             p = playback(); p["data"]["is_preview"] = value; variants.append(p)
         for field, value in [("timelength", True), ("timelength", 0), ("durl", []), ("durl", [{}, {}])]:
             p = playback(); p["data"][field] = value; variants.append(p)
@@ -110,11 +175,16 @@ class BilibiliTests(unittest.TestCase):
             get, calls = self.provider(play=p)
             with self.subTest(p=p), self.assertRaises(ValueError):
                 parser.resolve({"url": PAGE}, get)
-            self.assertEqual(len(calls), 2)
-        for locator in ["https://synthetic.bilivideo.com.evil.invalid/a", "http://synthetic.bilivideo.com/a", "https://127.0.0.1/a", "https://user@synthetic.bilivideo.com/a", "https://synthetic.bilivideo.com:444/a"]:
+            expected = 3 if p["data"].get("durl") in ([], [{}, {}]) and p["code"] == 0 else 2
+            self.assertEqual(len(calls), expected)
+        for locator in ["http://synthetic.bilivideo.com/a", "https://127.0.0.1/a", "https://user@synthetic.bilivideo.com/a"]:
             p = playback(); p["data"]["durl"][0]["url"] = locator
             with self.subTest(locator=locator), self.assertRaises(ValueError):
                 parser.bili_playback(json.dumps(p))
+        p = playback(); p["data"]["durl"][0]["url"] = "https://rotating-cdn.edge.example:4483/video.mp4"
+        self.assertEqual(parser.bili_playback(json.dumps(p))[1], ["https://rotating-cdn.edge.example:4483/video.mp4"])
+        p["data"]["is_preview"] = None  # Bilibili uses JSON null for ordinary public works.
+        self.assertEqual(parser.bili_playback(json.dumps(p))[1], ["https://rotating-cdn.edge.example:4483/video.mp4"])
 
     def test_api_redirect_response_limits_and_content_revision(self):
         get, calls = self.provider()

@@ -159,7 +159,7 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 	resolver, _ := wechatapp.ShareReadCapability(message)
 	validKind := resolver != "" && resolver == tool || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && (message.Type == 34 || message.Type == 43 || message.Type == 49) || tool == "media.listen" && message.Type == 34
 	if explicitPublicURL {
-		validKind = tool == "share.resolve_public"
+		validKind = tool == "share.resolve_public" || tool == "media.transcribe"
 	}
 	if m.memory == nil || message.ID == "" || message.ThreadID == "" || message.SenderID == "" || message.Direction != "incoming" || !validKind {
 		return nil, errors.New("share_native_source_required")

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/mcptools"
 )
 
 type quoteReader interface {
@@ -158,6 +159,9 @@ func quotedAnalysisMessage(m linuxnative.Message) (linuxnative.Message, bool) {
 	if !m.IsQuotedText() || m.ResolvedQuote == nil {
 		return m, false
 	}
+	if quotedReplyPublicVideoURL(m.Body) {
+		return m, false
+	}
 	original := *m.ResolvedQuote
 	if original.Direction != "incoming" || original.IsQuotedText() {
 		return m, false
@@ -171,4 +175,18 @@ func quotedAnalysisMessage(m linuxnative.Message) (linuxnative.Message, bool) {
 		}
 	}
 	return m, false
+}
+
+func quotedReplyPublicVideoURL(body string) bool {
+	// A new video URL in the reply body is the requested media. The quoted
+	// share remains context and must not replace the new link during analysis.
+	for _, word := range strings.Fields(body) {
+		if i := strings.Index(word, "http"); i >= 0 {
+			word = word[i:]
+		}
+		if mcptools.IsPublicVideoPage(strings.TrimRight(word, ".,;)]}，。；")) {
+			return true
+		}
+	}
+	return false
 }

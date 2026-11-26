@@ -3,6 +3,8 @@ package companion
 import (
 	"encoding/json"
 	"strings"
+
+	"wechat-bot/internal/mcptools"
 )
 
 // A missing observation on a non-file incoming attachment already points to
@@ -85,4 +87,17 @@ func needsComfyVideo(turns []map[string]string) bool {
 			strings.Contains(text, "制作视频") || strings.Contains(text, "做成视频")
 	}
 	return false
+}
+
+// A public video URL in the new message can be inspected directly. Only read
+// current_message.text: a quoted card may contain an older, different URL.
+func currentPublicVideoURL(turns []map[string]string) string {
+	literal, _, _ := strings.Cut(currentMessage(turns), "\n以下是本条引用所指")
+	for _, raw := range publicURLs.FindAllString(literal, 8) {
+		candidate := resourceURL(strings.TrimRight(raw, ".,;)]}，。；"))
+		if mcptools.IsPublicVideoPage(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }

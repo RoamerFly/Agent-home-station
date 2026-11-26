@@ -29,12 +29,13 @@ func (p *permittedTools) videoTools() []mcptools.Tool {
 	if p.trace.Preview || p.trace.ReportOnly || p.trace.Account != p.manager.native.Account() || !permittedRecipient(p.manager.Config().Config, p.trace.Thread) || !p.manager.Config().Behavior.ReadVideos {
 		return nil
 	}
-	return []mcptools.Tool{agentTool("video_inspect", "读取视频元数据、连续画面或音频。用 asset_id、message_id 或公开 url 选一个来源；管理员跨会话 asset_id 带 source_thread_id。info 查帧数，frames 按 start_frame/step/page_size 等分页，audio 按 start_seconds/duration_seconds 等分段；使用返回的 next_* 游标续读。参数可按需求调整，step>1 表示采样；timeout_seconds=0 不设本地截止时间，仍可取消。question 指定分析重点。只读取，不发送。", `{"type":"object","properties":{"action":{"type":"string","enum":["info","frames","audio"],"default":"info"},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"additionalProperties":false}`)}
+	return []mcptools.Tool{agentTool("video_inspect", "读取实际视频。用 asset_id、message_id 或公开 url 选一个来源；observe 单次缓存原件并抽样全片画面、转写所选音轨（默认前90秒），返回覆盖范围和续读位置；info 查元数据，frames/audio 分页精读。管理员跨会话 asset_id 带 source_thread_id。参数可按需求调整，step>1 表示采样；timeout_seconds=0 不设本地截止时间，仍可取消。question 指定分析重点。只读取，不发送。", `{"type":"object","properties":{"action":{"type":"string","enum":["observe","info","frames","audio"],"default":"info"},"source_thread_id":{"type":"string"},"asset_id":{"type":"string"},"message_id":{"type":"string"},"url":{"type":"string"},"start_frame":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1},"step":{"type":"integer","minimum":1},"batch_size":{"type":"integer","minimum":1},"max_dimension":{"type":"integer","minimum":1},"analysis_tokens":{"type":"integer","minimum":1},"timeout_seconds":{"type":"integer","minimum":0},"start_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"audio_chunk_seconds":{"type":"number","minimum":0},"audio_timeout_seconds":{"type":"integer","minimum":0},"question":{"type":"string"}},"additionalProperties":false}`)}
 }
 
 type videoInspectionInput struct {
 	sourceFingerprint string
 	sourceVariant     string
+	cachedAssetID     string
 	SourceThread      string  `json:"source_thread_id"`
 	Action            string  `json:"action"`
 	Asset             string  `json:"asset_id"`
@@ -240,12 +241,36 @@ func (p *permittedTools) inspectionSource(ctx context.Context, in *videoInspecti
 	if err != nil {
 		return nil, "", err
 	}
+	sourceMessage := policy.message
+	if in.Message != "" {
+		if original, e := m.native.Message(ctx, in.Message); e == nil && original.ID == in.Message && original.AccountID == p.trace.Account && original.ThreadID == in.SourceThread && original.Direction == "incoming" {
+			sourceMessage = original
+		}
+	}
+	if sourceMessage.Type == 49 || sourceMessage.Type == 43 || sourceMessage.Type == 1 {
+		in.sourceFingerprint = inboundFingerprint(sourceMessage)
+		in.Message = sourceMessage.ID
+	}
+	cacheInput := companion.Input{Channel: "wechat", Account: sourceMessage.AccountID, Thread: sourceMessage.ThreadID, TraceID: sourceMessage.ID, Sender: sourceMessage.SenderID, Text: "收到的公开视频", MessageTime: sourceMessage.CreatedAt}
+	if asset, data, ok := m.cachedWebMedia(cacheInput, policy.requestedURL, "video", true, 64<<20); ok {
+		if !asset.hasOriginal(in.sourceFingerprint) {
+			if linked, e := m.rememberAssetFormats(cacheInput, assetOriginal{InboundMessage: &sourceMessage, Data: data, MIME: asset.MIME, URL: asset.URL, RequestURL: policy.requestedURL, Filename: asset.Filename}, nil); e == nil {
+				asset = linked
+			}
+		}
+		in.cachedAssetID = asset.ID
+		return data, policy.requestedURL, nil
+	}
 	v, err := policy.readShare(ctx, 64<<20)
 	if err != nil {
 		return nil, "", err
 	}
 	if v.Kind != "video" {
 		return nil, "", toolInputError("分享链接没有返回实际视频")
+	}
+	asset, e := m.rememberAssetFormats(cacheInput, assetOriginal{InboundMessage: &sourceMessage, Data: v.Data, MIME: v.ContentType, URL: v.PageURL, RequestURL: policy.requestedURL, Filename: "分享视频.mp4"}, nil)
+	if e == nil {
+		in.cachedAssetID = asset.ID
 	}
 	return v.Data, policy.requestedURL, nil
 }
@@ -256,13 +281,13 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 	if json.Unmarshal(args, &in) != nil || in.Start < 0 || in.PageSize < 0 || in.Step < 0 || in.AudioStart < 0 || in.AudioLength < 0 || in.Tokens < 0 || in.BatchSize < 0 || in.MaxDimension < 0 || in.AudioChunk < 0 {
 		return "", toolInputError("视频精读参数无效")
 	}
-	// Discovery is a safe, read-only default. Validate explicit operations
-	// before resolving/downloading a source; never guess frames vs audio.
+	// Retain info as the default for existing callers. Share-link turns select
+	// observe explicitly to read content in one invocation.
 	if in.Action == "" {
 		in.Action = "info"
 	}
-	if in.Action != "info" && in.Action != "frames" && in.Action != "audio" {
-		return "", toolInputError("action应为info、frames或audio")
+	if in.Action != "observe" && in.Action != "info" && in.Action != "frames" && in.Action != "audio" {
+		return "", toolInputError("action应为observe、info、frames或audio")
 	}
 	seconds := 240
 	if in.Timeout != nil {
@@ -303,6 +328,9 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		return "", err
 	}
 	out := map[string]any{"source_thread_id": in.SourceThread, "origin_thread_id": p.trace.Thread, "source": source, "metadata": meta, "read_only": true, "usage": "frames: start_frame=0,step=1; follow next_start_frame until complete. audio: follow next_start_seconds. Total pages are not limited."}
+	if in.cachedAssetID != "" {
+		out["asset_id"] = in.cachedAssetID
+	}
 	if in.sourceVariant != "" {
 		out["source_variant"] = in.sourceVariant
 	}
@@ -321,6 +349,64 @@ func (p *permittedTools) callVideoInspection(ctx context.Context, _ string, args
 		return string(b), e
 	}
 	if in.Action == "info" {
+		return encode()
+	}
+	if in.Action == "observe" {
+		frameIn := in
+		if frameIn.PageSize == 0 {
+			frameIn.PageSize = 6
+		}
+		if frameIn.Step == 0 {
+			frameIn.Step = max(1, (meta.Frames-1)/max(1, frameIn.PageSize-1))
+		}
+		frameCount := min(frameIn.PageSize, mediaobserve.RemainingFrames(meta.Frames, frameIn.Start, frameIn.Step))
+		out["visual_sampling"] = map[string]any{"start_frame": frameIn.Start, "step": frameIn.Step, "requested_frames": frameIn.PageSize, "effective_frames": frameCount}
+		var visualErr, audioErr error
+		if frameCount > 0 {
+			var rows []map[string]any
+			var next int
+			rows, next, visualErr = p.inspectVideoFrameRange(ctx, path, dir, frameIn, frameCount, meta.Frames, source, data)
+			out["visual_batches"], out["next_start_frame"] = rows, min(next, meta.Frames)
+			out["visual_observed"] = len(rows) > 0
+		} else {
+			out["visual_observed"] = false
+		}
+		if in.AudioStart < meta.Seconds {
+			length := in.AudioLength
+			if length == 0 {
+				length = 90
+			}
+			length = math.Min(length, meta.Seconds-in.AudioStart)
+			message, e := p.inspectionTranscriptionMessage(ctx, in)
+			if e == nil {
+				out["source_message_id"] = message.ID
+				installed, readyErr := p.manager.installedServiceState(ctx, "media-understanding", "media")
+				if readyErr != nil {
+					audioErr = readyErr
+				} else if !installed || !p.manager.mediaTranscriptionConfigured(ctx) {
+					audioErr = errors.New("media_transcription_unavailable")
+				} else {
+					audioErr = p.inspectPluginAudioRange(ctx, data, in, length, meta.Seconds, message, out)
+				}
+			} else {
+				audioErr = e
+			}
+		}
+		if visualErr != nil {
+			out["visual_error"] = mcptools.FailureDescription(videoInspectionError(visualErr))
+		}
+		if audioErr != nil {
+			out["audio_error"] = mcptools.FailureDescription(videoInspectionError(audioErr))
+		}
+		if out["visual_observed"] != true && out["text"] == nil && out["transcription_state"] == nil {
+			if visualErr != nil {
+				return "", visualErr
+			}
+			if audioErr != nil {
+				return "", audioErr
+			}
+			return "", errors.New("video_observation_providers_unavailable")
+		}
 		return encode()
 	}
 	if in.Action == "audio" {
@@ -489,7 +575,7 @@ func (p *permittedTools) inspectionTranscriptionMessage(ctx context.Context, in 
 	if in.sourceFingerprint != "" && inboundFingerprint(message) != in.sourceFingerprint {
 		return linuxnative.Message{}, errors.New("video_source_changed")
 	}
-	if message.ID != messageID || message.AccountID != p.trace.Account || message.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(message.ThreadID) || message.Direction != "incoming" || (message.Type != 43 && message.Type != 49) {
+	if message.ID != messageID || message.AccountID != p.trace.Account || message.ThreadID != in.SourceThread || !p.inspectionThreadAllowed(message.ThreadID) || message.Direction != "incoming" || (message.Type != 43 && message.Type != 49 && !(in.URL != "" && message.Type == 1)) {
 		return linuxnative.Message{}, errors.New("share_native_source_required")
 	}
 	return message, nil
@@ -523,7 +609,13 @@ func (p *permittedTools) inspectPluginAudioRange(ctx context.Context, data []byt
 		segmentStart := next
 		text, seconds, err := a.videoAudioRangeTimedWith(ctx, data, segmentStart, count, timeout, func(ctx context.Context, wav []byte) (string, error) {
 			actorCtx := withSourceActor(ctx, p, agentID("video-inspect-audio", p.trace.TaskID, p.trace.TraceID, message.ID, formatSeconds(segmentStart), formatSeconds(count)), message.ThreadID)
-			policy, err := p.manager.newMediaTranscriptionPolicy(actorCtx, message, wav)
+			var policy *mediaTranscriptionPolicy
+			var err error
+			if in.URL == "" {
+				policy, err = p.manager.newMediaTranscriptionPolicy(actorCtx, message, wav)
+			} else {
+				policy, err = p.manager.newPublicURLMediaTranscriptionPolicy(actorCtx, message, in.URL, wav)
+			}
 			if err != nil {
 				return "", err
 			}

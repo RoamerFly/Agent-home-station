@@ -80,7 +80,7 @@ func bindInputSource(in *companion.Input, m linuxnative.Message, e *companion.En
 	}
 	if kind != "" && !m.IsQuotedText() {
 		in.IncomingMedia = []companion.IncomingMediaRef{{Source: source, Kind: kind, Filename: identity.Clean(filename), UploaderID: m.SenderID, ObservationState: "pending", ObservationVersion: 1}}
-	} else if m.IsQuotedText() && m.ResolvedQuote != nil && !m.ResolvedQuote.IsQuotedText() {
+	} else if m.IsQuotedText() && m.ResolvedQuote != nil && !m.ResolvedQuote.IsQuotedText() && !quotedReplyPublicVideoURL(m.Body) {
 		// A quoted reply is the current request, but the quoted media belongs to
 		// the verified original source. Keep the media reference on that source so
 		// observations and generated context cannot be written to the text reply.
