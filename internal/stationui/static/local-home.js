@@ -2655,6 +2655,7 @@
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
+    view.douyinRoundsAbort?.abort();
     view.surfAbort?.abort();
     view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
@@ -3490,6 +3491,126 @@
     view.flowCleanup = cleanup;
     view.controller.signal.addEventListener("abort", cleanup, { once: true });
     return frame;
+  }
+  function douyinRoundToday() {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return values.year + "-" + values.month + "-" + values.day;
+  }
+  function douyinRoundTime(value) {
+    if (typeof value !== "string" || !value) return "未提供";
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "时间待核对";
+  }
+  function douyinExecutionRoundsPanel(view) {
+    const panel = appElement("section", "", "configuration-rounds douyin-rounds");
+    panel.setAttribute("aria-label", "抖音执行回合");
+    const intro = appElement("p", "这里仅查看本机已保存的抖音互动通知元数据；记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。当前记录缺少评论编号和父评论归属，不能根据通知类型或页面文字自动分类，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
+    const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
+    const dateLabel = appElement("label", "首次观察日期（北京时间）");
+    const date = document.createElement("input");
+    date.type = "date";
+    date.value = view.douyinRoundDate || douyinRoundToday();
+    dateLabel.append(date);
+    const limitLabel = appElement("label", "每页记录数（1–1000）");
+    const limitInput = document.createElement("input");
+    limitInput.type = "number";
+    limitInput.min = "1";
+    limitInput.max = "1000";
+    limitInput.step = "1";
+    limitInput.value = String(view.douyinRoundLimit || 20);
+    limitLabel.append(limitInput);
+    const records = appElement("div", "", "douyin-round-records");
+    const feedback = appElement("p", "", "apps-feedback douyin-round-feedback");
+    feedback.setAttribute("role", "status");
+    feedback.tabIndex = -1;
+    const more = memoryButton("较早记录", "button compact secondary", () => void load(true));
+    more.hidden = true;
+    const refresh = memoryButton("查看已保存记录", "button compact secondary", () => void load());
+    filters.append(dateLabel, limitLabel, refresh);
+    panel.append(intro, rule, filters, feedback, records, more);
+    let nextBefore = "", requestID = 0, controller = null;
+    const usedCursors = new Set();
+    const active = () => appConfiguration === view && view.record.id === "douyin" && view.section === "rounds" && panel.isConnected;
+    function roundCard(item) {
+      const card = appElement("article", "", "douyin-round-card");
+      const header = appElement("div", "", "douyin-round-card-header");
+      header.append(appElement("h4", "通知 " + item.notice_id), appElement("span", "待核对 · 不会回复", "station-label"));
+      const facts = appElement("dl", "", "douyin-round-facts");
+      for (const [name, value] of [
+        ["平台类型", String(item.type) + "（未分类）"],
+        ["作品编号", item.work_id || "未提供"],
+        ["平台时间", douyinRoundTime(item.created_at)],
+        ["本机首次观察", douyinRoundTime(item.observed_at)],
+        ["来源范围", "已保存通知元数据，单条来源未记录"],
+        ["判定证据", item.reason + "：缺少评论编号和父评论归属"],
+      ]) facts.append(appElement("dt", name), appElement("dd", value));
+      card.append(header, facts);
+      return card;
+    }
+    async function load(append = false) {
+      if (!active()) return;
+      const limit = Number(limitInput.value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date.value)) {
+        feedback.textContent = "请选择有效的查看日期。"; date.focus(); return;
+      }
+      if (limitInput.validity.badInput || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+        feedback.textContent = "每页记录数须为 1–1000 的整数，更多记录可按游标续页。"; limitInput.focus(); return;
+      }
+      if (append && !nextBefore) return;
+      const before = append ? nextBefore : "";
+      const moreFocused = append && document.activeElement === more;
+      controller?.abort();
+      const currentController = new AbortController();
+      controller = currentController;
+      view.douyinRoundsAbort = currentController;
+      const generation = ++requestID;
+      view.douyinRoundDate = date.value;
+      view.douyinRoundLimit = limit;
+      if (!append) { records.replaceChildren(); nextBefore = ""; usedCursors.clear(); more.hidden = true; }
+      panel.setAttribute("aria-busy", "true");
+      feedback.textContent = "正在读取本机已保存的通知元数据…";
+      const query = new URLSearchParams({ date: date.value, limit: String(limit) });
+      if (before) query.set("before", before);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds?" + query, { signal: currentController.signal });
+        if (!active() || generation !== requestID || currentController.signal.aborted) return;
+        if (result.date !== date.value || result.coverage !== "notice_metadata" || !Array.isArray(result.rounds) ||
+            typeof result.next_before !== "string" || !Number.isSafeInteger(result.effective_limit) || result.effective_limit < 1) {
+          throw new Error("抖音执行回合返回格式无效，请稍后重试。");
+        }
+        if (result.next_before && (result.next_before === before || usedCursors.has(result.next_before))) {
+          throw new Error("较早记录的续页位置未前进，请重新选择日期查看。");
+        }
+        const cards = result.rounds.map((item) => {
+          if (!item || typeof item.notice_id !== "string" || !item.notice_id || !Number.isInteger(item.type) ||
+              typeof item.work_id !== "string" || typeof item.created_at !== "string" || typeof item.observed_at !== "string" ||
+              item.state !== "待核对" || item.reason !== "证据不足" || item.reply_eligible !== false) {
+            throw new Error("抖音通知证据返回格式无效，请稍后重试。");
+          }
+          return roundCard(item);
+        });
+        if (before) usedCursors.add(before);
+        records.append(...cards);
+        nextBefore = result.next_before;
+        more.hidden = !nextBefore;
+        const count = records.childElementCount;
+        feedback.textContent = count ? "已显示 " + count + " 条已保存记录；本页实际页大小 " + result.effective_limit + "。全部证据不足，不会回复。" :
+          "所选日期没有已保存的通知元数据；不代表抖音平台没有互动消息。";
+        if (moreFocused && more.hidden) feedback.focus({ preventScroll: true });
+      } catch (error) {
+        if (active() && generation === requestID && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          more.hidden = !nextBefore;
+        }
+      } finally {
+        if (active() && generation === requestID) panel.setAttribute("aria-busy", "false");
+      }
+    }
+    date.addEventListener("change", () => void load());
+    queueMicrotask(() => { if (active()) void load(); });
+    return panel;
   }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
@@ -4439,7 +4560,10 @@
         }
         const coverage = page.has_more ? "平台报告还有后续通知。" : "平台报告已读到末批。";
         const progress = page.progress === "cursor_stalled" ? "平台游标没有前进，已停止续读。" : page.progress === "next_unavailable" ? "后批未能继续加载，已返回本次成功读取的部分。" : "";
-        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress;
+        const saveWarnings = [];
+        if (page.rounds_recorded === false) saveWarnings.push(typeof page.rounds_warning === "string" && page.rounds_warning.trim() ? page.rounds_warning.trim() : "回合未保存，不会自动重读。");
+        if (page.memory_recorded === false) saveWarnings.push(typeof page.memory_warning === "string" && page.memory_warning.trim() ? page.memory_warning.trim() : "通知记忆未保存，不会自动重读。");
+        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress + (saveWarnings.length ? " " + saveWarnings.join("；") : "");
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
           continuation = ""; next.hidden = true;
@@ -4619,7 +4743,7 @@
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && (["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "surf", "delivery", "tasks"].includes(section) || (section === "rounds" && record.id === "wechat"))) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -4637,7 +4761,7 @@
           const account = appElement("div", "", "douyin-workbench-account");
           account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
           const routes = appElement("div", "", "douyin-workbench-routes");
-          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
+          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
             if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
           }
           overview.append(account, routes);
@@ -4758,7 +4882,8 @@
         else controls.push(appElement("p", "添加微信连接后，可查看流程和已保存的画布。", "app-scope-note"));
         break;
       case "rounds":
-        if (selected) controls.push(appConfigurationRounds(view, selected.id));
+        if (record.id === "douyin") controls.push(douyinExecutionRoundsPanel(view));
+        else if (selected) controls.push(appConfigurationRounds(view, selected.id));
         else controls.push(appElement("p", "连接微信后可查看消息的处理过程。", "app-scope-note"));
         break;
       case "tasks":
@@ -4801,6 +4926,7 @@
           ? "请在主工作站聊天中用已登记成品创建草稿，并明确标题、简介和可见范围；这里按原任务编号提交、续办和核对回执。"
           : "请先在「内容浏览」读取确切视频或父评论，再在主工作站聊天中创建点赞或回复任务；这里管理原任务。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
+          if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
           if (view.douyinNoticeLogin !== login) {
             view.douyinNoticeAbort?.abort();
@@ -7766,6 +7892,7 @@
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
+    appConfiguration?.douyinRoundsAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
     $("#app-configuration").classList.remove("wechat-legacy-skin", "douyin-workbench-skin");

@@ -1588,6 +1588,38 @@ body.is-home-ready.standalone-workbench #app-configuration {
 }
 .is-home-ready .douyin-workbench-skin .douyin-read-choice-limit input { width:120px; max-width:100%; }
 .is-home-ready .douyin-workbench-skin .douyin-read-result:focus { outline:2px solid var(--accent); outline-offset:2px; }
+.is-home-ready .douyin-workbench-skin .douyin-rounds {
+  display:grid; gap:var(--s-3); max-width:1180px; min-width:0; overflow-wrap:anywhere;
+}
+.is-home-ready .douyin-workbench-skin .douyin-rounds > .app-scope-note { margin:0; }
+.is-home-ready .douyin-workbench-skin .douyin-round-rule {
+  padding:var(--s-3); border-inline-start:3px solid var(--warning); border-radius:var(--r-sm);
+}
+.is-home-ready .douyin-workbench-skin .douyin-round-filters { gap:var(--s-3); }
+.is-home-ready .douyin-workbench-skin .douyin-round-filters label { min-width:0; }
+.is-home-ready .douyin-workbench-skin .douyin-round-filters input[type=date] { width:190px; max-width:100%; }
+.is-home-ready .douyin-workbench-skin .douyin-round-filters input[type=number] { width:140px; max-width:100%; }
+.is-home-ready .douyin-workbench-skin .douyin-round-filters .button,
+.is-home-ready .douyin-workbench-skin .douyin-rounds > .button { min-height:40px; justify-self:start; }
+.is-home-ready .douyin-workbench-skin .douyin-round-feedback { margin:0; }
+.is-home-ready .douyin-workbench-skin .douyin-round-feedback:focus { outline:2px solid var(--accent); outline-offset:3px; }
+.is-home-ready .douyin-workbench-skin .douyin-round-records {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:var(--s-3);
+}
+.is-home-ready .douyin-workbench-skin .douyin-round-card {
+  min-width:0; padding:var(--s-3); border:1px solid var(--border); border-radius:var(--r-md);
+  background:var(--surface-raised);
+}
+.is-home-ready .douyin-workbench-skin .douyin-round-card-header {
+  display:flex; align-items:start; justify-content:space-between; flex-wrap:wrap; gap:var(--s-2);
+}
+.is-home-ready .douyin-workbench-skin .douyin-round-card-header h4 { margin:0; font-size:var(--fs-body); overflow-wrap:anywhere; }
+.is-home-ready .douyin-workbench-skin .douyin-round-facts {
+  display:grid; grid-template-columns:minmax(90px,max-content) minmax(0,1fr);
+  gap:var(--s-2) var(--s-3); margin:var(--s-3) 0 0; font-size:var(--fs-caption);
+}
+.is-home-ready .douyin-workbench-skin .douyin-round-facts dt { color:var(--text-muted); }
+.is-home-ready .douyin-workbench-skin .douyin-round-facts dd { min-width:0; margin:0; overflow-wrap:anywhere; }
 .is-home-ready .wechat-legacy-skin .switch-row {
   display:grid; grid-template-columns:minmax(0,1fr) 40px; align-items:center; gap:var(--s-3);
   padding:var(--s-3) 0; border-top:1px solid var(--border);

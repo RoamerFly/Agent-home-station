@@ -86,6 +86,7 @@ func (m *localDouyinWebLogin) noticeState(fish string) (localDouyinWebRecord, st
 }
 
 func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.ServeMux) {
+	m.executionRoundRoutes(owner, mux)
 	mux.HandleFunc("POST "+localDouyinNoticePath, owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		identity, err := m.home.identity.Read()
@@ -251,12 +252,29 @@ func (m *localDouyinWebLogin) noticeRoutes(owner *websession.Store, mux *http.Se
 			localDouyinNoticeFailure(w, errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err))
 			return
 		}
-		if err := m.captureNoticeMemory(ctx, record, page); err != nil {
-			websession.Fail(w, http.StatusServiceUnavailable, "通知已读取，可能已标记已读，本机记忆保存未完成")
+		if err := authorize(); err != nil {
+			localDouyinNoticeFailure(w, err)
+			return
+		}
+		roundsRecorded := m.captureExecutionRounds(ctx, identity.FishID, identity.LocalOwner.ID, record, page) == nil
+		memoryRecorded := m.captureNoticeMemory(ctx, record, page) == nil
+		if err := authorize(); err != nil {
+			localDouyinNoticeFailure(w, err)
 			return
 		}
 		next := m.finishNoticeCursor(scope, after, page, nextToken)
-		websession.Respond(w, http.StatusOK, localDouyinNoticeResult(page, next, input.Pages))
+		result := localDouyinNoticeResult(page, next, input.Pages)
+		result["rounds_recorded"] = roundsRecorded
+		if !roundsRecorded {
+			result["rounds_warning"] = "通知已读取，可能已标记已读；执行回合记录未确认保存，请保存本次读取结果，不会自动重读"
+		}
+		if _, granted := douyinMemorySource(record, identity.FishID, identity.LocalOwner.ID, douyinMemoryNotices); granted {
+			result["memory_recorded"] = memoryRecorded
+			if !memoryRecorded {
+				result["memory_warning"] = "通知已读取，可能已标记已读；已授权的本机通知记忆未确认保存，请保存本次读取结果，不会自动重读"
+			}
+		}
+		websession.Respond(w, http.StatusOK, result)
 	}))
 }
 

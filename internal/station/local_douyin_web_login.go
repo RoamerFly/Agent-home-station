@@ -89,22 +89,25 @@ type localDouyinWebRecord struct {
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
 	// account cannot inherit an earlier task's target reference.
-	ProfileEpoch    uint64                  `json:"profile_epoch,omitempty"`
-	ConfirmedAt     string                  `json:"confirmed_at,omitempty"`
-	ReadEnabled     bool                    `json:"read_enabled,omitempty"`
-	WorksEnabled    bool                    `json:"works_enabled,omitempty"`
-	ImagesEnabled   bool                    `json:"images_enabled,omitempty"`
-	ReadScope       string                  `json:"read_scope,omitempty"`
-	PlaybackEnabled bool                    `json:"playback_enabled,omitempty"`
-	AudioEnabled    bool                    `json:"audio_enabled,omitempty"`
-	VisualEnabled   bool                    `json:"visual_enabled,omitempty"`
-	CommentsEnabled bool                    `json:"comments_enabled,omitempty"`
-	LikesEnabled    bool                    `json:"likes_enabled,omitempty"`
-	RepliesEnabled  bool                    `json:"replies_enabled,omitempty"`
-	NoticeAccount   string                  `json:"notice_account,omitempty"`
-	NoticeAgent     bool                    `json:"notice_agent_enabled,omitempty"`
-	PublishEnabled  bool                    `json:"publish_enabled,omitempty"`
-	Memory          localDouyinMemoryGrants `json:"memory,omitzero"`
+	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
+	ConfirmedAt     string `json:"confirmed_at,omitempty"`
+	ReadEnabled     bool   `json:"read_enabled,omitempty"`
+	WorksEnabled    bool   `json:"works_enabled,omitempty"`
+	ImagesEnabled   bool   `json:"images_enabled,omitempty"`
+	ReadScope       string `json:"read_scope,omitempty"`
+	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
+	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
+	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
+	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
+	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
+	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
+	NoticeAccount   string `json:"notice_account,omitempty"`
+	// NoticeEpoch changes only when the bound notice account changes. It keeps
+	// read-only execution history stable across unrelated permission edits.
+	NoticeEpoch    uint64                  `json:"notice_epoch,omitempty"`
+	NoticeAgent    bool                    `json:"notice_agent_enabled,omitempty"`
+	PublishEnabled bool                    `json:"publish_enabled,omitempty"`
+	Memory         localDouyinMemoryGrants `json:"memory,omitzero"`
 }
 
 type localDouyinLoginWindow interface {
@@ -482,6 +485,9 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	original := record
 	save := func() error {
 		record.normalizeMemoryGrants(original)
+		if record.NoticeAccount != original.NoticeAccount {
+			record.NoticeEpoch = original.NoticeEpoch + 1
+		}
 		record.Revision++
 		raw, err := json.Marshal(record)
 		if err != nil {
