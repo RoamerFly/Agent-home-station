@@ -144,12 +144,24 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	}
 	contextPage, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1})
 	if err != nil || contextPage["ownership"] != "verified_own_work" || contextPage["audio_complete"] != true ||
-		contextPage["visual_complete"] != true || !strings.Contains(contextPage["creator_text"].(string), "简介 合成的简介") || contextPage["next_offset"] != float64(1) {
+		contextPage["visual_complete"] != true || !strings.Contains(contextPage["creator_text"].(string), "简介 合成的简介") ||
+		contextPage["next_offset"] != float64(1) || contextPage["next_cursor"] == "" {
 		t.Fatalf("saved context first page: %v %v", contextPage, err)
 	}
-	contextNext, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "offset": 1})
-	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil {
+	contextCursor := contextPage["next_cursor"].(string)
+	contextNext, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "cursor": contextCursor})
+	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil ||
+		contextNext["snapshot_state"] != "stable" {
+		t.Fatalf("saved context cursor continuation: %v %v", contextNext, err)
+	}
+	contextNext, err = call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "offset": 1})
+	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil ||
+		contextNext["snapshot_state"] != "legacy_offset_unpinned" {
 		t.Fatalf("saved context continuation: %v %v", contextNext, err)
+	}
+	if _, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID,
+		"cursor": contextCursor, "offset": 1}); err == nil {
+		t.Fatal("context accepted simultaneous cursor and offset")
 	}
 	if platformReads != 0 {
 		t.Fatalf("stored ledger tool read platform %d times", platformReads)
@@ -162,8 +174,13 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	if err := tools.ValidateGenerationSources(t.Context()); err != nil {
 		t.Fatalf("ordinary works-memory update blocked same-turn continuation: %v", err)
 	}
+	stale, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "cursor": contextCursor})
+	if err != nil || stale["restart_required"] != true || stale["snapshot_state"] != "restart_required" ||
+		len(stale["media_pages"].([]any)) != 0 || stale["creator_text"] != nil {
+		t.Fatalf("changed creator description reused prior page cursor: %v %v", stale, err)
+	}
 	updated, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID})
-	if err != nil || !strings.Contains(updated["creator_text"].(string), "更新后标题") {
+	if err != nil || !strings.Contains(updated["creator_text"].(string), "更新后标题") || updated["snapshot_state"] != "stable" {
 		t.Fatalf("context could not be refreshed after a same-work update: %v %v", updated, err)
 	}
 	code, current = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_memory", "revision": current["revision"],
@@ -173,6 +190,17 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	}
 	if err := tools.ValidateGenerationSources(t.Context()); err == nil {
 		t.Fatal("revoked works-memory grant left previously read context usable")
+	}
+	if disclosed, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID,
+		"cursor": contextCursor}); err == nil || disclosed != nil {
+		t.Fatalf("old Agent authorization read context after revocation: %v %v", disclosed, err)
+	}
+	freshTools := noticeToolSet(t, f, "round-tool-revoked-cursor", true)
+	revoked, err := call(freshTools, map[string]any{"action": "context", "date": day, "work_id": workID,
+		"cursor": contextCursor})
+	if err != nil || revoked["restart_required"] != true || revoked["creator_text"] != nil ||
+		len(revoked["media_pages"].([]any)) != 0 {
+		t.Fatalf("revoked works-memory cursor disclosed content: %v %v", revoked, err)
 	}
 }
 

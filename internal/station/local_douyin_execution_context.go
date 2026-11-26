@@ -51,6 +51,9 @@ type localDouyinExecutionWorkContext struct {
 	MediaPages        []localDouyinWorkContextPage `json:"media_pages"`
 	MediaPageCount    int                          `json:"media_page_count"`
 	NextOffset        int                          `json:"next_offset,omitempty"`
+	NextCursor        string                       `json:"next_cursor"`
+	SnapshotState     string                       `json:"snapshot_state,omitempty"`
+	RestartRequired   bool                         `json:"restart_required"`
 	EffectiveLimit    int                          `json:"effective_limit"`
 	Coverage          string                       `json:"coverage"`
 	ReplyEligible     bool                         `json:"reply_eligible"`
@@ -103,12 +106,12 @@ func (m *localDouyinWebLogin) executionRoundContextRoutes(owner *websession.Stor
 			return
 		}
 		query := r.URL.Query()
-		if len(query) < 2 || len(query) > 4 {
+		if len(query) < 2 || len(query) > 5 {
 			websession.Fail(w, http.StatusBadRequest, "作品上下文查询参数无效")
 			return
 		}
 		for key, values := range query {
-			if (key != "date" && key != "work_id" && key != "offset" && key != "limit") || len(values) != 1 {
+			if (key != "date" && key != "work_id" && key != "offset" && key != "limit" && key != "cursor") || len(values) != 1 {
 				websession.Fail(w, http.StatusBadRequest, "作品上下文查询参数无效")
 				return
 			}
@@ -120,6 +123,11 @@ func (m *localDouyinWebLogin) executionRoundContextRoutes(owner *websession.Stor
 			return
 		}
 		offset, limit := 0, 20
+		cursor := query.Get("cursor")
+		if query.Has("cursor") && (cursor == "" || len(cursor) > localDouyinExecutionContextCursorMax || query.Has("offset")) {
+			websession.Fail(w, http.StatusBadRequest, "作品上下文续页位置无效")
+			return
+		}
 		if query.Has("offset") {
 			offset, err = strconv.Atoi(query.Get("offset"))
 			if err != nil || offset < 0 {
@@ -150,9 +158,13 @@ func (m *localDouyinWebLogin) executionRoundContextRoutes(owner *websession.Stor
 			websession.Fail(w, http.StatusForbidden, "抖音通知授权已改变")
 			return
 		}
-		result, err := m.executionWorkContext(ctx, scope, record, identity.FishID, identity.LocalOwner.ID, day, workID, offset, limit)
+		result, err := m.executionWorkContextPage(ctx, scope, record, identity.FishID, identity.LocalOwner.ID, day, workID, offset, limit, cursor)
 		if err != nil {
-			websession.Fail(w, http.StatusServiceUnavailable, "作品上下文读取失败")
+			if errors.Is(err, errLocalDouyinExecutionContextCursor) {
+				websession.Fail(w, http.StatusBadRequest, "作品上下文续页位置无效")
+			} else {
+				websession.Fail(w, http.StatusServiceUnavailable, "作品上下文读取失败")
+			}
 			return
 		}
 		if err := current(); err != nil {

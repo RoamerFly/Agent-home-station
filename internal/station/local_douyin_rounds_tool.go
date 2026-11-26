@@ -25,8 +25,8 @@ const localDouyinRoundsToolName = "douyin_rounds"
 // only for a saved notice's independently verified own work.
 func localDouyinRoundsTool() mcptools.Tool {
 	return mcptools.NewTool(localDouyinRoundsToolName,
-		"只读查询抖音执行回合。works 按 date 列作品组，以 next_cursor 续页；notices 必须指定 work_id，以 next_before 在该作品内续页；notice 按 notice_id 精确读取一条已保存通知及其未核实候选，不能据此回复；relation 要求已保存通知详情中的明确 target_path/target_id，可选同详情 root_path/root_id，只针对本人作品自然加载的一页评论响应核对一条关系，始终不能据此回复。context 按 next_offset 读已保存的简介、音轨与采样画面。locate 为已有通知的 work_id 逐页寻找本人作品，返回临时 content_id；续办时传 resume=true 和相同 page_size。prepare 仅对该通知的本人作品及临时 content_id 读取音轨/采样画面；audio_pages、visual_pages 限定本次页数，audio_seconds、visual_frames 控制每页精度。默认只读一页音轨；须显式指定 visual_pages 才会调用视觉模型，可设 audio_pages=0 专读画面。同一媒体 SHA 已完整的字段跳过以免重复模型调用。按 context_complete 判断音画是否都已留存，再用 context 分页读取证据；已保存的完整性不代表重新核实当前平台原件。所有动作均不回复或投稿，reply_eligible=false。",
-		`{"type":"object","properties":{"action":{"type":"string","enum":["works","notices","notice","relation","context","locate","prepare"]},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"work_id":{"type":"string","pattern":"^([1-9][0-9]{0,19})?$"},"notice_id":{"type":"string","minLength":1,"maxLength":128},"target_path":{"type":"string","enum":["cid","real_cid","comment.cid","reply_comment.cid"]},"target_id":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"},"root_path":{"type":"string","enum":["reply_id","comment.reply_id","reply_comment.reply_id"]},"root_id":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"},"limit":{"type":"integer","minimum":1,"maximum":1000},"cursor":{"type":"string","minLength":1,"maxLength":256},"before":{"type":"string","pattern":"^[1-9][0-9]*$"},"offset":{"type":"integer","minimum":0},"pages":{"type":"integer","minimum":1,"maximum":1000},"page_size":{"type":"integer","minimum":1,"maximum":1000},"resume":{"type":"boolean"},"content_id":{"type":"string","minLength":1,"maxLength":256},"audio_pages":{"type":"integer","minimum":0,"maximum":1000},"visual_pages":{"type":"integer","minimum":0,"maximum":1000},"audio_seconds":{"type":"integer","minimum":1,"maximum":240},"visual_frames":{"type":"integer","minimum":1,"maximum":12}},"required":["action","date"],"additionalProperties":false}`)
+		"只读查询抖音执行回合。works 按 date 列作品组，以 next_cursor 续页；notices 必须指定 work_id，以 next_before 在该作品内续页；notice 按 notice_id 精确读取一条已保存通知及其未核实候选，不能据此回复；relation 要求已保存通知详情中的明确 target_path/target_id，可选同详情 root_path/root_id，只针对本人作品自然加载的一页评论响应核对一条关系，始终不能据此回复。context 首次读取不传 cursor，后续必须优先传返回的 next_cursor；若 restart_required=true，丢弃旧页并从头读取。旧 offset 仍可用，但未锁定快照，不能据此认定已完整取得同一版本。locate 为已有通知的 work_id 逐页寻找本人作品，返回临时 content_id；续办时传 resume=true 和相同 page_size。prepare 仅对该通知的本人作品及临时 content_id 读取音轨/采样画面；audio_pages、visual_pages 限定本次页数，audio_seconds、visual_frames 控制每页精度。默认只读一页音轨；须显式指定 visual_pages 才会调用视觉模型，可设 audio_pages=0 专读画面。同一媒体 SHA 已完整的字段跳过以免重复模型调用。按 context_complete 判断音画是否都已留存，再用 context 分页读取证据；已保存的完整性不代表重新核实当前平台原件。所有动作均不回复或投稿，reply_eligible=false。",
+		`{"type":"object","properties":{"action":{"type":"string","enum":["works","notices","notice","relation","context","locate","prepare"]},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"work_id":{"type":"string","pattern":"^([1-9][0-9]{0,19})?$"},"notice_id":{"type":"string","minLength":1,"maxLength":128},"target_path":{"type":"string","enum":["cid","real_cid","comment.cid","reply_comment.cid"]},"target_id":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"},"root_path":{"type":"string","enum":["reply_id","comment.reply_id","reply_comment.reply_id"]},"root_id":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"},"limit":{"type":"integer","minimum":1,"maximum":1000},"cursor":{"type":"string","minLength":1,"maxLength":1024},"before":{"type":"string","pattern":"^[1-9][0-9]*$"},"offset":{"type":"integer","minimum":0},"pages":{"type":"integer","minimum":1,"maximum":1000},"page_size":{"type":"integer","minimum":1,"maximum":1000},"resume":{"type":"boolean"},"content_id":{"type":"string","minLength":1,"maxLength":256},"audio_pages":{"type":"integer","minimum":0,"maximum":1000},"visual_pages":{"type":"integer","minimum":0,"maximum":1000},"audio_seconds":{"type":"integer","minimum":1,"maximum":240},"visual_frames":{"type":"integer","minimum":1,"maximum":12}},"required":["action","date"],"additionalProperties":false}`)
 }
 
 type localDouyinRoundsInput struct {
@@ -123,9 +123,12 @@ func parseLocalDouyinRoundsInput(raw json.RawMessage) (localDouyinRoundsInput, i
 			return in, 0, mcptools.ArgumentError("$.root_id", "主评论路径和编号须同时提供，且不能等于目标评论")
 		}
 	case "context":
-		allowed["work_id"], allowed["offset"] = true, true
+		allowed["work_id"], allowed["offset"], allowed["cursor"] = true, true, true
 		if !validLocalDouyinCommentID(in.WorkID) {
 			return in, 0, mcptools.ArgumentError("$.work_id", "请指定有效的作品编号")
+		}
+		if _, ok := fields["cursor"]; ok && (in.Cursor == "" || len(in.Cursor) > localDouyinExecutionContextCursorMax || fields["offset"] != nil) {
+			return in, 0, mcptools.ArgumentError("$.cursor", "作品证据游标无效，不能同时提供 offset")
 		}
 		if in.Offset < 0 {
 			return in, 0, mcptools.ArgumentError("$.offset", "作品证据续页位置须为非负整数")
@@ -389,8 +392,11 @@ func (t *localToolSet) callDouyinRounds(ctx context.Context, raw json.RawMessage
 		out = result
 	case "context":
 		var result localDouyinExecutionWorkContext
-		result, err = m.executionWorkContext(ctx, scope, record, t.access.fishID, t.access.ownerID,
-			in.Date, in.WorkID, in.Offset, in.Limit)
+		result, err = m.executionWorkContextPage(ctx, scope, record, t.access.fishID, t.access.ownerID,
+			in.Date, in.WorkID, in.Offset, in.Limit, in.Cursor)
+		if errors.Is(err, errLocalDouyinExecutionContextCursor) {
+			return "", mcptools.ArgumentError("$.cursor", "作品证据游标无效，请从头读取")
+		}
 		if err == nil && result.Ownership == "verified_own_work" {
 			var source localDouyinMemorySource
 			var granted bool

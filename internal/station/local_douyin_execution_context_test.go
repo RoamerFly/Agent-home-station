@@ -84,13 +84,68 @@ func TestLocalDouyinExecutionWorkContextRequiresSameCreatorAndRetainedProof(t *t
 	}
 	code, result = f.request("GET", url+"&limit=2", nil, false)
 	if code != http.StatusOK || result["audio_complete"] != true || result["visual_complete"] != true ||
-		result["media_page_count"] != float64(4) || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != float64(2) {
+		result["media_page_count"] != float64(4) || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != float64(2) ||
+		result["snapshot_state"] != "stable" || result["restart_required"] != false || result["next_cursor"] == "" {
 		t.Fatalf("retained media evidence page: %d %v", code, result)
 	}
+	firstCursor := result["next_cursor"].(string)
+	for _, other := range []string{
+		localDouyinExecutionContextPath + "?date=" + executionRoundDay() + "&work_id=7391234567890123457&cursor=" + firstCursor,
+		localDouyinExecutionContextPath + "?date=2026-11-25&work_id=" + workID + "&cursor=" + firstCursor,
+	} {
+		code, result = f.request("GET", other, nil, false)
+		if code != http.StatusOK || result["restart_required"] != true || result["creator_text"] != nil || len(result["media_pages"].([]any)) != 0 {
+			t.Fatalf("context cursor crossed work or date: %d %v", code, result)
+		}
+	}
+	code, result = f.request("GET", url+"&limit=2&cursor="+firstCursor, nil, false)
+	if code != http.StatusOK || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != nil ||
+		result["next_cursor"] != "" || result["snapshot_state"] != "stable" {
+		t.Fatalf("pinned media evidence continuation: %d %v", code, result)
+	}
 	code, result = f.request("GET", url+"&limit=2&offset=2", nil, false)
-	if code != http.StatusOK || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != nil {
+	if code != http.StatusOK || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != nil ||
+		result["snapshot_state"] != "legacy_offset_unpinned" || result["next_cursor"] != "" {
 		t.Fatalf("retained media evidence continuation: %d %v", code, result)
 	}
+	if code, _ := f.request("GET", url+"&cursor=invalid", nil, false); code != http.StatusBadRequest {
+		t.Fatalf("malformed context cursor: %d", code)
+	}
+	if code, _ := f.request("GET", url+"&cursor="+firstCursor+"&offset=2", nil, false); code != http.StatusBadRequest {
+		t.Fatalf("context cursor with offset: %d", code)
+	}
+	// Adding a page under the same media SHA must invalidate a prior offset
+	// even though the chosen media original has not changed.
+	if err := observation.captureCreatorMediaContext(t.Context(), access, target, apphost.ObservationAudio,
+		apphost.ObservationPage{AudioProof: &apphost.AudioProof{State: "transcribed", MediaSHA256: hash,
+			StartSeconds: 10, WindowEndSeconds: 12, MediaDurationSeconds: 12},
+			Chunks: []apphost.ObservationChunk{{Text: "后补的音轨页"}}, Coverage: "后补音轨页"}); err != nil {
+		t.Fatal(err)
+	}
+	code, result = f.request("GET", url+"&limit=2&cursor="+firstCursor, nil, false)
+	if code != http.StatusOK || result["restart_required"] != true || len(result["media_pages"].([]any)) != 0 {
+		t.Fatalf("inserted media page reused old cursor: %d %v", code, result)
+	}
+	code, result = f.request("GET", url+"&limit=2", nil, false)
+	if code != http.StatusOK || result["next_cursor"] == "" || result["media_page_count"] != float64(5) {
+		t.Fatalf("new media page could not be reread from start: %d %v", code, result)
+	}
+	insertCursor := result["next_cursor"].(string)
+	if err := observation.captureCreatorMediaContext(t.Context(), access, target, apphost.ObservationAudio,
+		apphost.ObservationPage{AudioProof: &apphost.AudioProof{State: "transcribed", MediaSHA256: hash,
+			StartSeconds: 10, WindowEndSeconds: 12, MediaDurationSeconds: 12},
+			Chunks: []apphost.ObservationChunk{{Text: "更新后的补读音轨页"}}, Coverage: "更新后的补读页"}); err != nil {
+		t.Fatal(err)
+	}
+	code, result = f.request("GET", url+"&limit=2&cursor="+insertCursor, nil, false)
+	if code != http.StatusOK || result["restart_required"] != true || len(result["media_pages"].([]any)) != 0 {
+		t.Fatalf("updated same-SHA media page reused old cursor: %d %v", code, result)
+	}
+	code, result = f.request("GET", url+"&limit=2", nil, false)
+	if code != http.StatusOK || result["next_cursor"] == "" {
+		t.Fatalf("updated media page could not be reread from start: %d %v", code, result)
+	}
+	updatedCursor := result["next_cursor"].(string)
 	newHash := strings.Repeat("b", 64)
 	if err := observation.captureCreatorMediaContext(t.Context(), access, target, apphost.ObservationAudio,
 		apphost.ObservationPage{AudioProof: &apphost.AudioProof{State: "transcribed", MediaSHA256: newHash,
@@ -98,9 +153,14 @@ func TestLocalDouyinExecutionWorkContextRequiresSameCreatorAndRetainedProof(t *t
 			Chunks: []apphost.ObservationChunk{{Text: "新原件仅处理了开头"}}, Coverage: "新原件音轨前半段"}); err != nil {
 		t.Fatal(err)
 	}
+	code, result = f.request("GET", url+"&limit=2&cursor="+updatedCursor, nil, false)
+	if code != http.StatusOK || result["restart_required"] != true || result["snapshot_state"] != "restart_required" ||
+		result["ownership"] != "unverified" || len(result["media_pages"].([]any)) != 0 || result["creator_text"] != nil || result["next_cursor"] != "" {
+		t.Fatalf("changed media reused old page cursor: %d %v", code, result)
+	}
 	code, result = f.request("GET", url, nil, false)
 	if code != http.StatusOK || result["media_sha256"] != newHash || result["media_page_count"] != float64(1) ||
-		result["audio_complete"] != false || result["visual_complete"] != false {
+		result["audio_complete"] != false || result["visual_complete"] != false || result["snapshot_state"] != "stable" {
 		t.Fatalf("new partial original inherited old completeness: %d %v", code, result)
 	}
 	// An additional notification for the same work but another account removes

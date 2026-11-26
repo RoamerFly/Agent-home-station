@@ -3529,11 +3529,11 @@
     const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
     const contextAction = memoryButton("让 Agent 读取此作品音画", "button compact secondary", () => {
       if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
-      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 locate 逐页核对当前创作者账号、本人作品及标题简介，取得该作品的临时 content_id。随后用 prepare 按页读取音轨（每次 audio_pages=1），再明确指定 audio_pages=0、visual_pages=1 按页采样画面，依据返回的进度续办，直到 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；重新 locate 后，未完成字段可能从首段重读。最后用 context 逐页读取已保存证据，整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
+      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 locate 逐页核对当前创作者账号、本人作品及标题简介，取得该作品的临时 content_id。随后用 prepare 按页读取音轨（每次 audio_pages=1），再明确指定 audio_pages=0、visual_pages=1 按页采样画面，依据返回的进度续办，直到 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；重新 locate 后，未完成字段可能从首段重读。最后用 context 从首读开始，后续只用 next_cursor 逐页读取已保存证据；若返回 restart_required，丢弃先前页并从头读取。整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
       handoffDouyinWorkbenchChat(draft, feedback);
     });
     contextAction.hidden = true;
-    const contextMore = memoryButton("更多音画证据", "button compact secondary", () => void loadContext(true));
+    const contextMore = memoryButton("更多音画证据", "button compact secondary", () => void loadContext(!contextNeedsRestart));
     contextMore.hidden = true;
     const records = appElement("div", "", "douyin-round-records");
     const feedback = appElement("p", "", "apps-feedback douyin-round-feedback");
@@ -3545,10 +3545,10 @@
     filters.append(dateLabel, limitLabel, refresh);
     panel.append(intro, rule, filters, feedback, groupHeading, groups, groupMore, selectedHeading, context, contextAction, contextMore, records, more);
     let nextGroupCursor = "", nextBefore = "", selectedWorkID = null;
-    let nextContextOffset = null;
+    let nextContextOffset = null, nextContextCursor = "", contextNeedsRestart = false;
     let groupGeneration = 0, roundGeneration = 0, contextGeneration = 0;
     let groupController = null, roundController = null, contextController = null;
-    const usedGroupCursors = new Set(), usedRoundCursors = new Set(), knownGroupIDs = new Set();
+    const usedGroupCursors = new Set(), usedRoundCursors = new Set(), usedContextCursors = new Set(), knownGroupIDs = new Set();
     const active = () => appConfiguration === view && view.record.id === "douyin" && view.section === "rounds" && panel.isConnected;
     view.douyinRoundsAbort = { abort() { groupController?.abort(); roundController?.abort(); contextController?.abort(); } };
     function validFilters() {
@@ -3623,7 +3623,7 @@
         ++contextGeneration;
         groups.replaceChildren(); records.replaceChildren();
         selectedWorkID = null; nextBefore = ""; nextGroupCursor = "";
-        nextContextOffset = null; contextMore.hidden = true;
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear(); contextMore.hidden = true;
         contextAction.hidden = true;
         context.textContent = "请选择作品查看已保存的作品资料和音画证据。";
         usedGroupCursors.clear(); usedRoundCursors.clear(); knownGroupIDs.clear();
@@ -3739,28 +3739,47 @@
         contextMore.hidden = true; contextAction.hidden = true;
         return;
       }
-      if (append && nextContextOffset === null) return;
+      if (append && (!nextContextCursor || nextContextOffset === null)) return;
       const offset = append ? nextContextOffset : 0;
+      const cursor = append ? nextContextCursor : "";
       contextController?.abort();
       const currentController = new AbortController();
       contextController = currentController;
       const generation = ++contextGeneration;
       if (!append) {
-        nextContextOffset = null;
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear();
+        contextMore.textContent = "更多音画证据";
         contextMore.hidden = true;
         contextAction.hidden = true;
         context.replaceChildren(appElement("p", "正在读取本机已保存的作品证据…"));
       }
-      const query = new URLSearchParams({ date: date.value, work_id: workID, offset: String(offset), limit: "20" });
+      const query = new URLSearchParams({ date: date.value, work_id: workID, limit: "20" });
+      if (cursor) query.set("cursor", cursor);
       try {
         const result = await request("/api/local/apps/douyin/execution-rounds/context?" + query, { signal: currentController.signal });
         if (!active() || currentController.signal.aborted || generation !== contextGeneration || selectedWorkID !== workID) return;
+        if (result.work_id === workID && result.restart_required === true && result.snapshot_state === "restart_required" &&
+            result.ownership === "unverified" && result.reply_eligible === false &&
+            Array.isArray(result.media_pages) && result.media_pages.length === 0 && result.next_cursor === "") {
+          nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = true; usedContextCursors.clear();
+          context.replaceChildren(appElement("p", "作品资料或已保存音画证据在翻页期间发生变化。旧页已丢弃，请从头读取同一作品。"));
+          contextAction.hidden = true;
+          contextMore.textContent = "重新读取作品证据"; contextMore.hidden = false;
+          return;
+        }
         if (result.work_id !== workID || !["unverified", "verified_own_work"].includes(result.ownership) ||
-            result.reply_eligible !== false || typeof result.audio_complete !== "boolean" || typeof result.visual_complete !== "boolean" ||
+            result.reply_eligible !== false || result.restart_required !== false ||
+            !["stable", "unverified"].includes(result.snapshot_state) || typeof result.next_cursor !== "string" ||
+            typeof result.audio_complete !== "boolean" || typeof result.visual_complete !== "boolean" ||
             !Array.isArray(result.media_pages) || !Number.isSafeInteger(result.media_page_count) || result.media_page_count < 0 ||
             result.media_page_count < offset + result.media_pages.length || !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== 20 ||
-            (result.next_offset !== undefined && (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset))) {
+            (result.next_offset !== undefined && (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset)) ||
+            (result.next_offset !== undefined) !== Boolean(result.next_cursor) ||
+            (append && result.snapshot_state !== "stable")) {
           throw new Error("抖音作品上下文返回格式无效，请稍后重试。");
+        }
+        if (result.next_cursor && (result.next_cursor === cursor || usedContextCursors.has(result.next_cursor))) {
+          throw new Error("作品证据续页位置未前进，请重新读取该作品。");
         }
         if (!append) {
           context.replaceChildren();
@@ -3793,7 +3812,9 @@
             context.append(item);
           }
         }
+        if (cursor) usedContextCursors.add(cursor);
         nextContextOffset = result.next_offset ?? null;
+        nextContextCursor = result.next_cursor;
         contextMore.hidden = nextContextOffset === null || result.ownership !== "verified_own_work";
       } catch (error) {
         if (active() && generation === contextGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -4948,7 +4969,7 @@
     const field = appElement("label", "创作请求草稿", "settings-field");
     const input = document.createElement("textarea");
     input.rows = 7; input.maxLength = 6000; input.autocomplete = "off";
-    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频，把最终 MP4 或 WebM 登记为不可变成品，再用 douyin_video_check 核对该成品的容器、时长、尺寸，以及指定画面和音频片段是否可解码；这项抽样不检验内容含义，也不能证明全片每秒均可播放。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
+    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频。若项目工具已返回不可变 MP4 或 WebM 成品的 artifact_id，直接使用该编号；若只生成了家目录中的视频文件，先用 artifact_publish 登记。随后用 douyin_video_check 核对该成品的容器、时长、尺寸，以及指定画面和音频片段是否可解码；这项抽样不检验内容含义，也不能证明全片每秒均可播放。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
     input.addEventListener("input", () => { view.douyinCreationDraft = input.value; });
     field.append(input);
     const actions = appElement("div", "", "publication-actions");

@@ -198,6 +198,16 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = append(all, t.localYuETools(ctx)...)
 		all = append(all, t.localTTSTools(ctx)...)
 		all = append(all, t.localAudioCppTools(ctx)...)
+	} else if t.projectTools != nil && t.projectTools.comfy != nil && t.access != nil && t.run != nil && t.run.Tracked {
+		// A withdrawn media grant stops new work, but the original owner must
+		// still be able to query or cancel a previously started ComfyUI job.
+		if grant, err := t.access.resolve(); err == nil {
+			if host, err := t.projectTools.forFish(grant.FishID); err == nil {
+				if _, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localComfyPackage, capability: localComfyCapability}); err == nil {
+					all = append(all, localComfyJobToolSpec())
+				}
+			}
+		}
 	}
 	var failures error
 	accesses := []companion.ToolAccess{t.memory}
@@ -314,7 +324,15 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	switch name {
 	case localRVCVoicesTool, localRVCStartTool, localRVCJobTool:
 		return t.callLocalRVC(ctx, name, raw)
-	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyStartTool, localComfyJobTool:
+	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyRegisterTool, localComfyStartTool:
+		if t.publicUseOnly || !t.grants.Media {
+			return "", errors.New("本轮未授权本机媒体工具")
+		}
+		return t.callLocalComfy(ctx, name, raw)
+	case localComfyJobTool:
+		if t.publicUseOnly {
+			return "", errors.New("应用工作台不能操作本机 ComfyUI 任务")
+		}
 		return t.callLocalComfy(ctx, name, raw)
 	case localYuEStartTool, localYuEJobTool:
 		return t.callLocalYuE(ctx, name, raw)
