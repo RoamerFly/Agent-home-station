@@ -266,6 +266,29 @@ test('one group collection window has one queued card and keeps the actual batch
  assert.equal(batch.entries.length,6);
  assert.equal(batch.group,'done');
 });
+
+test('independent speakers stay in one card and an unsent child keeps it pending',()=>{
+ const rows=[
+  entry(1,{message_id:'request-a',event:'message_received',category:'received',content:'search again'}),
+  entry(2,{message_id:'image-b',event:'message_received',category:'received',content:'[image]'}),
+  entry(3,{message_id:'followup-b',event:'message_received',category:'received',content:'which one'}),
+  entry(4,{message_id:'image-b',related_message_id:'request-a',event:'message_aggregated',category:'decision',status:'deferred'}),
+  entry(5,{message_id:'followup-b',related_message_id:'request-a',event:'message_aggregated',category:'decision',status:'deferred'}),
+  entry(6,{message_id:'request-a',event:'message_sent',category:'sent',status:'accepted',content:'first reply',send_id:'send-a'}),
+ ];
+ const states={loaded:true,states:{'request-a':{phase:'replied'},'image-b':{phase:'received'},'followup-b':{phase:'received'}}};
+ let rounds=project(rows,{},undefined,states);
+ assert.equal(rounds.length,1);
+ assert.equal(rounds[0].group,'pending');
+ rounds=project([...rows,
+  entry(7,{message_id:'image-b',related_message_id:'followup-b',event:'message_aggregated',category:'decision',status:'aggregated'}),
+  entry(8,{message_id:'followup-b',event:'generation_started',category:'decision',status:'processing'}),
+  entry(9,{message_id:'followup-b',event:'message_sent',category:'sent',status:'accepted',content:'image reply',send_id:'send-b'}),
+ ],{},undefined,{loaded:true,states:{'request-a':{phase:'replied'},'image-b':{phase:'replied'},'followup-b':{phase:'replied'}}});
+ assert.equal(rounds.length,1);
+ assert.equal(rounds[0].sent.length,2);
+ assert.equal(rounds[0].group,'done');
+});
 test('messages queued during an active group turn join it before and after receipt',()=>{
  const root=entry(1,{message_id:'active-root',event:'generation_started',category:'decision',status:'running'});
  const queued=entry(2,{message_id:'new-message',event:'message_queued',category:'received',status:'queued'});

@@ -399,6 +399,12 @@
       if (!manualCompletion && !round.orphanReceipt && unresolvedReceipts.length && !(plan?.state === 'accepted' && plan.index >= plan.total)) {
         round.status = receiptRetryScheduled ? 'checking_receipt' : 'waiting';
       }
+      // A first speaker's accepted reply does not settle another speaker who
+      // was deferred from the same collection window for a separate decision.
+      if (inbox.loaded && ['accepted', 'completed', 'silent', 'skipped'].includes(round.status) && round.entries.some(e =>
+        e.event === 'message_aggregated' && e.status === 'deferred' && inbox.states?.[e.message_id]?.phase === 'received')) {
+        round.status = 'queued';
+      }
       if (round.entries.some(e => e.event === 'round_manually_closed')) round.status = 'completed';
       round.group = groupByStatus[round.status] || 'pending';
       // Execution rounds have exactly three public lifecycle states. The raw

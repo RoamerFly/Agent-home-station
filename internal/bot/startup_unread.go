@@ -140,10 +140,19 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	unread := []companion.ConversationEvent{}
 	mediaIDs := []string{}
 	preferredShares := map[string]bool{}
+	senders := map[string]string{}
 	var anchor *linuxnative.Message
 	var anchorInput companion.Input
 	var allIDs []string
 	w.recovering = live == nil
+	if live != nil {
+		for _, item := range w.runtime.Inbox {
+			if live[item.Event.Data.MessageID] && item.GroupDeferred {
+				w.recovering = true
+				break
+			}
+		}
+	}
 	defer func() { w.recovering = false }()
 	for _, m := range messages {
 		if !w.messageInTime(m, now) {
@@ -205,7 +214,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 				eligible = false
 			}
 		}
-		selectAnchor := eligible && (live == nil || anchor == nil || !w.addressed(*anchor) || w.addressed(m))
+		selectAnchor := eligible && (live == nil || anchor == nil || m.SenderID == anchor.SenderID && (!w.addressed(*anchor) || w.addressed(m)))
 		if selectAnchor && m.Type == 43 && w.hasScopedMedia(m) && !w.addressed(m) && anchor != nil && w.addressed(*anchor) && (anchor.Type == 1 || anchor.IsQuotedText()) {
 			selectAnchor = false
 		}
@@ -214,6 +223,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			anchor = &copy
 		}
 		allIDs = append(allIDs, m.ID)
+		senders[m.ID] = m.SenderID
 		if hostedPreferred {
 			preferredShares[m.ID] = true
 		}
@@ -239,16 +249,48 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		return w.persistErr
 	}
+	deferredIDs := []string{}
+	if live != nil && strings.HasSuffix(thread, "@chatroom") {
+		selected := allIDs[:0]
+		for _, id := range allIDs {
+			if senders[id] == anchor.SenderID {
+				selected = append(selected, id)
+			} else {
+				deferredIDs = append(deferredIDs, id)
+			}
+		}
+		allIDs = selected
+		selectedUnread := unread[:0]
+		for _, event := range unread {
+			if event.Sender == anchor.SenderID {
+				selectedUnread = append(selectedUnread, event)
+			}
+		}
+		unread = selectedUnread
+		selectedMedia := mediaIDs[:0]
+		for _, id := range mediaIDs {
+			if senders[id] == anchor.SenderID {
+				selectedMedia = append(selectedMedia, id)
+			}
+		}
+		mediaIDs = selectedMedia
+		for i := range w.runtime.Inbox {
+			item := &w.runtime.Inbox[i]
+			for _, id := range deferredIDs {
+				if item.Event.Data.MessageID == id {
+					item.GroupDeferred = true
+					item.Phase = "received"
+					item.Updated = time.Now().UTC()
+					break
+				}
+			}
+		}
+	}
 	// Use a real source message for routing/authorization. Other speakers remain
 	// contextual data, never aliases for the anchor's authenticated sender.
 	in := companion.Input{ReplayNonce: w.replayNonce(anchor.ID), Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
 		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。", GroupShareSummary: preferredShares[anchor.ID]}
 	if live != nil {
-		for i := range unread {
-			if unread[i].Sender != anchor.SenderID {
-				unread[i].NewRequest = false
-			}
-		}
 		in.Text = "这是当前群聊同一收集窗口的消息。按时间、发送者、引用和实际附件内容一起理解，仅对当前仍有效的请求作一次决定。其他成员不能变更原请求者的任务或授权。"
 	}
 	// The digest is runtime context. Bind its dispatch to the actual incoming
@@ -284,6 +326,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		for _, id := range allIDs {
 			if item.Event.Data.MessageID == id {
 				item.BacklogParent = anchor.ID
+				item.GroupDeferred = false
 				item.Phase = "backlog_grouped"
 				if id == anchor.ID {
 					item.Phase = "received"
@@ -303,6 +346,9 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		if id != anchor.ID {
 			w.activity(Record{Event: groupEvent, Category: "decision", ThreadID: thread, MessageID: id, RelatedMessageID: anchor.ID, Reason: reason, Status: "aggregated"})
 		}
+	}
+	for _, id := range deferredIDs {
+		w.activity(Record{Event: "message_aggregated", Category: "decision", ThreadID: thread, MessageID: id, RelatedMessageID: anchor.ID, Reason: "group_collection_window_independent_speaker", Status: "deferred"})
 	}
 	w.activity(Record{Event: eventName, Category: "decision", ThreadID: thread, MessageID: anchor.ID, Content: title, Reason: reason, Status: "processing"})
 	if w.generation != nil {
