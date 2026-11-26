@@ -36,6 +36,7 @@ type localToolSet struct {
 	observations          *apphost.Observer
 	appReads              []apphost.ObservationResult
 	noticeReads           []localDouyinNoticeProof
+	douyinRoundProofs     []localDouyinRoundContextProof
 	wechatMemoryProofs    []localWechatMemoryProof
 	wechatMemoryRefs      map[string]localWechatMemoryReference
 	wechatMemoryPages     map[string]localWechatMemoryPage
@@ -64,7 +65,7 @@ type localToolSet struct {
 func (*localToolSet) AutonomousActions() bool { return true }
 
 func (t *localToolSet) RequestScopedMemory() bool {
-	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0
+	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0 || len(t.douyinRoundProofs) > 0
 }
 
 func (h *localChatService) tools(store *companion.Store, in companion.Input) *localToolSet {
@@ -121,6 +122,9 @@ func (t *localToolSet) ValidateGenerationSources(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := t.checkDouyinRoundContextProofs(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -159,6 +163,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
 		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
+		if t.douyinMemoryRequested {
+			all = append(all, localDouyinRoundsTool())
+		}
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -271,6 +278,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localInboxToolName {
 		return t.callInbox(ctx, raw)
+	}
+	if name == localDouyinRoundsToolName {
+		return t.callDouyinRounds(ctx, raw)
 	}
 	if name == localPublicationToolName {
 		return t.callPublication(ctx, raw)

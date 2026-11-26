@@ -39,6 +39,11 @@ func TestClassifyLocalDouyinNoticeReplyRequiresExactThreadAndOwner(t *testing.T)
 			p.Root = &localDouyinReplyComment{CID: "400", WorkID: "200", ReplyID: "0", ReplyToReplyID: "0", AuthorUID: "901"}
 			p.Parent = &localDouyinReplyComment{CID: "500", WorkID: "200", ReplyID: "400", ReplyToReplyID: "0", AuthorUID: "902"}
 		}, false, "direct_parent_not_self_child"},
+		{"root author missing", func(p *localDouyinNoticeReplyProof) {
+			p.Target.ReplyID, p.Target.ReplyToReplyID = "400", "500"
+			p.Root = &localDouyinReplyComment{CID: "400", WorkID: "200", ReplyID: "0", ReplyToReplyID: "0"}
+			p.Parent = &localDouyinReplyComment{CID: "500", WorkID: "200", ReplyID: "400", ReplyToReplyID: "0", AuthorUID: "900"}
+		}, false, "direct_parent_not_self_child"},
 		{"reply to root", func(p *localDouyinNoticeReplyProof) {
 			p.Target.ReplyID, p.Target.ReplyToReplyID = "400", "400"
 			p.Root = &localDouyinReplyComment{CID: "400", WorkID: "200", ReplyID: "0", ReplyToReplyID: "0", AuthorUID: "900"}

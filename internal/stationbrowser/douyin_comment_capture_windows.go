@@ -42,7 +42,7 @@ func ReadDouyinCommentRelationTarget(ctx context.Context, profile string, input 
 
 	readCtx, cancel := context.WithTimeout(ctx, pageLoadTimeout)
 	defer cancel()
-	session, err := openRestrictedCDP(readCtx, profile, isDouyinHomeHost)
+	session, err := openRestrictedCDP(readCtx, profile, isDouyinNoticeHost)
 	if err != nil {
 		return DouyinCommentRelation{}, fmt.Errorf("%w: %v", ErrDouyinCommentsUnavailable, err)
 	}
@@ -84,6 +84,7 @@ func readDouyinCommentRelationTargetSession(ctx context.Context, session readerS
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
 		{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "eventsEnabled": false}},
 		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": "window.open=()=>null;"}},
+		{"Fetch.enable", map[string]any{"patterns": []map[string]string{{"urlPattern": "*", "requestStage": "Request"}}, "handleAuthRequests": true}},
 	} {
 		if session.Call(ctx, attached.SessionID, call.method, call.params, nil) != nil {
 			return DouyinCommentRelation{}, ErrDouyinCommentsUnavailable
@@ -183,6 +184,8 @@ func captureDouyinCommentRelationPage(ctx context.Context, session readerSession
 		return douyinCommentRelationPage{}, err
 	}
 	requests := make(map[string]pendingDouyinCommentResponse)
+	approved := make(map[string]string)
+	listIssued := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -195,6 +198,54 @@ func captureDouyinCommentRelationPage(ctx context.Context, session readerSession
 				continue
 			}
 			switch event.Method {
+			case "Fetch.requestPaused":
+				var paused struct {
+					RequestID          string `json:"requestId"`
+					NetworkID          string `json:"networkId"`
+					FrameID            string `json:"frameId"`
+					ResourceType       string `json:"resourceType"`
+					ResponseStatusCode int    `json:"responseStatusCode"`
+					ResponseError      string `json:"responseErrorReason"`
+					Request            struct{ URL, Method string }
+				}
+				if json.Unmarshal(event.Params, &paused) != nil || paused.RequestID == "" {
+					return douyinCommentRelationPage{}, ErrDouyinCommentsUnavailable
+				}
+				if err := authorize(); err != nil {
+					return douyinCommentRelationPage{}, err
+				}
+				allowed, comment := allowDouyinCommentCaptureRequest(req, paused.FrameID, paused.ResourceType,
+					paused.Request.URL, paused.Request.Method)
+				if paused.ResponseStatusCode != 0 || paused.ResponseError != "" ||
+					comment && (listIssued || paused.NetworkID == "") {
+					allowed = false
+				}
+				method := "Fetch.failRequest"
+				params := map[string]any{"requestId": paused.RequestID, "errorReason": "BlockedByClient"}
+				if allowed {
+					method = "Fetch.continueRequest"
+					params = map[string]any{"requestId": paused.RequestID}
+				}
+				if session.Call(ctx, req.SessionID, method, params, nil) != nil {
+					return douyinCommentRelationPage{}, ErrDouyinCommentsUnavailable
+				}
+				if allowed && comment {
+					listIssued = true
+					approved[paused.NetworkID] = paused.Request.URL
+				}
+			case "Fetch.authRequired":
+				var challenge struct {
+					RequestID string `json:"requestId"`
+				}
+				if err := authorize(); err != nil {
+					return douyinCommentRelationPage{}, err
+				}
+				if json.Unmarshal(event.Params, &challenge) != nil || challenge.RequestID == "" ||
+					session.Call(ctx, req.SessionID, "Fetch.continueWithAuth", map[string]any{
+						"requestId": challenge.RequestID, "authChallengeResponse": map[string]any{"response": "CancelAuth"},
+					}, nil) != nil {
+					return douyinCommentRelationPage{}, ErrDouyinCommentsUnavailable
+				}
 			case "Network.requestWillBeSent":
 				var p struct {
 					RequestID string `json:"requestId"`
@@ -224,7 +275,7 @@ func captureDouyinCommentRelationPage(ctx context.Context, session readerSession
 					continue
 				}
 				pending, found := requests[p.RequestID]
-				if !found {
+				if !found || approved[p.RequestID] != pending.url {
 					continue
 				}
 				if p.Response.Status != 200 || p.Response.FromServiceWorker || p.Response.URL != pending.url ||
@@ -240,6 +291,7 @@ func captureDouyinCommentRelationPage(ctx context.Context, session readerSession
 				}
 				if json.Unmarshal(event.Params, &p) == nil {
 					delete(requests, p.RequestID)
+					delete(approved, p.RequestID)
 				}
 			case "Network.loadingFinished":
 				var p struct {
@@ -251,6 +303,7 @@ func captureDouyinCommentRelationPage(ctx context.Context, session readerSession
 				}
 				pending, found := requests[p.RequestID]
 				delete(requests, p.RequestID)
+				delete(approved, p.RequestID)
 				if !found || !pending.accepted || p.EncodedDataLength < 0 || p.EncodedDataLength > 512<<10 {
 					continue
 				}
@@ -336,6 +389,43 @@ func exactDouyinCommentListURL(raw string, req douyinCommentCaptureRequest) bool
 	}
 	return u.EscapedPath() == "/aweme/v1/web/comment/list/reply/" && param("item_id", req.WorkID) && param("comment_id", req.RootID) &&
 		(len(q["aweme_id"]) == 0 || param("aweme_id", req.WorkID))
+}
+
+// allowDouyinCommentCaptureRequest is the request-stage fence for this reader.
+// The page may supply its own signed query, but only one target comment-list
+// GET can be admitted by captureDouyinCommentRelationPage. Other API routes,
+// subframes, media, downloads and mutation methods cannot leave the browser.
+func allowDouyinCommentCaptureRequest(req douyinCommentCaptureRequest, frameID, kind, raw, method string) (bool, bool) {
+	if frameID == "" || frameID != req.FrameID || method != "GET" {
+		return false, false
+	}
+	target, err := DouyinVideoURL(req.WorkID)
+	if err != nil {
+		return false, false
+	}
+	if kind == "Document" {
+		return raw == target, false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" ||
+		u.Opaque != "" || u.Port() != "" || u.Host == "" || u.Host != strings.ToLower(u.Host) {
+		return false, false
+	}
+	if kind == "Script" || kind == "Stylesheet" || kind == "Image" || kind == "Font" {
+		return u.Host != "www.douyin.com" && isDouyinNoticeHost(u.Host), false
+	}
+	if (kind != "XHR" && kind != "Fetch") || u.Host != "www.douyin.com" {
+		return false, false
+	}
+	if exactDouyinCommentListURL(raw, req) {
+		return true, true
+	}
+	if u.EscapedPath() != douyinDetailPath {
+		return false, false
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	return err == nil && len(q["aid"]) == 1 && q.Get("aid") == "6383" &&
+		len(q["aweme_id"]) == 1 && q.Get("aweme_id") == req.WorkID, false
 }
 
 func verifyDouyinCommentCapturePage(ctx context.Context, session readerSession, req douyinCommentCaptureRequest) error {

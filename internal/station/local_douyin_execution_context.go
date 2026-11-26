@@ -165,6 +165,16 @@ func (m *localDouyinWebLogin) executionRoundContextRoutes(owner *websession.Stor
 
 func (m *localDouyinWebLogin) executionWorkContext(ctx context.Context, scope string, record localDouyinWebRecord,
 	fish, owner, day, workID string, offset, limit int) (localDouyinExecutionWorkContext, error) {
+	return m.executionWorkContextWithMedia(ctx, scope, record, fish, owner, day, workID, offset, limit, true)
+}
+
+func (m *localDouyinWebLogin) executionWorkOwnership(ctx context.Context, scope string, record localDouyinWebRecord,
+	fish, owner, day, workID string) (localDouyinExecutionWorkContext, error) {
+	return m.executionWorkContextWithMedia(ctx, scope, record, fish, owner, day, workID, 0, 1, false)
+}
+
+func (m *localDouyinWebLogin) executionWorkContextWithMedia(ctx context.Context, scope string, record localDouyinWebRecord,
+	fish, owner, day, workID string, offset, limit int, includeMedia bool) (localDouyinExecutionWorkContext, error) {
 	result := localDouyinExecutionWorkContext{WorkID: workID, Ownership: "unverified", MediaPages: []localDouyinWorkContextPage{},
 		EffectiveLimit: limit, Coverage: "通知作品编号尚未核实归属；无作品内容", ReplyEligible: false}
 	rounds, err := openLocalDouyinExecutionDB(ctx, m.home, false)
@@ -238,6 +248,9 @@ WHERE r.scope=? AND r.observed_date=? AND r.work_id=?`, scope, day, workID).Scan
 	result.Ownership = "verified_own_work"
 	result.CreatorText, result.CreatorCoverage, result.CreatorObservedAt = text, coverage, observedAt
 	result.Coverage = "通知账号与当前创作者管理页作品相符；视频内容仅覆盖已读取的证据页"
+	if !includeMedia {
+		return result, nil
+	}
 	return m.readExecutionWorkMedia(ctx, memory, source, workID, offset, limit, result)
 }
 

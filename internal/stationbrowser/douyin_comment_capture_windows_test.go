@@ -16,9 +16,12 @@ type commentCaptureFixture struct {
 	body       string
 	bodyCalls  int
 	requestURL string
+	fetchOn    bool
+	continued  []string
+	blocked    []string
 }
 
-func (f *commentCaptureFixture) Call(_ context.Context, _, method string, _ any, result any) error {
+func (f *commentCaptureFixture) Call(_ context.Context, _, method string, params any, result any) error {
 	switch method {
 	case "Target.createTarget":
 		putReaderResult(result, map[string]any{"targetId": "target-1"})
@@ -36,6 +39,16 @@ func (f *commentCaptureFixture) Call(_ context.Context, _, method string, _ any,
 	case "Network.getResponseBody":
 		f.bodyCalls++
 		putReaderResult(result, map[string]any{"body": f.body})
+	case "Fetch.enable":
+		f.fetchOn = true
+	case "Fetch.continueRequest", "Fetch.failRequest":
+		value, _ := params.(map[string]any)
+		id, _ := value["requestId"].(string)
+		if method == "Fetch.continueRequest" {
+			f.continued = append(f.continued, id)
+		} else {
+			f.blocked = append(f.blocked, id)
+		}
 	}
 	return nil
 }
@@ -45,7 +58,7 @@ func TestReadDouyinCommentRelationTargetSessionReturnsOnlyNoticeTarget(t *testin
 	f.requestURL = "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200&cursor=0"
 	got, err := readDouyinCommentRelationTargetSession(context.Background(), f, "https://www.douyin.com/video/200",
 		DouyinCommentRelationRequest{WorkID: "200", TargetID: "400"}, func() error { return nil })
-	if err != nil || got.CID != "400" || got.Text != "目标" || f.bodyCalls != 1 {
+	if err != nil || got.CID != "400" || got.Text != "目标" || f.bodyCalls != 1 || !f.fetchOn || len(f.continued) != 1 || f.continued[0] != "fetch-r1" {
 		t.Fatalf("relation = %+v, body calls = %d, err = %v", got, f.bodyCalls, err)
 	}
 }
@@ -71,6 +84,10 @@ func commentCaptureEvents(f *commentCaptureFixture, requestURL, frameID, session
 	f.events <- commentCaptureEvent("Network.requestWillBeSent", sessionID, map[string]any{
 		"requestId": "r1", "frameId": frameID, "loaderId": "loader-1", "request": map[string]any{"url": requestURL, "method": "GET"},
 	})
+	f.events <- commentCaptureEvent("Fetch.requestPaused", sessionID, map[string]any{
+		"requestId": "fetch-r1", "networkId": "r1", "frameId": frameID, "resourceType": "Fetch",
+		"request": map[string]any{"url": requestURL, "method": "GET"},
+	})
 	f.events <- commentCaptureEvent("Network.responseReceived", sessionID, map[string]any{
 		"requestId": "r1", "type": "Fetch", "response": map[string]any{"url": requestURL, "status": 200, "mimeType": "application/json"},
 	})
@@ -81,6 +98,32 @@ func newCommentCaptureFixture(body string) *commentCaptureFixture {
 	return &commentCaptureFixture{events: make(chan cdpEvent, 8), pageURL: "https://www.douyin.com/video/200", body: body}
 }
 
+func TestAllowDouyinCommentCaptureRequest(t *testing.T) {
+	req := douyinCommentCaptureRequest{FrameID: "frame-1", WorkID: "200", TargetID: "400"}
+	for _, tc := range []struct {
+		name, frame, kind, url, method string
+		allowed, comment               bool
+	}{
+		{"video document", "frame-1", "Document", "https://www.douyin.com/video/200", "GET", true, false},
+		{"other video", "frame-1", "Document", "https://www.douyin.com/video/201", "GET", false, false},
+		{"script", "frame-1", "Script", "https://lf-douyin-pc-web.douyinstatic.com/web/app.js", "GET", true, false},
+		{"target list", "frame-1", "Fetch", "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200&cursor=0", "GET", true, true},
+		{"video detail", "frame-1", "XHR", "https://www.douyin.com/aweme/v1/web/aweme/detail/?aid=6383&aweme_id=200&msToken=x", "GET", true, false},
+		{"wrong work", "frame-1", "Fetch", "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=201", "GET", false, false},
+		{"mutation", "frame-1", "Fetch", "https://www.douyin.com/aweme/v1/web/comment/publish/?aweme_id=200", "POST", false, false},
+		{"other API", "frame-1", "XHR", "https://www.douyin.com/aweme/v1/web/user/profile/", "GET", false, false},
+		{"subframe", "frame-2", "Fetch", "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200", "GET", false, false},
+		{"other host", "frame-1", "Image", "https://example.com/asset.png", "GET", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed, comment := allowDouyinCommentCaptureRequest(req, tc.frame, tc.kind, tc.url, tc.method)
+			if allowed != tc.allowed || comment != tc.comment {
+				t.Fatalf("allow = %v, comment = %v", allowed, comment)
+			}
+		})
+	}
+}
+
 func TestCaptureDouyinCommentRelationPageBindsMainComment(t *testing.T) {
 	f := newCommentCaptureFixture(`{"status_code":0,"comments":[{"aweme_id":"200","cid":"400","reply_id":"0","reply_to_reply_id":"0","user":{"uid":"901"},"text":"主评论"}],"cursor":3,"has_more":1}`)
 	commentCaptureEvents(f, "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200&cursor=0&count=20", "frame-1", "session-1")
@@ -88,6 +131,28 @@ func TestCaptureDouyinCommentRelationPageBindsMainComment(t *testing.T) {
 	page, err := captureDouyinCommentRelationPage(context.Background(), f, req, func() error { return nil })
 	if err != nil || f.bodyCalls != 1 || len(page.Relations) != 1 || page.Relations[0].CID != "400" || page.Cursor != "3" || !page.HasMore {
 		t.Fatalf("page = %+v, body calls = %d, err = %v", page, f.bodyCalls, err)
+	}
+}
+
+func TestCaptureDouyinCommentRelationPageRequiresApprovedRequest(t *testing.T) {
+	f := newCommentCaptureFixture(`{"status_code":0,"comments":[{"cid":"400","reply_id":"0","reply_to_reply_id":"0","user":{"uid":"901"},"text":"主评论"}]}`)
+	url := "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200"
+	f.events <- commentCaptureEvent("Network.requestWillBeSent", "session-1", map[string]any{
+		"requestId": "r1", "frameId": "frame-1", "loaderId": "loader-1", "request": map[string]any{"url": url, "method": "GET"},
+	})
+	f.events <- commentCaptureEvent("Network.responseReceived", "session-1", map[string]any{
+		"requestId": "r1", "type": "Fetch", "response": map[string]any{"url": url, "status": 200, "mimeType": "application/json"},
+	})
+	f.events <- commentCaptureEvent("Network.loadingFinished", "session-1", map[string]any{
+		"requestId": "r1", "encodedDataLength": 300,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := captureDouyinCommentRelationPage(ctx, f, douyinCommentCaptureRequest{
+		SessionID: "session-1", FrameID: "frame-1", WorkID: "200", TargetID: "400",
+	}, func() error { return nil })
+	if !errors.Is(err, context.DeadlineExceeded) || f.bodyCalls != 0 {
+		t.Fatalf("unapproved response was read: body calls = %d, err = %v", f.bodyCalls, err)
 	}
 }
 

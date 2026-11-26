@@ -80,6 +80,7 @@ func classifyLocalDouyinNoticeReply(p localDouyinNoticeReplyProof) localDouyinNo
 	}
 	root, parent := *p.Root, *p.Parent
 	if root.CID != p.Target.ReplyID || root.WorkID != p.WorkID || root.ReplyID != "0" || root.ReplyToReplyID != "0" ||
+		!validLocalDouyinCommentID(root.AuthorUID) ||
 		parent.CID != p.Target.ReplyToReplyID || parent.WorkID != p.WorkID || parent.ReplyID != root.CID ||
 		parent.CID == p.Target.CID || parent.AuthorUID != p.CreatorUID {
 		return reject("direct_parent_not_self_child")

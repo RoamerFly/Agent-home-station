@@ -14,6 +14,8 @@
 
 点赞和评论回复任务由主人在主工作站聊天中基于已读取的视频或父评论创建。作品发布页的“制作作品”入口预填一条可编辑请求：Agent 先检查已登记项目工具，制作并核对视频，登记不可变成品，再用明确的文案与可见范围创建抖音草稿。点击“带到主聊天”仅把文字放进聊天输入框，主人核对并手动发送；不会由入口发送聊天或投稿。执行回合在核对本人作品后显示“让 Agent 读取此作品音画”，同样只预填按该作品编号完整续读音轨与画面采样的请求。独立 Windows 工作台经受限的宿主消息把请求交给主窗口，浏览器预览在同一标签页返回主页面。项目工具入口也返回主工作站。发布任务仍按原请求提供提交、续办、状态查询和停止；创建流程绑定原请求、来源版本和成品证明，当前本机 HTTP 工作台接口只接受原任务操作，不能凭页面输入绕过来源核对。发布审阅只读原任务账本，Agent 的通用任务列表与状态查询不会带出草稿正文。
 
+Agent 已接入只读 `douyin_rounds` 工具读取同一执行回合账本。`works` 按 `date` 列作品分组，用 `next_cursor` 续页；`notices` 必须提供 `date` 和 `work_id`，用 `next_before` 在该作品内续页（`work_id=""` 仅表示未提供作品编号的通知组）；`context` 必须提供有效作品编号，用 `next_offset` 分页读取已保存的创作者作品文字与音画证据。`limit` 默认 20，可在 1–1000 范围内指定。工具调用前后及 Agent 生成前重核本机主人、通知 Agent 授权、当前账号与作品记忆归属；作品记忆新增证据页允许同回合继续读取。工具完全不触发浏览器、通知标已读或回复。作品资料需先通过获准的本人作品观察留存，音轨与画面页需通过 `app_observe` 分别读到完成后才能在这里出现；当前工具不会自动采集。`audio_complete` 是原音轨已读分页的连续性，`visual_complete` 是采样计划覆盖至结尾，不能称为逐帧理解；`reply_eligible` 仍为 `false`。
+
 此前留存的真实账号记录证明过一次“仅自己可见”的 18 秒作品投稿。本次另在用户普通 Edge 已登录标签页查看了互动通知和对应作品的评论树：主评论卡片内嵌子评论，编号位于各自卡片的 `tooltip_<数字>` 后代；视频直达页使用 `[data-e2e="comment-list"].comment-mainContent`，通知打开的弹层使用 `#merge-all-comment-container`。打开通知面板可能触发平台标已读，但没有执行点赞或回复。这些观察尚未证明编号与平台评论接口的 `cid` 完全一致，也不代表工作台独立 Edge 登录资料已连接成功。原标签曾无法附着调试器；扩展新开标签后只读查看了一条回复通知和评论弹层，仍无法通过浏览器接口取得原始响应。新标签已关闭。真实点赞及回复、通知列表与详情原始字段、公开发布仍待验收。直播伴侣检查和 OBS 预览不表示抖音平台开播能力已接通。
 
 ## 评论通知的回复范围
@@ -22,4 +24,4 @@
 
 ## 与微信分支集成时核对
 
-抖音工作台入口、执行回合入口和渲染涉及共用文件 `internal/station/local_app_configuration.go`、`internal/stationui/static/local-home.js`、`internal/stationui/static/local-home.css`，后端通知入账还涉及 `internal/station/local_douyin_notice.go` 与 `internal/station/local_app_inbox.go`。本轮共用页面改动位于抖音 `rounds` 分组、作品音画续读请求、`publications` 创作与审阅入口及对应样式；桌面宿主 `ApplicationWorkbenchDialog`、`MainForm`、`WindowTests` 新增 Douyin 专属纯文本草稿与项目工具路由，主页面只预填输入框或打开工具页。共用 `internal/apphost/publication.go` 增加仅供本机 owner 精确任务审阅的方法，`internal/station/local_app_publication.go` 注册抖音专属只读审阅路由；通用发布列表与状态结构保持元数据边界。共用测试夹具 `internal/station/local_home_test.go` 另修正本机回环会话登录方式，原密码路由夹具保持原样。合并微信分支时核对这些文件中抖音专属分支及工作台分区变动，尤其保留微信原有执行回合路由与页面。未修改构建脚本；工作台能力说明位于本抖音专属文档。
+抖音工作台入口、执行回合入口和渲染涉及共用文件 `internal/station/local_app_configuration.go`、`internal/stationui/static/local-home.js`、`internal/stationui/static/local-home.css`，后端通知入账还涉及 `internal/station/local_douyin_notice.go` 与 `internal/station/local_app_inbox.go`。本轮共用页面改动位于抖音 `rounds` 分组、作品音画续读请求、`publications` 创作与审阅入口及对应样式；桌面宿主 `ApplicationWorkbenchDialog`、`MainForm`、`WindowTests` 新增 Douyin 专属纯文本草稿与项目工具路由，主页面只预填输入框或打开工具页。共用 `internal/apphost/publication.go` 增加仅供本机 owner 精确任务审阅的方法，`internal/station/local_app_publication.go` 注册抖音专属只读审阅路由；通用发布列表与状态结构保持元数据边界。共用 `internal/station/local_tools.go` 增加 `douyin_rounds` 的发现、分派与作品上下文源核对接线，实现在抖音专属 `internal/station/local_douyin_rounds_tool.go`。共用测试夹具 `internal/station/local_home_test.go` 另修正本机回环会话登录方式，原密码路由夹具保持原样。合并微信分支时核对这些文件中抖音专属分支及工作台分区变动，尤其保留微信原有执行回合路由与页面。未修改构建脚本；工作台能力说明位于本抖音专属文档。
