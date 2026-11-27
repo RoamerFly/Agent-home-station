@@ -2478,8 +2478,9 @@
           ["音轨转写", auth(douyinWebAudioEnabled(value)), "使用已启用的本机语音识别按窗口转写确切视频音轨。", "browse"],
           ["视频画面分析", visualStatus, "按批分析确切视频的采样帧；需要已配置的媒体理解工具。", "browse"],
           ["平台互动通知", noticeStatus, "绑定账号后按批手动读取；平台网页可能同时标记已读，Agent 读取另行授权。", "interactions"],
+          ["执行回合", noticeStatus, "按本人作品分别查看已保存通知、作品简介和音画证据，并定向核对评论关系。", "rounds"],
           ["点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
-          ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "从已读父评论由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "通知限定回复须先在执行回合读完本人作品证据并核对评论关系；创建后在此管理原任务。", "interactions"],
           ["普通账号作品发布", auth(publish), "从已登记成品由主人聊天创建草稿，此处管理原任务；公开发布尚待验收。", "publications"],
           ["工作站按需记忆", auth(memoryScopes.length > 0), memoryScopes.length ? `已允许 ${memoryScopes.length} 类抖音资料按需留存与检索；各类来源单独授权。` : "可分别授权本人作品、评论和互动通知的按需留存与检索。", "account"],
           ["直播伴侣与本机预览", !value ? unknown : value.detached ? "已撤下" : "可检查", "可检查直播伴侣程序状态并打开 OBS 本机预览；未接通抖音平台开播。", "live"],
@@ -3506,7 +3507,7 @@
     const panel = appElement("section", "", "configuration-rounds douyin-rounds");
     panel.setAttribute("aria-label", "抖音执行回合");
     const intro = appElement("p", "按作品查看本机已保存的抖音互动通知。记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
-    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。原生字段的编号尚未核实与本次来评、直接父评论的对应关系，因此全部待核对、不会回复。", "app-scope-note douyin-round-rule");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。此页只展示已保存证据，不自行发送回复；Agent 须在同一回合读完整件作品证据，并用专用通知回复工具逐条核实关系后，才能创建待提交任务。", "app-scope-note douyin-round-rule");
     const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
     const dateLabel = appElement("label", "首次观察日期（北京时间）");
     const date = document.createElement("input");
@@ -4930,7 +4931,7 @@
     section.append(appElement("h4", "已接入的抖音功能"),
       appElement("p", "状态反映本机登录、授权和可用入口；实际读取范围与外部操作结果以每次回执为准。", "app-scope-note"));
     const grid = appElement("div", "", "douyin-workbench-feature-grid");
-    const routes = { account: "账号与授权", browse: "内容浏览", publications: "作品发布", interactions: "互动任务", live: "直播与本机预览" };
+    const routes = { account: "账号与授权", browse: "内容浏览", publications: "作品发布", interactions: "互动任务", rounds: "执行回合", live: "直播与本机预览" };
     for (const [name, status, description, route] of evidence.capabilities) {
       const card = appElement("article", "", "app-capability douyin-workbench-feature");
       card.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", description));
@@ -4943,6 +4944,43 @@
     }
     section.append(grid);
     return section;
+  }
+  function appConfigurationNavigation(view) {
+    const button = (item) => {
+      const active = item.id === view.section;
+      const control = memoryButton(item.title, "local-tab" + (active ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
+      control.setAttribute("aria-pressed", String(active));
+      if (active) control.setAttribute("aria-current", "page");
+      return control;
+    };
+    if (view.record.id !== "douyin") return view.sections.map(button);
+    const available = new Map(view.sections.map((item) => [item.id, item]));
+    const groups = [
+      ["总览", ["overview"]],
+      ["活动", ["rounds", "interactions"]],
+      ["内容与创作", ["browse", "publications"]],
+      ["账号与服务", ["account", "live", "source"]],
+    ];
+    const nodes = [];
+    for (const [label, ids] of groups) {
+      const items = ids.map((id) => available.get(id)).filter(Boolean);
+      if (!items.length) continue;
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", label);
+      group.classList.toggle("is-active", items.some((item) => item.id === view.section));
+      group.append(appElement("span", label, "app-workbench-nav-heading"), ...items.map(button));
+      nodes.push(group);
+      for (const item of items) available.delete(item.id);
+    }
+    if (available.size) {
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", "其他分区");
+      group.append(appElement("span", "其他分区", "app-workbench-nav-heading"), ...Array.from(available.values(), button));
+      nodes.push(group);
+    }
+    return nodes;
   }
   function prepareDouyinWorkbenchChat(raw) {
     if (standaloneWorkbenchApp || !state.home?.initialized || state.home.chat_available === false || typeof raw !== "string" || !raw.trim() || raw.length > 6000) return false;
@@ -5009,11 +5047,7 @@
     const selected = connections.find((row) => row.id === view.connection);
     $("#app-configuration-status").textContent = [evidence.service, selected?.label || evidence.account, evidence.grant].join(" · ");
     $("#app-configuration-feedback").append($("#apps-feedback"));
-    nav.replaceChildren(...view.sections.map((item) => {
-      const button = memoryButton(item.title, "local-tab" + (item.id === section ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
-      button.setAttribute("aria-pressed", String(item.id === section));
-      return button;
-    }));
+    nav.replaceChildren(...appConfigurationNavigation(view));
     if (focusSection) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     const listing = apps.catalog?.find((row) => row.id === record.id);
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
@@ -5036,11 +5070,17 @@
           const overview = appElement("section", "", "app-layer douyin-workbench-overview");
           const account = appElement("div", "", "douyin-workbench-account");
           account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
+          const activity = appElement("section", "", "douyin-workbench-activity");
+          activity.append(appElement("h4", "活动 · 执行回合"),
+            appElement("p", "按作品查看已保存通知、简介与音画证据，并逐条核对目标评论。页面只读取本机账本。", "app-scope-note"));
+          if (view.sections.some((item) => item.id === "rounds")) {
+            activity.append(memoryButton("打开执行回合", "button compact primary", () => openDouyinWorkbenchSection(view, "rounds")));
+          }
           const routes = appElement("div", "", "douyin-workbench-routes");
           for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
             if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
           }
-          overview.append(account, routes);
+          overview.append(account, activity, routes);
           controls.splice(1, 0, overview);
           controls.push(douyinWorkbenchFeatures(evidence, view));
         } else controls.push(appCapabilityRows(evidence, true));
@@ -5200,7 +5240,7 @@
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
         if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
           appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
-        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务；抖音通用评论回复暂不可新建或提交，等待通知目标和直接父评论核验。这里仍可查询或取消原回复任务。真实平台互动尚待验收。", "app-scope-note"));
+        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
           if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
