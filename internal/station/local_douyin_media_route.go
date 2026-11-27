@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"wechat-bot/internal/apphost"
@@ -62,7 +63,31 @@ func (h *localHomeService) douyinWebMediaRoutes(owner *websession.Store, mux *ht
 			websession.Fail(w, http.StatusForbidden, "抖音视频读取许可已变化")
 			return
 		}
-		media, err := read(ctx, initial.profile, id, check)
+		var grantMu sync.Mutex
+		lastGrantCheck := time.Time{}
+		readGrant := func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			grantMu.Lock()
+			defer grantMu.Unlock()
+			if time.Since(lastGrantCheck) < 500*time.Millisecond {
+				return nil
+			}
+			if err := check(); err != nil {
+				return err
+			}
+			lastGrantCheck = time.Now()
+			return nil
+		}
+		media, err := read(ctx, initial.profile, id, readGrant)
+		if errors.Is(err, stationbrowser.ErrDouyinWebMediaUnavailable) && ctx.Err() == nil {
+			if retryErr := check(); retryErr != nil {
+				err = retryErr
+			} else {
+				media, err = read(ctx, initial.profile, id, readGrant)
+			}
+		}
 		if err == nil {
 			err = check()
 		}
