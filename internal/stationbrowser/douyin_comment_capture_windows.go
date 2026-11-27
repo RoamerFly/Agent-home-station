@@ -16,8 +16,9 @@ import (
 // ReadDouyinCommentRelationTarget verifies exactly one comment already found
 // through a notification. The official video page itself must emit the
 // matching list response; this function does not call a signed API or scroll
-// through comments to find a notification. Child replies require RootID and
-// will remain unavailable unless the page naturally loads that reply list.
+// through comments to find a notification. The main list may expose an
+// embedded reply preview; otherwise child replies need their exact root list
+// to load naturally.
 func ReadDouyinCommentRelationTarget(ctx context.Context, profile string, input DouyinCommentRelationRequest, authorize func() error) (DouyinCommentRelation, error) {
 	if err := ctx.Err(); err != nil {
 		return DouyinCommentRelation{}, err

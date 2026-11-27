@@ -42,46 +42,78 @@ func parseDouyinCommentRelations(raw []byte, workID, rootID string) ([]DouyinCom
 	comments := make([]DouyinCommentRelation, 0, len(rows))
 	seen := make(map[string]bool, len(rows))
 	for _, rawRow := range rows {
-		row, ok := noticeObject(rawRow)
-		if !ok {
-			return nil, ErrDouyinCommentsUnavailable
+		relation, row, err := parseDouyinCommentRelationRow(rawRow, workID, rootID, seen)
+		if err != nil {
+			return nil, err
 		}
-		cid, ok := commentRelationID(row["cid"], false)
-		if !ok || seen[cid] {
-			return nil, ErrDouyinCommentsUnavailable
+		comments = append(comments, relation)
+		if rootID != "" {
+			continue
 		}
-		seen[cid] = true
-		replyID, ok := commentRelationID(row["reply_id"], true)
-		if !ok {
-			return nil, ErrDouyinCommentsUnavailable
-		}
-		directID, ok := commentRelationID(row["reply_to_reply_id"], true)
-		if !ok || directID == cid || replyID == cid || rootID == "" && (replyID != "0" || directID != "0") ||
-			rootID != "" && replyID != rootID {
-			return nil, ErrDouyinCommentsUnavailable
-		}
-		if rawWork, present := row["aweme_id"]; present {
-			id, valid := commentRelationID(rawWork, false)
-			if !valid || id != workID {
+		// The observed /comment/list/ response includes a bounded preview of
+		// replies under each main comment. These rows already carry both the
+		// root and direct-parent IDs, so the target may be found in this response.
+		var children []json.RawMessage
+		if rawChildren, present := row["reply_comment"]; present && !bytes.Equal(bytes.TrimSpace(rawChildren), []byte("null")) {
+			if json.Unmarshal(rawChildren, &children) != nil || children == nil || len(children) > 200 {
 				return nil, ErrDouyinCommentsUnavailable
 			}
 		}
-		user, ok := noticeObject(row["user"])
-		if !ok {
-			return nil, ErrDouyinCommentsUnavailable
+		for _, rawChild := range children {
+			child, fields, err := parseDouyinCommentRelationRow(rawChild, workID, relation.CID, seen)
+			if err != nil {
+				return nil, err
+			}
+			if rawGrandchildren, present := fields["reply_comment"]; present &&
+				!bytes.Equal(bytes.TrimSpace(rawGrandchildren), []byte("null")) &&
+				!bytes.Equal(bytes.TrimSpace(rawGrandchildren), []byte("[]")) {
+				return nil, ErrDouyinCommentsUnavailable
+			}
+			comments = append(comments, child)
 		}
-		uid, ok := commentRelationID(user["uid"], false)
-		if !ok {
-			return nil, ErrDouyinCommentsUnavailable
-		}
-		var body string
-		if json.Unmarshal(row["text"], &body) != nil || len(body) > 8192 || strings.TrimSpace(body) == "" {
-			return nil, ErrDouyinCommentsUnavailable
-		}
-		comments = append(comments, DouyinCommentRelation{CID: cid, WorkID: workID, ReplyID: replyID,
-			ReplyToReplyID: directID, AuthorUID: uid, Text: body})
 	}
 	return comments, nil
+}
+
+func parseDouyinCommentRelationRow(raw []byte, workID, rootID string, seen map[string]bool) (DouyinCommentRelation, map[string]json.RawMessage, error) {
+	row, ok := noticeObject(raw)
+	if !ok {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	cid, ok := commentRelationID(row["cid"], false)
+	if !ok || seen[cid] {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	seen[cid] = true
+	replyID, ok := commentRelationID(row["reply_id"], true)
+	if !ok {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	directID, ok := commentRelationID(row["reply_to_reply_id"], true)
+	if !ok || directID == cid || replyID == cid || rootID == "" && (replyID != "0" || directID != "0") ||
+		rootID != "" && replyID != rootID {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	if rawWork, present := row["aweme_id"]; present {
+		id, valid := commentRelationID(rawWork, false)
+		if !valid || id != workID {
+			return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+		}
+	}
+	user, ok := noticeObject(row["user"])
+	if !ok {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	uid, ok := commentRelationID(user["uid"], false)
+	if !ok {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	var body string
+	if json.Unmarshal(row["text"], &body) != nil || len(body) > 8192 || strings.TrimSpace(body) == "" {
+		return DouyinCommentRelation{}, nil, ErrDouyinCommentsUnavailable
+	}
+	return DouyinCommentRelation{CID: cid, WorkID: workID, ReplyID: replyID,
+		ReplyToReplyID: directID, AuthorUID: uid, Text: body}, row, nil
 }
 
 func commentRelationID(raw json.RawMessage, allowZero bool) (string, bool) {

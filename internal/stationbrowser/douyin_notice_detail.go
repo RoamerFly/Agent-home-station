@@ -124,7 +124,6 @@ func parseDouyinNoticeDetail(ctx context.Context, raw []byte, refs []noticeDetai
 			ID        string `json:"nid_str"`
 			Type      int    `json:"type"`
 			CreatedAt int64  `json:"create_time"`
-			WorkID    string `json:"aweme_id"`
 		}
 		if json.Unmarshal(item, &row) != nil || !douyinVideoID.MatchString(row.ID) || row.Type < 0 || row.CreatedAt < 0 || seen[row.ID] {
 			return nil, ErrDouyinNoticeUnavailable
@@ -135,14 +134,11 @@ func parseDouyinNoticeDetail(ctx context.Context, raw []byte, refs []noticeDetai
 		}
 		seen[row.ID] = true
 		candidates, valid := noticeCandidates(object)
-		workID := ""
-		if douyinVideoID.MatchString(row.WorkID) {
-			workID = row.WorkID
-		}
+		workID, workValid := noticeWorkID(object)
 		out = append(out, DouyinNoticeDetail{
 			NoticeID: row.ID, RequestType: requestType, NoticeType: row.Type,
 			CreatedAt: row.CreatedAt, WorkID: workID,
-			Candidates: candidates, CandidateFieldsValid: valid,
+			Candidates: candidates, CandidateFieldsValid: valid && workValid,
 		})
 	}
 	return out, nil

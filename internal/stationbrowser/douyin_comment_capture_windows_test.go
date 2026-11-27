@@ -63,6 +63,16 @@ func TestReadDouyinCommentRelationTargetSessionReturnsOnlyNoticeTarget(t *testin
 	}
 }
 
+func TestReadDouyinCommentRelationTargetSessionFindsEmbeddedReply(t *testing.T) {
+	f := newCommentCaptureFixture(`{"status_code":0,"comments":[{"aweme_id":"200","cid":"400","reply_id":"0","reply_to_reply_id":"0","user":{"uid":"901"},"text":"主评论","reply_comment":[{"aweme_id":"200","cid":"500","reply_id":"400","reply_to_reply_id":"0","user":{"uid":"900"},"text":"作者子评论","reply_comment":[]},{"aweme_id":"200","cid":"600","reply_id":"400","reply_to_reply_id":"500","user":{"uid":"901"},"text":"回复作者子评论","reply_comment":[]}]}],"has_more":false}`)
+	f.requestURL = "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200&cursor=0"
+	got, err := readDouyinCommentRelationTargetSession(context.Background(), f, "https://www.douyin.com/video/200",
+		DouyinCommentRelationRequest{WorkID: "200", TargetID: "600"}, func() error { return nil })
+	if err != nil || got.CID != "600" || got.ReplyID != "400" || got.ReplyToReplyID != "500" || f.bodyCalls != 1 {
+		t.Fatalf("embedded reply relation = %+v, body calls = %d, err = %v", got, f.bodyCalls, err)
+	}
+}
+
 func TestReadDouyinCommentRelationTargetSessionMissingCIDRemainsPending(t *testing.T) {
 	f := newCommentCaptureFixture(`{"status_code":0,"comments":[{"aweme_id":"200","cid":"401","reply_id":"0","reply_to_reply_id":"0","user":{"uid":"902"},"text":"其他"}],"cursor":20,"has_more":1}`)
 	f.requestURL = "https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id=200&cursor=0"

@@ -59,6 +59,23 @@ func grantExecutionNoticeMemory(t *testing.T, f *localHomeFixture, view map[stri
 	return next
 }
 
+func TestDouyinNestedCommentDetailCandidateStaysReadOnly(t *testing.T) {
+	item := stationbrowser.DouyinNotice{ID: "100", Type: 31, WorkID: "200"}
+	detail := stationbrowser.DouyinNoticeDetail{NoticeID: "100", RequestType: 31, NoticeType: 31,
+		WorkID: "200", CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{
+			{Path: "comment.comment.cid", ID: "400"},
+		}}
+	status, candidates, err := normalizedDouyinRoundDetail(item, detail, strings.Repeat("a", 64))
+	if err != nil || status != "observed_candidate" || candidates["comment.comment.cid"] != "400" || len(candidates) != 1 {
+		t.Fatalf("nested comment candidate was lost: %s %v %v", status, candidates, err)
+	}
+	detail.WorkID = "201"
+	status, candidates, err = normalizedDouyinRoundDetail(item, detail, strings.Repeat("a", 64))
+	if err != nil || status != "conflict" || len(candidates) != 0 {
+		t.Fatalf("cross-work detail was accepted: %s %v %v", status, candidates, err)
+	}
+}
+
 func TestLocalDouyinExecutionRoundsKeepDetailCandidatesScopedAndNonActionable(t *testing.T) {
 	f, m, _ := syntheticExecutionRoundFixture(t, false)
 	identity, err := m.home.identity.Read()

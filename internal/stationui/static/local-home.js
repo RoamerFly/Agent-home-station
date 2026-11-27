@@ -3601,9 +3601,9 @@
       ]) facts.append(appElement("dt", name), appElement("dd", value));
       card.append(header, facts);
       if (item.detail_status === "observed_candidate" && /^[1-9]\d{0,19}$/.test(item.work_id || "") &&
-          item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "reply_comment.cid"].includes(candidate.path))) {
+          item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid"].includes(candidate.path))) {
         card.append(memoryButton("让 Agent 只读核对这条通知", "button compact secondary", () => {
-          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；若详情中有明确的 CID 路径候选，可用 relation 仅对其中一条候选做只读定向探测，子评论的 root 路径和编号也只能从同一详情选取。多个候选或关系不明时请说明分歧，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；目标评论、直接父评论和通知字段语义尚未验真，不要点赞、评论或投稿。`;
+          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；若详情中有明确的 CID 路径候选，可用 relation 仅对其中一条候选做只读定向探测。若详情提供 root，必须使用同一详情的路径和编号；未提供时，仅在自然主列表命中目标 CID 后，从其结构化关系读取主楼，缺页保持待核对。多个候选或关系不明时请说明分歧，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；通知到目标评论的工作台链路尚未验真，不要点赞、评论或投稿。`;
           handoffDouyinWorkbenchChat(draft, feedback);
         }));
       }

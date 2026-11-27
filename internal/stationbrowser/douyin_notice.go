@@ -217,6 +217,22 @@ func noticeCandidates(fields map[string]json.RawMessage) ([]DouyinNoticeCandidat
 				return nil, false
 			}
 		}
+		if branch == "comment" {
+			// A web comment notice can wrap the target row one level deeper.
+			// Retain only IDs; the row text, profile and media remain private.
+			nestedRaw, exists := object["comment"]
+			if exists && !bytes.Equal(bytes.TrimSpace(nestedRaw), []byte("null")) {
+				nested, ok := noticeObject(nestedRaw)
+				if !ok {
+					return nil, false
+				}
+				for _, key := range []string{"cid", "reply_id", "reply_to_reply_id"} {
+					if !add("comment.comment."+key, nested, key) {
+						return nil, false
+					}
+				}
+			}
+		}
 		user, exists := object["user"]
 		user = bytes.TrimSpace(user)
 		if !exists || bytes.Equal(user, []byte("null")) {
@@ -228,6 +244,48 @@ func noticeCandidates(fields map[string]json.RawMessage) ([]DouyinNoticeCandidat
 		}
 	}
 	return candidates, true
+}
+
+// noticeWorkID accepts only consistent work IDs from the notification and its
+// comment payload. A nested comment notice may omit the top-level aweme_id.
+func noticeWorkID(fields map[string]json.RawMessage) (string, bool) {
+	workID := ""
+	add := func(object map[string]json.RawMessage) bool {
+		raw, exists := object["aweme_id"]
+		if !exists {
+			return true
+		}
+		id, present, valid := noticeCandidateID(raw)
+		if !valid || present && workID != "" && id != workID {
+			return false
+		}
+		if present {
+			workID = id
+		}
+		return true
+	}
+	if !add(fields) {
+		return "", false
+	}
+	rawComment, exists := fields["comment"]
+	if !exists || bytes.Equal(bytes.TrimSpace(rawComment), []byte("null")) {
+		return workID, true
+	}
+	comment, ok := noticeObject(rawComment)
+	if !ok || !add(comment) {
+		return "", false
+	}
+	for _, branch := range []string{"comment", "aweme"} {
+		raw, exists := comment[branch]
+		if !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			continue
+		}
+		nested, ok := noticeObject(raw)
+		if !ok || !add(nested) {
+			return "", false
+		}
+	}
+	return workID, true
 }
 
 func parseDouyinNoticePage(ctx context.Context, raw []byte) (DouyinNoticePage, error) {
@@ -284,7 +342,6 @@ func parseDouyinNoticePage(ctx context.Context, raw []byte) (DouyinNoticePage, e
 			ID        string `json:"nid_str"`
 			Type      int    `json:"type"`
 			CreatedAt int64  `json:"create_time"`
-			WorkID    string `json:"aweme_id"`
 		}
 		if json.Unmarshal(rawItem, &row) != nil {
 			return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
@@ -293,12 +350,9 @@ func parseDouyinNoticePage(ctx context.Context, raw []byte) (DouyinNoticePage, e
 			return DouyinNoticePage{}, ErrDouyinNoticeUnavailable
 		}
 		seen[row.ID] = true
-		workID := ""
-		if douyinVideoID.MatchString(row.WorkID) {
-			workID = row.WorkID
-		}
+		workID, workValid := noticeWorkID(fields)
 		var candidates []DouyinNoticeCandidate
-		if unique {
+		if unique && workValid {
 			candidates, _ = noticeCandidates(fields)
 		}
 		// Candidate parsing never discards notification metadata after a

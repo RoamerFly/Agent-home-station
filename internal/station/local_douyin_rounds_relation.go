@@ -16,7 +16,8 @@ import (
 
 // A relation probe never promotes a notification candidate to reply proof.
 // Each exact target/root/parent probe inspects at most one naturally emitted
-// page. A missing row remains unverified; no comment thread is scanned.
+// page. A child may first appear in the main list's embedded reply preview;
+// a missing row remains unverified and no comment thread is scanned.
 type localDouyinRoundRelationResult struct {
 	Date                  string `json:"date"`
 	NoticeID              string `json:"notice_id"`
@@ -42,7 +43,7 @@ type localDouyinRoundRelationResult struct {
 
 func validDouyinRoundRelationTargetPath(path string) bool {
 	switch path {
-	case "cid", "real_cid", "comment.cid", "reply_comment.cid":
+	case "cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid":
 		return true
 	}
 	return false
@@ -50,7 +51,7 @@ func validDouyinRoundRelationTargetPath(path string) bool {
 
 func validDouyinRoundRelationRootPath(path string) bool {
 	switch path {
-	case "reply_id", "comment.reply_id", "reply_comment.reply_id":
+	case "reply_id", "comment.reply_id", "comment.comment.reply_id", "reply_comment.reply_id":
 		return true
 	}
 	return false
@@ -71,7 +72,14 @@ func validDouyinRoundRelationResult(got stationbrowser.DouyinCommentRelation, in
 		return false
 	}
 	if in.RootID == "" {
-		return got.ReplyID == "0" && got.ReplyToReplyID == "0"
+		if got.ReplyID == "0" {
+			return got.ReplyToReplyID == "0"
+		}
+		// Without a root candidate, only the main list's embedded target row
+		// can supply the root. The caller cannot issue a root reply-list query
+		// before independently observing this exact notification CID.
+		return validLocalDouyinCommentID(got.ReplyID) && got.ReplyToReplyID != got.CID &&
+			(got.ReplyToReplyID == "0" || validLocalDouyinCommentID(got.ReplyToReplyID))
 	}
 	return got.ReplyID == in.RootID && got.ReplyToReplyID != got.CID &&
 		(got.ReplyToReplyID == "0" || validLocalDouyinCommentID(got.ReplyToReplyID))
@@ -81,7 +89,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	profile, scope string, in localDouyinRoundsInput, notice localDouyinNoticeProof) (localDouyinRoundRelationResult, *localDouyinRoundContextProof, error) {
 	result := localDouyinRoundRelationResult{Date: in.Date, NoticeID: in.NoticeID, TargetPath: in.TargetPath,
 		TargetID: in.TargetID, RootPath: in.RootPath, RootID: in.RootID, State: "unverified",
-		Coverage: "仅通知详情的未校准候选；一次页面自然加载的定向关系读取不证明回复资格", ReplyEligible: false}
+		Coverage: "仅通知详情候选；一次页面自然加载的定向关系读取不证明回复资格", ReplyEligible: false}
 	works, granted := douyinMemorySource(record, t.access.fishID, t.access.ownerID, douyinMemoryWorks)
 	if !granted {
 		return result, nil, apphost.ErrObservationForbidden
@@ -135,19 +143,40 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	if reader == nil {
 		return result, nil, stationbrowser.ErrDouyinCommentsUnavailable
 	}
-	// At most three exact reads: notification target, its declared root, then
-	// its declared direct parent. Each still needs a naturally emitted page.
-	readCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// One bounded main-list preview may contain the target child. Only if the
+	// preview lacks it do we try the exact root reply list. Root and direct
+	// parent remain separate exact probes, never a scan for notifications.
+	readCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	stop := context.AfterFunc(serviceCtx, cancel)
 	defer stop()
-	got, readErr := reader(readCtx, profile, stationbrowser.DouyinCommentRelationRequest{
-		WorkID: result.WorkID, RootID: in.RootID, TargetID: in.TargetID}, check)
-	if err := check(); err != nil {
-		return result, nil, err
+	readExact := func(rootID, targetID string) (stationbrowser.DouyinCommentRelation, error) {
+		if err := check(); err != nil {
+			return stationbrowser.DouyinCommentRelation{}, err
+		}
+		row, err := reader(readCtx, profile, stationbrowser.DouyinCommentRelationRequest{
+			WorkID: result.WorkID, RootID: rootID, TargetID: targetID}, check)
+		if checkErr := check(); checkErr != nil {
+			return stationbrowser.DouyinCommentRelation{}, checkErr
+		}
+		if readCtx.Err() != nil {
+			return stationbrowser.DouyinCommentRelation{}, stationbrowser.ErrDouyinCommentsUnavailable
+		}
+		return row, err
 	}
-	if readCtx.Err() != nil {
-		return result, nil, stationbrowser.ErrDouyinCommentsUnavailable
+	readChild := func(rootID, targetID string) (stationbrowser.DouyinCommentRelation, error) {
+		row, err := readExact("", targetID)
+		if errors.Is(err, stationbrowser.ErrDouyinCommentTargetPending) {
+			return readExact(rootID, targetID)
+		}
+		return row, err
+	}
+	var got stationbrowser.DouyinCommentRelation
+	var readErr error
+	if in.RootID == "" {
+		got, readErr = readExact("", in.TargetID)
+	} else {
+		got, readErr = readChild(in.RootID, in.TargetID)
 	}
 	if readErr != nil {
 		switch {
@@ -172,29 +201,19 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	authorIsCreator := hex.EncodeToString(digest[:]) == evidence.creatorAccount
 	result.AuthorIsCreator = &authorIsCreator
 	result.Text = got.Text
-	if in.RootID == "" {
+	if got.ReplyID == "0" {
 		result.ThreadState = "top_level_observed"
-		result.Coverage = "仅目标主评论的结构化关系已观察；通知目标字段语义尚未校准"
+		result.Coverage = "通知指定的目标 CID 与主评论结构化关系已观察；不授权回复"
 		return result, proof, nil
 	}
-	if got.ReplyToReplyID == "0" || got.ReplyToReplyID == in.RootID {
+	rootID := in.RootID
+	if rootID == "" {
+		rootID = got.ReplyID
+	}
+	if got.ReplyToReplyID == "0" || got.ReplyToReplyID == rootID {
 		result.ThreadState = "direct_parent_is_root"
-		result.Coverage = "目标子评论直接回复主楼；不是回复本账号子评论的情形；通知字段语义尚未校准"
+		result.Coverage = "目标子评论直接回复主楼；不是回复本账号子评论的情形；不授权回复"
 		return result, proof, nil
-	}
-	readRelated := func(rootID, targetID string) (stationbrowser.DouyinCommentRelation, error) {
-		if err := check(); err != nil {
-			return stationbrowser.DouyinCommentRelation{}, err
-		}
-		row, err := reader(readCtx, profile, stationbrowser.DouyinCommentRelationRequest{
-			WorkID: result.WorkID, RootID: rootID, TargetID: targetID}, check)
-		if checkErr := check(); checkErr != nil {
-			return stationbrowser.DouyinCommentRelation{}, checkErr
-		}
-		if readCtx.Err() != nil {
-			return stationbrowser.DouyinCommentRelation{}, stationbrowser.ErrDouyinCommentsUnavailable
-		}
-		return row, err
 	}
 	classifyRead := func(err error, field *string, pendingReason string) error {
 		if err == nil {
@@ -214,7 +233,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 		}
 		return nil
 	}
-	root, readErr := readRelated("", in.RootID)
+	root, readErr := readExact("", rootID)
 	if err := classifyRead(readErr, &result.RootState, "root_not_in_natural_page"); err != nil {
 		return result, nil, err
 	}
@@ -223,13 +242,13 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 		result.Coverage = "目标评论已观察；主评论仍未核实；不能判断回复关系"
 		return result, proof, nil
 	}
-	if root.CID != in.RootID || root.WorkID != result.WorkID || root.ReplyID != "0" ||
+	if root.CID != rootID || root.WorkID != result.WorkID || root.ReplyID != "0" ||
 		root.ReplyToReplyID != "0" || !validLocalDouyinCommentID(root.AuthorUID) ||
 		strings.TrimSpace(root.Text) == "" || len(root.Text) > 8192 {
 		return result, nil, apphost.ErrObservationInvalid
 	}
 	result.RootState = "observed"
-	parent, readErr := readRelated(in.RootID, got.ReplyToReplyID)
+	parent, readErr := readChild(rootID, got.ReplyToReplyID)
 	if err := classifyRead(readErr, &result.ParentState, "parent_not_in_natural_page"); err != nil {
 		return result, nil, err
 	}
@@ -238,7 +257,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 		result.Coverage = "目标与主评论已观察；直接父评论仍未核实；不能判断回复关系"
 		return result, proof, nil
 	}
-	if parent.CID != got.ReplyToReplyID || parent.WorkID != result.WorkID || parent.ReplyID != in.RootID ||
+	if parent.CID != got.ReplyToReplyID || parent.WorkID != result.WorkID || parent.ReplyID != rootID ||
 		parent.ReplyToReplyID == parent.CID ||
 		parent.ReplyToReplyID != "0" && !validLocalDouyinCommentID(parent.ReplyToReplyID) ||
 		!validLocalDouyinCommentID(parent.AuthorUID) || strings.TrimSpace(parent.Text) == "" || len(parent.Text) > 8192 {
@@ -253,6 +272,6 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	} else {
 		result.ThreadState = "other_child_observed"
 	}
-	result.Coverage = "仅逐条核对目标、主评论及直接父评论的结构化关系；通知目标字段语义尚未校准，不授权回复"
+	result.Coverage = "仅逐条核对目标、主评论及直接父评论的结构化关系；工作台内通知到评论的完整链路未验收，不授权回复"
 	return result, proof, nil
 }

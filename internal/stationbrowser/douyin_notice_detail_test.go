@@ -111,3 +111,49 @@ func TestDouyinNoticeDetailNormalizesPerNoticeWithoutReplyAuthority(t *testing.T
 		t.Fatalf("invalid candidates survived: %+v %v", items, err)
 	}
 }
+
+func TestDouyinNoticeDetailLikeAndEmptyResponseCannotSupplyCommentCandidate(t *testing.T) {
+	refs := []noticeDetailRef{{id: "123456", requestType: 0}}
+	like := []byte(`{"status_code":0,"notice_list_v2":[{"nid_str":"123456","type":0,"create_time":1700000000,"digg":{"aweme":{"aweme_id":"200"}},"general_notice":{"message_extra":"{\"item_id\":\"200\",\"notice_type\":1}"}}]}`)
+	items, err := parseDouyinNoticeDetail(t.Context(), like, refs)
+	if err != nil || len(items) != 1 || items[0].WorkID != "" || len(items[0].Candidates) != 0 || !items[0].CandidateFieldsValid {
+		t.Fatalf("like notice gained a comment candidate: %+v, %v", items, err)
+	}
+	if _, err := parseDouyinNoticeDetail(t.Context(), []byte(`{"status_code":0,"notice_list_v2":null}`), refs); !errors.Is(err, ErrDouyinNoticeUnavailable) {
+		t.Fatalf("empty detail became a comment candidate: %v", err)
+	}
+}
+
+func TestDouyinNestedCommentNoticeKeepsExactWorkAndTargetCandidate(t *testing.T) {
+	// Synthetic shape of a web type-31 comment notice. No response text,
+	// nickname, media URL or account-specific ID from the observed sample is kept.
+	item := `{"nid_str":"123456","type":31,"create_time":1700000000,"comment":{"comment":{"cid":"400","aweme_id":"200","user":{"uid":"901","nickname":"private-name"},"text":"private-text"},"aweme":{"aweme_id":"200","desc":"private-caption"}}}`
+	raw := []byte(`{"status_code":0,"has_more":0,"notice_list_v2":[` + item + `]}`)
+	page, err := parseDouyinNoticePage(t.Context(), raw)
+	if err != nil || len(page.Items) != 1 || page.Items[0].WorkID != "200" || len(page.Items[0].Candidates) != 1 ||
+		page.Items[0].Candidates[0] != (DouyinNoticeCandidate{Path: "comment.comment.cid", ID: "400"}) {
+		t.Fatalf("nested notice list = %+v, %v", page, err)
+	}
+	refs := []noticeDetailRef{{id: "123456", requestType: 31}}
+	items, err := parseDouyinNoticeDetail(t.Context(), raw, refs)
+	if err != nil || len(items) != 1 || items[0].WorkID != "200" || !items[0].CandidateFieldsValid ||
+		len(items[0].Candidates) != 1 || items[0].Candidates[0] != (DouyinNoticeCandidate{Path: "comment.comment.cid", ID: "400"}) {
+		t.Fatalf("nested notice detail = %+v, %v", items, err)
+	}
+	encoded, _ := json.Marshal(items)
+	for _, private := range []string{"private-name", "private-text", "private-caption"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("private notification field retained: %s", private)
+		}
+	}
+	conflict := strings.Replace(item, `"aweme":{"aweme_id":"200"`, `"aweme":{"aweme_id":"201"`, 1)
+	bad := []byte(`{"status_code":0,"has_more":0,"notice_list_v2":[` + conflict + `]}`)
+	badPage, err := parseDouyinNoticePage(t.Context(), bad)
+	if err != nil || len(badPage.Items) != 1 || badPage.Items[0].WorkID != "" || len(badPage.Items[0].Candidates) != 0 {
+		t.Fatalf("conflicting nested work survived list parsing: %+v, %v", badPage, err)
+	}
+	badItems, err := parseDouyinNoticeDetail(t.Context(), bad, refs)
+	if err != nil || len(badItems) != 1 || badItems[0].WorkID != "" || badItems[0].CandidateFieldsValid {
+		t.Fatalf("conflicting nested work survived detail parsing: %+v, %v", badItems, err)
+	}
+}

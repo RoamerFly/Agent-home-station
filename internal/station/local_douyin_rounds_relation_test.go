@@ -33,6 +33,7 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 			Details: []stationbrowser.DouyinNoticeDetail{{NoticeID: noticeID, NoticeType: 7, WorkID: workID,
 				CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{
 					{Path: "comment.cid", ID: "300"}, {Path: "comment.reply_id", ID: "400"},
+					{Path: "comment.comment.cid", ID: "300"},
 					{Path: "comment.user.uid", ID: "901"},
 				}}}}); err != nil {
 		t.Fatal(err)
@@ -120,13 +121,15 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 			t.Fatalf("reader lost exact scope or authorization: profile=%q req=%+v", profile, req)
 		}
 		switch req {
-		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "300"}:
+		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, TargetID: "300"},
+			stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "300"}:
 			return stationbrowser.DouyinCommentRelation{CID: "300", WorkID: workID, ReplyID: "400",
 				ReplyToReplyID: "500", AuthorUID: "901", Text: "合成目标评论"}, nil
 		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, TargetID: "400"}:
 			return stationbrowser.DouyinCommentRelation{CID: "400", WorkID: workID, ReplyID: "0",
 				ReplyToReplyID: "0", AuthorUID: "901", Text: "合成主评论"}, nil
-		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "500"}:
+		case stationbrowser.DouyinCommentRelationRequest{WorkID: workID, TargetID: "500"},
+			stationbrowser.DouyinCommentRelationRequest{WorkID: workID, RootID: "400", TargetID: "500"}:
 			return stationbrowser.DouyinCommentRelation{CID: "500", WorkID: workID, ReplyID: "400",
 				ReplyToReplyID: "0", AuthorUID: creatorUID, Text: "合成本人子评论"}, nil
 		default:
@@ -143,7 +146,26 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 		result["reply_eligible"] != false || readCalls != 3 {
 		t.Fatalf("target relation became reply proof or lost fields: %v %v reads=%d", result, err, readCalls)
 	}
+	// The observed type-31 notice shape supplies a target CID but no root ID.
+	// A child is classifiable only when that exact CID appears in the natural
+	// main-list preview, which supplies the root and direct-parent IDs.
+	derived, err := call(tools, map[string]any{"target_path": "comment.comment.cid", "target_id": "300"})
+	if err != nil || derived["thread_state"] != "self_child_observed" || derived["reply_id"] != "400" ||
+		derived["root_id"] != nil || derived["parent_author_is_creator"] != true || derived["reply_eligible"] != false {
+		t.Fatalf("notice CID alone could not derive a bounded child relation: %v %v", derived, err)
+	}
 	selfChildReader := m.readRelation
+	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
+		check func() error) (stationbrowser.DouyinCommentRelation, error) {
+		if req.RootID == "" && (req.TargetID == "300" || req.TargetID == "500") {
+			return stationbrowser.DouyinCommentRelation{}, errors.Join(stationbrowser.ErrDouyinCommentTargetPending, check())
+		}
+		return selfChildReader(ctx, profile, req, check)
+	}
+	fallback, err := call(tools, args())
+	if err != nil || fallback["thread_state"] != "self_child_observed" || fallback["reply_eligible"] != false {
+		t.Fatalf("missing embedded reply did not fall back to exact reply list: %v %v", fallback, err)
+	}
 	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
 		check func() error) (stationbrowser.DouyinCommentRelation, error) {
 		if req.TargetID == "500" {
