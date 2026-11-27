@@ -178,12 +178,27 @@ func (t *localToolSet) callInbox(ctx context.Context, raw json.RawMessage) (valu
 			err = m.revokeChangedNoticeAccount(readCtx, record)
 			return "", "", errors.Join(stationbrowser.ErrDouyinNoticeAccountChanged, err)
 		}
-		if err := m.captureNoticeMemory(readCtx, record, page); err != nil {
-			return "", "", &localInboxToolError{status: 503, message: "通知已读取，可能已标记已读，本机记忆保存未完成"}
+		if err := check(); err != nil {
+			return "", "", err
+		}
+		roundsRecorded := m.captureExecutionRounds(readCtx, t.access.fishID, t.access.ownerID, record, page) == nil
+		memoryRecorded := m.captureNoticeMemory(readCtx, record, page) == nil
+		if err := check(); err != nil {
+			return "", "", err
 		}
 		next := m.finishNoticeCursor(scope, after, page, nextToken)
 		result := localDouyinNoticeResult(page, next, in.Pages)
 		result["app_id"], result["mark_read_possible"], result["text_scope"] = "douyin", true, "rendered_list_may_include_previous_pages"
+		result["rounds_recorded"] = roundsRecorded
+		if !roundsRecorded {
+			result["rounds_warning"] = "通知已读取，可能已标记已读；执行回合记录未确认保存，请保存本次读取结果，不会自动重读"
+		}
+		if _, granted := douyinMemorySource(record, t.access.fishID, t.access.ownerID, douyinMemoryNotices); granted {
+			result["memory_recorded"] = memoryRecorded
+			if !memoryRecorded {
+				result["memory_warning"] = "通知已读取，可能已标记已读；已授权的本机通知记忆未确认保存，请保存本次读取结果，不会自动重读"
+			}
+		}
 		t.noticeReads = append(t.noticeReads, proof)
 		value, err := localProcessJSON(result)
 		if err != nil {

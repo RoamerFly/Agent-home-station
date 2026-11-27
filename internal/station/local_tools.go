@@ -20,35 +20,39 @@ import (
 )
 
 type localToolSet struct {
-	directMedia           *deepseek.Client
-	memory                companion.ToolAccess
-	files                 *localWorkspaceFileTools
-	process               *localProcessTools
-	processError          error
-	projectTools          *localProjectTools
-	access                *localWorkspaceAccess
-	python                string
-	run                   *companion.LocalToolRun
-	traceID               string
-	inspectOnly           bool
-	store                 *companion.Store
-	wechat                *stationWechat
-	observations          *apphost.Observer
-	appReads              []apphost.ObservationResult
-	noticeReads           []localDouyinNoticeProof
-	wechatMemoryProofs    []localWechatMemoryProof
-	wechatMemoryRefs      map[string]localWechatMemoryReference
-	wechatMemoryPages     map[string]localWechatMemoryPage
-	douyinMemoryRequested bool
-	douyinMemoryOrigin    func(context.Context) error
-	douyinMemoryProofs    map[localDouyinMemoryProof]struct{}
-	douyinMemoryRefs      map[string]localDouyinMemoryReference
-	douyinMemoryPages     map[string]localDouyinMemoryPage
-	memoryLinked          bool
-	publications          *localChatService
-	requestTime           time.Time
-	continuationGuard     func(context.Context) error
-	mcpSessions           map[string]*stationMCPSession
+	directMedia                 *deepseek.Client
+	memory                      companion.ToolAccess
+	files                       *localWorkspaceFileTools
+	process                     *localProcessTools
+	processError                error
+	projectTools                *localProjectTools
+	access                      *localWorkspaceAccess
+	python                      string
+	run                         *companion.LocalToolRun
+	traceID                     string
+	inspectOnly                 bool
+	store                       *companion.Store
+	wechat                      *stationWechat
+	observations                *apphost.Observer
+	appReads                    []apphost.ObservationResult
+	noticeReads                 []localDouyinNoticeProof
+	douyinRoundProofs           []localDouyinRoundContextProof
+	douyinRoundContextReads     map[string]localDouyinRoundContextRead
+	douyinRoundContextCompleted map[string]localDouyinRoundContextRead
+	douyinVideoCheckProofs      []localDouyinVideoCheckProof
+	wechatMemoryProofs          []localWechatMemoryProof
+	wechatMemoryRefs            map[string]localWechatMemoryReference
+	wechatMemoryPages           map[string]localWechatMemoryPage
+	douyinMemoryRequested       bool
+	douyinMemoryOrigin          func(context.Context) error
+	douyinMemoryProofs          map[localDouyinMemoryProof]struct{}
+	douyinMemoryRefs            map[string]localDouyinMemoryReference
+	douyinMemoryPages           map[string]localDouyinMemoryPage
+	memoryLinked                bool
+	publications                *localChatService
+	requestTime                 time.Time
+	continuationGuard           func(context.Context) error
+	mcpSessions                 map[string]*stationMCPSession
 	// catalog is the application index injected with the workspace note. It
 	// carries names and switch state only; no application content is loaded.
 	catalog map[string]any
@@ -64,7 +68,7 @@ type localToolSet struct {
 func (*localToolSet) AutonomousActions() bool { return true }
 
 func (t *localToolSet) RequestScopedMemory() bool {
-	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0
+	return t.memoryLinked || len(t.wechatMemoryProofs) > 0 || len(t.douyinMemoryProofs) > 0 || len(t.noticeReads) > 0 || len(t.douyinRoundProofs) > 0 || len(t.douyinVideoCheckProofs) > 0
 }
 
 func (h *localChatService) tools(store *companion.Store, in companion.Input) *localToolSet {
@@ -121,6 +125,12 @@ func (t *localToolSet) ValidateGenerationSources(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := t.checkDouyinRoundContextProofs(ctx); err != nil {
+		return err
+	}
+	if err := t.checkDouyinVideoCheckProofs(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -158,7 +168,10 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localExternalTaskTools(ctx)...)
 	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
-		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
+		all = append(all, stationOverviewTool(), localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
+		if t.douyinMemoryRequested {
+			all = append(all, localDouyinRoundsTool(), localDouyinNoticeReplyTool())
+		}
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -174,6 +187,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	}
 	if t.access.home.artifacts != nil && t.run != nil {
 		all = append(all, mcptools.NewTool(localArtifactPublishTool, "把家目录中已完成的文件登记为不可变成品快照。path 为家目录相对路径，宿主自动计算并返回实际 SHA-256；已知哈希时可选 expected_sha256 核对指定版本，无需仅为登记另起进程算哈希。返回 artifact_id，不会向应用发送。", `{"type":"object","properties":{"path":{"type":"string"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64}},"required":["path"],"additionalProperties":false}`))
+		all = append(all, localDouyinVideoCheckTool())
 	}
 	// Execution and generation only appear after the owner hands them over.
 	if t.grants.Documents {
@@ -186,6 +200,16 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 		all = append(all, t.localYuETools(ctx)...)
 		all = append(all, t.localTTSTools(ctx)...)
 		all = append(all, t.localAudioCppTools(ctx)...)
+	} else if t.projectTools != nil && t.projectTools.comfy != nil && t.access != nil && t.run != nil && t.run.Tracked {
+		// A withdrawn media grant stops new work, but the original owner must
+		// still be able to query or cancel a previously started ComfyUI job.
+		if grant, err := t.access.resolve(); err == nil {
+			if host, err := t.projectTools.forFish(grant.FishID); err == nil {
+				if _, err := installedLocalProject(ctx, host, localProjectOperation{pkg: localComfyPackage, capability: localComfyCapability}); err == nil {
+					all = append(all, localComfyJobToolSpec())
+				}
+			}
+		}
 	}
 	var failures error
 	accesses := []companion.ToolAccess{t.memory}
@@ -248,6 +272,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)
 	}
+	if name == localStationOverviewTool {
+		return t.callStationOverview(ctx, raw)
+	}
 	if name == localWechatMemoryTool {
 		result, err := t.callAppMemory(ctx, raw)
 		if err != nil {
@@ -271,6 +298,12 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localInboxToolName {
 		return t.callInbox(ctx, raw)
+	}
+	if name == localDouyinRoundsToolName {
+		return t.callDouyinRounds(ctx, raw)
+	}
+	if name == localDouyinNoticeReplyToolName {
+		return t.callDouyinNoticeReply(ctx, raw)
 	}
 	if name == localPublicationToolName {
 		return t.callPublication(ctx, raw)
@@ -299,7 +332,15 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	switch name {
 	case localRVCVoicesTool, localRVCStartTool, localRVCJobTool:
 		return t.callLocalRVC(ctx, name, raw)
-	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyStartTool, localComfyJobTool:
+	case localComfyListTool, localComfyModelsTool, localComfyFilesTool, localComfyRegisterTool, localComfyStartTool:
+		if t.publicUseOnly || !t.grants.Media {
+			return "", errors.New("本轮未授权本机媒体工具")
+		}
+		return t.callLocalComfy(ctx, name, raw)
+	case localComfyJobTool:
+		if t.publicUseOnly {
+			return "", errors.New("应用工作台不能操作本机 ComfyUI 任务")
+		}
 		return t.callLocalComfy(ctx, name, raw)
 	case localYuEStartTool, localYuEJobTool:
 		return t.callLocalYuE(ctx, name, raw)
@@ -310,6 +351,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localArtifactPublishTool {
 		return t.publishCheckpointed(ctx, raw)
+	}
+	if name == localDouyinVideoCheckToolName {
+		return t.callDouyinVideoCheck(ctx, raw)
 	}
 	if strings.HasPrefix(name, "memory_") {
 		return t.memory.Call(ctx, name, raw)

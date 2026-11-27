@@ -3,10 +3,11 @@
   const $ = (selector) => document.querySelector(selector);
   const workbenchQuery = new URLSearchParams(window.location.search).get("workbench");
   const standaloneWorkbenchApp = ["douyin", "bilibili"].includes(workbenchQuery) ? workbenchQuery : "";
-  const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView(), toolGrants: null };
-  const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
+  const state = { csrf: "", home: null, model: null, personaDocument: { content: "", revision: 0, path: "", loaded: false, loading: false, saving: false, dirty: false }, busy: false, chat: newChatView(), toolGrants: null };
+  const tabs = ["chat", "memory", "apps", "works", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
+  let works = newWorksView();
   let memory = newMemoryView();
   let projectTools = newProjectToolsView();
   let liveSafety = newLiveSafety();
@@ -16,8 +17,18 @@
   const connectionView = $("#connection-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const initializeButton = $("#initialize-button"), accessButton = $("#access-button");
   const settingsAccessButton = $("#settings-access-button"), chatStream = $("#chat-stream");
+  let messageClearTimer = 0;
 
-  function showMessage(text, kind = "") { message.textContent = text || ""; message.className = `page-message${kind ? ` is-${kind}` : ""}`; }
+  function showMessage(text, kind = "") {
+    window.clearTimeout(messageClearTimer);
+    message.textContent = text || "";
+    message.className = `page-message${kind ? ` is-${kind}` : ""}`;
+    if (text && kind === "success") {
+      messageClearTimer = window.setTimeout(() => {
+        if (message.textContent === text && message.classList.contains("is-success")) showMessage("");
+      }, 4000);
+    }
+  }
   function safeServerMessage(body, fallback) { const value = body && (body.error || body.message || body.detail); return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : fallback; }
   function responseMessage(status) {
     if (status === 401 || status === 403) return "本机连接暂时不可用，请重试。";
@@ -62,6 +73,7 @@
   function setActiveView(view) {
     if (activeView === "project-tools" && view !== "project-tools") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     if (activeView === "chat" && view !== "chat") { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
+    if (activeView === "works" && view !== "works") { works.controller?.abort(); works.generation++; works.loading = false; }
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -73,9 +85,10 @@
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") refreshProjectToolsPanel();
+    if (view === "works" && state.home?.initialized) void loadWorks();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
-    if (view === "settings") void loadToolGrants();
+    if (view === "settings") { void loadToolGrants(); void loadPersonaDocument(); }
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
@@ -99,6 +112,9 @@
       douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false },
       douyinActivityTab: "publications",
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
+  }
+  function newWorksView() {
+    return { items: [], nextCursor: "", hasMore: false, loading: false, application: "all", status: "active", query: "", filterKey: "", generation: 0, controller: null, selected: "" };
   }
   function newProjectToolsView() {
     return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, aliyunBalance: null, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
@@ -512,7 +528,8 @@
         mode: ["all", "social"].includes(settings.mode) ? settings.mode : "mention",
         prefix: typeof settings.prefix === "string" ? settings.prefix : "",
         persona: typeof settings.persona === "string" ? settings.persona : "",
-        force_reply_when_mentioned: settings.force_reply_when_mentioned === true
+        force_reply_when_mentioned: settings.force_reply_when_mentioned === true,
+        mention_context_each_side: Number.isInteger(settings.mention_context_each_side) ? settings.mention_context_each_side : 5
       };
     };
     const configuredRules = new Map((status.configured_policy?.group_rules || [])
@@ -561,17 +578,29 @@
         advanced.className = "group-rule-advanced";
         advanced.append(appElement("summary", "触发方式与角色（可选）"));
         const settings = value.reply_settings;
-        const effective = settings || { mode: "mention", prefix: "", persona: "", force_reply_when_mentioned: false };
+        const effective = settings || { mode: "mention", prefix: "", persona: "", force_reply_when_mentioned: false, mention_context_each_side: 5 };
         const fields = appElement("div", "", "details-grid");
         const mode = document.createElement("select");
         mode.setAttribute("aria-label", threadID + " 群聊触发方式");
-        for (const [optionValue, optionText] of [["mention", "只在提及时回复"], ["all", "每条群聊文字都交给大肥鱼判断"], ["social", "允许观察本群并自主选择接话"]]) {
+        for (const [optionValue, optionText] of [["mention", "仅@回复"], ["all", "回复全部"], ["social", "自主接话"]]) {
           const option = document.createElement("option");
           option.value = optionValue;
           option.textContent = optionText;
           mode.append(option);
         }
         mode.value = effective.mode;
+        const mentionContext = document.createElement("input");
+        mentionContext.type = "number";
+        mentionContext.min = "0";
+        mentionContext.max = "200";
+        mentionContext.step = "1";
+        mentionContext.required = true;
+        mentionContext.value = String(effective.mention_context_each_side);
+        mentionContext.setAttribute("aria-label", threadID + " 被提及时上下文前后各 N 条");
+        const mentionContextLabel = appElement("label", "被提及时上下文：前后各 N 条");
+        mentionContextLabel.append(mentionContext);
+        const syncMentionContext = () => { mentionContextLabel.hidden = mode.value !== "mention"; };
+        syncMentionContext();
         const prefix = document.createElement("input");
         prefix.value = effective.prefix;
         prefix.placeholder = "可选触发前缀，保留末尾空格";
@@ -589,9 +618,12 @@
           mode: ["all", "social"].includes(mode.value) ? mode.value : "mention",
           prefix: prefix.value,
           persona: persona.value,
-          force_reply_when_mentioned: force.checked
+          force_reply_when_mentioned: force.checked,
+          mention_context_each_side: mentionContext.validity.valid && mentionContext.value !== "" ? Number(mentionContext.value) :
+            (readGroupRule(threadID).reply_settings?.mention_context_each_side ?? effective.mention_context_each_side)
         } });
-        mode.addEventListener("change", writeSettings);
+        mode.addEventListener("change", () => { syncMentionContext(); writeSettings(); });
+        mentionContext.addEventListener("input", writeSettings);
         prefix.addEventListener("input", writeSettings);
         persona.addEventListener("input", writeSettings);
         force.addEventListener("change", writeSettings);
@@ -603,10 +635,10 @@
         personaLabel.append(persona);
         const forceLabel = appElement("label", "", "switch-row");
         forceLabel.append(force, appElement("span", "被提及时强制回复"));
-        fields.append(modeLabel, prefixLabel, personaLabel, forceLabel);
+        fields.append(modeLabel, mentionContextLabel, prefixLabel, personaLabel, forceLabel);
         if (settings) {
           const reset = appSetupButton("恢复默认触发方式", () => {
-            updateGroupRule(threadID, { reply_settings: { mode: "mention" } });
+            updateGroupRule(threadID, { reply_settings: { mode: "mention", mention_context_each_side: 5 } });
             renderGroupRules();
           });
           fields.append(reset);
@@ -628,6 +660,9 @@
     renderGroupRules();
     syncObservationOptions();
     const save = appSetupButton("保存回复范围", () => {
+      for (const input of groupRules.querySelectorAll('input[type="number"]')) {
+        if (!input.closest("label")?.hidden && !input.reportValidity()) return;
+      }
       const reply_threads = field.value.split(/[\s，,]+/u).filter(Boolean);
       const history_threads = history.value.split(/[\s，,]+/u).filter(Boolean);
       const attachment_threads = attachmentThreadIDs();
@@ -1485,16 +1520,217 @@
     panel.append(note, records, more);
     return panel;
   }
-  $("#artifact-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector("button"), path = $("#artifact-path").value;
+  function workURL(value) {
+    if (typeof value !== "string" || !value) return "";
+    try {
+      const url = new URL(value, window.location.origin);
+      return url.origin === window.location.origin && url.pathname.startsWith("/api/local/works/") ? url.href : "";
+    } catch (_) { return ""; }
+  }
+  function workSize(value) {
+    const size = Number(value);
+    if (!Number.isFinite(size) || size < 0) return "";
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  function workDate(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+  }
+  function workSource(value) {
+    return ({ home: "大肥鱼的家", wechat: "微信", douyin: "抖音", bilibili: "哔哩哔哩" })[value] || value || "其他来源";
+  }
+  function workActionNotice(text, error = false, undo = null) {
+    const host = $("#works-action");
+    host.replaceChildren(document.createTextNode(text));
+    host.classList.toggle("is-error", error);
+    host.hidden = false;
+    if (undo) host.append(memoryButton("撤销移至待删除", "button compact secondary", () => void restoreWork(undo)));
+  }
+  async function restoreWork(item) {
+    const url = workURL(item.restore_url) || `/api/local/works/${encodeURIComponent(item.id)}/restore`;
+    try {
+      await request(url, { method: "POST", body: JSON.stringify({}) });
+      workActionNotice(`${item.name || "作品"}已恢复。`);
+      await loadWorks();
+    } catch (error) { workActionNotice(error.message || "恢复失败，请重试。", true); }
+  }
+  async function trashWork(item, button) {
     button.disabled = true;
     try {
-      const artifact = await request("/api/local/artifacts", { method: "POST", body: JSON.stringify({ path, request_key: crypto.randomUUID() }) });
-      $("#artifact-result").textContent = artifact.filename + " 已登记，作品编号 " + artifact.artifact_id;
-    } catch (error) { $("#artifact-result").textContent = error.message; }
-    finally { button.disabled = false; }
+      const value = await request(`/api/local/works/${encodeURIComponent(item.id)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: item.version }) });
+      workActionNotice(`${item.name || "作品"}已移至待删除。`, false, value.item?.can_restore ? value.item : null);
+      if (works.selected === item.id) renderWorkPreview(null);
+      await loadWorks();
+    } catch (error) { workActionNotice(error.message || "移至待删除失败，请重试。", true); button.disabled = false; }
+  }
+  async function revealWork(item, button) {
+    button.disabled = true;
+    try {
+      await request(`/api/local/works/${encodeURIComponent(item.id)}/reveal`, { method: "POST" });
+      workActionNotice(`${item.name || "作品"}已在文件夹中选中。`);
+    } catch (error) {
+      workActionNotice(error.message || "打开所在文件夹失败，请重试。", true);
+    } finally { button.disabled = false; }
+  }
+  function editWorkName(item, detail, button) {
+    if (detail.querySelector(".works-rename")) return;
+    const form = appElement("form", "", "works-rename"), input = document.createElement("input");
+    input.type = "text"; input.required = true; input.maxLength = 255; input.value = item.name || "";
+    input.setAttribute("aria-label", `${item.name || "作品"}的新名称`);
+    const save = appElement("button", "保存名称", "button compact primary"); save.type = "submit";
+    const cancel = memoryButton("取消", "button compact quiet", () => { form.remove(); button.hidden = false; button.focus(); });
+    form.append(input, save, cancel); detail.append(form); button.hidden = true; input.focus(); input.select();
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name) return;
+      save.disabled = true; cancel.disabled = true;
+      try {
+        const result = await request(`/api/local/works/${encodeURIComponent(item.id)}`, { method: "PATCH", body: JSON.stringify({ name, expected_version: item.version }) });
+        if (works.selected === item.id && result.item) renderWorkPreview(result.item);
+        workActionNotice("作品名称已更新。");
+        await loadWorks();
+      } catch (error) {
+        workActionNotice(error.status === 409 ? "作品已在别处更新。当前名称仍保留在输入框中，请刷新列表后重试。" : error.message || "重命名失败，请重试。", true);
+        save.disabled = false; cancel.disabled = false;
+      }
+    });
+  }
+  function syncWorkSelection() {
+    for (const row of $("#works-list").querySelectorAll(".works-item")) {
+      const selected = Boolean(works.selected && row.dataset.workId === works.selected);
+      row.classList.toggle("is-selected", selected);
+      row.querySelector(".works-item-select")?.setAttribute("aria-pressed", String(selected));
+    }
+  }
+  function renderWorkPreview(item) {
+    const host = $("#works-preview"), content = $("#works-view .works-content");
+    host.replaceChildren();
+    works.selected = item?.id || "";
+    content.classList.toggle("has-preview", Boolean(item));
+    if (!item) {
+      host.append(appElement("p", "选择左侧作品查看详情。", "works-preview-empty"));
+      syncWorkSelection();
+      return;
+    }
+    host.append(appElement("h4", item.name || "作品详情"), appElement("p", [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · "), "works-preview-meta"));
+    const actions = appElement("div", "", "works-preview-actions");
+    if (works.status === "active" && item.can_reveal) {
+      const reveal = memoryButton("打开所在文件夹", "button compact secondary", () => void revealWork(item, reveal));
+      actions.append(reveal);
+    }
+    if (works.status === "active" && item.can_trash) {
+      const trash = memoryButton("删除作品", "button compact quiet", () => void trashWork(item, trash));
+      actions.append(trash);
+    }
+    if (item.can_restore) actions.append(memoryButton("恢复作品", "button compact secondary", () => void restoreWork(item)));
+    const downloadURL = workURL(item.download_url);
+    if (downloadURL) {
+      const download = appElement("a", "下载作品", "button compact secondary");
+      download.href = downloadURL; download.setAttribute("download", item.name || "");
+      actions.append(download);
+    }
+    if (actions.childElementCount) host.append(actions);
+    const url = item.previewable ? workURL(item.preview_url) : "";
+    if (url) {
+      const mediaType = String(item.mime || "").toLowerCase();
+      let media;
+      if (mediaType.startsWith("image/")) {
+        media = document.createElement("img"); media.alt = item.name || "作品图片";
+      } else if (mediaType.startsWith("video/")) {
+        media = document.createElement("video"); media.controls = true; media.preload = "metadata";
+      } else if (mediaType.startsWith("audio/")) {
+        media = document.createElement("audio"); media.controls = true; media.preload = "metadata";
+      } else {
+        media = document.createElement("iframe"); media.title = `${item.name || "作品"}预览`; media.setAttribute("sandbox", "");
+      }
+      const failure = appElement("p", "预览暂时无法打开，可下载后查看。", "works-preview-error"); failure.hidden = true;
+      media.addEventListener("error", () => { failure.hidden = false; });
+      media.src = url;
+      host.append(media, failure);
+    } else {
+      host.append(appElement("p", item.can_restore ? "此作品在待删除中，恢复后即可查看。" : "此格式暂不支持站内预览，可下载后查看。", "works-preview-empty"));
+    }
+    syncWorkSelection();
+  }
+  function renderWorks() {
+    const host = $("#works-list");
+    host.replaceChildren();
+    if (!works.items.length && !works.loading) host.append(appElement("p", works.status === "trash" ? "待删除中没有作品。" : "这个范围内还没有可显示的作品。", "apps-empty"));
+    for (const item of works.items) {
+      const row = appElement("article", "", "works-item"), detail = appElement("div", ""), actions = appElement("div", "", "works-item-actions");
+      row.dataset.workId = item.id;
+      const meta = [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · ");
+      const title = appElement("h3", ""), select = memoryButton(item.name || item.path || "未命名作品", "works-item-select", () => renderWorkPreview(item));
+      select.setAttribute("aria-label", `查看${item.name || "作品"}`);
+      title.append(select); detail.append(title, appElement("p", meta));
+      row.addEventListener("click", event => { if (!event.target.closest("button, a, input, select")) renderWorkPreview(item); });
+      const downloadURL = workURL(item.download_url);
+      if (downloadURL) {
+        const download = appElement("a", "下载", "button compact secondary");
+        download.href = downloadURL; download.setAttribute("download", item.name || "");
+        download.setAttribute("aria-label", `下载${item.name || "作品"}`); actions.append(download);
+      }
+      if (works.status === "active" && item.can_rename) {
+        const rename = memoryButton("重命名", "button compact secondary", () => editWorkName(item, detail, rename));
+        rename.setAttribute("aria-label", `重命名${item.name || "作品"}`); actions.append(rename);
+      }
+      if (works.status === "active" && item.can_trash) {
+        const trash = memoryButton("移至待删除", "button compact quiet", () => void trashWork(item, trash));
+        trash.setAttribute("aria-label", `将${item.name || "作品"}移至待删除`); actions.append(trash);
+      }
+      if (works.status === "trash" && item.can_restore) {
+        const restore = memoryButton("恢复", "button compact secondary", () => void restoreWork(item));
+        restore.setAttribute("aria-label", `恢复${item.name || "作品"}`); actions.append(restore);
+      }
+      row.append(detail, actions); host.append(row);
+    }
+    host.setAttribute("aria-busy", String(works.loading));
+    $("#works-more").hidden = !works.hasMore;
+    $("#works-more").disabled = works.loading;
+    syncWorkSelection();
+  }
+  async function loadWorks(append = false) {
+    if (activeView !== "works" || append && !works.hasMore) return;
+    works.controller?.abort();
+    const controller = new AbortController(), generation = ++works.generation;
+    works.controller = controller; works.loading = true;
+    if (!append) {
+      const filterKey = JSON.stringify([works.application, works.status, works.query]);
+      if (works.filterKey !== filterKey) { works.items = []; renderWorkPreview(null); }
+      works.filterKey = filterKey;
+      works.nextCursor = ""; works.hasMore = false;
+    }
+    $("#works-status").textContent = append ? "正在加载更多作品…" : "正在读取作品…";
+    renderWorks();
+    try {
+      const params = new URLSearchParams({ application: works.application, status: works.status, q: works.query, limit: "40" });
+      if (append && works.nextCursor) params.set("cursor", works.nextCursor);
+      const value = await request(`/api/local/works?${params}`, { signal: controller.signal });
+      if (generation !== works.generation || activeView !== "works") return;
+      if (!Array.isArray(value.items)) throw new Error("作品列表返回不完整，请重试。");
+      works.items = append ? works.items.concat(value.items) : value.items;
+      works.nextCursor = value.next_cursor || "";
+      works.hasMore = value.has_more === true;
+      if (works.selected) renderWorkPreview(works.items.find(item => item.id === works.selected) || null);
+      $("#works-status").textContent = `已显示 ${works.items.length} 件作品${works.hasMore ? "，可继续加载" : ""}。`;
+    } catch (error) {
+      if (generation !== works.generation || error.name === "AbortError") return;
+      $("#works-status").textContent = error.message || "作品列表暂时无法读取。";
+    } finally {
+      if (generation === works.generation) { works.loading = false; renderWorks(); }
+    }
+  }
+  $("#works-filter-form").addEventListener("submit", event => {
+    event.preventDefault();
+    works.application = $("#works-application").value;
+    works.status = $("#works-status-filter").value;
+    works.query = $("#works-query").value.trim();
+    void loadWorks();
   });
+  $("#works-more").addEventListener("click", () => void loadWorks(true));
   async function runWorkerAction(id, method, action, body) {
     const current = apps;
     if (current.setupBusy || current.loading) return;
@@ -1995,13 +2231,13 @@
             replies.type = "checkbox";
             replies.checked = douyinWebRepliesEnabled(value);
             replies.disabled = busy || (!replies.checked && (!available || !douyinWebCommentsEnabled(value)));
-            replies.setAttribute("aria-label", "允许回复评论");
+            replies.setAttribute("aria-label", "保留回复评论许可，当前暂停发送");
             replies.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowReplies: replies.checked }); });
-            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许回复评论"));
+            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "保留回复许可（当前暂停发送）"));
             interactionActions.append(repliesLabel);
             const interactionNote = douyinWebCommentsEnabled(value)
-              ? "点赞需要首页及视频页文字读取；回复评论还依赖视频评论读取。两项互动都单独保存。"
-              : "点赞需要首页及视频页文字读取；回复评论还需先允许读取视频评论。";
+              ? "点赞需要首页及视频页文字读取；回复许可还依赖视频评论读取。通知到目标评论及直接父评论尚未核实，当前暂停回复发送。"
+              : "点赞需要首页及视频页文字读取；回复许可还需先允许读取视频评论，当前暂停回复发送。";
             if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给项目工具中已启用的共享视觉能力处理。` : `${value.visual_reason || "请先在项目工具中启用媒体理解；抖音这里无需重复配置。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
@@ -2455,9 +2691,13 @@
     if (id === "douyin") {
       const value = apps.douyinWebLogin.value;
       const paused = value?.paused || value?.detached;
-      const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
+      const read = douyinWebReadEnabled(value), publish = douyinWebPublishEnabled(value);
       const actions = [read, value?.works_enabled === true, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
-      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
+      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : allowed ? "已授权" : "未授权";
+      const memoryScopes = Array.isArray(value?.memory_scopes) ? value.memory_scopes : [];
+      const noticeStatus = !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : value.notice_bound ? "已绑定" : "未绑定";
+      const visualStatus = value?.visual_enabled && value?.visual_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(douyinWebVisualEnabled(value));
+      const imagesStatus = value?.images_enabled && value?.images_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(value?.images_enabled === true);
       const state = douyinAppState(value);
       return {
         service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "网页通道待恢复",
@@ -2466,9 +2706,20 @@
         state,
         connected: state !== "not_connected",
         capabilities: [
-          ["内容浏览", auth(read), "依据本机保存的浏览范围，实际可读性以网页为准。"],
-          ["作品发布", auth(publish), "作品提交及发布结果按各任务单独核对。"],
-          ["直播控制", "待验证", "程序检查可读取本机状态，直播控制仍需单独验证。"],
+          ["网页文字", auth(read), read && douyinWebReadScope(value) === "home_and_videos" ? "可读取首页和从首页发现的视频页文字；按实际页面与覆盖范围返回。" : "先允许首页文字读取，再按需扩大到视频页。", "browse"],
+          ["本人作品", auth(value?.works_enabled === true), "从已核对的创作者账号读取作品列表和单篇信息。", "browse"],
+          ["公开图文图片", imagesStatus, "本人公开图文的图片按批交给已配置的视觉服务分析。", "browse"],
+          ["视频评论", auth(douyinWebCommentsEnabled(value)), "读取页面实际加载的评论，保留作者和评论编号并支持续读。", "browse"],
+          ["静音播放观察", auth(douyinWebPlaybackEnabled(value)), "记录确切视频的实际播放区间，不代表完整观看。", "browse"],
+          ["音轨转写", auth(douyinWebAudioEnabled(value)), "使用已启用的本机语音识别按窗口转写确切视频音轨。", "browse"],
+          ["视频画面分析", visualStatus, "按批分析确切视频的采样帧；需要已配置的媒体理解工具。", "browse"],
+          ["平台互动通知", noticeStatus, "绑定账号后按批手动读取；平台网页可能同时标记已读，Agent 读取另行授权。", "interactions"],
+          ["执行回合", noticeStatus, "按本人作品分别查看已保存通知、作品简介和音画证据，并定向核对评论关系。", "rounds"],
+          ["点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "通知限定回复须先在执行回合读完本人作品证据并核对评论关系；创建后在此管理原任务。", "interactions"],
+          ["普通账号作品发布", auth(publish), "从已登记成品由主人聊天创建草稿，此处管理原任务；公开发布尚待验收。", "publications"],
+          ["工作站按需记忆", auth(memoryScopes.length > 0), memoryScopes.length ? `已允许 ${memoryScopes.length} 类抖音资料按需留存与检索；各类来源单独授权。` : "可分别授权本人作品、评论和互动通知的按需留存与检索。", "account"],
+          ["直播伴侣与本机预览", !value ? unknown : value.detached ? "已撤下" : "可检查", "可检查直播伴侣程序状态并打开 OBS 本机预览；未接通抖音平台开播。", "live"],
         ],
       };
     }
@@ -2641,6 +2892,7 @@
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
+    view.douyinRoundsAbort?.abort();
     view.surfAbort?.abort();
     view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
@@ -3477,6 +3729,356 @@
     view.controller.signal.addEventListener("abort", cleanup, { once: true });
     return frame;
   }
+  function douyinRoundToday() {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return values.year + "-" + values.month + "-" + values.day;
+  }
+  function douyinRoundTime(value) {
+    if (typeof value !== "string" || !value) return "未提供";
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "时间待核对";
+  }
+  function douyinExecutionRoundsPanel(view) {
+    const panel = appElement("section", "", "configuration-rounds douyin-rounds");
+    panel.setAttribute("aria-label", "抖音执行回合");
+    const intro = appElement("p", "按作品查看本机已保存的抖音互动通知。记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。此页只展示已保存证据，不自行发送回复；Agent 须在同一回合读完整件作品证据，并用专用通知回复工具逐条核实关系后，才能创建待提交任务。", "app-scope-note douyin-round-rule");
+    const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
+    const dateLabel = appElement("label", "首次观察日期（北京时间）");
+    const date = document.createElement("input");
+    date.type = "date";
+    date.value = view.douyinRoundDate || douyinRoundToday();
+    dateLabel.append(date);
+    const limitLabel = appElement("label", "每页作品和记录数（1–1000）");
+    const limitInput = document.createElement("input");
+    limitInput.type = "number";
+    limitInput.min = "1";
+    limitInput.max = "1000";
+    limitInput.step = "1";
+    limitInput.value = String(view.douyinRoundLimit || 20);
+    limitLabel.append(limitInput);
+    const groupHeading = appElement("h3", "作品分组", "douyin-round-section-title");
+    groupHeading.hidden = true;
+    const groups = appElement("div", "", "douyin-round-groups");
+    const groupMore = memoryButton("更多作品", "button compact secondary", () => void loadGroups(true));
+    groupMore.hidden = true;
+    const selectedHeading = appElement("h3", "选择作品查看通知", "douyin-round-section-title");
+    selectedHeading.hidden = true;
+    const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
+    context.hidden = true;
+    const contextAction = memoryButton("让 Agent 核对此作品资料与音画", "button compact secondary", () => {
+      if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
+      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 context 首读已保存的作品资料、简介和音画证据。若 ownership=verified_own_work 且 audio_complete、visual_complete 均为真，只用 next_cursor 逐页续读到 agent_context_read_complete=true，不重复调用 prepare。否则用 locate 逐页核对当前创作者账号、本人作品及标题简介，取得临时 content_id；再用 prepare 只补缺失的音轨或画面页，读画面时显式指定 visual_pages，依据返回进度续办至 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；补证后用 context 从首页重读到 agent_context_read_complete=true。若 context 返回 restart_required，丢弃旧页并从头读取。按作品独立整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
+      handoffDouyinWorkbenchChat(draft, feedback);
+    });
+    contextAction.hidden = true;
+    const contextMore = memoryButton("更多音画证据", "button compact secondary", () => void loadContext(!contextNeedsRestart));
+    contextMore.hidden = true;
+    const records = appElement("div", "", "douyin-round-records");
+    const feedback = appElement("p", "", "apps-feedback douyin-round-feedback");
+    feedback.setAttribute("role", "status");
+    feedback.tabIndex = -1;
+    const more = memoryButton("该作品较早通知", "button compact secondary", () => void loadRounds(true));
+    more.hidden = true;
+    const refresh = memoryButton("查看已保存通知", "button compact secondary", () => void loadGroups());
+    filters.append(dateLabel, limitLabel, refresh);
+    panel.append(intro, rule, filters, feedback, groupHeading, groups, groupMore, selectedHeading, context, contextAction, contextMore, records, more);
+    let nextGroupCursor = "", nextBefore = "", selectedWorkID = null;
+    let nextContextOffset = null, nextContextCursor = "", contextNeedsRestart = false;
+    let groupGeneration = 0, roundGeneration = 0, contextGeneration = 0;
+    let groupController = null, roundController = null, contextController = null;
+    const usedGroupCursors = new Set(), usedRoundCursors = new Set(), usedContextCursors = new Set(), knownGroupIDs = new Set();
+    const active = () => appConfiguration === view && view.record.id === "douyin" && view.section === "rounds" && panel.isConnected;
+    view.douyinRoundsAbort = { abort() { groupController?.abort(); roundController?.abort(); contextController?.abort(); } };
+    function validFilters() {
+      const limit = Number(limitInput.value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date.value)) {
+        feedback.textContent = "请选择有效的查看日期。"; date.focus(); return null;
+      }
+      if (limitInput.validity.badInput || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+        feedback.textContent = "每页数量须为 1–1000 的整数，更多内容可按游标续页。"; limitInput.focus(); return null;
+      }
+      view.douyinRoundDate = date.value;
+      view.douyinRoundLimit = limit;
+      return limit;
+    }
+    function selectWork(workID, label) {
+      if (!active() || selectedWorkID === workID) return;
+      selectedWorkID = workID;
+      selectedHeading.textContent = label + "的通知";
+      selectedHeading.hidden = false;
+      context.hidden = false;
+      context.textContent = "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。";
+      contextAction.hidden = !/^[1-9]\d{0,19}$/.test(workID);
+      for (const button of groups.querySelectorAll("button[data-work-id]")) {
+        button.setAttribute("aria-pressed", String(button.dataset.workId === workID));
+      }
+      void loadRounds();
+      void loadContext();
+    }
+    function roundCard(item) {
+      const noticeDay = date.value;
+      const card = appElement("article", "", "douyin-round-card");
+      const header = appElement("div", "", "douyin-round-card-header");
+      header.append(appElement("h4", "通知 " + item.notice_id), appElement("span", "待核对 · 不会回复", "station-label"));
+      const facts = appElement("dl", "", "douyin-round-facts");
+      const detailLabels = {
+        not_observed: "页面未自然返回该通知详情", partial: "详情只返回了部分通知", in_flight: "详情请求仍在处理",
+        invalid_response: "详情响应未通过核对", conflict: "详情与列表证据冲突", account_unverified: "详情账号未核对",
+        invalid_fields: "详情候选字段无效", observed_no_candidates: "已取得详情，没有可用编号",
+        observed_candidate: "已取得详情编号，仍需关联核对",
+      };
+      for (const [name, value] of [
+        ["平台类型", String(item.type) + "（未分类）"],
+        ["作品编号", item.work_id || "未提供"],
+        ["平台时间", douyinRoundTime(item.created_at)],
+        ["本机首次观察", douyinRoundTime(item.observed_at)],
+        ["来源范围", "已保存通知元数据，单条来源未记录"],
+        ["原生候选字段", item.candidates.length ? item.candidates.map((candidate) => candidate.path + "=" + candidate.id).join("；") + "（未经关联核对）" : "未取得可验证编号"],
+        ["通知详情", detailLabels[item.detail_status] || "详情状态待核对"],
+        ["详情候选字段", item.detail_candidates.length ? item.detail_candidates.map((candidate) => candidate.path + "=" + candidate.id).join("；") + "（未经关联核对）" : "未取得可验证编号"],
+        ["评论定位", "待核对：尚未核实目标评论、层级和直接父评论归属"],
+        ["回复资格", item.reason + " · 不会回复"],
+      ]) facts.append(appElement("dt", name), appElement("dd", value));
+      card.append(header, facts);
+      const detailTarget = item.detail_status === "observed_candidate" &&
+        item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid"].includes(candidate.path));
+      const listPaths = new Set(item.candidates.map((candidate) => candidate.path));
+      const listTarget = item.type === 31 && /^[1-9]\d{0,19}$/.test(item.notice_id || "") &&
+        ["not_observed", "partial"].includes(item.detail_status) && listPaths.size === item.candidates.length &&
+        item.candidates.some((candidate) => candidate.path === "comment.comment.cid") &&
+        item.candidates.every((candidate) => ["comment.comment.cid", "comment.parent_id"].includes(candidate.path));
+      if ((detailTarget || listTarget) && /^[1-9]\d{0,19}$/.test(item.work_id || "")) {
+        card.append(memoryButton("让 Agent 核对并准备回复", "button compact secondary", () => {
+          const draft = `请处理北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 核对已保存通知，并在本轮用 context 从首页顺序读完同一作品的简介、音轨和画面证据，直到 agent_context_read_complete=true；证据缺失时再用 locate、prepare 补齐，然后从首页重读。详情候选或结构唯一的 31 类列表候选可用 relation 对明确 CID 做只读定向探测；comment.parent_id 只是主楼候选，须与目标行的 reply_id 核对，直接父评论须另看 reply_to_reply_id。关系核实且符合“主评论或直接回复本账号子评论”时，用 locate 取得当前本人作品 content_id，并先用 app_observe(comments) 建立该作品入口，再调用 douyin_notice_reply(create) 保存待提交回复任务及草稿正文供我审阅。候选冲突、缺页、账号或父评论不明时说明停止位置，不要猜目标或遍历评论区。不要提交回复、点赞或投稿。`;
+          handoffDouyinWorkbenchChat(draft, feedback);
+        }));
+      }
+      return card;
+    }
+    async function loadGroups(append = false) {
+      if (!active()) return;
+      const limit = validFilters();
+      if (limit === null || (append && !nextGroupCursor)) return;
+      const cursor = append ? nextGroupCursor : "";
+      const moreFocused = append && document.activeElement === groupMore;
+      groupController?.abort();
+      if (!append) {
+        roundController?.abort();
+        contextController?.abort();
+        ++roundGeneration;
+        ++contextGeneration;
+        groups.replaceChildren(); records.replaceChildren();
+        selectedWorkID = null; nextBefore = ""; nextGroupCursor = "";
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear(); contextMore.hidden = true;
+        contextAction.hidden = true;
+        context.textContent = "请选择作品查看已保存的作品资料和音画证据。";
+        usedGroupCursors.clear(); usedRoundCursors.clear(); knownGroupIDs.clear();
+        groupMore.hidden = true; more.hidden = true;
+        groupHeading.hidden = true;
+        selectedHeading.hidden = true;
+        context.hidden = true;
+        selectedHeading.textContent = "选择作品查看通知";
+      }
+      const currentController = new AbortController();
+      groupController = currentController;
+      const generation = ++groupGeneration;
+      panel.setAttribute("aria-busy", "true");
+      feedback.textContent = "正在按作品整理本机已保存的通知…";
+      const query = new URLSearchParams({ date: date.value, limit: String(limit) });
+      if (cursor) query.set("cursor", cursor);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds/works?" + query, { signal: currentController.signal });
+        if (!active() || generation !== groupGeneration || currentController.signal.aborted) return;
+        if (result.date !== date.value || result.coverage !== "notice_work_groups" || !Array.isArray(result.groups) ||
+            typeof result.next_cursor !== "string" || !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== limit) {
+          throw new Error("抖音作品分组返回格式无效，请稍后重试。");
+        }
+        if (result.next_cursor && (result.next_cursor === cursor || usedGroupCursors.has(result.next_cursor))) {
+          throw new Error("作品分组续页位置未前进，请重新选择日期查看。");
+        }
+        const pageIDs = new Set();
+        const buttons = result.groups.map((group) => {
+          if (!group || typeof group.work_id !== "string" ||
+              (group.work_id !== "" && !/^[1-9]\d{0,19}$/.test(group.work_id)) ||
+              !Number.isSafeInteger(group.notice_count) || group.notice_count < 1 ||
+              group.ownership !== "unverified" || pageIDs.has(group.work_id) || knownGroupIDs.has(group.work_id)) {
+            throw new Error("抖音作品分组证据返回格式无效，请稍后重试。");
+          }
+          pageIDs.add(group.work_id);
+          const label = group.work_id ? "作品 " + group.work_id : "未提供作品编号";
+          const button = memoryButton(label + " · " + group.notice_count + " 条通知", "button compact secondary douyin-round-group", () => selectWork(group.work_id, label));
+          button.dataset.workId = group.work_id;
+          button.setAttribute("aria-pressed", "false");
+          return button;
+        });
+        if (cursor) usedGroupCursors.add(cursor);
+        for (const id of pageIDs) knownGroupIDs.add(id);
+        groups.append(...buttons);
+        groupHeading.hidden = groups.childElementCount === 0;
+        nextGroupCursor = result.next_cursor;
+        groupMore.hidden = !nextGroupCursor;
+        feedback.textContent = groups.childElementCount ? "已列出 " + groups.childElementCount + " 个作品分组。请选择作品查看通知；归属与评论关系仍待核对。" :
+          "所选日期没有已保存的通知；不代表抖音平台没有互动消息。";
+        if (selectedWorkID === null && buttons.length) buttons[0].click();
+        if (moreFocused && groupMore.hidden) feedback.focus({ preventScroll: true });
+      } catch (error) {
+        if (active() && generation === groupGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          groupMore.hidden = !nextGroupCursor;
+        }
+      } finally {
+        if (active() && generation === groupGeneration) panel.setAttribute("aria-busy", "false");
+      }
+    }
+    async function loadRounds(append = false) {
+      if (!active() || selectedWorkID === null) return;
+      const limit = validFilters();
+      if (limit === null || (append && !nextBefore)) return;
+      const workID = selectedWorkID, before = append ? nextBefore : "";
+      const moreFocused = append && document.activeElement === more;
+      roundController?.abort();
+      const currentController = new AbortController();
+      roundController = currentController;
+      const generation = ++roundGeneration;
+      if (!append) { records.replaceChildren(); nextBefore = ""; usedRoundCursors.clear(); more.hidden = true; }
+      feedback.textContent = "正在读取该作品的已保存通知…";
+      const query = new URLSearchParams({ date: date.value, limit: String(limit), work_id: workID });
+      if (before) query.set("before", before);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds?" + query, { signal: currentController.signal });
+        if (!active() || generation !== roundGeneration || currentController.signal.aborted || selectedWorkID !== workID) return;
+        if (result.date !== date.value || result.coverage !== "notice_metadata" || result.group_selected !== true || result.selected_work_id !== workID ||
+            !Array.isArray(result.rounds) || typeof result.next_before !== "string" ||
+            !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== limit) {
+          throw new Error("抖音执行回合返回格式无效，请稍后重试。");
+        }
+        if (result.next_before && (result.next_before === before || usedRoundCursors.has(result.next_before))) {
+          throw new Error("该作品较早通知的续页位置未前进，请重新选择日期查看。");
+        }
+        const cards = result.rounds.map((item) => {
+          if (!item || typeof item.notice_id !== "string" || !item.notice_id || !Number.isInteger(item.type) || item.work_id !== workID ||
+              typeof item.created_at !== "string" || typeof item.observed_at !== "string" ||
+              item.state !== "待核对" || item.reason !== "证据不足" || item.reply_eligible !== false ||
+              !Array.isArray(item.candidates) || item.candidates.length > 16 ||
+              !item.candidates.every((candidate) => candidate && typeof candidate.path === "string" && typeof candidate.id === "string" && /^[1-9]\d{0,19}$/.test(candidate.id)) ||
+              !["not_observed", "partial", "in_flight", "invalid_response", "conflict", "account_unverified", "invalid_fields", "observed_no_candidates", "observed_candidate"].includes(item.detail_status) ||
+              !Array.isArray(item.detail_candidates) || item.detail_candidates.length > 16 ||
+              !item.detail_candidates.every((candidate) => candidate && typeof candidate.path === "string" && typeof candidate.id === "string" && /^[1-9]\d{0,19}$/.test(candidate.id))) {
+            throw new Error("抖音通知证据返回格式无效，请稍后重试。");
+          }
+          return roundCard(item);
+        });
+        if (before) usedRoundCursors.add(before);
+        records.append(...cards);
+        nextBefore = result.next_before;
+        more.hidden = !nextBefore;
+        feedback.textContent = "该作品已显示 " + records.childElementCount + " 条通知；候选编号未经关联核对，全部不会回复。";
+        if (moreFocused && more.hidden) feedback.focus({ preventScroll: true });
+      } catch (error) {
+        if (active() && generation === roundGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          more.hidden = !nextBefore;
+        }
+      }
+    }
+    async function loadContext(append = false) {
+      if (!active() || selectedWorkID === null) return;
+      const workID = selectedWorkID;
+      if (!workID) {
+        context.textContent = "通知未提供作品编号，无法核对本人作品简介或关联视频证据；不会回复。";
+        contextMore.hidden = true; contextAction.hidden = true;
+        return;
+      }
+      if (append && (!nextContextCursor || nextContextOffset === null)) return;
+      const offset = append ? nextContextOffset : 0;
+      const cursor = append ? nextContextCursor : "";
+      contextController?.abort();
+      const currentController = new AbortController();
+      contextController = currentController;
+      const generation = ++contextGeneration;
+      if (!append) {
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear();
+        contextMore.textContent = "更多音画证据";
+        contextMore.hidden = true;
+        context.replaceChildren(appElement("p", "正在读取本机已保存的作品证据…"));
+      }
+      const query = new URLSearchParams({ date: date.value, work_id: workID, limit: "20" });
+      if (cursor) query.set("cursor", cursor);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds/context?" + query, { signal: currentController.signal });
+        if (!active() || currentController.signal.aborted || generation !== contextGeneration || selectedWorkID !== workID) return;
+        if (result.work_id === workID && result.restart_required === true && result.snapshot_state === "restart_required" &&
+            result.ownership === "unverified" && result.reply_eligible === false &&
+            Array.isArray(result.media_pages) && result.media_pages.length === 0 && result.next_cursor === "") {
+          nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = true; usedContextCursors.clear();
+          context.replaceChildren(appElement("p", "作品资料或已保存音画证据在翻页期间发生变化。旧页已丢弃，请从头读取同一作品。"));
+          contextAction.hidden = false;
+          contextMore.textContent = "重新读取作品证据"; contextMore.hidden = false;
+          return;
+        }
+        if (result.work_id !== workID || !["unverified", "verified_own_work"].includes(result.ownership) ||
+            result.reply_eligible !== false || result.restart_required !== false ||
+            !["stable", "unverified"].includes(result.snapshot_state) || typeof result.next_cursor !== "string" ||
+            typeof result.audio_complete !== "boolean" || typeof result.visual_complete !== "boolean" ||
+            !Array.isArray(result.media_pages) || !Number.isSafeInteger(result.media_page_count) || result.media_page_count < 0 ||
+            result.media_page_count < offset + result.media_pages.length || !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== 20 ||
+            (result.next_offset !== undefined && (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset)) ||
+            (result.next_offset !== undefined) !== Boolean(result.next_cursor) ||
+            (append && result.snapshot_state !== "stable")) {
+          throw new Error("抖音作品上下文返回格式无效，请稍后重试。");
+        }
+        if (result.next_cursor && (result.next_cursor === cursor || usedContextCursors.has(result.next_cursor))) {
+          throw new Error("作品证据续页位置未前进，请重新读取该作品。");
+        }
+        if (!append) {
+          context.replaceChildren();
+          if (result.ownership === "unverified") {
+            context.append(appElement("p", "尚未核实该通知组属于当前创作者账号，不能显示关联作品内容，也不会回复。"));
+          } else {
+            context.append(appElement("p", "已核对当前账号的创作者作品快照。通知到具体评论、直接父评论的关系仍待逐条核对。"));
+            if (typeof result.creator_text === "string" && result.creator_text) {
+              context.append(appElement("pre", result.creator_text, "douyin-round-creator-text"));
+            }
+            if (typeof result.creator_coverage === "string" && result.creator_coverage) {
+              context.append(appElement("p", "作品资料范围：" + result.creator_coverage));
+            }
+            context.append(appElement("p", "音轨转写：" + (result.audio_complete ? "已完成已读分页" : "尚未覆盖整段") +
+              "；画面：" + (result.visual_complete ? "采样分页已结束" : "采样分页尚未结束") + "。采样不等于逐帧观看。"));
+          }
+          contextAction.hidden = false;
+        }
+        if (result.ownership === "verified_own_work") {
+          for (const page of result.media_pages) {
+            if (!page || !["audio", "visual"].includes(page.field) || typeof page.coverage !== "string" ||
+                typeof page.observed_at !== "string" || typeof page.complete !== "boolean" ||
+                (page.text !== undefined && typeof page.text !== "string")) {
+              throw new Error("抖音音画证据返回格式无效，请稍后重试。");
+            }
+            const item = appElement("article", "", "douyin-round-media-page");
+            item.append(appElement("strong", page.field === "audio" ? "音轨转写" : "画面采样"),
+              appElement("p", page.coverage + " · 本机观察 " + douyinRoundTime(page.observed_at)),
+              appElement("pre", page.text || "本页没有可显示的文字", "douyin-round-media-text"));
+            context.append(item);
+          }
+        }
+        if (cursor) usedContextCursors.add(cursor);
+        nextContextOffset = result.next_offset ?? null;
+        nextContextCursor = result.next_cursor;
+        contextMore.hidden = nextContextOffset === null || result.ownership !== "verified_own_work";
+      } catch (error) {
+        if (active() && generation === contextGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          if (!append) context.replaceChildren();
+          context.append(appElement("p", error.message));
+        }
+      }
+    }
+    date.addEventListener("change", () => void loadGroups());
+    limitInput.addEventListener("change", () => void loadGroups());
+    queueMicrotask(() => { if (active()) void loadGroups(); });
+    return panel;
+  }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
     const date = document.createElement("input");
@@ -4198,12 +4800,28 @@
     page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
     account_works: "本人作品列表", own_video: "本人作品信息", images: "图文图片",
   };
+  const douyinReadAmounts = {
+    page_text: ["字", 0], comments: ["条", 0], visual: ["帧", 12], audio: ["秒", 240],
+    playback: ["秒", 20], account_works: ["条", 0], own_video: ["字", 0], images: ["张", 6],
+  };
   function douyinReadPanel(view) {
     const panel = appElement("section", "", "douyin-read-panel");
     const actions = appElement("div", "", "publication-actions");
     const output = appElement("div", "", "configuration-round-records");
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
+    const limitInputs = new Map();
+    const readKey = (connection, content, field) => JSON.stringify([connection, content, field]);
+    function requestedLimit(input, field) {
+      const raw = input.value.trim();
+      const limit = Number(raw);
+      const [unit, max] = douyinReadAmounts[field];
+      if (!raw && !input.validity.badInput) return 0;
+      if (Number.isSafeInteger(limit) && limit > 0 && (!max || limit <= max)) return limit;
+      feedback.textContent = max ? `本次${douyinReadLabels[field]}读取量须为 1–${max} ${unit}。` : "请输入大于零的整数读取量。";
+      input.focus();
+      return null;
+    }
     function beginRead() {
       view.douyinReadAbort?.abort();
       const controller = new AbortController();
@@ -4214,6 +4832,7 @@
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       feedback.textContent = "正在核对抖音读取授权…";
+      limitInputs.clear();
       actions.replaceChildren(discovery); output.replaceChildren();
       try {
         const { items } = await request("/api/local/apps/observation?app_id=douyin", { signal: controller.signal });
@@ -4232,22 +4851,41 @@
         if (!Object.hasOwn(douyinReadLabels, field)) continue;
         const kind = field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field];
         const name = label ? label + " · " + kind : kind;
-        area.append(memoryButton(name, "button compact secondary", () => void read(connection, content, field)));
+        const [unit, max] = douyinReadAmounts[field];
+        const choice = appElement("div", "", "douyin-read-choice");
+        const amount = appElement("label", `本次读取量（${unit}）`, "douyin-read-choice-limit");
+        const input = document.createElement("input");
+        input.type = "number"; input.min = "1"; input.step = "1";
+        if (max) input.max = String(max);
+        input.placeholder = "默认 / 续读";
+        input.setAttribute("aria-label", name + `本次读取量（${unit}）`);
+        amount.append(input);
+        choice.append(amount, memoryButton(name, "button compact secondary", () => {
+          const limit = requestedLimit(input, field);
+          if (limit !== null) void read(connection, content, field, limit > 0 && field !== "own_video", limit);
+        }));
+        area.append(choice);
+        limitInputs.set(readKey(connection, content, field), input);
       }
     }
-    async function read(connection, content, field, refresh = false) {
+    async function read(connection, content, field, refresh = false, limit = 0) {
+      const focusResult = panel.contains(document.activeElement);
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       const query = { app_id: "douyin", connection_id: connection, content_id: content, field, refresh };
+      if (limit > 0) query.limit = limit;
       feedback.textContent = "正在读取" + douyinReadLabels[field] + "…";
       try {
         const result = await request("/api/local/apps/observation", { method: "POST", body: JSON.stringify(query), signal: controller.signal });
         if (!active()) return;
         const chunks = Array.isArray(result.chunks) ? result.chunks : [];
         const page = appElement("section", "", "memory-detail-section douyin-read-result");
+        page.tabIndex = -1;
+        page.setAttribute("aria-label", (field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]) + "读取结果");
         const header = appElement("div", "", "publication-actions");
         header.append(appElement("strong", field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]),
           appElement("span", result.complete ? "本次读取无后续页" : "仍有后续页", "station-label"));
+        if (limit > 0) header.append(appElement("span", "指定读取量 " + limit, "station-label"));
         if (result.resumed && !result.cached) header.append(appElement("span", "从已保存进度续读", "station-label"));
         if (result.visual_proof) {
           const proof = result.visual_proof;
@@ -4264,11 +4902,15 @@
         }
         if (!chunks.length) page.append(appElement("p", "这页没有返回文本，可查看本次覆盖状态。"));
         const controls = appElement("div", "", "publication-actions douyin-read-pagination");
-        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field)));
+        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field, false, limit)));
+        const key = readKey(connection, content, field);
         if (["page_text", "comments", "visual", "audio", "playback", "account_works", "images"].includes(field))
-          controls.append(memoryButton("从头刷新", "button compact quiet", () => void read(connection, content, field, true)));
+          controls.append(memoryButton("从头刷新", "button compact quiet", () => {
+            const input = limitInputs.get(key);
+            const nextLimit = input?.isConnected ? requestedLimit(input, field) : limit;
+            if (nextLimit !== null) void read(connection, content, field, true, nextLimit);
+          }));
         page.append(controls);
-        const key = JSON.stringify([content, field]);
         const prior = [...output.children].filter((element) => element.dataset.read === key);
         if (!refresh && result.resumed && !result.cached) {
           prior.at(-1)?.querySelector(".douyin-read-pagination")?.remove();
@@ -4278,6 +4920,7 @@
           output.append(page);
         }
         page.dataset.read = key;
+        if (focusResult && (panel.contains(document.activeElement) || document.activeElement === document.body)) page.focus();
         feedback.textContent = "";
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -4287,7 +4930,7 @@
     }
     actions.append(discovery);
     panel.append(appElement("h4", "内容读取"), appElement("p", "从已授权的入口读取文字、评论和媒体证据。首页候选不能作为本人作品列表。", "app-scope-note"),
-      actions, feedback, output);
+      appElement("p", "每项可单独填写读取量。留空沿用已保存进度，新内容使用默认量；填写后从头读取，结果页的「继续读取」沿用本次数量。", "app-scope-note"), actions, feedback, output);
     return panel;
   }
 
@@ -4370,21 +5013,27 @@
         next.hidden = !continuation;
         if (typeof page.rendered_text === "string" && page.rendered_text) {
           const rendered = appElement("article", "", "douyin-read-chunk");
-          rendered.append(appElement("strong", "平台页面可见文字（可能包含前批）"), appElement("p", page.rendered_text));
+          rendered.append(appElement("strong", "整批平台页面可见文字（无法逐条对应通知编号，可能包含前批）"), appElement("p", page.rendered_text));
           output.append(rendered);
         } else if (page.items.length) {
           output.append(appElement("p", "本次仅取得通知编号及元数据，页面文字未能核对。", "app-scope-note"));
         }
         for (const row of page.items) {
           const card = appElement("div", "", "douyin-read-chunk");
-          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type));
-          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "作品 " + row.work_id : ""].filter(Boolean);
+          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type + "（未分类）"));
+          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "关联作品编号 " + row.work_id + "（归属待核对）" : ""].filter(Boolean);
           if (details.length) card.append(appElement("p", details.join(" · "), "publication-reference"));
+          card.append(appElement("p", "逐条正文：未取得；整批页面文字不能对应本通知。", "publication-reference"),
+            appElement("p", "评论定位：待核对；缺少目标评论编号、层级和直接父评论归属。", "publication-reference"),
+            appElement("p", "回复资格：证据不足 · 不会回复。", "publication-reference"));
           output.append(card);
         }
         const coverage = page.has_more ? "平台报告还有后续通知。" : "平台报告已读到末批。";
         const progress = page.progress === "cursor_stalled" ? "平台游标没有前进，已停止续读。" : page.progress === "next_unavailable" ? "后批未能继续加载，已返回本次成功读取的部分。" : "";
-        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress;
+        const saveWarnings = [];
+        if (page.rounds_recorded === false) saveWarnings.push(typeof page.rounds_warning === "string" && page.rounds_warning.trim() ? page.rounds_warning.trim() : "回合未保存，不会自动重读。");
+        if (page.memory_recorded === false) saveWarnings.push(typeof page.memory_warning === "string" && page.memory_warning.trim() ? page.memory_warning.trim() : "通知记忆未保存，不会自动重读。");
+        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress + (saveWarnings.length ? " " + saveWarnings.join("；") : "");
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
           continuation = ""; next.hidden = true;
@@ -4516,30 +5165,239 @@
     void load();
     return section;
   }
+  function openDouyinWorkbenchSection(view, route) {
+    selectAppConfiguration(view, route);
+    if (appConfiguration === view && view.section === route) {
+      $("#app-configuration-nav").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    }
+  }
+  function douyinWorkbenchFeatures(evidence, view) {
+    const section = appElement("section", "", "douyin-workbench-features");
+    section.append(appElement("h4", "已接入的抖音功能"),
+      appElement("p", "状态反映本机登录、授权和可用入口；实际读取范围与外部操作结果以每次回执为准。", "app-scope-note"));
+    const grid = appElement("div", "", "douyin-workbench-feature-grid");
+    const routes = { account: "账号与授权", browse: "内容浏览", publications: "作品发布", interactions: "互动任务", rounds: "执行回合", live: "直播与本机预览" };
+    for (const [name, status, description, route] of evidence.capabilities) {
+      const card = appElement("article", "", "app-capability douyin-workbench-feature");
+      card.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", description));
+      if (view.sections.some((item) => item.id === route)) {
+        const button = memoryButton("打开" + routes[route], "button compact secondary", () => openDouyinWorkbenchSection(view, route));
+        button.setAttribute("aria-label", name + "：打开" + routes[route]);
+        card.append(button);
+      }
+      grid.append(card);
+    }
+    section.append(grid);
+    return section;
+  }
+  function appConfigurationNavigation(view) {
+    const button = (item) => {
+      const active = item.id === view.section;
+      const control = memoryButton(item.title, "local-tab" + (active ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
+      control.setAttribute("aria-pressed", String(active));
+      if (active) control.setAttribute("aria-current", "page");
+      return control;
+    };
+    if (view.record.id !== "douyin") return view.sections.map(button);
+    const available = new Map(view.sections.map((item) => [item.id, item]));
+    const groups = [
+      ["总览", ["overview"]],
+      ["活动", ["rounds", "interactions"]],
+      ["内容与创作", ["browse", "publications"]],
+      ["账号与服务", ["account", "live", "source"]],
+    ];
+    const nodes = [];
+    for (const [label, ids] of groups) {
+      const items = ids.map((id) => available.get(id)).filter(Boolean);
+      if (!items.length) continue;
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", label);
+      group.classList.toggle("is-active", items.some((item) => item.id === view.section));
+      group.append(appElement("span", label, "app-workbench-nav-heading"), ...items.map(button));
+      nodes.push(group);
+      for (const item of items) available.delete(item.id);
+    }
+    if (available.size) {
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", "其他分区");
+      group.append(appElement("span", "其他分区", "app-workbench-nav-heading"), ...Array.from(available.values(), button));
+      nodes.push(group);
+    }
+    return nodes;
+  }
+  const douyinConsoleGroups = [
+    { label: "总览", icon: "overview", sections: ["overview"] },
+    { label: "活动", icon: "activity", sections: ["rounds", "interactions"] },
+    { label: "内容与创作", icon: "content", sections: ["browse", "publications"] },
+    { label: "账号与服务", icon: "account", sections: ["account", "live", "source"] },
+  ];
+  function douyinConsoleIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "18");
+    svg.setAttribute("height", "18");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.8");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ({
+      overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+      activity: '<path d="M5 3h10l4 4v14H5Z"/><path d="M14 3v5h5M8 12h8m-8 4h6"/>',
+      content: '<path d="M4 4h16v16H4zM8 4v16M12 9h5m-5 4h5m-5 4h3"/>',
+      account: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M6 16c1-3 5-3 6 0M15 9h3m-3 5h3"/>',
+      refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.3 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.3 3A7.5 7.5 0 0 0 18.7 16"/>',
+      light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
+      dark: '<path d="M20.1 15.5A8 8 0 0 1 8.5 3.9 8 8 0 1 0 20.1 15.5Z"/>',
+    })[name];
+    return svg;
+  }
+  function douyinConsoleTheme() {
+    try { return localStorage.getItem("douyin-console-theme") === "dark" ? "dark" : "light"; }
+    catch { return "light"; }
+  }
+  function renderDouyinConsoleNavigation(view, nav, contextNav) {
+    const available = new Map(view.sections.map((item) => [item.id, item]));
+    const currentGroup = douyinConsoleGroups.find((group) => group.sections.includes(view.section)) || douyinConsoleGroups[0];
+    const brand = appElement("div", "", "douyin-console-brand");
+    const avatar = document.createElement("img");
+    avatar.src = "/assets/whale-girl-cutout.png";
+    avatar.alt = "";
+    avatar.width = 68;
+    avatar.height = 68;
+    const brandName = document.createElement("b");
+    brandName.append("Agent-home-", document.createElement("br"), "station");
+    brand.append(avatar, brandName);
+    const primary = appElement("div", "", "douyin-console-primary-nav");
+    for (const group of douyinConsoleGroups) {
+      const target = group.sections.find((id) => available.has(id));
+      const active = group === currentGroup;
+      const button = memoryButton("", "douyin-console-nav-link" + (active ? " is-active" : ""), () => {
+        if (target && view.section !== target) selectAppConfiguration(view, target);
+      });
+      button.append(douyinConsoleIcon(group.icon), appElement("span", group.label));
+      button.disabled = !target;
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-controls", "app-configuration-body");
+      if (active) button.setAttribute("aria-current", "page");
+      primary.append(button);
+    }
+    const bottom = appElement("div", "", "douyin-console-sidebar-bottom");
+    const refresh = memoryButton("", "douyin-console-refresh", () => $("#app-configuration-refresh").click());
+    refresh.append(douyinConsoleIcon("refresh"), appElement("span", "刷新"));
+    refresh.setAttribute("aria-label", "刷新抖音工作台");
+    const themeControl = appElement("div", "", "douyin-console-theme-control");
+    const dialog = $("#app-configuration");
+    const selectedTheme = dialog.dataset.consoleTheme || douyinConsoleTheme();
+    dialog.dataset.consoleTheme = selectedTheme;
+    for (const [theme, label] of [["light", "浅色主题"], ["dark", "深色主题"]]) {
+      const button = memoryButton("", "douyin-console-theme-button", () => {
+        dialog.dataset.consoleTheme = theme;
+        try { localStorage.setItem("douyin-console-theme", theme); } catch { /* storage may be unavailable */ }
+        themeControl.querySelectorAll("button").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      });
+      button.append(douyinConsoleIcon(theme));
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+      button.setAttribute("aria-pressed", String(selectedTheme === theme));
+      themeControl.append(button);
+    }
+    bottom.append(refresh, themeControl);
+    nav.replaceChildren(brand, primary, bottom);
+    contextNav.replaceChildren(...currentGroup.sections.filter((id) => available.has(id)).map((id) => {
+      const active = id === view.section;
+      const button = memoryButton(available.get(id).title, "local-tab douyin-console-context-link" + (active ? " is-active" : ""), () => {
+        if (!active) selectAppConfiguration(view, id);
+      });
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-controls", "app-configuration-body");
+      if (active) button.setAttribute("aria-current", "page");
+      return button;
+    }));
+    contextNav.hidden = false;
+    $("#app-configuration-title").textContent = currentGroup.label;
+  }
+  function prepareDouyinWorkbenchChat(raw) {
+    if (standaloneWorkbenchApp || !state.home?.initialized || state.home.chat_available === false || typeof raw !== "string" || !raw.trim() || raw.length > 6000) return false;
+    if ($("#app-configuration").open) $("#app-configuration").close();
+    if ($("#app-dialog").open) $("#app-dialog").close();
+    setActiveView("chat");
+    const input = $("#chat-input");
+    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${raw.trim()}` : raw.trim();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    showMessage("请求已放入聊天输入框，请核对后手动发送。", "success");
+    return true;
+  }
+  function handoffDouyinWorkbenchChat(draft, feedback, fallbackInput = null) {
+    if (window.chrome?.webview && standaloneWorkbenchApp) {
+      window.chrome.webview.postMessage({ type: "application-workbench-chat-draft", text: draft });
+      feedback.textContent = "正在交给主工作站聊天框…";
+    } else if (standaloneWorkbenchApp) {
+      try { window.sessionStorage.setItem("douyin-creation-chat-draft", draft); window.location.href = "/"; }
+      catch (_) { feedback.textContent = "无法暂存请求，请复制草稿后在主工作站粘贴。"; fallbackInput?.focus(); fallbackInput?.select(); }
+    } else if (!prepareDouyinWorkbenchChat(draft)) feedback.textContent = "主聊天尚未就绪，请稍后重试。";
+  }
+  function douyinCreationRow(view) {
+    const row = appElement("section", "", "app-layer publication-layer douyin-creation-row");
+    row.append(appElement("h5", "制作作品"));
+    const detail = appElement("div", "", "publication-detail");
+    detail.append(appElement("strong", "用已登记的项目工具创作"),
+      appElement("p", "编辑下面的请求，再交给主工作站聊天。Agent 会根据可用工具制作成品、登记不可变产物、抽样检查音画轨可解码性并创建抖音草稿；此入口不会发送聊天或投稿。"));
+    const field = appElement("label", "创作请求草稿", "settings-field");
+    const input = document.createElement("textarea");
+    input.rows = 7; input.maxLength = 6000; input.autocomplete = "off";
+    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频。若项目工具已返回不可变 MP4 或 WebM 成品的 artifact_id，直接使用该编号；若只生成了家目录中的视频文件，先用 artifact_publish 登记。随后用 douyin_video_check 核对该成品的容器、时长、尺寸，以及指定画面和音频片段是否可解码；这项抽样不检验内容含义，也不能证明全片每秒均可播放。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
+    input.addEventListener("input", () => { view.douyinCreationDraft = input.value; });
+    field.append(input);
+    const actions = appElement("div", "", "publication-actions");
+    const feedback = appElement("span", "", "publication-feedback"); feedback.setAttribute("role", "status");
+    const openChat = memoryButton("带到主聊天", "button compact primary", () => {
+      const draft = input.value.trim();
+      if (!draft) { feedback.textContent = "请先填写创作请求。"; input.focus(); return; }
+      handoffDouyinWorkbenchChat(draft, feedback, input);
+    });
+    const openTools = memoryButton("打开项目工具", "button compact secondary", () => {
+      if (window.chrome?.webview && standaloneWorkbenchApp) window.chrome.webview.postMessage({ type: "application-workbench-project-tools" });
+      else if (standaloneWorkbenchApp) {
+        try { window.sessionStorage.setItem("douyin-open-project-tools", "1"); window.location.href = "/"; }
+        catch (_) { feedback.textContent = "无法切换页面，请在主工作站打开项目工具。"; }
+      } else { if ($("#app-configuration").open) $("#app-configuration").close(); if ($("#app-dialog").open) $("#app-dialog").close(); setActiveView("project-tools"); }
+    });
+    actions.append(openChat, openTools, feedback);
+    detail.append(field, actions);
+    row.append(detail);
+    return row;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
     const { record, section } = view;
-    const body = $("#app-configuration-body"), nav = $("#app-configuration-nav");
+    const body = $("#app-configuration-body"), nav = $("#app-configuration-nav"), contextNav = $("#app-configuration-context-nav");
     const scroll = body.scrollTop, focused = document.activeElement;
-    const focusSection = nav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
+    const focusSection = nav.contains(focused), focusContext = contextNav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
     const evidence = appEvidence(record.id);
     const connections = appConfigurationConnections(view);
     if (!connections.some((row) => row.id === view.connection)) view.connection = connections.find((row) => row.primary)?.id || connections[0]?.id || "";
     const selected = connections.find((row) => row.id === view.connection);
     $("#app-configuration-status").textContent = [evidence.service, selected?.label || evidence.account, evidence.grant].join(" · ");
     $("#app-configuration-feedback").append($("#apps-feedback"));
-    nav.replaceChildren(...view.sections.map((item) => {
-      const button = memoryButton(item.title, "local-tab" + (item.id === section ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
-      button.setAttribute("aria-pressed", String(item.id === section));
-      return button;
-    }));
+    if (standaloneWorkbenchApp === "douyin" && record.id === "douyin") renderDouyinConsoleNavigation(view, nav, contextNav);
+    else {
+      nav.replaceChildren(...appConfigurationNavigation(view));
+      contextNav.replaceChildren();
+      contextNav.hidden = true;
+    }
     if (focusSection) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    if (focusContext) contextNav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     const listing = apps.catalog?.find((row) => row.id === record.id);
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && (["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "surf", "delivery", "tasks"].includes(section) || (section === "rounds" && record.id === "wechat"))) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -4550,19 +5408,26 @@
     }
     switch (section) {
       case "overview":
-        controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
+        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
         if (record.id === "douyin") {
           const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
           const overview = appElement("section", "", "app-layer douyin-workbench-overview");
           const account = appElement("div", "", "douyin-workbench-account");
           account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
-          const routes = appElement("div", "", "douyin-workbench-routes");
-          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
-            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => selectAppConfiguration(view, id)));
+          const activity = appElement("section", "", "douyin-workbench-activity");
+          activity.append(appElement("h4", "活动 · 执行回合"),
+            appElement("p", "按作品查看已保存通知、简介与音画证据，并逐条核对目标评论。页面只读取本机账本。", "app-scope-note"));
+          if (view.sections.some((item) => item.id === "rounds")) {
+            activity.append(memoryButton("打开执行回合", "button compact primary", () => openDouyinWorkbenchSection(view, "rounds")));
           }
-          overview.append(account, routes);
+          const routes = appElement("div", "", "douyin-workbench-routes");
+          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
+            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
+          }
+          overview.append(account, activity, routes);
           controls.splice(1, 0, overview);
-        }
+          controls.push(douyinWorkbenchFeatures(evidence, view));
+        } else controls.push(appCapabilityRows(evidence, true));
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
@@ -4677,7 +5542,8 @@
         else controls.push(appElement("p", "添加微信连接后，可查看流程和已保存的画布。", "app-scope-note"));
         break;
       case "rounds":
-        if (selected) controls.push(appConfigurationRounds(view, selected.id));
+        if (record.id === "douyin") controls.push(douyinExecutionRoundsPanel(view));
+        else if (selected) controls.push(appConfigurationRounds(view, selected.id));
         else controls.push(appElement("p", "连接微信后可查看消息的处理过程。", "app-scope-note"));
         break;
       case "tasks":
@@ -4716,7 +5582,11 @@
       case "publications":
       case "interactions":
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
+          appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
+        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
+          if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
           if (view.douyinNoticeLogin !== login) {
             view.douyinNoticeAbort?.abort();
@@ -4916,18 +5786,18 @@
     const draft = current.personas.get(id) || { revision: 0, text: "", loaded: false, editing: false, busy: false, error: "" };
     current.personas.set(id, draft);
     const form = appElement("form", "", "app-persona-form");
-    form.setAttribute("aria-label", `${label}子角色`);
+    form.setAttribute("aria-label", `${label}应用补充设定`);
     const heading = appElement("div", "", "app-persona-heading");
     const edit = appElement("button", draft.busy ? "读取中…" : "编辑", "text-action");
     edit.type = "button"; edit.disabled = draft.busy; edit.hidden = draft.editing;
-    heading.append(appElement("strong", "应用子角色"), edit);
-    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用，留空沿用主角色。" : draft.loaded && draft.text ? draft.text : "在主角色之上，补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
+    heading.append(appElement("strong", "应用补充设定"), edit);
+    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用。留空时只使用共享主角色设定。" : draft.loaded && draft.text ? draft.text : "可用 Markdown 补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
     const input = document.createElement("textarea");
-    input.setAttribute("aria-label", `${label}子角色设定`); input.maxLength = 4000; input.rows = 3;
-    input.placeholder = "留空沿用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
+    input.setAttribute("aria-label", `${label}补充设定 Markdown 内容`); input.maxLength = 4000; input.rows = 5;
+    input.placeholder = "留空时只使用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
     input.addEventListener("input", () => { draft.text = input.value; });
     const actions = appElement("div", "", "settings-actions"); actions.hidden = !draft.editing;
-    const save = appElement("button", draft.busy ? "保存中…" : "保存子角色", "button compact primary"); save.type = "submit"; save.disabled = draft.busy;
+    const save = appElement("button", draft.busy ? "保存中…" : "保存补充设定", "button compact primary"); save.type = "submit"; save.disabled = draft.busy;
     const cancel = appElement("button", "取消", "text-action"); cancel.type = "button"; cancel.disabled = draft.busy;
     actions.append(save, cancel);
     edit.addEventListener("click", async () => {
@@ -4946,7 +5816,7 @@
         const value = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`, { method: "PUT", body: JSON.stringify({ revision: draft.revision, persona: draft.text }) });
         if (current !== apps) return;
         draft.revision = value.revision; draft.text = value.persona; draft.editing = false; draft.error = "";
-        appFeedback(`${label}子角色已保存，下次模型调用生效。`);
+        appFeedback(`${label}补充设定已保存，下次模型调用生效。`);
       } catch (error) {
         draft.error = error.message;
         if (error.status === 409) { try { const latest = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`); if (current === apps) draft.revision = latest.revision; } catch (_) { /* Keep the draft and its revision until a fresh read succeeds. */ } }
@@ -5564,6 +6434,7 @@
     const pending = publicationWork(current, appID).pending.get(task.job_id);
     const pendingLabel = pending?.has("cancel") ? "正在登记停止…" : "正在处理原任务…";
     details.append(appElement("p", pending?.size ? pendingLabel : note));
+    if (appID === "douyin") details.append(douyinPublicationReview(task));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(publicationActions)) {
@@ -5583,6 +6454,71 @@
     }
     row.append(details, buttons);
     return row;
+  }
+  function douyinPublicationReview(task) {
+    const review = appElement("details", "", "douyin-publication-review");
+    review.append(appElement("summary", "查看发布内容"));
+    const content = appElement("div", "", "douyin-publication-review-content");
+    review.append(content);
+    let loading = false;
+    let loaded = false;
+    let previewVideo = null;
+    review.addEventListener("toggle", async () => {
+      if (!review.open) { previewVideo?.pause(); return; }
+      if (loading || loaded) return;
+      loading = true;
+      content.replaceChildren(appElement("p", "正在读取原任务内容…"));
+      try {
+        const value = await request(`/api/local/apps/douyin/publications/review?job_id=${encodeURIComponent(task.job_id)}`);
+        if (value?.task?.job_id !== task.job_id || typeof value.title !== "string" ||
+            typeof value.body !== "string" || !Array.isArray(value.artifacts) || value.artifacts.length !== 1) {
+          throw new Error("原任务内容返回格式无效，请稍后重试。");
+        }
+        content.replaceChildren();
+        const facts = appElement("dl", "", "douyin-publication-review-facts");
+        for (const [label, text] of [
+          ["标题", value.title || "（未填写）"],
+          ["文案", value.body || "（未填写）"],
+          ["可见范围", value.visibility === "private" ? "仅自己可见" : value.visibility === "public" ? "公开" : value.visibility === "friends" ? "朋友可见" : "未识别"],
+        ]) {
+          facts.append(appElement("dt", label), appElement("dd", text));
+        }
+        content.append(facts);
+        const previewLabel = appElement("strong", "视频预览（手动播放）");
+        const preview = document.createElement("video");
+        preview.className = "douyin-publication-review-video";
+        preview.controls = true;
+        preview.preload = "none";
+        preview.setAttribute("aria-label", "原发布任务的视频预览");
+        preview.src = `/api/local/apps/douyin/publications/review/video?job_id=${encodeURIComponent(task.job_id)}`;
+        const previewFeedback = appElement("p", "播放前请核对标题、文案和可见范围。", "app-scope-note");
+        preview.addEventListener("error", () => { previewFeedback.textContent = "视频预览不可用，请下载素材核对原文件。"; });
+        previewVideo = preview;
+        content.append(previewLabel, preview, previewFeedback);
+        const media = appElement("ul", "", "douyin-publication-review-media");
+        for (const artifact of value.artifacts) {
+          if (typeof artifact?.id !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(artifact.id)) continue;
+          const row = appElement("li", "", "");
+          const size = Number.isSafeInteger(artifact.bytes) && artifact.bytes >= 0 ? `，${artifact.bytes} 字节` : "";
+          row.append(appElement("span", `${artifact.name || "作品素材"}${size}（${artifact.id}）`));
+          if (typeof artifact.sha256 === "string" && /^[a-f0-9]{64}$/.test(artifact.sha256)) {
+            row.append(appElement("code", `SHA-256 ${artifact.sha256}`));
+          }
+          const link = appElement("a", "下载核对素材", "button compact quiet");
+          link.href = `/api/local/artifacts/${encodeURIComponent(artifact.id)}/download`;
+          link.setAttribute("aria-label", `下载核对${artifact.name || "作品素材"}`);
+          row.append(link);
+          media.append(row);
+        }
+        if (media.children.length) content.append(appElement("strong", "素材"), media);
+        loaded = true;
+      } catch (error) {
+        content.replaceChildren(appElement("p", error.message || "原任务内容读取失败。", "publication-feedback is-warn"));
+      } finally {
+        loading = false;
+      }
+    });
+    return review;
   }
   function douyinInteractionTaskRow(current, task) {
     const row = appElement("li", "", "publication-task");
@@ -5606,12 +6542,14 @@
       }
     }
     details.append(summary, appElement("p", note));
+    if (task.kind === "reply_comment") details.append(appElement("p", "原回复任务仅可查询或取消；通知关系核验完成前暂停提交与续办。", "publication-reference"));
     const pending = current.douyinInteractions.pending.get(task.job_id);
     if (pending?.size) details.append(appElement("p", pending.has("cancel") ? "正在登记停止…" : "正在处理原互动任务…", "publication-reference"));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(interactionActions)) {
       if (!available.includes(action)) continue;
+      if (task.kind === "reply_comment" && (action === "submit" || action === "resume")) continue;
       if (douyinIsDetached(current) && action !== "cancel") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
@@ -6907,7 +7845,7 @@
     if (!panel.childElementCount) panel.append(appElement("p", "正在读取应用工具…", "project-tools-empty"));
     const labels = {
       wechat: ["会话与消息读取", "文字、图片、语音、视频和文件收发", "通讯录与群管理", "视频号账号内解析"],
-      douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
+      douyin: ["作品、评论与网页内容读取", "点赞；评论回复待核验", "创作者作品管理与发布"],
       bilibili: ["稿件与评论读取", "账号授权与视频发布"]
     };
     const wechatLabels = { "share-reader": "微信分享解析", "music": "微信音乐与投递" };
@@ -7266,6 +8204,11 @@
     projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
     appFeedback("");
+    works.controller?.abort(); works.generation++;
+    works = newWorksView();
+    $("#works-list").replaceChildren(); renderWorkPreview(null);
+    $("#works-status").textContent = ""; $("#works-action").hidden = true;
+    $("#works-status-filter").value = "active"; $("#works-application").value = "all"; $("#works-query").value = "";
     $("#project-tools-list").replaceChildren();
     projectToolsFeedback("");
     setActiveView("chat");
@@ -7306,7 +8249,7 @@
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
       if (activeView === "chat") void loadRecentMemory();
-      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
+      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "works" ? loadWorks() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   // General capabilities are the owner's to hand over. The list is explicit so
@@ -7356,6 +8299,63 @@
       showMessage(feedback.textContent, "error");
     }
   }
+  function personaStatus(text, error = false) {
+    const status = $("#persona-status");
+    status.textContent = text;
+    status.classList.toggle("is-error", error);
+  }
+  async function loadPersonaDocument(force = false) {
+    const draft = state.personaDocument;
+    if (draft.loading || draft.saving || draft.loaded && !force) return;
+    draft.loading = true;
+    $("#persona-save").disabled = true;
+    $("#persona-reload").disabled = true;
+    personaStatus("正在读取主角色设定…");
+    try {
+      const value = await request("/api/persona-document");
+      if (typeof value.content !== "string" || value.revision === undefined) throw new Error("主角色设定返回不完整，请重试。");
+      draft.content = value.content;
+      draft.revision = value.revision;
+      draft.path = value.path || "";
+      draft.loaded = true;
+      draft.dirty = false;
+      $("#persona-content").value = value.content;
+      personaStatus("已读取共享主角色设定。修改后请单独保存主角色。");
+    } catch (error) {
+      personaStatus(error.message || "主角色设定暂时无法读取。", true);
+    } finally {
+      draft.loading = false;
+      $("#persona-save").disabled = !draft.loaded;
+      $("#persona-reload").disabled = false;
+    }
+  }
+  async function savePersonaDocument(event) {
+    event.preventDefault();
+    const draft = state.personaDocument;
+    if (!draft.loaded || draft.loading || draft.saving) return;
+    draft.saving = true;
+    $("#persona-save").disabled = true;
+    $("#persona-reload").disabled = true;
+    personaStatus("正在保存主角色设定…");
+    try {
+      const value = await request("/api/persona-document", { method: "POST", body: JSON.stringify({ content: $("#persona-content").value, revision: draft.revision }) });
+      if (typeof value.content !== "string" || value.revision === undefined) throw new Error("保存结果不完整，请重新读取核对。");
+      draft.content = value.content;
+      draft.revision = value.revision;
+      draft.path = value.path || draft.path;
+      draft.dirty = false;
+      $("#persona-content").value = value.content;
+      personaStatus("主角色设定已保存；已接入角色设定的应用会在下次生成时读取。");
+    } catch (error) {
+      personaStatus(error.status === 409
+        ? "主角色设定已在别处更新。当前编辑已保留；请复制内容，再重新读取并合并。"
+        : error.message || "主角色设定未能保存。", true);
+    } finally {
+      draft.saving = false;
+      $("#persona-save").disabled = false;
+      $("#persona-reload").disabled = false;
+    }
+  }
   function setModelForm(model) {
     const source = model || {};
     $("#model-revision").value = String(source.revision || 0);
@@ -7368,7 +8368,6 @@
     $("#model-direct-media").checked = !!source.direct_media_input;
     $("#model-reasoning").value = ["high", "max"].includes(source.reasoning_effort) ? source.reasoning_effort : "max";
     $("#model-reasoning").disabled = !$("#model-thinking").checked;
-    $("#model-persona").value = source.persona || "";
     $("#model-api-key").value = ""; $("#model-api-key").placeholder = source.key_configured ? "已保存；留空不改" : "填写后保存";
     $("#model-clear-key").checked = false;
   }
@@ -7547,6 +8546,16 @@
       if (!authenticated(session)) { showConnection(); return; }
       if (standaloneWorkbenchApp) activeView = "apps";
       await loadHome();
+      if (!standaloneWorkbenchApp && state.home?.initialized) {
+        try {
+          const draft = window.sessionStorage.getItem("douyin-creation-chat-draft");
+          if (draft && prepareDouyinCreationChat(draft)) window.sessionStorage.removeItem("douyin-creation-chat-draft");
+          if (window.sessionStorage.getItem("douyin-open-project-tools") === "1") {
+            window.sessionStorage.removeItem("douyin-open-project-tools");
+            setActiveView("project-tools"); selectToolPanel("public");
+          }
+        } catch (_) { /* Browser storage may be unavailable; keep the page usable. */ }
+      }
       if (standaloneWorkbenchApp && state.home?.initialized) {
         apps.openID = standaloneWorkbenchApp;
         $("#app-configuration-close").textContent = "关闭工作台";
@@ -7569,7 +8578,7 @@
   }
   async function saveModel(event) {
     event.preventDefault();
-    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
+    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
     const button = $("#model-save"); button.disabled = true;
     try {
       state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model);
@@ -7682,6 +8691,7 @@
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
+    appConfiguration?.douyinRoundsAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
     $("#app-configuration").classList.remove("wechat-legacy-skin", "douyin-workbench-skin");
@@ -7697,7 +8707,7 @@
       } else {
         const opener = closed?.record.id;
         apps.openID = "";
-        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .apps-layout"));
         renderApps(false);
         const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
         (button || $("#apps-search")).focus({ preventScroll: true });
@@ -7713,7 +8723,7 @@
     const opener = apps.openID;
     clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
     apps.openID = ""; renderLiveSafety();
-    $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+    $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .apps-layout"));
     if (activeView === "apps" && opener) {
       renderApps(false);
       const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
@@ -7749,6 +8759,17 @@
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); refreshProjectToolsPanel(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel);
+  $("#persona-form").addEventListener("submit", savePersonaDocument);
+  $("#persona-content").addEventListener("input", () => {
+    const draft = state.personaDocument;
+    if (!draft.loaded) return;
+    draft.dirty = $("#persona-content").value !== draft.content;
+    personaStatus(draft.dirty ? "主角色有未保存的修改。" : "主角色与已保存内容一致。");
+  });
+  $("#persona-reload").addEventListener("click", () => {
+    if (state.personaDocument.dirty && !window.confirm("当前主角色修改尚未保存。重新读取会替换编辑内容，是否继续？")) return;
+    void loadPersonaDocument(true);
+  });
   $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#chat-memory-link-cancel").addEventListener("click", () => { state.chat.link = null; renderChat(); $("#chat-input").focus(); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
@@ -7786,6 +8807,14 @@
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
       if (value.type === "open-public-tools") { setActiveView("project-tools"); selectToolPanel("public"); return; }
+      if (value.type === "open-douyin-project-tools" && !standaloneWorkbenchApp) {
+        if ($("#app-configuration").open) $("#app-configuration").close();
+        if ($("#app-dialog").open) $("#app-dialog").close();
+        setActiveView("project-tools"); selectToolPanel("public");
+        return;
+      }
+      if (value.type === "prepare-douyin-creation-chat") { prepareDouyinCreationChat(value.text); return; }
+      if (value.type === "application-workbench-route-error") { appFeedback(value.message || "主工作站暂不可用，请稍后重试。", true); return; }
       if (value.type === "share-reader-auth-result") {
         if (value.ok === true) {
           appFeedback(value.message || "登录凭据已保存。");

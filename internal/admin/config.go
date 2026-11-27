@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
@@ -106,8 +107,8 @@ func validate(c Config) error {
 		seen[id] = true
 	}
 	for _, r := range c.GroupRules {
-		if !validID(r.ID) || !strings.HasSuffix(r.ID, "@chatroom") || seen[r.ID] || (r.Mode != "mention" && r.Mode != "all" && r.Mode != "social") || len(r.Name) > 256 || !utf8.ValidString(r.Name) || len(r.Prefix) > 64 || !utf8.ValidString(r.Prefix) || strings.ContainsAny(r.Prefix, "\r\n\x00") || len(r.Persona) > 4000 || !utf8.ValidString(r.Persona) {
-			return errors.New("请检查群 ID、群回复模式和触发前缀，群规则不能重复")
+		if !validID(r.ID) || !strings.HasSuffix(r.ID, "@chatroom") || seen[r.ID] || (r.Mode != "mention" && r.Mode != "all" && r.Mode != "social") || len(r.Name) > 256 || !utf8.ValidString(r.Name) || !wechatapp.ValidGroupReplySettings(apphost.ConnectionGroupReplySettings{Mode: r.Mode, Prefix: r.Prefix, Persona: r.Persona, MentionContextEachSide: r.MentionContextEachSide}) {
+			return errors.New("请检查群 ID、回复模式、触发前缀和提及上下文条数（0 至 200），群规则不能重复")
 		}
 		seen[r.ID] = true
 		if r.Mode == "social" && c.Companion.Enabled && (!c.Companion.Permissions.ObserveGroups || !c.Companion.Permissions.AutonomousGroups) {

@@ -64,6 +64,20 @@ namespace WechatAgent.Desktop {
             }
         }
         static void Assert(bool value, string reason) { if (!value) throw new Exception(reason); assertions++; }
+        static void WorkbenchDraftProtocolTests() {
+            string draft;
+            var valid = new Dictionary<string, object> { { "type", "application-workbench-chat-draft" }, { "text", "制作原创视频\n只创建草稿" } };
+            Assert(ApplicationWorkbenchDialog.TryReadChatDraft("douyin", valid, out draft) && draft == "制作原创视频\n只创建草稿",
+                "Douyin workbench must accept a plain editable chat draft");
+            Assert(!ApplicationWorkbenchDialog.TryReadChatDraft("bilibili", valid, out draft),
+                "another workbench must not route a Douyin chat draft");
+            Assert(!ApplicationWorkbenchDialog.TryReadChatDraft("douyin", new Dictionary<string, object> { { "type", "application-workbench-chat-draft" }, { "text", new string('a', 6001) } }, out draft),
+                "an oversized cross-window draft must be rejected");
+            Assert(!ApplicationWorkbenchDialog.TryReadChatDraft("douyin", new Dictionary<string, object> { { "type", "application-workbench-chat-draft" }, { "text", "  " } }, out draft),
+                "an empty cross-window draft must be rejected");
+            Assert(!ApplicationWorkbenchDialog.TryReadChatDraft("douyin", new Dictionary<string, object> { { "type", "application-workbench-chat-draft" }, { "text", "video\0draft" } }, out draft),
+                "a draft containing a NUL must be rejected");
+        }
         static async Task Wait(Func<bool> condition, string reason) {
             for (int i = 0; i < 150; ++i) { if (condition()) return; await Task.Delay(100); }
             throw new Exception(reason);
@@ -498,6 +512,11 @@ namespace WechatAgent.Desktop {
                 }
             }
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+            if (args.Length == 1 && args[0] == "--workbench-routing") {
+                WorkbenchDraftProtocolTests();
+                Console.WriteLine("Douyin workbench routing assertions passed: " + assertions + "; synthetic text only, no platform action.");
+                return 0;
+            }
             Program.RegisterDependencies();
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             bool webViewRecoveryOnly = args.Length == 2 && args[0] == "--webview-recovery";

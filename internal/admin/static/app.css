@@ -172,3 +172,5 @@
 .mobile-observation-app-state{color:var(--warning,#9a6700);font-size:11px;font-weight:600}
 /* Workspace editor uses the established theme and stays within narrow panels. */
 .workspace-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:end}.workspace-toolbar>div{flex:1 1 180px;min-width:0}#agent-workspace-panel{min-width:0}#agent-workspace-panel summary{cursor:pointer;min-height:40px}#agent-doc-content{width:100%;font-family:ui-monospace,Consolas,monospace;line-height:1.6;resize:vertical}#agent-process-list pre{max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}#agent-doc-state{overflow-wrap:anywhere}
+
+#rules .mention-context-setting{display:grid;gap:4px;font-size:13px;font-weight:500;color:var(--muted)}#rules .mention-context-setting[hidden]{display:none}

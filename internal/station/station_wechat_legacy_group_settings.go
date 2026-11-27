@@ -294,10 +294,10 @@ func readLegacyGroupReplySettings(root *os.Root, config, thread string, guard *l
 		return legacyGroupSettingView{Status: "unsupported", Reason: "此群沿用旧版自定义的全局前缀，请在新站单独核对"}, ""
 	case !policy.Companion.Enabled && (group.Persona != "" || group.ForceReplyWhenMentioned):
 		return legacyGroupSettingView{Status: "unsupported", Reason: "此群的角色规则在旧版未启用，请在新站单独核对"}, ""
-	case group.Mode == "mention" && group.Prefix == "" && group.Persona == "" && !group.ForceReplyWhenMentioned:
+	case group.Mode == "mention" && group.Prefix == "" && group.Persona == "" && !group.ForceReplyWhenMentioned && group.MentionContextEachSide == nil:
 		return legacyGroupSettingView{Status: "empty", Reason: "此群使用新站已有的默认回复方式"}, ""
 	}
-	settings := apphost.ConnectionGroupReplySettings{Mode: group.Mode, Prefix: group.Prefix, Persona: group.Persona, ForceReplyWhenMentioned: group.ForceReplyWhenMentioned}
+	settings := apphost.ConnectionGroupReplySettings{Mode: group.Mode, Prefix: group.Prefix, Persona: group.Persona, ForceReplyWhenMentioned: group.ForceReplyWhenMentioned, MentionContextEachSide: group.MentionContextEachSide}
 	if !wechatapp.ValidGroupReplySettings(settings) {
 		return invalid, ""
 	}

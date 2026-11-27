@@ -610,7 +610,7 @@ def verify(binary, output):
                     worker["group_mute_threads"] = body["group_mute_threads"]
                     worker["group_rules"] = [
                         {key: value for key, value in rule.items()
-                         if key != "reply_settings" or value != {"mode": "mention"}}
+                         if key != "reply_settings" or value != {"mode": "mention", "mention_context_each_side": 5}}
                         for rule in body.get("group_rules", [])
                     ]
                     worker["contact_read"] = body["contact_read"]
@@ -978,14 +978,28 @@ def verify(binary, output):
                 page.get_by_text("触发方式与角色（可选）", exact=True).click()
                 assert page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).input_value() == "social"
                 assert page.get_by_role("textbox", name="synthetic-room@chatroom 群聊触发前缀", exact=True).input_value() == "!fish "
+                page.get_by_role("combobox", name="synthetic-room@chatroom 群聊触发方式", exact=True).select_option("mention")
+                mention_context = page.get_by_role("spinbutton", name="synthetic-room@chatroom 被提及时上下文前后各 N 条", exact=True)
+                assert mention_context.input_value() == "5", "old group rule must display the default five"
+                mention_context.fill("0")
+                page.get_by_role("button", name="保存回复范围").click()
+                page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
+                assert worker["policy_payloads"][-1]["group_rules"][0]["reply_settings"]["mention_context_each_side"] == 0
+                assert worker["group_rules"][0]["reply_settings"]["mention_context_each_side"] == 0
+                refresh_application(page)
+                page.locator("#apps-list[aria-busy='false']").wait_for()
+                page.get_by_text("触发方式与角色（可选）", exact=True).click()
+                assert page.get_by_role("spinbutton", name="synthetic-room@chatroom 被提及时上下文前后各 N 条", exact=True).input_value() == "0"
                 page.get_by_role("button", name="恢复默认触发方式", exact=True).click()
+                page.get_by_text("触发方式与角色（可选）", exact=True).click()
+                assert page.get_by_role("spinbutton", name="synthetic-room@chatroom 被提及时上下文前后各 N 条", exact=True).input_value() == "5"
                 expect(page.get_by_role("checkbox", name="自动读图", exact=True)).not_to_be_checked()
                 expect(page.get_by_role("checkbox", name="自动读视频", exact=True)).not_to_be_checked()
                 page.get_by_role("checkbox", name="自动读图", exact=True).check()
                 page.get_by_role("checkbox", name="自动读视频", exact=True).check()
                 page.get_by_role("button", name="保存回复范围").click()
                 page.locator("#apps-feedback").get_by_text("回复范围已保存。", exact=True).wait_for()
-                assert worker["policy_payloads"][-1]["group_rules"][0]["reply_settings"] == {"mode": "mention"}
+                assert worker["policy_payloads"][-1]["group_rules"][0]["reply_settings"] == {"mode": "mention", "mention_context_each_side": 5}
                 assert worker["group_rules"] == [{"thread_id": "synthetic-room@chatroom", "note": "收到分享时先总结重点", "summarize_shares": True}]
                 assert page.get_by_role("textbox", name="附件读取会话 ID").input_value() == "synthetic-room@chatroom"
                 assert worker["media_reply_threads"] == ["synthetic-room@chatroom"]

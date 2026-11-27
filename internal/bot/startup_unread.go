@@ -33,7 +33,8 @@ func (w *Worker) captureStartupUnread(ctx context.Context, path string, state *c
 						return errors.New("startup inbox full; source cursor retained for continuation")
 					}
 				}
-				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: event, Phase: "received", Backlog: true, Updated: time.Now().UTC()})
+				now := time.Now().UTC()
+				w.runtime.Inbox = append(w.runtime.Inbox, inboxItem{Event: event, Phase: "received", Backlog: true, Updated: now, ReceivedAt: now})
 				if err = w.saveRuntime(); err != nil {
 					return err
 				}

@@ -410,15 +410,20 @@ func (e *Engine) pendingEventEvidence(ctx context.Context, in Input, updates []C
 }
 
 type ConversationEvent struct {
-	Source     *SourceRef `json:"source,omitempty"`
-	ReplyTo    *SourceRef `json:"reply_to,omitempty"`
-	Relation   string     `json:"relation,omitempty"`
-	SenderName string     `json:"sender_name,omitempty"`
-	MessageID  string     `json:"message_id"`
-	Sender     string     `json:"sender"`
-	Text       string     `json:"text"`
-	At         string     `json:"at"`
-	NewRequest bool       `json:"new_request"`
+	Source   *SourceRef `json:"source,omitempty"`
+	ReplyTo  *SourceRef `json:"reply_to,omitempty"`
+	Relation string     `json:"relation,omitempty"`
+	// NativeWindow marks context selected and verified by the WeChat host. It
+	// remains background evidence, never an independently authorized request.
+	NativeWindow           bool   `json:"native_window,omitempty"`
+	NativeRecallGeneration int    `json:"native_recall_generation,omitempty"`
+	Direction              string `json:"direction,omitempty"`
+	SenderName             string `json:"sender_name,omitempty"`
+	MessageID              string `json:"message_id"`
+	Sender                 string `json:"sender"`
+	Text                   string `json:"text"`
+	At                     string `json:"at"`
+	NewRequest             bool   `json:"new_request"`
 	// MediaReadFailed is a host observation status, never retained user text.
 	MediaReadFailed bool `json:"media_read_failed,omitempty"`
 }

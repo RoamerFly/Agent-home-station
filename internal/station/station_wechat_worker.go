@@ -92,7 +92,7 @@ type stationWechatPolicy struct {
 }
 
 func (policy stationWechatPolicy) groupPolicy() wechatapp.GroupPolicy {
-	return wechatapp.GroupPolicy{Replies: policy.Grants, Attachments: policy.AttachmentGrants, Rules: policy.GroupRules}
+	return wechatapp.GroupPolicy{Replies: policy.Grants, Attachments: policy.AttachmentGrants, History: policy.HistoryGrants, Rules: policy.GroupRules}
 }
 
 const stationWechatPolicyLimit = 128 << 10
@@ -674,7 +674,7 @@ func (s *stationWechat) SetConnectionPolicy(ctx context.Context, id string, poli
 			next.ContactGrant = now
 		}
 	}
-	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.Equal(groupRules, w.policy.GroupRules) || next.StationLocalAudio != w.policy.StationLocalAudio || next.StationVideoVision != w.policy.StationVideoVision || next.StationImageVision != w.policy.StationImageVision || next.AutoImagesSince != w.policy.AutoImagesSince || next.AutoVideosSince != w.policy.AutoVideosSince
+	workerScopeChanged := !maps.Equal(grants, w.policy.Grants) || !maps.Equal(attachments, w.policy.AttachmentGrants) || !maps.Equal(mediaReplies, w.policy.MediaReplyGrants) || !maps.Equal(history, w.policy.HistoryGrants) || !maps.EqualFunc(groupRules, w.policy.GroupRules, wechatapp.EqualGroupRules) || next.StationLocalAudio != w.policy.StationLocalAudio || next.StationVideoVision != w.policy.StationVideoVision || next.StationImageVision != w.policy.StationImageVision || next.AutoImagesSince != w.policy.AutoImagesSince || next.AutoVideosSince != w.policy.AutoVideosSince
 	if workerScopeChanged {
 		next.Grants, next.AttachmentGrants, next.MediaReplyGrants, next.HistoryGrants = grants, attachments, mediaReplies, history
 		// Require explicit resume after a scope change on an enabled worker.

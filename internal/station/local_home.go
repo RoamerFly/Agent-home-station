@@ -149,6 +149,9 @@ func NewLocalHomeHandlerWithPackageDirectories(dir, workspaceRoot, password, ori
 	if err := home.migrateSingleHome(); err != nil {
 		return nil, err
 	}
+	if err := ensureSharedPersonaDocument(dir); err != nil {
+		return nil, err
+	}
 	home.registerHomeRoutes(auth, mux)
 	chat := newLocalChatService(home)
 	chat.windows = runner

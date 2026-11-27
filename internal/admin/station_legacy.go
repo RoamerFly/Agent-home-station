@@ -32,6 +32,7 @@ type stationLegacyGroupRule struct {
 	Prefix                  string `json:"prefix"`
 	Persona                 string `json:"persona"`
 	ForceReplyWhenMentioned bool   `json:"force_reply_when_mentioned"`
+	MentionContextEachSide  *int   `json:"mention_context_each_side,omitempty"`
 }
 
 type stationLegacyWorkerPolicy struct {
@@ -149,7 +150,7 @@ func makeStationLegacyGroupRules(policy stationLegacyWorkerPolicy) []GroupRule {
 		if mode == "" {
 			mode = "mention"
 		}
-		result = append(result, GroupRule{ID: id, Mode: mode, Prefix: raw.Prefix, Persona: raw.Persona, ForceReplyWhenMentioned: raw.ForceReplyWhenMentioned})
+		result = append(result, GroupRule{ID: id, Mode: mode, Prefix: raw.Prefix, Persona: raw.Persona, ForceReplyWhenMentioned: raw.ForceReplyWhenMentioned, MentionContextEachSide: raw.MentionContextEachSide})
 	}
 	return result
 }

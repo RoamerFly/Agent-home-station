@@ -143,6 +143,7 @@ func (t *localToolSet) callPublication(ctx context.Context, raw json.RawMessage)
 }
 
 func (h *localChatService) publicationRoutes(s *websession.Store, mux *http.ServeMux) {
+	h.douyinPublicationReviewRoutes(s, mux)
 	handler := s.Protect(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		publisher, actor, err := h.publicationHost()

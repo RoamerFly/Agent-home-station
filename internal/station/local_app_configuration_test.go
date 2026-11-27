@@ -62,8 +62,16 @@ func TestLocalAppConfigurationGenericAndSourceOnly(t *testing.T) {
 		t.Fatalf("generic application: %d %#v", code, generic)
 	}
 	code, douyin := f.request("GET", path+"douyin/configuration", nil, false)
-	if code != 200 || douyin["registered"] != false || len(douyin["sections"].([]any)) != 7 {
+	if code != 200 || douyin["registered"] != false || len(douyin["sections"].([]any)) != 8 {
 		t.Fatalf("source-only application: %d %#v", code, douyin)
+	}
+	hasDouyinRounds := false
+	for _, section := range douyin["sections"].([]any) {
+		row := section.(map[string]any)
+		hasDouyinRounds = hasDouyinRounds || row["id"] == "rounds" && row["title"] == "执行回合"
+	}
+	if !hasDouyinRounds {
+		t.Fatal("Douyin workbench must expose execution rounds", douyin)
 	}
 	if code, _ := f.request("GET", path+"unknown/configuration", nil, false); code != 404 {
 		t.Fatalf("unknown application status = %d", code)

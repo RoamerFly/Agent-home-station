@@ -39,6 +39,29 @@ type Attachment struct {
 	MessageID string `json:"messageId,omitempty"`
 }
 
+type MessageMentions struct {
+	State string   `json:"state"`
+	Self  *bool    `json:"self"`
+	IDs   []string `json:"ids,omitempty"`
+}
+
+func (m *MessageMentions) UnmarshalJSON(data []byte) error {
+	var value struct {
+		State   string   `json:"state"`
+		Self    *bool    `json:"self"`
+		IDs     []string `json:"ids"`
+		UserIDs []string `json:"userIds"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*m = MessageMentions{State: value.State, Self: value.Self, IDs: value.IDs}
+	if len(m.IDs) == 0 {
+		m.IDs = value.UserIDs
+	}
+	return nil
+}
+
 type Message struct {
 	PrivateQuote   string          `json:"-"`
 	ResolvedQuote  *Message        `json:"-"`
@@ -56,11 +79,7 @@ type Message struct {
 	Direction      string          `json:"direction"`
 	Body           string          `json:"body"`
 	CreatedAt      string          `json:"createdAt"`
-	Mentions       struct {
-		State string   `json:"state"`
-		Self  *bool    `json:"self"`
-		IDs   []string `json:"ids,omitempty"`
-	} `json:"mentions"`
+	Mentions       MessageMentions `json:"mentions"`
 }
 type QuoteReference struct {
 	ServerID string `json:"serverId"`

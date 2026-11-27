@@ -57,6 +57,15 @@ func stationMemoryDir(dataDir string) string {
 func stationWorkspaceDir(dataDir string) string {
 	modern := filepath.Join(dataDir, "workspaces")
 	if directoryExists(modern) {
+		// A persona-only home can coexist with an older workspace tree. Do not
+		// switch the owner's projects and private files to a newly created root.
+		legacy := filepath.Join(dataDir, "managed-workspaces")
+		if structuredDataRoot(dataDir) {
+			legacy = filepath.Join(dataDir, "workspace")
+		}
+		if directoryExists(filepath.Join(legacy, "home")) && personaOnlyWorkspace(modern) {
+			return legacy
+		}
 		return modern
 	}
 	if structuredDataRoot(dataDir) {
@@ -71,6 +80,23 @@ func stationWorkspaceDir(dataDir string) string {
 		}
 	}
 	return modern
+}
+
+func personaOnlyWorkspace(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "home" || !entries[0].IsDir() {
+		return false
+	}
+	entries, err = os.ReadDir(filepath.Join(root, "home"))
+	if err != nil || len(entries) == 0 || len(entries) > 2 {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() != "PERSONA.md" && entry.Name() != "PERSONA.md.lock" {
+			return false
+		}
+	}
+	return true
 }
 
 func stationLogsDir(dataDir string) string {

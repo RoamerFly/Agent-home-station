@@ -47,21 +47,24 @@ type Input struct {
 	// GroupShareSummary is set only by the authorized host for one share turn.
 	GroupShareSummary bool `json:"group_share_summary,omitempty"`
 	// Set only by authorized host delivery preparation, never model decisions.
-	ConversationDelivery bool                 `json:"conversation_delivery,omitempty"`
-	SourceOnlyContext    bool                 `json:"source_only_context,omitempty"`
-	ExpectedVoiceID      string               `json:"expected_voice_id,omitempty"`
-	ExpectedVoiceProfile string               `json:"expected_voice_profile,omitempty"`
-	Source               *SourceRef           `json:"source,omitempty"`
-	QuotedSource         *SourceRef           `json:"quoted_source,omitempty"`
-	MentionedIDs         []string             `json:"mentioned_ids,omitempty"`
-	Addressees           []string             `json:"addressees,omitempty"`
-	IncomingMedia        []IncomingMediaRef   `json:"incoming_media,omitempty"`
-	ReplyContext         *ReplyContext        `json:"reply_context,omitempty"`
-	OriginalText         *string              `json:"original_text,omitempty"`
-	BackgroundResult     bool                 `json:"background_result,omitempty"`
-	UnreadMessages       []ConversationEvent  `json:"unread_messages,omitempty"`
-	RecoveryToolResults  []RecoveryToolResult `json:"recovery_tool_results,omitempty"`
-	RecoveryEvidence     *GenerationEvidence  `json:"recovery_evidence,omitempty"`
+	ConversationDelivery bool                `json:"conversation_delivery,omitempty"`
+	SourceOnlyContext    bool                `json:"source_only_context,omitempty"`
+	ExpectedVoiceID      string              `json:"expected_voice_id,omitempty"`
+	ExpectedVoiceProfile string              `json:"expected_voice_profile,omitempty"`
+	Source               *SourceRef          `json:"source,omitempty"`
+	QuotedSource         *SourceRef          `json:"quoted_source,omitempty"`
+	MentionedIDs         []string            `json:"mentioned_ids,omitempty"`
+	Addressees           []string            `json:"addressees,omitempty"`
+	IncomingMedia        []IncomingMediaRef  `json:"incoming_media,omitempty"`
+	ReplyContext         *ReplyContext       `json:"reply_context,omitempty"`
+	OriginalText         *string             `json:"original_text,omitempty"`
+	BackgroundResult     bool                `json:"background_result,omitempty"`
+	UnreadMessages       []ConversationEvent `json:"unread_messages,omitempty"`
+	// MentionContext is a host-supplied description of a bounded WeChat
+	// context window. It is separate from the user's literal message text.
+	MentionContext      string               `json:"mention_context,omitempty"`
+	RecoveryToolResults []RecoveryToolResult `json:"recovery_tool_results,omitempty"`
+	RecoveryEvidence    *GenerationEvidence  `json:"recovery_evidence,omitempty"`
 	// RecoveryPrivacy is host-issued metadata about a completed cross-
 	// conversation read. It is never model text. A resumed run must either
 	// restore that host route or fail closed before exposing saved results.
@@ -521,11 +524,25 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 			}
 		}
 		scope.Messages = kept
-		system += "\nunread_messages按时间合并处理；结合current_time判断仍有效的话题，可合并回应或安静。工具授权以对应锚点消息的request_actor_id/message_sender_id为准。"
+		nativeOnly := true
+		for _, event := range input.UnreadMessages {
+			nativeOnly = nativeOnly && event.NativeWindow
+		}
+		if nativeOnly {
+			system += "\nunread_messages是本群已核实的前后聊天背景；当前消息才是本轮请求。"
+		} else {
+			system += "\nunread_messages按时间合并处理；结合current_time判断仍有效的话题，可合并回应或安静。工具授权以对应锚点消息的request_actor_id/message_sender_id为准。"
+		}
 	}
 	modelInput := input
 	if input.FreshRoundRetry {
 		modelInput = freshRoundModelInput(input)
+	}
+	if modelInput.IsGroup && modelInput.MentionContext != "" {
+		// The host has selected a time-ordered native window for this turn.
+		// Keep the retained compressed summary, but do not append another raw
+		// recent-history slice that could duplicate or reorder those messages.
+		scope.Messages = nil
 	}
 	turns := e.contextTurns(scope, modelInput)
 	if input.FreshRoundRetry {
@@ -553,6 +570,9 @@ func (e *Engine) Respond(ctx context.Context, input Input) (result Decision, res
 		messageID = modelInput.Source.MessageID
 	}
 	currentPayload := map[string]any{"kind": "current_message", "account": modelInput.Account, "channel": modelInput.Channel, "thread": modelInput.Thread, "message_id": messageID, "source": modelInput.Source, "quoted_source": modelInput.QuotedSource, "addressees": modelInput.Addressees, "mentioned_ids": modelInput.MentionedIDs, "incoming_media": modelInput.IncomingMedia, "background_result": modelInput.BackgroundResult, "unread_messages": modelInput.UnreadMessages, "recovery_tool_results": modelInput.RecoveryToolResults, "timezone": c.Timezone, "task_continuation": modelInput.TaskID != "", "task_id": modelInput.TaskID, "request_trace_id": modelInput.OriginTraceID, "mode": modelInput.Mode, "message_sender_name": speaker, "message_sender_id": modelInput.Sender, "message_sender_name_source": modelInput.SenderNameSource, "request_actor_id": modelInput.Sender, "text": modelInput.Text, "directed": modelInput.Directed, "must_reply": modelInput.MustReply, "platform_response_required": modelInput.MustReply, "review_required": modelInput.ReviewRequired, "historical_review": modelInput.HistoricalReview, "is_group": modelInput.IsGroup, "relation_notes": scope.Notes, "conversation_preferences": scope.Preferences, "preferences_policy": "本会话表达偏好；分享总结依据实际读取的内容。", "message_time": modelInput.MessageTime, "surf": modelInput.Surf, "surf_force_share": modelInput.SurfForceShare, "recent_media_focus": recentMediaFocus(scope), "planned_reviews": modelInput.PlannedReviews, "current_time": now.In(location(c.Timezone)).Format(time.RFC3339)}
+	if modelInput.MentionContext != "" {
+		currentPayload["mention_context"] = modelInput.MentionContext
+	}
 	if len(input.IncomingMedia) != 0 && !input.Preview {
 		currentPayload["media_read_hint"] = "尚未取得内容时可发现 incoming_media_read，按需读取本条或引用的实际素材。"
 		for _, media := range input.IncomingMedia {

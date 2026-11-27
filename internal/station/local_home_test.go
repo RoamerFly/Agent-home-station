@@ -79,6 +79,25 @@ func (f *localHomeFixture) request(method, path string, value any, csrf bool) (i
 
 func (f *localHomeFixture) login() {
 	f.t.Helper()
+	if f.handler != nil {
+		// The local station now creates a loopback session at /api/session.
+		// A fresh jar preserves tests that need a different owner session.
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		f.client.Jar = jar
+		code, out := f.request("GET", "/api/session", nil, false)
+		if code != http.StatusOK || out["authenticated"] != true {
+			f.t.Fatalf("local session: %d %#v", code, out)
+		}
+		f.csrf, _ = out["csrf"].(string)
+		if f.csrf == "" {
+			f.t.Fatal("local session has no CSRF token")
+		}
+		return
+	}
+	// Standalone route fixtures still register the password-login endpoint.
 	code, out := f.request("POST", "/api/login", map[string]string{"password": "synthetic-local-password"}, false)
 	if code != http.StatusOK {
 		f.t.Fatalf("local login: %d %#v", code, out)
