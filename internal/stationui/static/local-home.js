@@ -3759,11 +3759,14 @@
     limitInput.value = String(view.douyinRoundLimit || 20);
     limitLabel.append(limitInput);
     const groupHeading = appElement("h3", "作品分组", "douyin-round-section-title");
+    groupHeading.hidden = true;
     const groups = appElement("div", "", "douyin-round-groups");
     const groupMore = memoryButton("更多作品", "button compact secondary", () => void loadGroups(true));
     groupMore.hidden = true;
     const selectedHeading = appElement("h3", "选择作品查看通知", "douyin-round-section-title");
+    selectedHeading.hidden = true;
     const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
+    context.hidden = true;
     const contextAction = memoryButton("让 Agent 核对此作品资料与音画", "button compact secondary", () => {
       if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
       const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 context 首读已保存的作品资料、简介和音画证据。若 ownership=verified_own_work 且 audio_complete、visual_complete 均为真，只用 next_cursor 逐页续读到 agent_context_read_complete=true，不重复调用 prepare。否则用 locate 逐页核对当前创作者账号、本人作品及标题简介，取得临时 content_id；再用 prepare 只补缺失的音轨或画面页，读画面时显式指定 visual_pages，依据返回进度续办至 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；补证后用 context 从首页重读到 agent_context_read_complete=true。若 context 返回 restart_required，丢弃旧页并从头读取。按作品独立整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
@@ -3804,6 +3807,8 @@
       if (!active() || selectedWorkID === workID) return;
       selectedWorkID = workID;
       selectedHeading.textContent = label + "的通知";
+      selectedHeading.hidden = false;
+      context.hidden = false;
       context.textContent = "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。";
       contextAction.hidden = !/^[1-9]\d{0,19}$/.test(workID);
       for (const button of groups.querySelectorAll("button[data-work-id]")) {
@@ -3871,6 +3876,9 @@
         context.textContent = "请选择作品查看已保存的作品资料和音画证据。";
         usedGroupCursors.clear(); usedRoundCursors.clear(); knownGroupIDs.clear();
         groupMore.hidden = true; more.hidden = true;
+        groupHeading.hidden = true;
+        selectedHeading.hidden = true;
+        context.hidden = true;
         selectedHeading.textContent = "选择作品查看通知";
       }
       const currentController = new AbortController();
@@ -3908,6 +3916,7 @@
         if (cursor) usedGroupCursors.add(cursor);
         for (const id of pageIDs) knownGroupIDs.add(id);
         groups.append(...buttons);
+        groupHeading.hidden = groups.childElementCount === 0;
         nextGroupCursor = result.next_cursor;
         groupMore.hidden = !nextGroupCursor;
         feedback.textContent = groups.childElementCount ? "已列出 " + groups.childElementCount + " 个作品分组。请选择作品查看通知；归属与评论关系仍待核对。" :
