@@ -12,7 +12,7 @@ import (
 	"wechat-bot/internal/stationbrowser"
 )
 
-func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
+func TestLocalDouyinRoundsRelationOnlyProbesSavedNoticeCandidate(t *testing.T) {
 	f, m, view := syntheticExecutionRoundFixture(t, true)
 	identity, err := m.home.identity.Read()
 	if err != nil || identity.LocalOwner == nil {
@@ -28,14 +28,31 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	}
 	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record,
 		stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: creatorAccount,
-			Items: []stationbrowser.DouyinNotice{{ID: noticeID, Type: 7, WorkID: workID,
-				Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "cid", ID: "999"}}}},
+			Items: []stationbrowser.DouyinNotice{
+				{ID: noticeID, Type: 7, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "cid", ID: "999"}}},
+				{ID: "101", Type: 31, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{
+						{Path: "comment.parent_id", ID: "400"}, {Path: "comment.comment.cid", ID: "300"}}},
+				{ID: "102", Type: 31, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.comment.cid", ID: "301"}}},
+				{ID: "103", Type: 41, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.comment.cid", ID: "300"}}},
+				{ID: "104", Type: 31, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{
+						{Path: "comment.comment.cid", ID: "300"}, {Path: "comment.cid", ID: "301"}}},
+				{ID: "105", Type: 31, WorkID: workID,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.comment.cid", ID: "400"}}},
+			},
 			Details: []stationbrowser.DouyinNoticeDetail{{NoticeID: noticeID, NoticeType: 7, WorkID: workID,
 				CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{
 					{Path: "comment.cid", ID: "300"}, {Path: "comment.reply_id", ID: "400"},
 					{Path: "comment.comment.cid", ID: "300"}, {Path: "comment.parent_id", ID: "400"},
 					{Path: "comment.user.uid", ID: "901"},
-				}}}}); err != nil {
+				}},
+				{NoticeID: "102", NoticeType: 31, WorkID: workID, CandidateFieldsValid: true,
+					Candidates: []stationbrowser.DouyinNoticeCandidate{{Path: "comment.comment.cid", ID: "302"}}},
+			}}); err != nil {
 		t.Fatal(err)
 	}
 	readCalls := 0
@@ -45,7 +62,10 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	}
 	call := func(tools *localToolSet, args map[string]any) (map[string]any, error) {
 		t.Helper()
-		args["action"], args["date"], args["notice_id"] = "relation", executionRoundDay(), noticeID
+		args["action"], args["date"] = "relation", executionRoundDay()
+		if _, supplied := args["notice_id"]; !supplied {
+			args["notice_id"] = noticeID
+		}
 		raw, _ := json.Marshal(args)
 		value, err := tools.Call(t.Context(), localDouyinRoundsToolName, raw)
 		if err != nil {
@@ -109,6 +129,9 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 		{"target_path": "reply_comment.cid", "target_id": "300"},
 		{"target_path": "comment.cid", "target_id": "300", "root_path": "comment.reply_id", "root_id": "401"},
 		{"target_path": "comment.cid", "target_id": "300", "root_path": "comment.reply_id"},
+		{"notice_id": "102", "target_path": "comment.comment.cid", "target_id": "302"},
+		{"notice_id": "103", "target_path": "comment.comment.cid", "target_id": "300"},
+		{"notice_id": "104", "target_path": "comment.comment.cid", "target_id": "300"},
 	} {
 		if result, err := call(tools, bad); err == nil || result != nil || readCalls != 0 {
 			t.Fatalf("unbound detail candidate reached reader: %v %v reads=%d", result, err, readCalls)
@@ -139,6 +162,7 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	}
 	result, err := call(tools, args())
 	if err != nil || result["state"] != "observed" || result["cid"] != "300" ||
+		result["candidate_source"] != "notice_detail" ||
 		result["reply_id"] != "400" || result["reply_to_reply_id"] != "500" ||
 		result["author_is_creator"] != false || result["text"] != "合成目标评论" ||
 		result["root_state"] != "observed" || result["parent_state"] != "observed" ||
@@ -171,6 +195,41 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	if err != nil || parentCandidate["thread_state"] != "self_child_observed" ||
 		parentCandidate["reply_id"] != "400" || parentCandidate["reply_eligible"] != false {
 		t.Fatalf("verified type-11 parent_id candidate lost exact reply-list fallback: %v %v", parentCandidate, err)
+	}
+	listTools := noticeToolSet(t, f, "list-candidate", true)
+	listCandidate, err := call(listTools, map[string]any{"notice_id": "101", "target_path": "comment.comment.cid",
+		"target_id": "300", "root_path": "comment.parent_id", "root_id": "400"})
+	if err != nil || listCandidate["candidate_source"] != "notice_list" ||
+		listCandidate["thread_state"] != "self_child_observed" || listCandidate["reply_eligible"] != false {
+		t.Fatalf("untouched type-31 list notice could not use an exact read-only relation: %v %v", listCandidate, err)
+	}
+	mainListCandidate, err := call(listTools, map[string]any{"notice_id": "105", "target_path": "comment.comment.cid", "target_id": "400"})
+	if err != nil || mainListCandidate["candidate_source"] != "notice_list" ||
+		mainListCandidate["thread_state"] != "top_level_observed" || mainListCandidate["reply_eligible"] != false {
+		t.Fatalf("untouched main-comment list notice lost exact read-only relation: %v %v", mainListCandidate, err)
+	}
+	// A later list capture that changes the same notice's CID invalidates both
+	// the old and new candidate. Neither may reach a browser relation probe.
+	changedPage := stationbrowser.DouyinNoticePage{Account: record.NoticeAccount, CreatorAccount: creatorAccount,
+		Items: []stationbrowser.DouyinNotice{{ID: "101", Type: 31, WorkID: workID,
+			Candidates: []stationbrowser.DouyinNoticeCandidate{
+				{Path: "comment.parent_id", ID: "400"}, {Path: "comment.comment.cid", ID: "777"}}}}}
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, changedPage); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.captureExecutionRounds(t.Context(), identity.FishID, identity.LocalOwner.ID, record, changedPage); err != nil {
+		t.Fatal(err)
+	}
+	beforeConflictReads := readCalls
+	for _, targetID := range []string{"300", "777"} {
+		if rejected, err := call(listTools, map[string]any{"notice_id": "101", "target_path": "comment.comment.cid",
+			"target_id": targetID, "root_path": "comment.parent_id", "root_id": "400"}); err == nil || rejected != nil || readCalls != beforeConflictReads {
+			t.Fatalf("conflicting list candidate reached relation reader: %s %v %v reads=%d", targetID, rejected, err, readCalls)
+		}
+	}
+	conflicted, found, err := m.readExecutionNotice(t.Context(), localDouyinExecutionScope(identity.FishID, identity.LocalOwner.ID, record), "101")
+	if err != nil || !found || conflicted.round.DetailStatus != "conflict" || len(conflicted.round.Candidates) != 0 {
+		t.Fatalf("changed list candidate was not durably invalidated: %+v %v", conflicted, err)
 	}
 	fallbackReader := m.readRelation
 	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,

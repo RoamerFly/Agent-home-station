@@ -190,6 +190,11 @@ func normalizedDouyinRoundDetail(item stationbrowser.DouyinNotice, detail statio
 		}
 		seen[candidate.Path] = candidate.ID
 	}
+	for _, listed := range item.Candidates {
+		if detailed, exists := seen[listed.Path]; exists && detailed != listed.ID {
+			return "conflict", nil, nil
+		}
+	}
 	if len(seen) == 0 {
 		return "observed_no_candidates", nil, nil
 	}
@@ -312,8 +317,13 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		if item.CreatedAt > 0 && item.CreatedAt < 253402300800 {
 			created = time.Unix(item.CreatedAt, 0).UTC().Format(time.RFC3339)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
-			scope, item.ID, item.Type, item.WorkID, created, stamp, day); err != nil {
+		inserted, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rounds(scope,notice_id,type,work_id,created_at,observed_at,observed_date) VALUES(?,?,?,?,?,?,?)`,
+			scope, item.ID, item.Type, item.WorkID, created, stamp, day)
+		if err != nil {
+			return err
+		}
+		insertedRows, err := inserted.RowsAffected()
+		if err != nil {
 			return err
 		}
 		var recordedType int
@@ -334,6 +344,29 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 				return errLocalDouyinNoticeGrant
 			}
 		}
+		seenCandidates := make(map[string]string, len(item.Candidates))
+		valid := len(item.Candidates) <= 16
+		if valid {
+			for _, candidate := range item.Candidates {
+				if !validDouyinRoundCandidate(candidate) {
+					valid = false
+					break
+				}
+				if previous, exists := seenCandidates[candidate.Path]; exists && previous != candidate.ID {
+					valid = false
+					break
+				}
+				seenCandidates[candidate.Path] = candidate.ID
+			}
+		}
+		listConflict := false
+		if insertedRows == 0 {
+			oldCandidates, err := readLocalDouyinListCandidateMap(ctx, tx, scope, item.ID)
+			if err != nil {
+				return err
+			}
+			listConflict = !valid || !equalLocalDouyinCandidateMaps(oldCandidates, seenCandidates)
+		}
 		detailStatus, detailCandidates := missingDetailStatus, map[string]string(nil)
 		if detailConflicts[item.ID] {
 			detailStatus = "conflict"
@@ -343,24 +376,21 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 				return err
 			}
 		}
+		if listConflict {
+			detailStatus, detailCandidates = "conflict", nil
+		}
 		if err := storeLocalDouyinRoundDetail(ctx, tx, scope, item.ID, item.WorkID, detailStatus, detailCandidates); err != nil {
 			return err
 		}
-		if len(item.Candidates) > 16 {
-			continue
+		var storedDetailStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM round_details WHERE scope=? AND notice_id=?`, scope, item.ID).Scan(&storedDetailStatus); err != nil {
+			return err
 		}
-		seenCandidates := make(map[string]string, len(item.Candidates))
-		valid := true
-		for _, candidate := range item.Candidates {
-			if !validDouyinRoundCandidate(candidate) {
-				valid = false
-				break
+		if storedDetailStatus == "conflict" {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM round_candidates WHERE scope=? AND notice_id=?`, scope, item.ID); err != nil {
+				return err
 			}
-			if previous, exists := seenCandidates[candidate.Path]; exists && previous != candidate.ID {
-				valid = false
-				break
-			}
-			seenCandidates[candidate.Path] = candidate.ID
+			continue
 		}
 		if !valid {
 			continue
@@ -405,6 +435,26 @@ func (m *localDouyinWebLogin) captureExecutionRounds(ctx context.Context, fish, 
 		return errLocalDouyinNoticeGrant
 	}
 	return tx.Commit()
+}
+
+func readLocalDouyinListCandidateMap(ctx context.Context, tx *sql.Tx, scope, noticeID string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path,candidate_id FROM round_candidates WHERE scope=? AND notice_id=?`, scope, noticeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var candidate stationbrowser.DouyinNoticeCandidate
+		if err := rows.Scan(&candidate.Path, &candidate.ID); err != nil || !validDouyinRoundCandidate(candidate) || len(result) >= 16 {
+			return nil, errLocalDouyinNoticeGrant
+		}
+		if _, duplicate := result[candidate.Path]; duplicate {
+			return nil, errLocalDouyinNoticeGrant
+		}
+		result[candidate.Path] = candidate.ID
+	}
+	return result, rows.Err()
 }
 
 func storeLocalDouyinRoundDetail(ctx context.Context, tx *sql.Tx, scope, noticeID, workID, status string, candidates map[string]string) error {

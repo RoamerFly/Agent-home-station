@@ -3600,10 +3600,16 @@
         ["回复资格", item.reason + " · 不会回复"],
       ]) facts.append(appElement("dt", name), appElement("dd", value));
       card.append(header, facts);
-      if (item.detail_status === "observed_candidate" && /^[1-9]\d{0,19}$/.test(item.work_id || "") &&
-          item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid"].includes(candidate.path))) {
+      const detailTarget = item.detail_status === "observed_candidate" &&
+        item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid"].includes(candidate.path));
+      const listPaths = new Set(item.candidates.map((candidate) => candidate.path));
+      const listTarget = item.type === 31 && /^[1-9]\d{0,19}$/.test(item.notice_id || "") &&
+        ["not_observed", "partial"].includes(item.detail_status) && listPaths.size === item.candidates.length &&
+        item.candidates.some((candidate) => candidate.path === "comment.comment.cid") &&
+        item.candidates.every((candidate) => ["comment.comment.cid", "comment.parent_id"].includes(candidate.path));
+      if ((detailTarget || listTarget) && /^[1-9]\d{0,19}$/.test(item.work_id || "")) {
         card.append(memoryButton("让 Agent 只读核对这条通知", "button compact secondary", () => {
-          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；若详情中有明确的 CID 路径候选，可用 relation 仅对其中一条候选做只读定向探测。若同一详情有主楼编号候选，可带其路径和编号定向读取；comment.parent_id 仅是候选，必须用目标评论的 reply_id 核对。没有主楼编号候选时，仅在自然主列表命中目标 CID 后，从其结构化关系读取主楼；缺页保持待核对。多个候选或关系不明时请说明分歧，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；通知到目标评论的工作台链路尚未验真，不要点赞、评论或投稿。`;
+          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；详情候选或结构唯一的 31 类列表候选都可用 relation 对明确 CID 做只读定向探测。若同一来源有主楼编号候选，可带其路径和编号定向读取；comment.parent_id 仅是候选，必须用目标评论的 reply_id 核对。没有主楼编号候选时，仅在自然主列表命中目标 CID 后，从其结构化关系读取主楼；缺页保持待核对。候选冲突或关系不明时请说明原因，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；通知到目标评论的工作台链路尚未验真，不要点赞、评论或投稿。`;
           handoffDouyinWorkbenchChat(draft, feedback);
         }));
       }

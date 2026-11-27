@@ -24,6 +24,7 @@ type localDouyinRoundRelationResult struct {
 	WorkID                string `json:"work_id"`
 	TargetPath            string `json:"target_path"`
 	TargetID              string `json:"target_id"`
+	CandidateSource       string `json:"candidate_source,omitempty"`
 	RootPath              string `json:"root_path,omitempty"`
 	RootID                string `json:"root_id,omitempty"`
 	State                 string `json:"state"`
@@ -57,7 +58,46 @@ func validDouyinRoundRelationRootPath(path string) bool {
 	return false
 }
 
-func douyinRoundDetailCandidateMatches(candidates []stationbrowser.DouyinNoticeCandidate, path, id string) bool {
+func douyinRoundRelationCandidates(round localDouyinExecutionRound) ([]stationbrowser.DouyinNoticeCandidate, string, bool) {
+	if round.DetailStatus == "observed_candidate" {
+		for _, listed := range round.Candidates {
+			for _, detailed := range round.DetailCandidates {
+				if listed.Path == detailed.Path && listed.ID != detailed.ID {
+					return nil, "", false
+				}
+			}
+		}
+		return round.DetailCandidates, "notice_detail", true
+	}
+	if (round.DetailStatus != "not_observed" && round.DetailStatus != "partial") || round.Type != 31 ||
+		!validLocalDouyinCommentID(round.NoticeID) {
+		return nil, "", false
+	}
+	targets := 0
+	seenPaths := make(map[string]struct{}, len(round.Candidates))
+	for _, candidate := range round.Candidates {
+		if !validDouyinRoundCandidate(candidate) {
+			return nil, "", false
+		}
+		if _, duplicate := seenPaths[candidate.Path]; duplicate {
+			return nil, "", false
+		}
+		seenPaths[candidate.Path] = struct{}{}
+		switch candidate.Path {
+		case "comment.comment.cid":
+			targets++
+		case "comment.parent_id":
+		default:
+			return nil, "", false
+		}
+	}
+	if targets != 1 {
+		return nil, "", false
+	}
+	return round.Candidates, "notice_list", true
+}
+
+func douyinRoundCandidateMatches(candidates []stationbrowser.DouyinNoticeCandidate, path, id string) bool {
 	for _, candidate := range candidates {
 		if candidate.Path == path && candidate.ID == id {
 			return true
@@ -89,7 +129,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	profile, scope string, in localDouyinRoundsInput, notice localDouyinNoticeProof) (localDouyinRoundRelationResult, *localDouyinRoundContextProof, error) {
 	result := localDouyinRoundRelationResult{Date: in.Date, NoticeID: in.NoticeID, TargetPath: in.TargetPath,
 		TargetID: in.TargetID, RootPath: in.RootPath, RootID: in.RootID, State: "unverified",
-		Coverage: "仅通知详情候选；一次页面自然加载的定向关系读取不证明回复资格", ReplyEligible: false}
+		Coverage: "仅通知编号候选；一次页面自然加载的定向关系读取不证明回复资格", ReplyEligible: false}
 	works, granted := douyinMemorySource(record, t.access.fishID, t.access.ownerID, douyinMemoryWorks)
 	if !granted {
 		return result, nil, apphost.ErrObservationForbidden
@@ -102,12 +142,14 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	if err != nil {
 		return result, nil, err
 	}
-	if !found || evidence.observedDate != in.Date || evidence.round.DetailStatus != "observed_candidate" ||
+	candidates, candidateSource, candidateValid := douyinRoundRelationCandidates(evidence.round)
+	if !found || evidence.observedDate != in.Date || !candidateValid ||
 		!validLocalDouyinCommentID(evidence.round.WorkID) || !validDouyinNoticeAccount(evidence.creatorAccount) ||
-		!douyinRoundDetailCandidateMatches(evidence.round.DetailCandidates, in.TargetPath, in.TargetID) ||
-		in.RootID != "" && !douyinRoundDetailCandidateMatches(evidence.round.DetailCandidates, in.RootPath, in.RootID) {
-		return result, nil, mcptools.ArgumentError("$.notice_id", "所选通知详情没有可定向核对的对应编号；候选不能用于回复")
+		!douyinRoundCandidateMatches(candidates, in.TargetPath, in.TargetID) ||
+		in.RootID != "" && !douyinRoundCandidateMatches(candidates, in.RootPath, in.RootID) {
+		return result, nil, mcptools.ArgumentError("$.notice_id", "所选通知没有可定向核对的对应编号；候选不能用于回复")
 	}
+	result.CandidateSource = candidateSource
 	result.WorkID = evidence.round.WorkID
 	proof := &localDouyinRoundContextProof{Source: works, CommentsSource: comments,
 		Revision: record.Revision, Date: in.Date, WorkID: result.WorkID}
