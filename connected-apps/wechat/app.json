@@ -100,7 +100,7 @@
     "adapter/station_video.go": "4f478d5cebfeaee7e33676fa1583d189f273ec5fb9d1210cc64f6b8a8e85165f",
     "adapter/station_worker.go": "a6af3cafd507a2da45560885b0816e18ae4d6b09d529208e729242272e26f810",
     "adapter/station_worker_test.go": "8eefbd29a212a0af2983e8cae165cfe14016f398614d56f1733fd0a317ebd4f8",
-    "adapter/tools.go": "744ec410242e044136c32e546afdedd1d19897710498507091b322da5133be5a",
+    "adapter/tools.go": "bbc257141da5c4088cd6c5f83db1a2c0c7dec61ae98e950d099601fc5508f84b",
     "adapter/windows/WechatStationRuntime.cs": "99a760510567776a6560b207563f667f50082069a73624cbad2a5573f64773cc",
     "adapter/worker_checkpoint.go": "6a4072f84328eaa863bed0f8901d4828d4ccfc369c71553f4030bd4bded483c7",
     "adapter/worker_checkpoint_test.go": "e9a3bb1aaa15e49a7b3ee36493b54852156390548a38d38ae7734059977244a8",
