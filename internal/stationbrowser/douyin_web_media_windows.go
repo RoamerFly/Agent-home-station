@@ -52,7 +52,7 @@ func readDouyinWebMedia(ctx context.Context, profile, target, videoID string, au
 		return DouyinWebMedia{}, ErrBrowserUnavailable
 	}
 	defer closeDouyinHomeSession(session)
-	page, err := openDouyinWebDetailPage(readCtx, session, target, videoID, authorize, fixture)
+	page, err := openDouyinWebDetailPage(readCtx, session, target, videoID, authorize, fixture, false)
 	if err != nil {
 		if errors.Is(err, ErrPlaybackUnavailable) {
 			err = ErrDouyinWebMediaUnavailable

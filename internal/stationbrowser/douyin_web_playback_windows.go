@@ -79,7 +79,7 @@ func validDouyinWebPlaybackTarget(raw, videoID string, fixture bool) bool {
 }
 
 func sampleDouyinWebSession(ctx context.Context, session *cdpSession, target, videoID string, sample time.Duration, authorize func() error, fixture bool) (PlaybackSample, error) {
-	page, err := openDouyinWebDetailPage(ctx, session, target, videoID, authorize, fixture)
+	page, err := openDouyinWebDetailPage(ctx, session, target, videoID, authorize, fixture, true)
 	if err != nil {
 		return PlaybackSample{}, err
 	}
@@ -161,7 +161,7 @@ type douyinWebDetailPage struct {
 
 // Navigation and exact-video metadata are common to measured playback and
 // audio-source retrieval. Neither path accepts arbitrary caller-supplied URLs.
-func openDouyinWebDetailPage(ctx context.Context, session *cdpSession, target, videoID string, authorize func() error, fixture bool) (douyinWebDetailPage, error) {
+func openDouyinWebDetailPage(ctx context.Context, session *cdpSession, target, videoID string, authorize func() error, fixture, blockPopupAndBeacon bool) (douyinWebDetailPage, error) {
 	var created struct {
 		TargetID string `json:"targetId"`
 	}
@@ -177,7 +177,7 @@ func openDouyinWebDetailPage(ctx context.Context, session *cdpSession, target, v
 	if session.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached) != nil || attached.SessionID == "" {
 		return douyinWebDetailPage{}, ErrPlaybackUnavailable
 	}
-	for _, call := range []struct {
+	calls := []struct {
 		method string
 		params any
 	}{
@@ -186,8 +186,14 @@ func openDouyinWebDetailPage(ctx context.Context, session *cdpSession, target, v
 		{"Runtime.enable", map[string]any{}},
 		{"Network.setBypassServiceWorker", map[string]any{"bypass": true}},
 		{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "eventsEnabled": false}},
-		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": remotePlaybackPrelude}},
-	} {
+	}
+	if blockPopupAndBeacon {
+		calls = append(calls, struct {
+			method string
+			params any
+		}{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": remotePlaybackPrelude}})
+	}
+	for _, call := range calls {
 		if session.Call(ctx, attached.SessionID, call.method, call.params, nil) != nil {
 			return douyinWebDetailPage{}, ErrPlaybackUnavailable
 		}

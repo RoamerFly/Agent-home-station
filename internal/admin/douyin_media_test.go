@@ -69,9 +69,17 @@ func TestWebMediaDownloadDouyinUsesStationOnceAndReusesVideo(t *testing.T) {
 	if got := downloads.Load(); got != 1 {
 		t.Fatalf("same verified Douyin video downloaded %d times, want 1", got)
 	}
+	access.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "wxid_group_member", IsGroup: true, TraceID: "group-request"})
+	args, _ := json.Marshal(map[string]string{"url": "https://www.douyin.com/video/" + id, "kind": "file"})
+	if _, err := access.Call(context.Background(), "web_media_download", args); err != nil {
+		t.Fatalf("group could not download public Douyin video: %v", err)
+	}
+	if got := downloads.Load(); got != 2 {
+		t.Fatalf("group download count = %d, want 2 separate conversations", got)
+	}
 }
 
-func TestStationDouyinMediaRejectsBadDigestAndNonOwner(t *testing.T) {
+func TestStationDouyinMediaRejectsBadDigestInPrivateAndGroup(t *testing.T) {
 	f, access := trustedAgent(t)
 	f.manager.native = &fakeTools{fakeNative: f.native}
 	const id = "7702768654487735586"
@@ -96,7 +104,7 @@ func TestStationDouyinMediaRejectsBadDigestAndNonOwner(t *testing.T) {
 		t.Fatalf("corrupt Station media was accepted: %v", err)
 	}
 	access.SetTrace(companion.Input{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "wxid_owner", IsGroup: true, TraceID: "group-request"})
-	if _, _, err := access.douyinVideoWithCache(context.Background(), "https://www.douyin.com/video/"+id, stationDouyinMediaLimit); err == nil || err.Error() != "douyin_owner_private_only" {
-		t.Fatalf("group request used owner profile: %v", err)
+	if _, _, err := access.douyinVideoWithCache(context.Background(), "https://www.douyin.com/video/"+id, stationDouyinMediaLimit); err == nil || err.Error() != "douyin_media_digest_mismatch" {
+		t.Fatalf("group request did not reach verified video read: %v", err)
 	}
 }

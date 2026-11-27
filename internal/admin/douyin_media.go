@@ -84,9 +84,6 @@ func publicVideoSourceFilename(title, mediaType string) string {
 }
 
 func (p *permittedTools) douyinVideoWithCache(ctx context.Context, raw string, limit int64) (mcptools.PublicVideo, bool, error) {
-	if !p.privileged() || p.trace.IsGroup || p.trace.Thread != p.trace.Sender {
-		return mcptools.PublicVideo{}, false, douyinFailure("douyin_owner_private_only", "抖音登录资料只用于主人私聊中的视频下载", 0)
-	}
 	if limit <= 0 {
 		return mcptools.PublicVideo{}, false, &mcptools.WebError{Code: "media_limit_invalid"}
 	}
