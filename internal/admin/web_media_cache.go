@@ -56,7 +56,7 @@ func cachedWebURLMatches(a mediaAsset, raw, key string, page bool) bool {
 	// Older video-page assets retained the public page URL, but not a request
 	// digest. Never use a legacy direct-media source_url here: its query was
 	// stripped and could denote a different signed resource.
-	return page && mcptools.IsPublicVideoPage(a.URL) && a.URL == raw
+	return page && (mcptools.IsPublicVideoPage(a.URL) || isDouyinVideoLink(a.URL)) && a.URL == raw
 }
 
 func (m *Manager) cachedWebMedia(in companion.Input, raw, kind string, page bool, limit int64) (mediaAsset, []byte, bool) {
@@ -102,6 +102,9 @@ func (m *Manager) cachedWebMedia(in companion.Input, raw, kind string, page bool
 }
 
 func (p *permittedTools) publicVideoWithCache(ctx context.Context, raw string, limit int64) (mcptools.PublicVideo, bool, error) {
+	if isDouyinVideoLink(raw) {
+		return p.douyinVideoWithCache(ctx, raw, limit)
+	}
 	if a, data, ok := p.manager.cachedWebMedia(p.trace, raw, "video", true, limit); ok {
 		title := strings.TrimSuffix(a.Filename, filepath.Ext(a.Filename))
 		if title == "" {

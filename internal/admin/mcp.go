@@ -232,8 +232,8 @@ func (p *permittedTools) localTools() []mcptools.Tool {
 		tools = append(tools, mcptools.Tool{Name: "media_history", Description: "按原时间分页查询素材的来源消息和关联请求；主人可用 source_thread_id 指定本账号其他会话。", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"source_thread_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["asset_id"],"additionalProperties":false}`)})
 		tools = append(tools, mcptools.Tool{Name: "media_recent", Description: "查当前会话附件目录：按 asset_id、requester_id 或 query 找原件、格式、来源和相关请求。听歌、翻唱和格式转换先查本地；准确匹配可复用。默认最近 12 项；offset=0 启用分页，按 next_offset 续读。", InputSchema: json.RawMessage(`{"type":"object","properties":{"asset_id":{"type":"string"},"requester_id":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"additionalProperties":false}`)}, mcptools.Tool{Name: "media_reuse", Description: "复用匹配的缓存素材，返回 media.id 供发送。视频默认 kind=video，图片 image，其余 file；voice 可设 start_seconds/duration_seconds/segment_seconds/timeout_seconds，默认整段。只准备，不联网或发送。", InputSchema: json.RawMessage(withVoiceConversion(`{"type":"object","properties":{"asset_id":{"type":"string"},"kind":{"type":"string","enum":["voice","file","image","video"]}},"required":["asset_id"],"additionalProperties":false}`))})
 	}
-	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "下载公开媒体并准备微信附件。默认 kind=video 为原生视频；kind=file 为文件；kind=voice 提取音轨并分段。支持公开直链、B站 BV/b23 和快手视频页；BV 可指定 ?p=分P，kind=file 时 audio_only=true 取音频。音乐默认 preview_seconds=0 为完整音频，可指定预览时长。已有会话视频用 video_inspect 观察。视频输入限 50 MiB，音轨限 10 分钟/25 MiB；登录、付费或 DRM 资源不可用。返回 media.id 后再发送。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url"],"additionalProperties":false}`)})
-	tools = append(tools, mcptools.Tool{Name: "web_douyin_resolve", Description: "解析公开抖音链接，返回固定作品链接和作品 ID。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048}},"required":["url"],"additionalProperties":false}`)})
+	tools = append(tools, mcptools.Tool{Name: "web_media_download", Description: "下载公开媒体并准备微信附件。默认 kind=video 为原生视频；kind=file 为文件；kind=voice 提取音轨并分段。支持公开直链、B站 BV/b23、快手视频页，以及主人私聊中的抖音短链或作品链接；抖音下载一次调用本工具即可，不必先解析或 web_fetch。BV 可指定 ?p=分P，kind=file 时 audio_only=true 取音频。音乐默认 preview_seconds=0 为完整音频，可指定预览时长。已有会话视频用 video_inspect 观察。普通视频输入限 50 MiB，抖音视频限 32 MiB，音轨限 10 分钟/25 MiB。返回 media.id 后再发送。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"kind":{"type":"string","enum":["voice","video","image","file"]},"preview_seconds":{"type":"integer","minimum":0,"maximum":900},"audio_only":{"type":"boolean"}},"required":["url"],"additionalProperties":false}`)})
+	tools = append(tools, mcptools.Tool{Name: "web_douyin_resolve", Description: "仅需作品 ID 时解析抖音链接；下载视频直接调用 web_media_download，不必先解析。", InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048}},"required":["url"],"additionalProperties":false}`)})
 	tools = append(tools, p.installedExternalHTTPTools(context.Background())...)
 	tools = append(tools, p.installedExternalJobTools(context.Background())...)
 	tools = append(tools, p.installedExternalPollTools(context.Background())...)
@@ -615,7 +615,10 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 		if preview < 0 || preview > 900 {
 			return "", &mcptools.WebError{Code: "audio_preview_invalid"}
 		}
-		if input.Kind == "video" && mcptools.IsPublicVideoPage(input.URL) {
+		if input.Kind == "image" && isDouyinVideoLink(input.URL) {
+			return "", douyinFailure("douyin_video_kind_invalid", "抖音作品链接是视频，请选择 video、file 或 voice", 0)
+		}
+		if input.Kind == "video" && (mcptools.IsPublicVideoPage(input.URL) || isDouyinVideoLink(input.URL)) {
 			video, cached, err := p.publicVideoWithCache(ctx, input.URL, toolsLimit("video"))
 			if err != nil {
 				return "", err
@@ -633,7 +636,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 			}
 			return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已取得公开可播放的视频文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "video", Data: data, MIMEType: "video/mp4", Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: filename})
 		}
-		if (input.Kind == "voice" || input.Kind == "file") && mcptools.IsPublicVideoPage(input.URL) {
+		if (input.Kind == "voice" || input.Kind == "file") && (mcptools.IsPublicVideoPage(input.URL) || isDouyinVideoLink(input.URL)) {
 			video, cached, err := p.publicVideoWithCache(ctx, input.URL, toolsLimit(input.Kind))
 			if err != nil {
 				return "", err
@@ -646,10 +649,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				audioOnly = *input.AudioOnly
 			}
 			if input.Kind == "file" && !audioOnly {
-				filename := video.Title + ".mp4"
-				if !safeMediaFilename(filename) {
-					filename = "public-video.mp4"
-				}
+				filename := publicVideoSourceFilename(video.Title, video.ContentType)
 				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "原视频文件已取得，尚未发送。", Media: []plugins.MediaResult{{Kind: "file", Data: video.Data, MIMEType: video.ContentType, Filename: filename}}}, &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: filename})
 			}
 			audio, err := extractPublicAudioFile(ctx, p.manager.dir, video.Data)
@@ -661,7 +661,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 				filename = "public-audio.m4a"
 			}
 			if input.Kind == "file" {
-				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: video.Title + ".mp4"}})
+				return p.stageOutputWithAsset(ctx, plugins.Output{Text: "已提取完整原音轨文件，尚未发送。来源：" + video.PageURL, Media: []plugins.MediaResult{{Kind: "file", Data: audio, MIMEType: "audio/mp4", Filename: filename}}}, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: publicVideoSourceFilename(video.Title, video.ContentType)}})
 			}
 			output, err := preparePublicAudioPreview(ctx, p.manager.dir, audio, preview)
 			if err != nil {
@@ -677,7 +677,7 @@ func (p *permittedTools) Call(ctx context.Context, name string, args json.RawMes
 					output.Media[i].Filename = name
 				}
 			}
-			return p.stageOutputWithAsset(ctx, output, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: video.Title + ".mp4"}})
+			return p.stageOutputWithAsset(ctx, output, &assetOriginal{VoiceComplete: preview == 0, Data: audio, MIME: "audio/mp4", URL: video.PageURL, RequestURL: input.URL, Filename: filename, Parent: &assetOriginal{Data: video.Data, MIME: video.ContentType, URL: video.PageURL, RequestURL: input.URL, Filename: publicVideoSourceFilename(video.Title, video.ContentType)}})
 		}
 		cachedAsset, data, cached := p.manager.cachedWebMedia(p.trace, input.URL, input.Kind, false, toolsLimit(input.Kind))
 		typ := cachedAsset.MIME

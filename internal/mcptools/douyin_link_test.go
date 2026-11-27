@@ -16,3 +16,14 @@ func TestResolveDouyinCanonicalLink(t *testing.T) {
 		}
 	}
 }
+
+func TestDouyinShortPathFromActualShareFormat(t *testing.T) {
+	if !douyinShortPath.MatchString("/2_IFZoD_pj0/") || !douyinShortPath.MatchString("/a-b_C123/") {
+		t.Fatal("valid Douyin share short code rejected")
+	}
+	for _, path := range []string{"/", "/video/7702768654487735586", "/bad%2fpath/", "/short.code/"} {
+		if douyinShortPath.MatchString(path) {
+			t.Fatalf("invalid short code accepted: %q", path)
+		}
+	}
+}

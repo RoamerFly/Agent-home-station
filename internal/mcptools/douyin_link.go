@@ -9,7 +9,7 @@ import (
 )
 
 var douyinVideoPath = regexp.MustCompile(`^/video/([0-9]{10,25})/?$`)
-var douyinShortPath = regexp.MustCompile(`^/[A-Za-z0-9]{4,40}/?$`)
+var douyinShortPath = regexp.MustCompile(`^/[A-Za-z0-9_-]{4,40}/?$`)
 
 // ResolveDouyinLink follows a public short link and returns the exact video
 // page identity. It does not claim to have downloaded or watched its media.
