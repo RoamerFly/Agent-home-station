@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -121,11 +122,11 @@ func TestLocalWorksCatalogAndRecoverableManagement(t *testing.T) {
 		t.Fatalf("unexpected catalog entries: %#v", seen)
 	}
 	registered := seen["已登记成品/a.txt|snapshot"]
-	if registered["id"] != "artifact-"+snapshot.ID || registered["can_rename"] != false || registered["can_trash"] != false {
+	if registered["id"] != "artifact-"+snapshot.ID || registered["can_rename"] != false || registered["can_trash"] != false || registered["can_reveal"] != true {
 		t.Fatal("snapshot is mutable", registered)
 	}
 	work := seen["home/works/a.txt|workspace"]
-	if work["can_rename"] != true || work["can_trash"] != true {
+	if work["can_rename"] != true || work["can_trash"] != true || work["can_reveal"] != true {
 		t.Fatal("work is not manageable", work)
 	}
 	if seen["home/projects/design.json|workspace"]["can_rename"] != false {
@@ -155,6 +156,11 @@ func TestLocalWorksCatalogAndRecoverableManagement(t *testing.T) {
 	if code, _ := f.request("GET", "/api/local/works/"+forged+"/preview", nil, false); code != 404 {
 		t.Fatal("private message previewed", code)
 	}
+	if runtime.GOOS == "windows" {
+		if code, _ := f.request("POST", "/api/local/works/"+forged+"/reveal", map[string]any{}, true); code != 404 {
+			t.Fatal("private message revealed", code)
+		}
+	}
 	if code, _ := f.request("PATCH", "/api/local/works/"+id, map[string]string{"name": "renamed.txt", "expected_version": "stale"}, true); code != 409 {
 		t.Fatal("stale rename succeeded", code)
 	}
@@ -180,7 +186,7 @@ func TestLocalWorksCatalogAndRecoverableManagement(t *testing.T) {
 		t.Fatalf("trash: %d %#v", code, trashed)
 	}
 	trashItem := trashed["item"].(map[string]any)
-	if trashItem["can_restore"] != true || trashItem["original_path"] != "home/works/renamed.txt" {
+	if trashItem["can_restore"] != true || trashItem["can_reveal"] != false || trashItem["original_path"] != "home/works/renamed.txt" {
 		t.Fatal("restore metadata missing", trashItem)
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "home", "works", "renamed.txt")); !os.IsNotExist(err) {
