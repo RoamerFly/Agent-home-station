@@ -7,8 +7,10 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -37,6 +39,7 @@ type localWorkItem struct {
 	DownloadURL  string `json:"download_url,omitempty"`
 	CanRename    bool   `json:"can_rename"`
 	CanTrash     bool   `json:"can_trash"`
+	CanReveal    bool   `json:"can_reveal"`
 	CanRestore   bool   `json:"can_restore"`
 	RestoreURL   string `json:"restore_url,omitempty"`
 	OriginalPath string `json:"original_path,omitempty"`
@@ -180,7 +183,7 @@ func workFileItem(app, rel string, info os.FileInfo) localWorkItem {
 	item := localWorkItem{ID: id, Application: app, Name: path.Base(rel), Path: app + "/" + rel,
 		Source: "workspace", Bytes: info.Size(), ModifiedAt: info.ModTime().UTC().Format("2006-01-02T15:04:05.000000000Z"),
 		MIME: mimeType, Version: workFileVersion(app, rel, info), Previewable: preview,
-		DownloadURL: "/api/local/works/" + id + "/download", CanRename: manage, CanTrash: manage}
+		DownloadURL: "/api/local/works/" + id + "/download", CanRename: manage, CanTrash: manage, CanReveal: true}
 	if preview {
 		item.PreviewURL = "/api/local/works/" + id + "/preview"
 	}
@@ -337,7 +340,7 @@ func (s *localArtifactStore) registeredWorks(ctx context.Context) ([]localWorkIt
 		mimeType, preview := workMIME(a.Name)
 		item := localWorkItem{ID: id, Application: "home", Name: a.Name, Path: "已登记成品/" + a.Name,
 			Source: "snapshot", Bytes: a.Bytes, ModifiedAt: info.ModTime().UTC().Format("2006-01-02T15:04:05.000000000Z"),
-			MIME: mimeType, Previewable: preview, DownloadURL: "/api/local/works/" + id + "/download"}
+			MIME: mimeType, Previewable: preview, DownloadURL: "/api/local/works/" + id + "/download", CanReveal: true}
 		if preview {
 			item.PreviewURL = "/api/local/works/" + id + "/preview"
 		}
@@ -422,6 +425,63 @@ func (s *localArtifactStore) serveWork(w http.ResponseWriter, r *http.Request, p
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	}
 	http.ServeContent(w, r, name, time.Time{}, file)
+}
+
+func (s *localArtifactStore) revealWork(w http.ResponseWriter, r *http.Request) {
+	ref, ok := parseWorkID(r.PathValue("id"))
+	if !ok || ref.kind == "trash" {
+		websession.Fail(w, 404, "作品不存在或已移走")
+		return
+	}
+	if runtime.GOOS != "windows" {
+		websession.Fail(w, 501, "当前平台不支持文件资源管理器")
+		return
+	}
+	system := os.Getenv("SystemRoot")
+	if !filepath.IsAbs(system) {
+		websession.Fail(w, 503, "系统目录不可用")
+		return
+	}
+	var selected string
+	if ref.kind == "artifact" {
+		a, err := s.read(ref.rel)
+		if err != nil {
+			websession.Fail(w, 404, "已登记作品不存在或来源已变化")
+			return
+		}
+		file, err := s.open(r.Context(), a, func() bool { _, allowed := s.access(a); return allowed })
+		if err != nil {
+			websession.Fail(w, 404, "作品不可读取或已变化")
+			return
+		}
+		file.Close()
+		selected = filepath.Join(s.home.dataDir, "artifacts", a.ID, "original")
+	} else {
+		grant, err := (&localWorkspaceAccess{home: s.home}).resolve()
+		if err != nil {
+			websession.Fail(w, 403, "家目录授权不可用")
+			return
+		}
+		file, _, err := s.workFile(ref, grant)
+		if err != nil {
+			websession.Fail(w, 404, "作品不可读取或已变化")
+			return
+		}
+		file.Close()
+		selected = filepath.Join(s.home.root, ref.app, filepath.FromSlash(ref.rel))
+	}
+	if !filepath.IsAbs(selected) {
+		websession.Fail(w, 503, "作品路径不可用")
+		return
+	}
+	cmd := exec.Command(filepath.Join(system, "explorer.exe"), "/select,", selected)
+	if err := cmd.Start(); err != nil {
+		websession.Fail(w, 503, "文件夹打开失败")
+		return
+	}
+	go cmd.Wait()
+	w.Header().Set("Cache-Control", "no-store")
+	websession.Respond(w, 200, map[string]any{"opened": true, "folder": filepath.Dir(selected), "selected_file": selected})
 }
 
 func (s *localArtifactStore) listWorks(w http.ResponseWriter, r *http.Request) {
@@ -523,6 +583,7 @@ func (s *localArtifactStore) worksRoutes(owner *websession.Store, mux *http.Serv
 	mux.HandleFunc("GET /api/local/works", owner.Protect(s.listWorks))
 	mux.HandleFunc("GET /api/local/works/{id}/preview", owner.Protect(func(w http.ResponseWriter, r *http.Request) { s.serveWork(w, r, true) }))
 	mux.HandleFunc("GET /api/local/works/{id}/download", owner.Protect(func(w http.ResponseWriter, r *http.Request) { s.serveWork(w, r, false) }))
+	mux.HandleFunc("POST /api/local/works/{id}/reveal", owner.Protect(s.revealWork))
 	mux.HandleFunc("PATCH /api/local/works/{id}", owner.Protect(s.renameWork))
 	mux.HandleFunc("POST /api/local/works/{id}/trash", owner.Protect(s.trashWork))
 	mux.HandleFunc("POST /api/local/works/{id}/restore", owner.Protect(s.restoreWork))
