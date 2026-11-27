@@ -73,31 +73,6 @@
                 <button id="open-settings-button" class="button compact secondary" type="button" hidden>设置模型</button>
               </div>
               <div class="chat-layout">
-                <aside class="chat-conversations" aria-label="聊天会话">
-                  <div class="chat-conversations-heading">
-                    <strong>聊天</strong>
-                    <button class="button compact quiet" type="button" aria-label="新建聊天">＋</button>
-                  </div>
-                  <label class="chat-search">
-                    <span class="sr-only">搜索会话</span>
-                    <input type="search" placeholder="搜索会话" autocomplete="off">
-                  </label>
-                  <div class="chat-conversation-list">
-                    <div class="chat-conversation is-active">
-                      <strong>日常闲聊</strong><small>今天的工作进展如何？</small><time>20:47</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>项目讨论</strong><small>接口方案已更新。</small><time>昨天</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>学习笔记</strong><small>整理了一份速查清单。</small><time>周二</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>灵感收集</strong><small>有个不错的想法，记录一下。</small><time>周一</time>
-                    </div>
-                  </div>
-                  <div class="button secondary chat-new-conversation" aria-hidden="true">＋ 新建聊天</div>
-                </aside>
                 <div class="chat-glass">
                   <div id="model-setup-note" class="model-setup-note" hidden>
                     <strong>先设置聊天模型</strong>
@@ -175,20 +150,12 @@
                   <h3>应用中心</h3>
 
                 </div>
-                <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+                <div class="app-dialog-actions">
+                  <button id="works-open" class="button compact primary" type="button">作品大全</button>
+                  <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+                </div>
               </header>
               <p id="apps-feedback" class="apps-feedback" role="status"></p>
-              <details class="identity-details work-register">
-                <summary>登记家目录中的作品</summary>
-                <form id="artifact-form" class="details-grid">
-                  <label for="artifact-path">成品文件</label>
-                  <div class="input-row">
-                    <input id="artifact-path" placeholder="如 作品/讲解.pdf" required autocomplete="off">
-                    <button class="button compact secondary" type="submit">登记作品</button>
-                  </div>
-                  <p id="artifact-result" class="apps-feedback" role="status">保存成品快照后，可在微信连接中授权交付。</p>
-                </form>
-              </details>
               <div class="apps-layout">
                 <div class="app-directory">
                   <div class="app-filters">
@@ -243,17 +210,25 @@
                   <h3 id="settings-heading">角色与模型</h3>
                   <p>主角色用于日常相处，各应用可单独补充。</p>
                 </div>
-                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存设置</button>
+                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存模型</button>
               </div>
+              <form id="persona-form" class="persona-form" aria-labelledby="persona-title">
+                <div class="persona-heading">
+                  <div>
+                    <h4 id="persona-title">主角色设定</h4>
+                    <p>所有应用共用这份 Markdown 设定。各应用可在自己的工作台添加补充设定。</p>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="persona-reload" class="button compact secondary" type="button">重新读取</button>
+                    <button id="persona-save" class="button compact primary" type="submit">保存主角色</button>
+                  </div>
+                </div>
+                <label class="sr-only" for="persona-content">主角色 Markdown 内容</label>
+                <textarea id="persona-content" rows="12" spellcheck="false" placeholder="用 Markdown 写下大肥鱼的身份、性格和相处方式…" aria-describedby="persona-status"></textarea>
+                <p id="persona-status" role="status" aria-live="polite">正在读取主角色设定…</p>
+              </form>
               <form id="model-form" class="model-form">
                 <input id="model-revision" type="hidden" value="0">
-                <fieldset class="settings-group">
-                  <legend>主角色</legend>
-                  <p>决定她的性格和与你的相处方式，应用之外也会使用。</p>
-                  <label>性格与相处方式
-                    <textarea id="model-persona" name="persona" rows="4" maxlength="4000" placeholder="例如：自然真诚，喜欢探索新事物…"></textarea>
-                  </label>
-                </fieldset>
                 <fieldset class="settings-group">
                   <legend>聊天模型</legend>
                 <div class="field-grid">
@@ -339,6 +314,31 @@
       </div>
     </section>
   </main>
+  <dialog id="works-dialog" class="app-dialog works-dialog" aria-labelledby="works-title">
+    <header class="app-dialog-header">
+      <div><p class="app-detail-kicker">大肥鱼的家与应用工作空间</p><h2 id="works-title" tabindex="-1">作品大全</h2></div>
+      <button id="works-close" class="button compact quiet" type="button">返回应用中心</button>
+    </header>
+    <form id="works-filter-form" class="works-toolbar" role="search">
+      <label>状态
+        <select id="works-status-filter"><option value="active">当前作品</option><option value="trash">待删除</option></select>
+      </label>
+      <label>来源
+        <select id="works-application"><option value="all">全部作品</option><option value="home">大肥鱼的家</option><option value="wechat">微信</option><option value="douyin">抖音</option><option value="bilibili">哔哩哔哩</option></select>
+      </label>
+      <label>搜索作品
+        <input id="works-query" type="search" placeholder="文件名或路径" autocomplete="off">
+      </label>
+      <button class="button compact primary" type="submit">查询</button>
+    </form>
+    <p id="works-status" class="works-status" role="status" aria-live="polite"></p>
+    <div id="works-action" class="works-action" role="status" aria-live="polite" hidden></div>
+    <div class="works-content">
+      <div id="works-list" class="works-list" aria-busy="false"></div>
+      <section id="works-preview" class="works-preview" aria-label="作品预览" hidden></section>
+    </div>
+    <div class="works-footer"><button id="works-more" class="button compact secondary" type="button" hidden>加载更多作品</button></div>
+  </dialog>
   <dialog id="app-configuration" class="app-dialog app-configuration" aria-labelledby="app-configuration-title">
     <header class="app-dialog-header">
       <div>

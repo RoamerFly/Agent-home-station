@@ -18,6 +18,47 @@ func (p catalogProvider) Inspect(context.Context, string) (apphost.ConnectionSta
 	return apphost.ConnectionStatus{}, nil
 }
 
+type overviewProvider struct {
+	connections, inspections int
+}
+
+func (p *overviewProvider) Connections(context.Context) ([]apphost.Connection, error) {
+	p.connections++
+	return []apphost.Connection{{ID: "one", AccountID: "private-account"}}, nil
+}
+
+func (p *overviewProvider) Inspect(context.Context, string) (apphost.ConnectionStatus, error) {
+	p.inspections++
+	return apphost.ConnectionStatus{Login: "online", Runtime: "ready", Worker: "running"}, nil
+}
+
+func TestApplicationOverviewProbesOnlyOnDemand(t *testing.T) {
+	provider := &overviewProvider{}
+	registry, err := apphost.New(apphost.Registration{
+		Application: apphost.Application{ID: "sample", Name: "Sample", InstallationID: "sample-install", Registration: "test"},
+		Provider:    provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &localChatService{applications: registry}
+	if catalog := service.homeCatalog(); catalog == nil || provider.connections != 0 || provider.inspections != 0 {
+		t.Fatalf("per-turn catalog probed application: catalog=%v calls=%d/%d", catalog, provider.connections, provider.inspections)
+	}
+	result, err := service.applicationOverview(context.Background(), "sample")
+	if err != nil || provider.connections != 1 || provider.inspections != 1 {
+		t.Fatalf("on-demand overview: result=%v err=%v calls=%d/%d", result, err, provider.connections, provider.inspections)
+	}
+	items := result["items"].([]map[string]any)
+	connections := items[0]["connections"].([]map[string]any)
+	if items[0]["state"] != "connected" || connections[0]["login"] != "online" {
+		t.Fatalf("status missing: %v", result)
+	}
+	if _, leaked := connections[0]["account_id"]; leaked {
+		t.Fatalf("provider account id leaked: %v", connections[0])
+	}
+}
+
 func catalogRegistry(t *testing.T, ids ...string) apphost.Registry {
 	t.Helper()
 	registrations := make([]apphost.Registration, 0, len(ids))

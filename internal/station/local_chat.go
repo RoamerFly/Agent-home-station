@@ -79,7 +79,7 @@ func newLocalChatService(home *localHomeService) *localChatService {
 	}
 	toolOptions.DocumentRuntimeRoot = portableDocumentRoot(home.toolPackages, home.root, toolOptions.DocumentRuntimeRoot)
 	models := newLocalModelStore(stationAuthorityDir(home.dataDir))
-	models.personaPath = filepath.Join(home.root, "home", "PERSONA.md")
+	models.personaPath = sharedPersonaDocumentPath(home.dataDir)
 	h := &localChatService{home: home, models: models, grants: newLocalToolGrantsStore(home.dataDir), ctx: ctx, cancel: cancel,
 		closeDone:    make(chan struct{}),
 		livePrograms: &localLivePrograms{home: home},
@@ -259,6 +259,7 @@ func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/local/chat", s.Protect(h.send))
 	mux.HandleFunc("GET /api/local/model", s.Protect(h.modelView))
 	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))
+	h.personaDocumentRoutes(s, mux)
 	h.toolGrantsRoutes(s, mux)
 	h.appObservationRoutes(s, mux)
 	h.publicationRoutes(s, mux)
@@ -340,6 +341,7 @@ func (h *localChatService) history(w http.ResponseWriter, r *http.Request) {
 func localConversationConfig(persona string) companion.Config {
 	c := companion.Defaults()
 	c.Enabled, c.Name, c.Persona = true, "大肥鱼", persona
+	c.PersonaDocument = true
 	c.Permissions = companion.Permissions{ReplyText: true, Remember: true}
 	c.Context = companion.ContextDefaults()
 	// Maintenance is not silently launched by a newly created local chat.

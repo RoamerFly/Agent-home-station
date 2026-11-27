@@ -34,7 +34,7 @@ func (h *localChatService) homeCatalog() map[string]any {
 		"count": len(items),
 		"items": items,
 		"note": "这里只有应用名字和开关状态，不含任何聊天内容或记忆。" +
-			"要回答某个应用里的具体情况，用 app_memory 传 app_id，先看 sources 再检索与当前问题相关的片段；" +
+			"运行情况按需用 station_overview 查；具体内容用 app_observe，历史用 app_memory 查相关片段；" +
 			"state=off 的应用此刻不在家，不读取它的记忆，也不替它发言。" +
 			"没有列出的应用不存在，不要假设。",
 	}

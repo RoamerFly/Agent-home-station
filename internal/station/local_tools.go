@@ -158,7 +158,7 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localExternalTaskTools(ctx)...)
 	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
-		all = append(all, localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
+		all = append(all, stationOverviewTool(), localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
 	}
 	if t.observations.HasDiscoverable(ctx) {
 		all = append(all, localAppObservationTool())
@@ -247,6 +247,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localFollowupToolName {
 		return t.callFollowup(ctx, raw)
+	}
+	if name == localStationOverviewTool {
+		return t.callStationOverview(ctx, raw)
 	}
 	if name == localWechatMemoryTool {
 		result, err := t.callAppMemory(ctx, raw)
