@@ -2183,13 +2183,13 @@
             replies.type = "checkbox";
             replies.checked = douyinWebRepliesEnabled(value);
             replies.disabled = busy || (!replies.checked && (!available || !douyinWebCommentsEnabled(value)));
-            replies.setAttribute("aria-label", "允许回复评论");
+            replies.setAttribute("aria-label", "保留回复评论许可，当前暂停发送");
             replies.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowReplies: replies.checked }); });
-            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许回复评论"));
+            repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "保留回复许可（当前暂停发送）"));
             interactionActions.append(repliesLabel);
             const interactionNote = douyinWebCommentsEnabled(value)
-              ? "点赞需要首页及视频页文字读取；回复评论还依赖视频评论读取。两项互动都单独保存。"
-              : "点赞需要首页及视频页文字读取；回复评论还需先允许读取视频评论。";
+              ? "点赞需要首页及视频页文字读取；回复许可还依赖视频评论读取。通知到目标评论及直接父评论尚未核实，当前暂停回复发送。"
+              : "点赞需要首页及视频页文字读取；回复许可还需先允许读取视频评论，当前暂停回复发送。";
             if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给项目工具中已启用的共享视觉能力处理。` : `${value.visual_reason || "请先在项目工具中启用媒体理解；抖音这里无需重复配置。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
@@ -2643,9 +2643,13 @@
     if (id === "douyin") {
       const value = apps.douyinWebLogin.value;
       const paused = value?.paused || value?.detached;
-      const read = douyinWebReadEnabled(value), publish = value?.publish_enabled === true;
+      const read = douyinWebReadEnabled(value), publish = douyinWebPublishEnabled(value);
       const actions = [read, value?.works_enabled === true, publish, douyinWebLikesEnabled(value), douyinWebRepliesEnabled(value)];
-      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : allowed ? "已授权" : "未授权";
+      const auth = (allowed) => !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : allowed ? "已授权" : "未授权";
+      const memoryScopes = Array.isArray(value?.memory_scopes) ? value.memory_scopes : [];
+      const noticeStatus = !value ? unknown : paused ? "已暂停" : value.state !== "saved" ? "待登录" : value.notice_bound ? "已绑定" : "未绑定";
+      const visualStatus = value?.visual_enabled && value?.visual_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(douyinWebVisualEnabled(value));
+      const imagesStatus = value?.images_enabled && value?.images_ready !== true && !paused && value.state === "saved" ? "工具待就绪" : auth(value?.images_enabled === true);
       const state = douyinAppState(value);
       return {
         service: !value ? unknown : value.detached ? "已撤下" : value.paused ? "已暂停" : value.available ? "网页通道可用" : "网页通道待恢复",
@@ -2654,9 +2658,20 @@
         state,
         connected: state !== "not_connected",
         capabilities: [
-          ["内容浏览", auth(read), "依据本机保存的浏览范围，实际可读性以网页为准。"],
-          ["作品发布", auth(publish), "作品提交及发布结果按各任务单独核对。"],
-          ["直播控制", "待验证", "程序检查可读取本机状态，直播控制仍需单独验证。"],
+          ["网页文字", auth(read), read && douyinWebReadScope(value) === "home_and_videos" ? "可读取首页和从首页发现的视频页文字；按实际页面与覆盖范围返回。" : "先允许首页文字读取，再按需扩大到视频页。", "browse"],
+          ["本人作品", auth(value?.works_enabled === true), "从已核对的创作者账号读取作品列表和单篇信息。", "browse"],
+          ["公开图文图片", imagesStatus, "本人公开图文的图片按批交给已配置的视觉服务分析。", "browse"],
+          ["视频评论", auth(douyinWebCommentsEnabled(value)), "读取页面实际加载的评论，保留作者和评论编号并支持续读。", "browse"],
+          ["静音播放观察", auth(douyinWebPlaybackEnabled(value)), "记录确切视频的实际播放区间，不代表完整观看。", "browse"],
+          ["音轨转写", auth(douyinWebAudioEnabled(value)), "使用已启用的本机语音识别按窗口转写确切视频音轨。", "browse"],
+          ["视频画面分析", visualStatus, "按批分析确切视频的采样帧；需要已配置的媒体理解工具。", "browse"],
+          ["平台互动通知", noticeStatus, "绑定账号后按批手动读取；平台网页可能同时标记已读，Agent 读取另行授权。", "interactions"],
+          ["执行回合", noticeStatus, "按本人作品分别查看已保存通知、作品简介和音画证据，并定向核对评论关系。", "rounds"],
+          ["点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "通知限定回复须先在执行回合读完本人作品证据并核对评论关系；创建后在此管理原任务。", "interactions"],
+          ["普通账号作品发布", auth(publish), "从已登记成品由主人聊天创建草稿，此处管理原任务；公开发布尚待验收。", "publications"],
+          ["工作站按需记忆", auth(memoryScopes.length > 0), memoryScopes.length ? `已允许 ${memoryScopes.length} 类抖音资料按需留存与检索；各类来源单独授权。` : "可分别授权本人作品、评论和互动通知的按需留存与检索。", "account"],
+          ["直播伴侣与本机预览", !value ? unknown : value.detached ? "已撤下" : "可检查", "可检查直播伴侣程序状态并打开 OBS 本机预览；未接通抖音平台开播。", "live"],
         ],
       };
     }
@@ -2829,6 +2844,7 @@
     if (appConfiguration !== view || !view.sections.some((item) => item.id === section)) return;
     view.douyinReadAbort?.abort();
     view.douyinNoticeAbort?.abort();
+    view.douyinRoundsAbort?.abort();
     view.surfAbort?.abort();
     view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinNoticePanel = null;
     stopAppConfigurationReads();
@@ -3665,6 +3681,347 @@
     view.controller.signal.addEventListener("abort", cleanup, { once: true });
     return frame;
   }
+  function douyinRoundToday() {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return values.year + "-" + values.month + "-" + values.day;
+  }
+  function douyinRoundTime(value) {
+    if (typeof value !== "string" || !value) return "未提供";
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "时间待核对";
+  }
+  function douyinExecutionRoundsPanel(view) {
+    const panel = appElement("section", "", "configuration-rounds douyin-rounds");
+    panel.setAttribute("aria-label", "抖音执行回合");
+    const intro = appElement("p", "按作品查看本机已保存的抖音互动通知。记录可能来自手动通知读取或主人聊天读取，当前账本不区分单条来源。打开页面、筛选和翻页都不会访问抖音、标记已读或发送回复。", "app-scope-note");
+    const rule = appElement("p", "目标规则：仅本人作品的主评论（顶层评论）和直接回复本人子评论，在核实作品与评论归属后才可能进入回复；回复他人子评论不回复。网页版示例中，“评论了你的作品”仍可能是子评论。此页只展示已保存证据，不自行发送回复；Agent 须在同一回合读完整件作品证据，并用专用通知回复工具逐条核实关系后，才能创建待提交任务。", "app-scope-note douyin-round-rule");
+    const filters = appElement("div", "", "configuration-round-filters douyin-round-filters");
+    const dateLabel = appElement("label", "首次观察日期（北京时间）");
+    const date = document.createElement("input");
+    date.type = "date";
+    date.value = view.douyinRoundDate || douyinRoundToday();
+    dateLabel.append(date);
+    const limitLabel = appElement("label", "每页作品和记录数（1–1000）");
+    const limitInput = document.createElement("input");
+    limitInput.type = "number";
+    limitInput.min = "1";
+    limitInput.max = "1000";
+    limitInput.step = "1";
+    limitInput.value = String(view.douyinRoundLimit || 20);
+    limitLabel.append(limitInput);
+    const groupHeading = appElement("h3", "作品分组", "douyin-round-section-title");
+    const groups = appElement("div", "", "douyin-round-groups");
+    const groupMore = memoryButton("更多作品", "button compact secondary", () => void loadGroups(true));
+    groupMore.hidden = true;
+    const selectedHeading = appElement("h3", "选择作品查看通知", "douyin-round-section-title");
+    const context = appElement("div", "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。", "app-scope-note douyin-round-context");
+    const contextAction = memoryButton("让 Agent 核对此作品资料与音画", "button compact secondary", () => {
+      if (!selectedWorkID || !/^[1-9]\d{0,19}$/.test(selectedWorkID)) return;
+      const draft = `请只针对北京时间 ${date.value} 的抖音执行回合中作品 ${selectedWorkID} 建立评论回复上下文。先用 douyin_rounds 的 context 首读已保存的作品资料、简介和音画证据。若 ownership=verified_own_work 且 audio_complete、visual_complete 均为真，只用 next_cursor 逐页续读到 agent_context_read_complete=true，不重复调用 prepare。否则用 locate 逐页核对当前创作者账号、本人作品及标题简介，取得临时 content_id；再用 prepare 只补缺失的音轨或画面页，读画面时显式指定 visual_pages，依据返回进度续办至 audio_complete 和 visual_complete 均为真。临时入口失效时先报告已有覆盖和可能重复处理的费用；补证后用 context 从首页重读到 agent_context_read_complete=true。若 context 返回 restart_required，丢弃旧页并从头读取。按作品独立整理时间戳、媒体哈希、实际覆盖范围与缺口，只为这件作品生成内容摘要。画面采样不能称为逐帧理解；通知与目标评论、直接父评论的对应关系未核实前，不要创建或发送评论回复，也不要点赞或投稿。若账号、作品归属、授权、媒体原件或分页无法核实，请报告停止位置。`;
+      handoffDouyinWorkbenchChat(draft, feedback);
+    });
+    contextAction.hidden = true;
+    const contextMore = memoryButton("更多音画证据", "button compact secondary", () => void loadContext(!contextNeedsRestart));
+    contextMore.hidden = true;
+    const records = appElement("div", "", "douyin-round-records");
+    const feedback = appElement("p", "", "apps-feedback douyin-round-feedback");
+    feedback.setAttribute("role", "status");
+    feedback.tabIndex = -1;
+    const more = memoryButton("该作品较早通知", "button compact secondary", () => void loadRounds(true));
+    more.hidden = true;
+    const refresh = memoryButton("查看已保存通知", "button compact secondary", () => void loadGroups());
+    filters.append(dateLabel, limitLabel, refresh);
+    panel.append(intro, rule, filters, feedback, groupHeading, groups, groupMore, selectedHeading, context, contextAction, contextMore, records, more);
+    let nextGroupCursor = "", nextBefore = "", selectedWorkID = null;
+    let nextContextOffset = null, nextContextCursor = "", contextNeedsRestart = false;
+    let groupGeneration = 0, roundGeneration = 0, contextGeneration = 0;
+    let groupController = null, roundController = null, contextController = null;
+    const usedGroupCursors = new Set(), usedRoundCursors = new Set(), usedContextCursors = new Set(), knownGroupIDs = new Set();
+    const active = () => appConfiguration === view && view.record.id === "douyin" && view.section === "rounds" && panel.isConnected;
+    view.douyinRoundsAbort = { abort() { groupController?.abort(); roundController?.abort(); contextController?.abort(); } };
+    function validFilters() {
+      const limit = Number(limitInput.value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date.value)) {
+        feedback.textContent = "请选择有效的查看日期。"; date.focus(); return null;
+      }
+      if (limitInput.validity.badInput || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+        feedback.textContent = "每页数量须为 1–1000 的整数，更多内容可按游标续页。"; limitInput.focus(); return null;
+      }
+      view.douyinRoundDate = date.value;
+      view.douyinRoundLimit = limit;
+      return limit;
+    }
+    function selectWork(workID, label) {
+      if (!active() || selectedWorkID === workID) return;
+      selectedWorkID = workID;
+      selectedHeading.textContent = label + "的通知";
+      context.textContent = "作品资料和视频内容证据尚未读取。回复前必须核对作品归属、简介及视频音画覆盖范围。";
+      contextAction.hidden = !/^[1-9]\d{0,19}$/.test(workID);
+      for (const button of groups.querySelectorAll("button[data-work-id]")) {
+        button.setAttribute("aria-pressed", String(button.dataset.workId === workID));
+      }
+      void loadRounds();
+      void loadContext();
+    }
+    function roundCard(item) {
+      const noticeDay = date.value;
+      const card = appElement("article", "", "douyin-round-card");
+      const header = appElement("div", "", "douyin-round-card-header");
+      header.append(appElement("h4", "通知 " + item.notice_id), appElement("span", "待核对 · 不会回复", "station-label"));
+      const facts = appElement("dl", "", "douyin-round-facts");
+      const detailLabels = {
+        not_observed: "页面未自然返回该通知详情", partial: "详情只返回了部分通知", in_flight: "详情请求仍在处理",
+        invalid_response: "详情响应未通过核对", conflict: "详情与列表证据冲突", account_unverified: "详情账号未核对",
+        invalid_fields: "详情候选字段无效", observed_no_candidates: "已取得详情，没有可用编号",
+        observed_candidate: "已取得详情编号，仍需关联核对",
+      };
+      for (const [name, value] of [
+        ["平台类型", String(item.type) + "（未分类）"],
+        ["作品编号", item.work_id || "未提供"],
+        ["平台时间", douyinRoundTime(item.created_at)],
+        ["本机首次观察", douyinRoundTime(item.observed_at)],
+        ["来源范围", "已保存通知元数据，单条来源未记录"],
+        ["原生候选字段", item.candidates.length ? item.candidates.map((candidate) => candidate.path + "=" + candidate.id).join("；") + "（未经关联核对）" : "未取得可验证编号"],
+        ["通知详情", detailLabels[item.detail_status] || "详情状态待核对"],
+        ["详情候选字段", item.detail_candidates.length ? item.detail_candidates.map((candidate) => candidate.path + "=" + candidate.id).join("；") + "（未经关联核对）" : "未取得可验证编号"],
+        ["评论定位", "待核对：尚未核实目标评论、层级和直接父评论归属"],
+        ["回复资格", item.reason + " · 不会回复"],
+      ]) facts.append(appElement("dt", name), appElement("dd", value));
+      card.append(header, facts);
+      const detailTarget = item.detail_status === "observed_candidate" &&
+        item.detail_candidates.some((candidate) => ["cid", "real_cid", "comment.cid", "comment.comment.cid", "reply_comment.cid"].includes(candidate.path));
+      const listPaths = new Set(item.candidates.map((candidate) => candidate.path));
+      const listTarget = item.type === 31 && /^[1-9]\d{0,19}$/.test(item.notice_id || "") &&
+        ["not_observed", "partial"].includes(item.detail_status) && listPaths.size === item.candidates.length &&
+        item.candidates.some((candidate) => candidate.path === "comment.comment.cid") &&
+        item.candidates.every((candidate) => ["comment.comment.cid", "comment.parent_id"].includes(candidate.path));
+      if ((detailTarget || listTarget) && /^[1-9]\d{0,19}$/.test(item.work_id || "")) {
+        card.append(memoryButton("让 Agent 核对并准备回复", "button compact secondary", () => {
+          const draft = `请处理北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 核对已保存通知，并在本轮用 context 从首页顺序读完同一作品的简介、音轨和画面证据，直到 agent_context_read_complete=true；证据缺失时再用 locate、prepare 补齐，然后从首页重读。详情候选或结构唯一的 31 类列表候选可用 relation 对明确 CID 做只读定向探测；comment.parent_id 只是主楼候选，须与目标行的 reply_id 核对，直接父评论须另看 reply_to_reply_id。关系核实且符合“主评论或直接回复本账号子评论”时，用 locate 取得当前本人作品 content_id，并先用 app_observe(comments) 建立该作品入口，再调用 douyin_notice_reply(create) 保存待提交回复任务及草稿正文供我审阅。候选冲突、缺页、账号或父评论不明时说明停止位置，不要猜目标或遍历评论区。不要提交回复、点赞或投稿。`;
+          handoffDouyinWorkbenchChat(draft, feedback);
+        }));
+      }
+      return card;
+    }
+    async function loadGroups(append = false) {
+      if (!active()) return;
+      const limit = validFilters();
+      if (limit === null || (append && !nextGroupCursor)) return;
+      const cursor = append ? nextGroupCursor : "";
+      const moreFocused = append && document.activeElement === groupMore;
+      groupController?.abort();
+      if (!append) {
+        roundController?.abort();
+        contextController?.abort();
+        ++roundGeneration;
+        ++contextGeneration;
+        groups.replaceChildren(); records.replaceChildren();
+        selectedWorkID = null; nextBefore = ""; nextGroupCursor = "";
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear(); contextMore.hidden = true;
+        contextAction.hidden = true;
+        context.textContent = "请选择作品查看已保存的作品资料和音画证据。";
+        usedGroupCursors.clear(); usedRoundCursors.clear(); knownGroupIDs.clear();
+        groupMore.hidden = true; more.hidden = true;
+        selectedHeading.textContent = "选择作品查看通知";
+      }
+      const currentController = new AbortController();
+      groupController = currentController;
+      const generation = ++groupGeneration;
+      panel.setAttribute("aria-busy", "true");
+      feedback.textContent = "正在按作品整理本机已保存的通知…";
+      const query = new URLSearchParams({ date: date.value, limit: String(limit) });
+      if (cursor) query.set("cursor", cursor);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds/works?" + query, { signal: currentController.signal });
+        if (!active() || generation !== groupGeneration || currentController.signal.aborted) return;
+        if (result.date !== date.value || result.coverage !== "notice_work_groups" || !Array.isArray(result.groups) ||
+            typeof result.next_cursor !== "string" || !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== limit) {
+          throw new Error("抖音作品分组返回格式无效，请稍后重试。");
+        }
+        if (result.next_cursor && (result.next_cursor === cursor || usedGroupCursors.has(result.next_cursor))) {
+          throw new Error("作品分组续页位置未前进，请重新选择日期查看。");
+        }
+        const pageIDs = new Set();
+        const buttons = result.groups.map((group) => {
+          if (!group || typeof group.work_id !== "string" ||
+              (group.work_id !== "" && !/^[1-9]\d{0,19}$/.test(group.work_id)) ||
+              !Number.isSafeInteger(group.notice_count) || group.notice_count < 1 ||
+              group.ownership !== "unverified" || pageIDs.has(group.work_id) || knownGroupIDs.has(group.work_id)) {
+            throw new Error("抖音作品分组证据返回格式无效，请稍后重试。");
+          }
+          pageIDs.add(group.work_id);
+          const label = group.work_id ? "作品 " + group.work_id : "未提供作品编号";
+          const button = memoryButton(label + " · " + group.notice_count + " 条通知", "button compact secondary douyin-round-group", () => selectWork(group.work_id, label));
+          button.dataset.workId = group.work_id;
+          button.setAttribute("aria-pressed", "false");
+          return button;
+        });
+        if (cursor) usedGroupCursors.add(cursor);
+        for (const id of pageIDs) knownGroupIDs.add(id);
+        groups.append(...buttons);
+        nextGroupCursor = result.next_cursor;
+        groupMore.hidden = !nextGroupCursor;
+        feedback.textContent = groups.childElementCount ? "已列出 " + groups.childElementCount + " 个作品分组。请选择作品查看通知；归属与评论关系仍待核对。" :
+          "所选日期没有已保存的通知；不代表抖音平台没有互动消息。";
+        if (selectedWorkID === null && buttons.length) buttons[0].click();
+        if (moreFocused && groupMore.hidden) feedback.focus({ preventScroll: true });
+      } catch (error) {
+        if (active() && generation === groupGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          groupMore.hidden = !nextGroupCursor;
+        }
+      } finally {
+        if (active() && generation === groupGeneration) panel.setAttribute("aria-busy", "false");
+      }
+    }
+    async function loadRounds(append = false) {
+      if (!active() || selectedWorkID === null) return;
+      const limit = validFilters();
+      if (limit === null || (append && !nextBefore)) return;
+      const workID = selectedWorkID, before = append ? nextBefore : "";
+      const moreFocused = append && document.activeElement === more;
+      roundController?.abort();
+      const currentController = new AbortController();
+      roundController = currentController;
+      const generation = ++roundGeneration;
+      if (!append) { records.replaceChildren(); nextBefore = ""; usedRoundCursors.clear(); more.hidden = true; }
+      feedback.textContent = "正在读取该作品的已保存通知…";
+      const query = new URLSearchParams({ date: date.value, limit: String(limit), work_id: workID });
+      if (before) query.set("before", before);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds?" + query, { signal: currentController.signal });
+        if (!active() || generation !== roundGeneration || currentController.signal.aborted || selectedWorkID !== workID) return;
+        if (result.date !== date.value || result.coverage !== "notice_metadata" || result.group_selected !== true || result.selected_work_id !== workID ||
+            !Array.isArray(result.rounds) || typeof result.next_before !== "string" ||
+            !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== limit) {
+          throw new Error("抖音执行回合返回格式无效，请稍后重试。");
+        }
+        if (result.next_before && (result.next_before === before || usedRoundCursors.has(result.next_before))) {
+          throw new Error("该作品较早通知的续页位置未前进，请重新选择日期查看。");
+        }
+        const cards = result.rounds.map((item) => {
+          if (!item || typeof item.notice_id !== "string" || !item.notice_id || !Number.isInteger(item.type) || item.work_id !== workID ||
+              typeof item.created_at !== "string" || typeof item.observed_at !== "string" ||
+              item.state !== "待核对" || item.reason !== "证据不足" || item.reply_eligible !== false ||
+              !Array.isArray(item.candidates) || item.candidates.length > 16 ||
+              !item.candidates.every((candidate) => candidate && typeof candidate.path === "string" && typeof candidate.id === "string" && /^[1-9]\d{0,19}$/.test(candidate.id)) ||
+              !["not_observed", "partial", "in_flight", "invalid_response", "conflict", "account_unverified", "invalid_fields", "observed_no_candidates", "observed_candidate"].includes(item.detail_status) ||
+              !Array.isArray(item.detail_candidates) || item.detail_candidates.length > 16 ||
+              !item.detail_candidates.every((candidate) => candidate && typeof candidate.path === "string" && typeof candidate.id === "string" && /^[1-9]\d{0,19}$/.test(candidate.id))) {
+            throw new Error("抖音通知证据返回格式无效，请稍后重试。");
+          }
+          return roundCard(item);
+        });
+        if (before) usedRoundCursors.add(before);
+        records.append(...cards);
+        nextBefore = result.next_before;
+        more.hidden = !nextBefore;
+        feedback.textContent = "该作品已显示 " + records.childElementCount + " 条通知；候选编号未经关联核对，全部不会回复。";
+        if (moreFocused && more.hidden) feedback.focus({ preventScroll: true });
+      } catch (error) {
+        if (active() && generation === roundGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          feedback.textContent = error.message;
+          more.hidden = !nextBefore;
+        }
+      }
+    }
+    async function loadContext(append = false) {
+      if (!active() || selectedWorkID === null) return;
+      const workID = selectedWorkID;
+      if (!workID) {
+        context.textContent = "通知未提供作品编号，无法核对本人作品简介或关联视频证据；不会回复。";
+        contextMore.hidden = true; contextAction.hidden = true;
+        return;
+      }
+      if (append && (!nextContextCursor || nextContextOffset === null)) return;
+      const offset = append ? nextContextOffset : 0;
+      const cursor = append ? nextContextCursor : "";
+      contextController?.abort();
+      const currentController = new AbortController();
+      contextController = currentController;
+      const generation = ++contextGeneration;
+      if (!append) {
+        nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = false; usedContextCursors.clear();
+        contextMore.textContent = "更多音画证据";
+        contextMore.hidden = true;
+        context.replaceChildren(appElement("p", "正在读取本机已保存的作品证据…"));
+      }
+      const query = new URLSearchParams({ date: date.value, work_id: workID, limit: "20" });
+      if (cursor) query.set("cursor", cursor);
+      try {
+        const result = await request("/api/local/apps/douyin/execution-rounds/context?" + query, { signal: currentController.signal });
+        if (!active() || currentController.signal.aborted || generation !== contextGeneration || selectedWorkID !== workID) return;
+        if (result.work_id === workID && result.restart_required === true && result.snapshot_state === "restart_required" &&
+            result.ownership === "unverified" && result.reply_eligible === false &&
+            Array.isArray(result.media_pages) && result.media_pages.length === 0 && result.next_cursor === "") {
+          nextContextOffset = null; nextContextCursor = ""; contextNeedsRestart = true; usedContextCursors.clear();
+          context.replaceChildren(appElement("p", "作品资料或已保存音画证据在翻页期间发生变化。旧页已丢弃，请从头读取同一作品。"));
+          contextAction.hidden = false;
+          contextMore.textContent = "重新读取作品证据"; contextMore.hidden = false;
+          return;
+        }
+        if (result.work_id !== workID || !["unverified", "verified_own_work"].includes(result.ownership) ||
+            result.reply_eligible !== false || result.restart_required !== false ||
+            !["stable", "unverified"].includes(result.snapshot_state) || typeof result.next_cursor !== "string" ||
+            typeof result.audio_complete !== "boolean" || typeof result.visual_complete !== "boolean" ||
+            !Array.isArray(result.media_pages) || !Number.isSafeInteger(result.media_page_count) || result.media_page_count < 0 ||
+            result.media_page_count < offset + result.media_pages.length || !Number.isSafeInteger(result.effective_limit) || result.effective_limit !== 20 ||
+            (result.next_offset !== undefined && (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset)) ||
+            (result.next_offset !== undefined) !== Boolean(result.next_cursor) ||
+            (append && result.snapshot_state !== "stable")) {
+          throw new Error("抖音作品上下文返回格式无效，请稍后重试。");
+        }
+        if (result.next_cursor && (result.next_cursor === cursor || usedContextCursors.has(result.next_cursor))) {
+          throw new Error("作品证据续页位置未前进，请重新读取该作品。");
+        }
+        if (!append) {
+          context.replaceChildren();
+          if (result.ownership === "unverified") {
+            context.append(appElement("p", "尚未核实该通知组属于当前创作者账号，不能显示关联作品内容，也不会回复。"));
+          } else {
+            context.append(appElement("p", "已核对当前账号的创作者作品快照。通知到具体评论、直接父评论的关系仍待逐条核对。"));
+            if (typeof result.creator_text === "string" && result.creator_text) {
+              context.append(appElement("pre", result.creator_text, "douyin-round-creator-text"));
+            }
+            if (typeof result.creator_coverage === "string" && result.creator_coverage) {
+              context.append(appElement("p", "作品资料范围：" + result.creator_coverage));
+            }
+            context.append(appElement("p", "音轨转写：" + (result.audio_complete ? "已完成已读分页" : "尚未覆盖整段") +
+              "；画面：" + (result.visual_complete ? "采样分页已结束" : "采样分页尚未结束") + "。采样不等于逐帧观看。"));
+          }
+          contextAction.hidden = false;
+        }
+        if (result.ownership === "verified_own_work") {
+          for (const page of result.media_pages) {
+            if (!page || !["audio", "visual"].includes(page.field) || typeof page.coverage !== "string" ||
+                typeof page.observed_at !== "string" || typeof page.complete !== "boolean" ||
+                (page.text !== undefined && typeof page.text !== "string")) {
+              throw new Error("抖音音画证据返回格式无效，请稍后重试。");
+            }
+            const item = appElement("article", "", "douyin-round-media-page");
+            item.append(appElement("strong", page.field === "audio" ? "音轨转写" : "画面采样"),
+              appElement("p", page.coverage + " · 本机观察 " + douyinRoundTime(page.observed_at)),
+              appElement("pre", page.text || "本页没有可显示的文字", "douyin-round-media-text"));
+            context.append(item);
+          }
+        }
+        if (cursor) usedContextCursors.add(cursor);
+        nextContextOffset = result.next_offset ?? null;
+        nextContextCursor = result.next_cursor;
+        contextMore.hidden = nextContextOffset === null || result.ownership !== "verified_own_work";
+      } catch (error) {
+        if (active() && generation === contextGeneration && !currentController.signal.aborted && !appSessionExpired([{ status: "rejected", reason: error }])) {
+          if (!append) context.replaceChildren();
+          context.append(appElement("p", error.message));
+        }
+      }
+    }
+    date.addEventListener("change", () => void loadGroups());
+    limitInput.addEventListener("change", () => void loadGroups());
+    queueMicrotask(() => { if (active()) void loadGroups(); });
+    return panel;
+  }
   function appConfigurationRounds(view, connection) {
     const panel = appElement("section", "", "configuration-rounds");
     const date = document.createElement("input");
@@ -4386,12 +4743,28 @@
     page_text: "网页文字", comments: "评论区", visual: "视频画面", audio: "视频音轨", playback: "播放证据",
     account_works: "本人作品列表", own_video: "本人作品信息", images: "图文图片",
   };
+  const douyinReadAmounts = {
+    page_text: ["字", 0], comments: ["条", 0], visual: ["帧", 12], audio: ["秒", 240],
+    playback: ["秒", 20], account_works: ["条", 0], own_video: ["字", 0], images: ["张", 6],
+  };
   function douyinReadPanel(view) {
     const panel = appElement("section", "", "douyin-read-panel");
     const actions = appElement("div", "", "publication-actions");
     const output = appElement("div", "", "configuration-round-records");
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
+    const limitInputs = new Map();
+    const readKey = (connection, content, field) => JSON.stringify([connection, content, field]);
+    function requestedLimit(input, field) {
+      const raw = input.value.trim();
+      const limit = Number(raw);
+      const [unit, max] = douyinReadAmounts[field];
+      if (!raw && !input.validity.badInput) return 0;
+      if (Number.isSafeInteger(limit) && limit > 0 && (!max || limit <= max)) return limit;
+      feedback.textContent = max ? `本次${douyinReadLabels[field]}读取量须为 1–${max} ${unit}。` : "请输入大于零的整数读取量。";
+      input.focus();
+      return null;
+    }
     function beginRead() {
       view.douyinReadAbort?.abort();
       const controller = new AbortController();
@@ -4402,6 +4775,7 @@
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       feedback.textContent = "正在核对抖音读取授权…";
+      limitInputs.clear();
       actions.replaceChildren(discovery); output.replaceChildren();
       try {
         const { items } = await request("/api/local/apps/observation?app_id=douyin", { signal: controller.signal });
@@ -4420,22 +4794,41 @@
         if (!Object.hasOwn(douyinReadLabels, field)) continue;
         const kind = field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field];
         const name = label ? label + " · " + kind : kind;
-        area.append(memoryButton(name, "button compact secondary", () => void read(connection, content, field)));
+        const [unit, max] = douyinReadAmounts[field];
+        const choice = appElement("div", "", "douyin-read-choice");
+        const amount = appElement("label", `本次读取量（${unit}）`, "douyin-read-choice-limit");
+        const input = document.createElement("input");
+        input.type = "number"; input.min = "1"; input.step = "1";
+        if (max) input.max = String(max);
+        input.placeholder = "默认 / 续读";
+        input.setAttribute("aria-label", name + `本次读取量（${unit}）`);
+        amount.append(input);
+        choice.append(amount, memoryButton(name, "button compact secondary", () => {
+          const limit = requestedLimit(input, field);
+          if (limit !== null) void read(connection, content, field, limit > 0 && field !== "own_video", limit);
+        }));
+        area.append(choice);
+        limitInputs.set(readKey(connection, content, field), input);
       }
     }
-    async function read(connection, content, field, refresh = false) {
+    async function read(connection, content, field, refresh = false, limit = 0) {
+      const focusResult = panel.contains(document.activeElement);
       const controller = beginRead();
       const active = () => appConfiguration === view && panel.isConnected && !controller.signal.aborted;
       const query = { app_id: "douyin", connection_id: connection, content_id: content, field, refresh };
+      if (limit > 0) query.limit = limit;
       feedback.textContent = "正在读取" + douyinReadLabels[field] + "…";
       try {
         const result = await request("/api/local/apps/observation", { method: "POST", body: JSON.stringify(query), signal: controller.signal });
         if (!active()) return;
         const chunks = Array.isArray(result.chunks) ? result.chunks : [];
         const page = appElement("section", "", "memory-detail-section douyin-read-result");
+        page.tabIndex = -1;
+        page.setAttribute("aria-label", (field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]) + "读取结果");
         const header = appElement("div", "", "publication-actions");
         header.append(appElement("strong", field === "page_text" && content.startsWith("creator-work-") ? "本人作品信息" : douyinReadLabels[field]),
           appElement("span", result.complete ? "本次读取无后续页" : "仍有后续页", "station-label"));
+        if (limit > 0) header.append(appElement("span", "指定读取量 " + limit, "station-label"));
         if (result.resumed && !result.cached) header.append(appElement("span", "从已保存进度续读", "station-label"));
         if (result.visual_proof) {
           const proof = result.visual_proof;
@@ -4452,11 +4845,15 @@
         }
         if (!chunks.length) page.append(appElement("p", "这页没有返回文本，可查看本次覆盖状态。"));
         const controls = appElement("div", "", "publication-actions douyin-read-pagination");
-        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field)));
+        if (!result.complete) controls.append(memoryButton("继续读取", "button compact secondary", () => void read(connection, content, field, false, limit)));
+        const key = readKey(connection, content, field);
         if (["page_text", "comments", "visual", "audio", "playback", "account_works", "images"].includes(field))
-          controls.append(memoryButton("从头刷新", "button compact quiet", () => void read(connection, content, field, true)));
+          controls.append(memoryButton("从头刷新", "button compact quiet", () => {
+            const input = limitInputs.get(key);
+            const nextLimit = input?.isConnected ? requestedLimit(input, field) : limit;
+            if (nextLimit !== null) void read(connection, content, field, true, nextLimit);
+          }));
         page.append(controls);
-        const key = JSON.stringify([content, field]);
         const prior = [...output.children].filter((element) => element.dataset.read === key);
         if (!refresh && result.resumed && !result.cached) {
           prior.at(-1)?.querySelector(".douyin-read-pagination")?.remove();
@@ -4466,6 +4863,7 @@
           output.append(page);
         }
         page.dataset.read = key;
+        if (focusResult && (panel.contains(document.activeElement) || document.activeElement === document.body)) page.focus();
         feedback.textContent = "";
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -4475,7 +4873,7 @@
     }
     actions.append(discovery);
     panel.append(appElement("h4", "内容读取"), appElement("p", "从已授权的入口读取文字、评论和媒体证据。首页候选不能作为本人作品列表。", "app-scope-note"),
-      actions, feedback, output);
+      appElement("p", "每项可单独填写读取量。留空沿用已保存进度，新内容使用默认量；填写后从头读取，结果页的「继续读取」沿用本次数量。", "app-scope-note"), actions, feedback, output);
     return panel;
   }
 
@@ -4558,21 +4956,27 @@
         next.hidden = !continuation;
         if (typeof page.rendered_text === "string" && page.rendered_text) {
           const rendered = appElement("article", "", "douyin-read-chunk");
-          rendered.append(appElement("strong", "平台页面可见文字（可能包含前批）"), appElement("p", page.rendered_text));
+          rendered.append(appElement("strong", "整批平台页面可见文字（无法逐条对应通知编号，可能包含前批）"), appElement("p", page.rendered_text));
           output.append(rendered);
         } else if (page.items.length) {
           output.append(appElement("p", "本次仅取得通知编号及元数据，页面文字未能核对。", "app-scope-note"));
         }
         for (const row of page.items) {
           const card = appElement("div", "", "douyin-read-chunk");
-          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type));
-          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "作品 " + row.work_id : ""].filter(Boolean);
+          card.append(appElement("p", "通知 " + row.id + " · 平台类型 " + row.type + "（未分类）"));
+          const details = [row.created_at ? new Date(row.created_at).toLocaleString("zh-CN") : "", row.work_id ? "关联作品编号 " + row.work_id + "（归属待核对）" : ""].filter(Boolean);
           if (details.length) card.append(appElement("p", details.join(" · "), "publication-reference"));
+          card.append(appElement("p", "逐条正文：未取得；整批页面文字不能对应本通知。", "publication-reference"),
+            appElement("p", "评论定位：待核对；缺少目标评论编号、层级和直接父评论归属。", "publication-reference"),
+            appElement("p", "回复资格：证据不足 · 不会回复。", "publication-reference"));
           output.append(card);
         }
         const coverage = page.has_more ? "平台报告还有后续通知。" : "平台报告已读到末批。";
         const progress = page.progress === "cursor_stalled" ? "平台游标没有前进，已停止续读。" : page.progress === "next_unavailable" ? "后批未能继续加载，已返回本次成功读取的部分。" : "";
-        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress;
+        const saveWarnings = [];
+        if (page.rounds_recorded === false) saveWarnings.push(typeof page.rounds_warning === "string" && page.rounds_warning.trim() ? page.rounds_warning.trim() : "回合未保存，不会自动重读。");
+        if (page.memory_recorded === false) saveWarnings.push(typeof page.memory_warning === "string" && page.memory_warning.trim() ? page.memory_warning.trim() : "通知记忆未保存，不会自动重读。");
+        status.textContent = "本次读取 " + page.pages_read + "/" + parameters.pages + " 批，返回 " + page.items.length + " 条新通知。" + coverage + progress + (saveWarnings.length ? " " + saveWarnings.join("；") : "");
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) {
           continuation = ""; next.hidden = true;
@@ -4704,6 +5108,120 @@
     void load();
     return section;
   }
+  function openDouyinWorkbenchSection(view, route) {
+    selectAppConfiguration(view, route);
+    if (appConfiguration === view && view.section === route) {
+      $("#app-configuration-nav").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    }
+  }
+  function douyinWorkbenchFeatures(evidence, view) {
+    const section = appElement("section", "", "douyin-workbench-features");
+    section.append(appElement("h4", "已接入的抖音功能"),
+      appElement("p", "状态反映本机登录、授权和可用入口；实际读取范围与外部操作结果以每次回执为准。", "app-scope-note"));
+    const grid = appElement("div", "", "douyin-workbench-feature-grid");
+    const routes = { account: "账号与授权", browse: "内容浏览", publications: "作品发布", interactions: "互动任务", rounds: "执行回合", live: "直播与本机预览" };
+    for (const [name, status, description, route] of evidence.capabilities) {
+      const card = appElement("article", "", "app-capability douyin-workbench-feature");
+      card.append(appElement("h4", name), appElement("span", status, "station-label"), appElement("p", description));
+      if (view.sections.some((item) => item.id === route)) {
+        const button = memoryButton("打开" + routes[route], "button compact secondary", () => openDouyinWorkbenchSection(view, route));
+        button.setAttribute("aria-label", name + "：打开" + routes[route]);
+        card.append(button);
+      }
+      grid.append(card);
+    }
+    section.append(grid);
+    return section;
+  }
+  function appConfigurationNavigation(view) {
+    const button = (item) => {
+      const active = item.id === view.section;
+      const control = memoryButton(item.title, "local-tab" + (active ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
+      control.setAttribute("aria-pressed", String(active));
+      if (active) control.setAttribute("aria-current", "page");
+      return control;
+    };
+    if (view.record.id !== "douyin") return view.sections.map(button);
+    const available = new Map(view.sections.map((item) => [item.id, item]));
+    const groups = [
+      ["总览", ["overview"]],
+      ["活动", ["rounds", "interactions"]],
+      ["内容与创作", ["browse", "publications"]],
+      ["账号与服务", ["account", "live", "source"]],
+    ];
+    const nodes = [];
+    for (const [label, ids] of groups) {
+      const items = ids.map((id) => available.get(id)).filter(Boolean);
+      if (!items.length) continue;
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", label);
+      group.classList.toggle("is-active", items.some((item) => item.id === view.section));
+      group.append(appElement("span", label, "app-workbench-nav-heading"), ...items.map(button));
+      nodes.push(group);
+      for (const item of items) available.delete(item.id);
+    }
+    if (available.size) {
+      const group = appElement("div", "", "app-workbench-nav-group");
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", "其他分区");
+      group.append(appElement("span", "其他分区", "app-workbench-nav-heading"), ...Array.from(available.values(), button));
+      nodes.push(group);
+    }
+    return nodes;
+  }
+  function prepareDouyinWorkbenchChat(raw) {
+    if (standaloneWorkbenchApp || !state.home?.initialized || state.home.chat_available === false || typeof raw !== "string" || !raw.trim() || raw.length > 6000) return false;
+    if ($("#app-configuration").open) $("#app-configuration").close();
+    if ($("#app-dialog").open) $("#app-dialog").close();
+    setActiveView("chat");
+    const input = $("#chat-input");
+    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${raw.trim()}` : raw.trim();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    showMessage("请求已放入聊天输入框，请核对后手动发送。", "success");
+    return true;
+  }
+  function handoffDouyinWorkbenchChat(draft, feedback, fallbackInput = null) {
+    if (window.chrome?.webview && standaloneWorkbenchApp) {
+      window.chrome.webview.postMessage({ type: "application-workbench-chat-draft", text: draft });
+      feedback.textContent = "正在交给主工作站聊天框…";
+    } else if (standaloneWorkbenchApp) {
+      try { window.sessionStorage.setItem("douyin-creation-chat-draft", draft); window.location.href = "/"; }
+      catch (_) { feedback.textContent = "无法暂存请求，请复制草稿后在主工作站粘贴。"; fallbackInput?.focus(); fallbackInput?.select(); }
+    } else if (!prepareDouyinWorkbenchChat(draft)) feedback.textContent = "主聊天尚未就绪，请稍后重试。";
+  }
+  function douyinCreationRow(view) {
+    const row = appElement("section", "", "app-layer publication-layer douyin-creation-row");
+    row.append(appElement("h5", "制作作品"));
+    const detail = appElement("div", "", "publication-detail");
+    detail.append(appElement("strong", "用已登记的项目工具创作"),
+      appElement("p", "编辑下面的请求，再交给主工作站聊天。Agent 会根据可用工具制作成品、登记不可变产物、抽样检查音画轨可解码性并创建抖音草稿；此入口不会发送聊天或投稿。"));
+    const field = appElement("label", "创作请求草稿", "settings-field");
+    const input = document.createElement("textarea");
+    input.rows = 7; input.maxLength = 6000; input.autocomplete = "off";
+    input.value = view.douyinCreationDraft ?? "请帮我创作一条抖音视频。主题：【填写主题】；目标时长：【填写秒数】；画幅：竖屏 9:16。请先查看已登记的项目工具和可用素材，使用获准工具制作原创视频。若项目工具已返回不可变 MP4 或 WebM 成品的 artifact_id，直接使用该编号；若只生成了家目录中的视频文件，先用 artifact_publish 登记。随后用 douyin_video_check 核对该成品的容器、时长、尺寸，以及指定画面和音频片段是否可解码；这项抽样不检验内容含义，也不能证明全片每秒均可播放。为这条作品拟定标题、简介，并以仅自己可见创建抖音发布草稿。先不要提交或发布；若主题、素材或工具缺失，请列出需要我补充的内容。";
+    input.addEventListener("input", () => { view.douyinCreationDraft = input.value; });
+    field.append(input);
+    const actions = appElement("div", "", "publication-actions");
+    const feedback = appElement("span", "", "publication-feedback"); feedback.setAttribute("role", "status");
+    const openChat = memoryButton("带到主聊天", "button compact primary", () => {
+      const draft = input.value.trim();
+      if (!draft) { feedback.textContent = "请先填写创作请求。"; input.focus(); return; }
+      handoffDouyinWorkbenchChat(draft, feedback, input);
+    });
+    const openTools = memoryButton("打开项目工具", "button compact secondary", () => {
+      if (window.chrome?.webview && standaloneWorkbenchApp) window.chrome.webview.postMessage({ type: "application-workbench-project-tools" });
+      else if (standaloneWorkbenchApp) {
+        try { window.sessionStorage.setItem("douyin-open-project-tools", "1"); window.location.href = "/"; }
+        catch (_) { feedback.textContent = "无法切换页面，请在主工作站打开项目工具。"; }
+      } else { if ($("#app-configuration").open) $("#app-configuration").close(); if ($("#app-dialog").open) $("#app-dialog").close(); setActiveView("project-tools"); }
+    });
+    actions.append(openChat, openTools, feedback);
+    detail.append(field, actions);
+    row.append(detail);
+    return row;
+  }
   function renderAppConfiguration() {
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
@@ -4717,17 +5235,13 @@
     const selected = connections.find((row) => row.id === view.connection);
     $("#app-configuration-status").textContent = [evidence.service, selected?.label || evidence.account, evidence.grant].join(" · ");
     $("#app-configuration-feedback").append($("#apps-feedback"));
-    nav.replaceChildren(...view.sections.map((item) => {
-      const button = memoryButton(item.title, "local-tab" + (item.id === section ? " is-active" : ""), () => selectAppConfiguration(view, item.id));
-      button.setAttribute("aria-pressed", String(item.id === section));
-      return button;
-    }));
+    nav.replaceChildren(...appConfigurationNavigation(view));
     if (focusSection) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     const listing = apps.catalog?.find((row) => row.id === record.id);
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
     if (view.error) controls.push(appElement("p", view.error, "app-scope-note"));
-    if (connections.length && ["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "rounds", "surf", "delivery", "tasks"].includes(section)) {
+    if (connections.length && (["account", "conversations", "tools", "permissions", "actions", "directory", "rules", "flow", "surf", "delivery", "tasks"].includes(section) || (section === "rounds" && record.id === "wechat"))) {
       const label = appElement("label", "当前连接", "configuration-connection");
       const select = document.createElement("select");
       select.id = "app-configuration-connection";
@@ -4738,19 +5252,26 @@
     }
     switch (section) {
       case "overview":
-        controls.push(appEvidenceRows(evidence), appPersonaRow(record), appCapabilityRows(evidence, true));
+        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
         if (record.id === "douyin") {
           const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
           const overview = appElement("section", "", "app-layer douyin-workbench-overview");
           const account = appElement("div", "", "douyin-workbench-account");
           account.append(appElement("h4", title), appElement("p", description, "app-scope-note"));
-          const routes = appElement("div", "", "douyin-workbench-routes");
-          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["live", "直播与本机预览"]]) {
-            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => selectAppConfiguration(view, id)));
+          const activity = appElement("section", "", "douyin-workbench-activity");
+          activity.append(appElement("h4", "活动 · 执行回合"),
+            appElement("p", "按作品查看已保存通知、简介与音画证据，并逐条核对目标评论。页面只读取本机账本。", "app-scope-note"));
+          if (view.sections.some((item) => item.id === "rounds")) {
+            activity.append(memoryButton("打开执行回合", "button compact primary", () => openDouyinWorkbenchSection(view, "rounds")));
           }
-          overview.append(account, routes);
+          const routes = appElement("div", "", "douyin-workbench-routes");
+          for (const [id, label] of [["account", "账号与授权"], ["browse", "内容浏览"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
+            if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
+          }
+          overview.append(account, activity, routes);
           controls.splice(1, 0, overview);
-        }
+          controls.push(douyinWorkbenchFeatures(evidence, view));
+        } else controls.push(appCapabilityRows(evidence, true));
         if (!view.sections.length && !view.error) controls.push(appElement("p", "正在读取配置分区…", "app-scope-note"));
         break;
       case "account":
@@ -4865,7 +5386,8 @@
         else controls.push(appElement("p", "添加微信连接后，可查看流程和已保存的画布。", "app-scope-note"));
         break;
       case "rounds":
-        if (selected) controls.push(appConfigurationRounds(view, selected.id));
+        if (record.id === "douyin") controls.push(douyinExecutionRoundsPanel(view));
+        else if (selected) controls.push(appConfigurationRounds(view, selected.id));
         else controls.push(appElement("p", "连接微信后可查看消息的处理过程。", "app-scope-note"));
         break;
       case "tasks":
@@ -4904,7 +5426,11 @@
       case "publications":
       case "interactions":
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
+          appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
+        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
+          if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
           if (view.douyinNoticeLogin !== login) {
             view.douyinNoticeAbort?.abort();
@@ -5752,6 +6278,7 @@
     const pending = publicationWork(current, appID).pending.get(task.job_id);
     const pendingLabel = pending?.has("cancel") ? "正在登记停止…" : "正在处理原任务…";
     details.append(appElement("p", pending?.size ? pendingLabel : note));
+    if (appID === "douyin") details.append(douyinPublicationReview(task));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(publicationActions)) {
@@ -5771,6 +6298,71 @@
     }
     row.append(details, buttons);
     return row;
+  }
+  function douyinPublicationReview(task) {
+    const review = appElement("details", "", "douyin-publication-review");
+    review.append(appElement("summary", "查看发布内容"));
+    const content = appElement("div", "", "douyin-publication-review-content");
+    review.append(content);
+    let loading = false;
+    let loaded = false;
+    let previewVideo = null;
+    review.addEventListener("toggle", async () => {
+      if (!review.open) { previewVideo?.pause(); return; }
+      if (loading || loaded) return;
+      loading = true;
+      content.replaceChildren(appElement("p", "正在读取原任务内容…"));
+      try {
+        const value = await request(`/api/local/apps/douyin/publications/review?job_id=${encodeURIComponent(task.job_id)}`);
+        if (value?.task?.job_id !== task.job_id || typeof value.title !== "string" ||
+            typeof value.body !== "string" || !Array.isArray(value.artifacts) || value.artifacts.length !== 1) {
+          throw new Error("原任务内容返回格式无效，请稍后重试。");
+        }
+        content.replaceChildren();
+        const facts = appElement("dl", "", "douyin-publication-review-facts");
+        for (const [label, text] of [
+          ["标题", value.title || "（未填写）"],
+          ["文案", value.body || "（未填写）"],
+          ["可见范围", value.visibility === "private" ? "仅自己可见" : value.visibility === "public" ? "公开" : value.visibility === "friends" ? "朋友可见" : "未识别"],
+        ]) {
+          facts.append(appElement("dt", label), appElement("dd", text));
+        }
+        content.append(facts);
+        const previewLabel = appElement("strong", "视频预览（手动播放）");
+        const preview = document.createElement("video");
+        preview.className = "douyin-publication-review-video";
+        preview.controls = true;
+        preview.preload = "none";
+        preview.setAttribute("aria-label", "原发布任务的视频预览");
+        preview.src = `/api/local/apps/douyin/publications/review/video?job_id=${encodeURIComponent(task.job_id)}`;
+        const previewFeedback = appElement("p", "播放前请核对标题、文案和可见范围。", "app-scope-note");
+        preview.addEventListener("error", () => { previewFeedback.textContent = "视频预览不可用，请下载素材核对原文件。"; });
+        previewVideo = preview;
+        content.append(previewLabel, preview, previewFeedback);
+        const media = appElement("ul", "", "douyin-publication-review-media");
+        for (const artifact of value.artifacts) {
+          if (typeof artifact?.id !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(artifact.id)) continue;
+          const row = appElement("li", "", "");
+          const size = Number.isSafeInteger(artifact.bytes) && artifact.bytes >= 0 ? `，${artifact.bytes} 字节` : "";
+          row.append(appElement("span", `${artifact.name || "作品素材"}${size}（${artifact.id}）`));
+          if (typeof artifact.sha256 === "string" && /^[a-f0-9]{64}$/.test(artifact.sha256)) {
+            row.append(appElement("code", `SHA-256 ${artifact.sha256}`));
+          }
+          const link = appElement("a", "下载核对素材", "button compact quiet");
+          link.href = `/api/local/artifacts/${encodeURIComponent(artifact.id)}/download`;
+          link.setAttribute("aria-label", `下载核对${artifact.name || "作品素材"}`);
+          row.append(link);
+          media.append(row);
+        }
+        if (media.children.length) content.append(appElement("strong", "素材"), media);
+        loaded = true;
+      } catch (error) {
+        content.replaceChildren(appElement("p", error.message || "原任务内容读取失败。", "publication-feedback is-warn"));
+      } finally {
+        loading = false;
+      }
+    });
+    return review;
   }
   function douyinInteractionTaskRow(current, task) {
     const row = appElement("li", "", "publication-task");
@@ -5794,12 +6386,14 @@
       }
     }
     details.append(summary, appElement("p", note));
+    if (task.kind === "reply_comment") details.append(appElement("p", "原回复任务仅可查询或取消；通知关系核验完成前暂停提交与续办。", "publication-reference"));
     const pending = current.douyinInteractions.pending.get(task.job_id);
     if (pending?.size) details.append(appElement("p", pending.has("cancel") ? "正在登记停止…" : "正在处理原互动任务…", "publication-reference"));
     const buttons = appElement("div", "", "publication-actions");
     const available = Array.isArray(task.available_actions) ? task.available_actions : [];
     for (const [action, label] of Object.entries(interactionActions)) {
       if (!available.includes(action)) continue;
+      if (task.kind === "reply_comment" && (action === "submit" || action === "resume")) continue;
       if (douyinIsDetached(current) && action !== "cancel") continue;
       const button = appElement("button", label, `button compact ${action === "submit" ? "primary" : "quiet"}`);
       button.type = "button";
@@ -7095,7 +7689,7 @@
     if (!panel.childElementCount) panel.append(appElement("p", "正在读取应用工具…", "project-tools-empty"));
     const labels = {
       wechat: ["会话与消息读取", "文字、图片、语音、视频和文件收发", "通讯录与群管理", "视频号账号内解析"],
-      douyin: ["作品、评论与网页内容读取", "点赞与回复评论", "创作者作品管理与发布"],
+      douyin: ["作品、评论与网页内容读取", "点赞；评论回复待核验", "创作者作品管理与发布"],
       bilibili: ["稿件与评论读取", "账号授权与视频发布"]
     };
     const wechatLabels = { "share-reader": "微信分享解析", "music": "微信音乐与投递" };
@@ -7791,6 +8385,16 @@
       if (!authenticated(session)) { showConnection(); return; }
       if (standaloneWorkbenchApp) activeView = "apps";
       await loadHome();
+      if (!standaloneWorkbenchApp && state.home?.initialized) {
+        try {
+          const draft = window.sessionStorage.getItem("douyin-creation-chat-draft");
+          if (draft && prepareDouyinCreationChat(draft)) window.sessionStorage.removeItem("douyin-creation-chat-draft");
+          if (window.sessionStorage.getItem("douyin-open-project-tools") === "1") {
+            window.sessionStorage.removeItem("douyin-open-project-tools");
+            setActiveView("project-tools"); selectToolPanel("public");
+          }
+        } catch (_) { /* Browser storage may be unavailable; keep the page usable. */ }
+      }
       if (standaloneWorkbenchApp && state.home?.initialized) {
         apps.openID = standaloneWorkbenchApp;
         $("#app-configuration-close").textContent = "关闭工作台";
@@ -7926,6 +8530,7 @@
     appConfiguration?.controller.abort();
     appConfiguration?.douyinReadAbort?.abort();
     appConfiguration?.douyinNoticeAbort?.abort();
+    appConfiguration?.douyinRoundsAbort?.abort();
     appConfiguration?.surfAbort?.abort();
     appConfiguration = null;
     $("#app-configuration").classList.remove("wechat-legacy-skin", "douyin-workbench-skin");
@@ -8041,6 +8646,14 @@
     window.chrome.webview.addEventListener("message", (event) => {
       const value = event.data || {};
       if (value.type === "open-public-tools") { setActiveView("project-tools"); selectToolPanel("public"); return; }
+      if (value.type === "open-douyin-project-tools" && !standaloneWorkbenchApp) {
+        if ($("#app-configuration").open) $("#app-configuration").close();
+        if ($("#app-dialog").open) $("#app-dialog").close();
+        setActiveView("project-tools"); selectToolPanel("public");
+        return;
+      }
+      if (value.type === "prepare-douyin-creation-chat") { prepareDouyinCreationChat(value.text); return; }
+      if (value.type === "application-workbench-route-error") { appFeedback(value.message || "主工作站暂不可用，请稍后重试。", true); return; }
       if (value.type === "share-reader-auth-result") {
         if (value.ok === true) {
           appFeedback(value.message || "登录凭据已保存。");

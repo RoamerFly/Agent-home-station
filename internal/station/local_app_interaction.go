@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
@@ -18,7 +19,7 @@ import (
 const localInteractionToolName = "app_action"
 
 func localInteractionTool() mcptools.Tool {
-	return mcptools.NewTool(localInteractionToolName, "管理已授权应用的点赞和评论回复。targets 查许可；create 绑定 content_id，点赞填 desired，回复填已读 comment_id 与 text；submit 提交原 job_id，status/resume 核对或续办，cancel 停止未提交任务，list 查任务。结果待确认或需等 next_attempt_at 时沿用原 job_id。",
+	return mcptools.NewTool(localInteractionToolName, "管理已授权应用的点赞和评论回复。targets 查当前可创建的操作；create 绑定 content_id，点赞填 desired，回复填已读 comment_id 与 text。抖音评论通知到目标和直接父评论尚未逐条核实，通用路径暂不创建或提交抖音 reply_comment；原任务仍可 status/cancel。其他操作的 submit/resume 沿用原 job_id，list 查任务。结果待确认或需等 next_attempt_at 时沿用原 job_id。",
 		`{"type":"object","properties":{"action":{"type":"string","enum":["targets","create","submit","resume","status","cancel","list"]},"app_id":{"type":"string"},"connection_id":{"type":"string"},"content_id":{"type":"string"},"kind":{"type":"string","enum":["like","reply_comment"]},"comment_id":{"type":"string"},"text":{"type":"string"},"desired":{"type":"boolean"},"job_id":{"type":"string"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}},"required":["action"],"additionalProperties":false}`)
 }
 
@@ -51,6 +52,17 @@ func (h *localChatService) interactionHostWithGuard(check func(context.Context, 
 		return nil, actor, err
 	}
 	validate := func(ctx context.Context, job pluginhost.Job, d apphost.InteractionDraft) error {
+		if d.Target.AppID == douyinapp.ID && d.Kind == "reply_comment" {
+			// Only the dedicated notice-bound origin carries the saved notification,
+			// structured relation and completed work-context evidence. Old generic
+			// jobs remain denied at create, submit and resume.
+			if check != nil {
+				if err := check(ctx, job, d); err != nil {
+					return err
+				}
+			}
+			return h.validateDouyinNoticeReply(ctx, job, d)
+		}
 		if check != nil {
 			if err := check(ctx, job, d); err != nil {
 				return err
@@ -93,6 +105,9 @@ func (h *localChatService) interactionTargets(ctx context.Context) []map[string]
 			ref := apphost.ConnectionRef{AppID: app.ID, InstallationID: entry.InstallationID, ConnectionID: c.ID, AccountID: c.AccountID}
 			kinds := []string{}
 			for _, kind := range []string{"like", "reply_comment"} {
+				if app.ID == douyinapp.ID && kind == "reply_comment" {
+					continue
+				}
 				if grant, err := provider.GrantInteraction(ctx, apphost.InteractionDraft{Target: ref, Kind: kind}); err == nil && grant.Allowed {
 					kinds = append(kinds, kind)
 				}
@@ -103,6 +118,34 @@ func (h *localChatService) interactionTargets(ctx context.Context) []map[string]
 		}
 	}
 	return items
+}
+
+func localInteractionAvailableView(view apphost.InteractionView) apphost.InteractionView {
+	if view.Target.AppID != douyinapp.ID || view.Kind != "reply_comment" {
+		return view
+	}
+	actions := make([]string, 0, len(view.AvailableActions))
+	for _, action := range view.AvailableActions {
+		if action != "submit" && action != "resume" {
+			actions = append(actions, action)
+		}
+	}
+	view.AvailableActions = actions
+	return view
+}
+
+func localInteractionAvailableResult(result any) any {
+	switch value := result.(type) {
+	case apphost.InteractionView:
+		return localInteractionAvailableView(value)
+	case apphost.InteractionPage:
+		for index := range value.Items {
+			value.Items[index] = localInteractionAvailableView(value.Items[index])
+		}
+		return value
+	default:
+		return result
+	}
 }
 
 func (t *localToolSet) callInteraction(ctx context.Context, raw json.RawMessage) (value string, failure error) {
@@ -144,6 +187,9 @@ func (t *localToolSet) callInteraction(ctx context.Context, raw json.RawMessage)
 	case "create":
 		if t.inspectOnly {
 			return "", mcptools.ArgumentError("$", "原操作结果待核对，请先查询原job_id")
+		}
+		if in.AppID == douyinapp.ID && in.Kind == "reply_comment" {
+			return "", mcptools.ArgumentError("$.kind", "抖音通知尚未逐条核实目标评论及直接父评论；当前只能查看或取消原回复任务，不能经通用工具新建回复")
 		}
 		if in.JobID != "" || in.AppID == "" || in.ConnectionID == "" || in.ContentID == "" ||
 			(in.Kind == "like" && (in.Desired == nil || in.CommentID != "" || in.Text != "")) ||
@@ -204,7 +250,7 @@ func (t *localToolSet) callInteraction(ctx context.Context, raw json.RawMessage)
 	if err := t.run.CheckSource(ctx); err != nil {
 		return "", err
 	}
-	return localProcessJSON(result)
+	return localProcessJSON(localInteractionAvailableResult(result))
 }
 
 func (h *localChatService) interactionRoutes(s *websession.Store, mux *http.ServeMux) {
@@ -244,7 +290,7 @@ func (h *localChatService) interactionRoutes(s *websession.Store, mux *http.Serv
 			}
 			var page apphost.InteractionPage
 			page, err = host.List(ctx, actor, app, after, limit)
-			result = map[string]any{"tasks": page, "targets": h.interactionTargets(ctx)}
+			result = map[string]any{"tasks": localInteractionAvailableResult(page), "targets": h.interactionTargets(ctx)}
 		} else {
 			r.Body = http.MaxBytesReader(w, r.Body, 4096)
 			var in struct {
@@ -265,7 +311,7 @@ func (h *localChatService) interactionRoutes(s *websession.Store, mux *http.Serv
 			websession.Fail(w, code, msg)
 			return
 		}
-		websession.Respond(w, 200, result)
+		websession.Respond(w, 200, localInteractionAvailableResult(result))
 	})
 	mux.HandleFunc("GET /api/local/interactions", handler)
 	mux.HandleFunc("POST /api/local/interactions", handler)

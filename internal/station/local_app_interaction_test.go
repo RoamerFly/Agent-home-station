@@ -2,7 +2,6 @@ package station
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"os"
@@ -180,25 +179,16 @@ func TestLocalAppInteractionNormalChatCreatesSubmitsAndKeepsReceipt(t *testing.T
 	}
 }
 
-func TestLocalAppReplyBindsReadCommentVersionAndRejectsUnseenSubject(t *testing.T) {
+func TestLocalAppReplyGenericPathStaysClosedAfterReadingComment(t *testing.T) {
 	f, m, id, _ := syntheticInteractionFixture(t, true)
 	const original = "原评论的完整合成内容"
 	m.readComments = func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error) {
 		return stationbrowser.DouyinCommentPage{Comments: []stationbrowser.DouyinComment{{ID: "105", AuthorID: "author105", Author: "甲", Text: original}}, Complete: true}, nil
 	}
 	clicks := 0
-	m.interact = func(ctx context.Context, _ string, in stationbrowser.DouyinInteractionRequest, authorize func() error) (stationbrowser.DouyinInteractionResult, error) {
-		if in.ExpectedCommentSHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(original))) || in.CommentID != "105" || in.Text != "谢谢你的分享" {
-			t.Fatal("reply source lost", in)
-		}
-		if err := in.BeforeSubmit(ctx); err != nil {
-			return stationbrowser.DouyinInteractionResult{}, err
-		}
-		if err := authorize(); err != nil {
-			return stationbrowser.DouyinInteractionResult{}, err
-		}
+	m.interact = func(context.Context, string, stationbrowser.DouyinInteractionRequest, func() error) (stationbrowser.DouyinInteractionResult, error) {
 		clicks++
-		return stationbrowser.DouyinInteractionResult{State: "applied", RemoteID: "501", Submitted: true}, nil
+		return stationbrowser.DouyinInteractionResult{}, nil
 	}
 	calls := 0
 	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
@@ -210,27 +200,25 @@ func TestLocalAppReplyBindsReadCommentVersionAndRejectsUnseenSubject(t *testing.
 			case 2:
 				return localToolCall("app_action", map[string]any{"action": "create", "app_id": "douyin", "connection_id": "web-page-text", "content_id": id, "kind": "reply_comment", "comment_id": "105", "text": "谢谢你的分享"}), nil
 			case 3:
-				if !strings.Contains(localModelHistory(turns), "先读取") {
-					t.Fatal("unread subject feedback", localModelHistory(turns))
+				if !strings.Contains(localModelHistory(turns), "通知尚未逐条核实") {
+					t.Fatal("generic reply rejection missing", localModelHistory(turns))
 				}
-				return localToolCall("discover_tools", map[string]any{"query": "app_observe"}), nil
-			case 4:
 				return localToolCall("app_observe", map[string]any{"action": "read", "app_id": "douyin", "connection_id": "web-page-text", "content_id": id, "field": "comments"}), nil
-			case 5:
+			case 4:
 				return localToolCall("app_action", map[string]any{"action": "create", "app_id": "douyin", "connection_id": "web-page-text", "content_id": id, "kind": "reply_comment", "comment_id": "105", "text": "谢谢你的分享"}), nil
-			case 6:
-				ids := localPublicationJobIDs(localModelHistory(turns))
-				if len(ids) != 1 {
-					t.Fatal("reply task missing", localModelHistory(turns))
-				}
-				return localToolCall("app_action", map[string]any{"action": "submit", "job_id": ids[0]}), nil
 			default:
-				return `{"action":"reply","messages":["回复已核对。"]}`, nil
+				if !strings.Contains(localModelHistory(turns), "通知尚未逐条核实") || len(localPublicationJobIDs(localModelHistory(turns))) != 0 {
+					t.Fatal("read comment bypassed the reply gate", localModelHistory(turns))
+				}
+				return `{"action":"reply","messages":["通知回复仍待核对。"]}`, nil
 			}
 		}}, nil
 	}
-	if code, out := localChatSend(f, "reply-version-normal", "回复刚才的评论"); code != 200 || clicks != 1 {
-		t.Fatalf("reply: %d %#v clicks=%d", code, out, clicks)
+	if code, out := localChatSend(f, "reply-generic-blocked", "回复刚才的评论"); code != 200 || clicks != 0 {
+		t.Fatalf("reply gate: %d %#v clicks=%d", code, out, clicks)
+	}
+	if code, page := f.request("GET", "/api/local/interactions?app_id=douyin", nil, false); code != 200 || len(page["tasks"].(map[string]any)["items"].([]any)) != 0 {
+		t.Fatalf("denied reply left a task: %d %#v", code, page)
 	}
 }
 

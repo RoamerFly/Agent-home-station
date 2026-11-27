@@ -46,6 +46,139 @@ func TestLocalDouyinCommentsPagingAndSourceFields(t *testing.T) {
 	}
 }
 
+func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
+	if !Available() {
+		t.Skip("Microsoft Edge unavailable")
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		switch r.URL.Path {
+		case "/invalid":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title>
+<div id="merge-all-comment-container"><div data-e2e="comment-item"><div id="tooltip_323456789012345678"></div>
+<span data-e2e="comment-user-name" data-sec-uid="sec_bad">无效</span><p data-e2e="comment-content">无效编号</p>
+<a href="/video/4234567890123456789">作品链接</a></div><div data-e2e="comments-end">结束</div></div>`))
+		case "/multiple":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container">
+<div data-e2e="comment-item"><span data-e2e="comment-user-name" data-sec-uid="sec_bad">无效</span><p data-e2e="comment-content">多个编号</p>
+<div id="tooltip_3234567890123456789"></div><div id="tooltip_4234567890123456789"></div></div></div>`))
+		case "/missing":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div data-e2e="comment-item" data-comment-id="123"><span data-e2e="comment-user-name" data-sec-uid="sec_old">旧页面</span><p data-e2e="comment-content">无原生容器</p></div>`))
+		case "/bad-author":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container"><div data-e2e="comment-item">
+<div id="tooltip_3234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/bad%2Fid">无效作者</a><a href="//www.douyin.com/user/sec_target">被回复者</a></div>
+<div class="FduGc_lz">正文</div></div></div>`))
+		case "/ambiguous-body":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container"><div data-e2e="comment-item">
+<div id="tooltip_3234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_author">作者</a></div>
+<div class="FduGc_lz">正文甲</div><div class="FduGc_lz">正文乙</div></div></div>`))
+		case "/direct", "/scroll":
+			prefix := ""
+			suffix := ""
+			if r.URL.Path == "/scroll" {
+				prefix = `<style>.route-scroll-container{height:70px;overflow-y:auto}</style><div id="scroll-root" class="route-scroll-container">`
+				suffix = `<div style="height:400px">填充</div></div>`
+			}
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title>` + prefix + `<div data-e2e="comment-list" class="comment-mainContent">
+<div data-e2e="comment-item"><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_direct">作者</a></div><div class="FduGc_lz">直达页评论</div>
+<div><div><div id="tooltip_3234567890123456789"></div></div></div></div></div>` + suffix))
+		case "/both":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container"></div><div data-e2e="comment-list" class="comment-mainContent"></div>`))
+		default:
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title>
+<div data-e2e="comment-item"><div id="tooltip_9234567890123456789"></div><span data-sec-uid="sec_outside">外部</span><p data-e2e="comment-content">容器外</p></div>
+<div id="merge-all-comment-container">
+  <div data-e2e="comment-item"><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_root">甲</a></div><div class="FduGc_lz">主评论</div>
+    <div><div><div><div><div id="tooltip_1234567890123456789"></div></div></div></div></div>
+    <div class="replyContainer"><div data-e2e="comment-item"><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_child">乙</a><a href="//www.douyin.com/user/sec_root">被回复者</a></div><div class="FduGc_lz">子评论</div>
+      <div><div><div><div><div id="tooltip_2234567890123456789"></div></div></div></div></div>
+    </div></div>
+  </div>
+  <div data-e2e="comments-end">结束</div>
+</div>`))
+		}
+	}))
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	profile := t.TempDir() + "\\profile"
+	page, err := readDouyinComments(ctx, profile, s.URL+"/video/123", DouyinCommentsRequest{VideoID: "123", Limit: 10}, func() error { return nil }, true)
+	if err != nil || !page.Complete || len(page.Comments) != 2 ||
+		page.Comments[0].ID != "1234567890123456789" || page.Comments[0].AuthorID != "sec_root" ||
+		page.Comments[0].Text != "主评论" || page.Comments[1].ID != "2234567890123456789" ||
+		page.Comments[1].AuthorID != "sec_child" || page.Comments[1].Text != "子评论" {
+		t.Fatalf("tooltip comment cards: %+v %v", page, err)
+	}
+	probe, err := openCDP(ctx, t.TempDir()+"\\probe-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	var created struct{ TargetID string }
+	if err := probe.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &created); err != nil || created.TargetID == "" {
+		t.Fatalf("create synthetic comment tab: %v", err)
+	}
+	var attached struct{ SessionID string }
+	if err := probe.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached); err != nil || attached.SessionID == "" {
+		t.Fatalf("attach synthetic comment tab: %v", err)
+	}
+	if err := probe.Call(ctx, attached.SessionID, "Page.enable", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	stateAt := func(path string, localFixture bool) renderedDouyinComments {
+		t.Helper()
+		target := s.URL + path
+		var nav struct{ ErrorText string }
+		if err := probe.Call(ctx, attached.SessionID, "Page.navigate", map[string]any{"url": target}, &nav); err != nil || nav.ErrorText != "" {
+			t.Fatalf("navigate synthetic comment tab: %v %s", err, nav.ErrorText)
+		}
+		for until := time.Now().Add(3 * time.Second); time.Now().Before(until); time.Sleep(50 * time.Millisecond) {
+			state, err := renderedDouyinCommentsPage(ctx, probe, attached.SessionID, target, localFixture)
+			if err == nil && state.Ready && state.URL == target {
+				return state
+			}
+		}
+		t.Fatalf("synthetic comment tab did not load %s", path)
+		return renderedDouyinComments{}
+	}
+	native := stateAt("/video/123", false)
+	if native.Invalid || len(native.Comments) != 2 || native.Comments[0].ID != page.Comments[0].ID || native.Comments[1].ID != page.Comments[1].ID {
+		t.Fatalf("production parser lost nested comment cards: %+v", native)
+	}
+	direct := stateAt("/direct", false)
+	if direct.Invalid || len(direct.Comments) != 1 || direct.Comments[0].ID != "3234567890123456789" || direct.Comments[0].AuthorID != "sec_direct" {
+		t.Fatalf("production parser lost direct video comment list: %+v", direct)
+	}
+	for _, path := range []string{"/invalid", "/multiple", "/bad-author", "/ambiguous-body"} {
+		state := stateAt(path, false)
+		if !state.Invalid || len(state.Comments) != 0 {
+			t.Fatalf("ambiguous tooltip or linked video ID accepted: %s %+v", path, state)
+		}
+	}
+	missing := stateAt("/missing", false)
+	if !missing.Invalid || len(missing.Comments) != 0 {
+		t.Fatalf("production read accepted missing native container: %+v", missing)
+	}
+	both := stateAt("/both", false)
+	if !both.Invalid || len(both.Comments) != 0 {
+		t.Fatalf("production read accepted multiple native containers: %+v", both)
+	}
+	if state := stateAt("/scroll", false); state.Invalid || len(state.Comments) != 1 {
+		t.Fatalf("synthetic scroll list unavailable: %+v", state)
+	}
+	if err := scrollDouyinComments(ctx, probe, attached.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	var scrolled struct {
+		Result struct {
+			Value struct{ Parent, List float64 }
+		}
+	}
+	if err := probe.Call(ctx, attached.SessionID, "Runtime.evaluate", map[string]any{"expression": `({parent:document.querySelector('#scroll-root').scrollTop,list:document.querySelector('[data-e2e="comment-list"]').scrollTop})`, "returnByValue": true}, &scrolled); err != nil || scrolled.Result.Value.Parent <= 0 || scrolled.Result.Value.List != 0 {
+		t.Fatalf("comment list did not scroll its real ancestor: %+v %v", scrolled, err)
+	}
+}
+
 func TestLocalDouyinCommentsEmptyLoginCursorRevocationAndNavigation(t *testing.T) {
 	if !Available() {
 		t.Skip("Microsoft Edge unavailable")

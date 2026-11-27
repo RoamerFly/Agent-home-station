@@ -76,6 +76,11 @@ func (p *localDouyinWebObservation) readAudio(ctx context.Context, a localDouyin
 	if authErr := check(); authErr != nil {
 		return apphost.ObservationPage{}, authErr
 	}
+	if err == nil {
+		if captureErr := p.captureCreatorMediaContext(ctx, a, target, apphost.ObservationAudio, page); captureErr != nil {
+			return apphost.ObservationPage{}, captureErr
+		}
+	}
 	return page, err
 }
 
