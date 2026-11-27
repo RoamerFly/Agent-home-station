@@ -1,12 +1,14 @@
 package station
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"wechat-bot/internal/characterrefs"
@@ -38,6 +40,49 @@ type LocalModelInput struct {
 	LocalModelSettings
 	APIKey   string `json:"api_key,omitempty"`
 	ClearKey bool   `json:"clear_key"`
+}
+
+// localChatModelSelection changes one local chat turn without saving a new
+// global model configuration. Empty values inherit the saved settings; the
+// pointer distinguishes an explicit thinking-off choice from inheritance.
+type localChatModelSelection struct {
+	Model           string `json:"model,omitempty"`
+	ThinkingEnabled *bool  `json:"thinking_enabled,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+func (selection localChatModelSelection) apply(settings *LocalModelSettings) error {
+	if settings.Provider != "deepseek" && (selection.ThinkingEnabled != nil || selection.ReasoningEffort != "") {
+		return errors.New("当前模型接口不支持按轮选择思考程度")
+	}
+	if selection.Model != "" {
+		if len(selection.Model) > 128 || !utf8.ValidString(selection.Model) || strings.IndexFunc(selection.Model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return errors.New("本轮模型名称无效")
+		}
+		settings.Model = selection.Model
+	}
+	if selection.ThinkingEnabled != nil {
+		settings.ThinkingEnabled = *selection.ThinkingEnabled
+	}
+	if selection.ReasoningEffort != "" {
+		if selection.ReasoningEffort != "low" && selection.ReasoningEffort != "high" && selection.ReasoningEffort != "max" {
+			return errors.New("本轮思考程度无效")
+		}
+		settings.ReasoningEffort = selection.ReasoningEffort
+		if selection.ThinkingEnabled == nil {
+			settings.ThinkingEnabled = true
+		}
+	}
+	// Explicit UI choice takes precedence over the Agent's automatic
+	// task_reasoning tool for this turn. Merely changing the model retains the
+	// saved task reasoning policy.
+	if selection.ThinkingEnabled != nil || selection.ReasoningEffort != "" {
+		settings.TaskReasoning = "off"
+		if settings.ThinkingEnabled {
+			settings.TaskReasoning = settings.ReasoningEffort
+		}
+	}
+	return nil
 }
 
 type localModelRecord struct {
@@ -147,6 +192,13 @@ func (s *localModelStore) Client(onUsage ...func(deepseek.Usage)) (companion.Lan
 // client.  Callers can safely use the snapshot for request auditing and
 // billing even if a concurrent save happens immediately afterwards.
 func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (companion.LanguageModel, LocalModelSettings, error) {
+	return s.ClientSnapshotForSelection(localChatModelSelection{}, onUsage...)
+}
+
+// ClientSnapshotForSelection uses the saved provider, endpoint and private key
+// while applying a model/thinking choice to this client only. The returned
+// settings describe the effective request for usage accounting.
+func (s *localModelStore) ClientSnapshotForSelection(selection localChatModelSelection, onUsage ...func(deepseek.Usage)) (companion.LanguageModel, LocalModelSettings, error) {
 	s.mu.Lock()
 	record, err := s.readLocked()
 	s.mu.Unlock()
@@ -154,6 +206,10 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 		return nil, LocalModelSettings{}, err
 	}
 	settings := localModelView(record)
+	if err := selection.apply(&settings); err != nil {
+		return nil, settings, err
+	}
+	record.LocalModelSettings = settings
 	if s.personaPath != "" {
 		content, _, readErr := readSharedPersonaDocument(s.personaPath)
 		if readErr != nil {
@@ -184,6 +240,36 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 		return nil, settings, err
 	}
 	return model, settings, nil
+}
+
+// Models fetches the provider's catalogue only when explicitly requested by
+// the UI. The configured model remains available as a fallback when the
+// catalogue or credentials are unavailable; callers can display err as a
+// nonfatal status alongside that fallback.
+func (s *localModelStore) Models(ctx context.Context) ([]string, error) {
+	model, settings, err := s.ClientSnapshot()
+	fallback := []string{}
+	if settings.Model != "" {
+		fallback = append(fallback, settings.Model)
+	}
+	if err != nil {
+		return fallback, err
+	}
+	client, ok := model.(*deepseek.Client)
+	if !ok {
+		return fallback, errors.New("当前模型不支持查询目录")
+	}
+	defer client.CloseIdleConnections()
+	models, err := client.Models(ctx)
+	if err != nil {
+		return fallback, err
+	}
+	for _, name := range models {
+		if name == settings.Model {
+			return models, nil
+		}
+	}
+	return append(fallback, models...), nil
 }
 
 func (s *localModelStore) readLocked() (localModelRecord, error) {

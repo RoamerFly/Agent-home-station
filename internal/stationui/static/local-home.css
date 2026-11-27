@@ -650,10 +650,35 @@ p.publication-authorization-note,
 .bubble-text { margin: var(--s-1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-body); line-height: var(--lh-body); }
 .bubble-failure { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); margin-top: var(--s-2); padding-top: var(--s-2); border-top: 1px solid var(--border); color: var(--warning); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .load-older { justify-self: center; }
-.composer { display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
+.composer { position: relative; display: grid; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-raised); }
 .composer textarea { width: 100%; min-height: 58px; border-color: transparent; background: transparent; box-shadow: none; }
 .composer textarea:focus { border-color: transparent; box-shadow: none; }
-.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.composer-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.composer-controls { display: flex; flex: 1 1 22rem; align-items: center; flex-wrap: wrap; gap: var(--s-2); min-width: 0; }
+.composer-thought-controls { display: inline-flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
+.composer-bar > #chat-send { flex: none; align-self: flex-end; margin-left: auto; }
+.composer-attach { display: inline-flex; align-items: center; gap: var(--s-1); white-space: nowrap; }
+.composer-attach svg { width: 16px; height: 16px; }
+.composer-model, .composer-thinking, .composer-effort { display: inline-flex; align-items: center; gap: var(--s-1); min-height: 32px; padding: 0 var(--s-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: var(--fs-caption); white-space: nowrap; }
+.composer-model input { width: clamp(7rem, 12vw, 11rem); min-width: 0; padding: 2px 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.composer-model:focus-within, .composer-effort:focus-within { border-color: var(--accent); }
+.composer-thinking { cursor: pointer; }
+.composer-thinking:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-deep); }
+.composer-thinking:has(input:disabled) { opacity: .55; cursor: default; }
+.composer-thinking input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.composer-effort select { min-width: 3.8rem; padding: 2px 0; border: 0; background: transparent; color: var(--text); font: inherit; }
+.composer-effort:has(select:disabled) { opacity: .55; }
+.composer-thinking-note { color: var(--text-muted); font-size: var(--fs-caption); }
+.composer-attachments, .chat-attachments { display: flex; flex-wrap: wrap; gap: var(--s-2); min-width: 0; }
+.composer-attachment, .chat-attachment { display: inline-flex; align-items: center; gap: var(--s-2); min-width: 0; max-width: min(100%, 20rem); padding: var(--s-1) var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sunken); color: var(--text); font-size: var(--fs-caption); text-decoration: none; }
+.composer-attachment img, .chat-attachment img { width: 32px; height: 32px; flex: none; border-radius: 4px; object-fit: cover; }
+.composer-attachment-name, .chat-attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-attachment button { flex: none; border: 0; background: transparent; color: var(--text-muted); font-size: 1.2rem; line-height: 1; cursor: pointer; }
+.composer-attachment button:hover, .composer-attachment button:focus-visible { color: var(--danger); }
+.chat-attachments { margin-top: var(--s-2); }
+.chat-attachment:hover, .chat-attachment:focus-visible { border-color: var(--accent); color: var(--accent-deep); }
+.composer-drop-hint { display: none; position: absolute; inset: 0; z-index: 2; align-items: center; justify-content: center; border: 2px dashed var(--accent); border-radius: inherit; background: var(--surface); color: var(--accent-deep); font-weight: var(--fw-strong); pointer-events: none; }
+.composer.is-drag-over .composer-drop-hint { display: flex; }
 .chat-progress { min-height: 1.3em; color: var(--text-muted); font-size: var(--fs-caption); }
 .composer .button { min-height: 32px; padding: 0 var(--s-3); }
 .model-form { display: grid; gap: var(--s-4); }

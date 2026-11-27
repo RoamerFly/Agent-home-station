@@ -169,6 +169,9 @@ func (t *localToolSet) List(ctx context.Context) ([]mcptools.Tool, error) {
 	all = append(all, t.localExternalMCPTools(ctx)...)
 	if t.publications != nil && t.run != nil {
 		all = append(all, stationOverviewTool(), localPublicationTool(), localInteractionTool(), localLiveTool(), localFollowupTool(), localInboxTool())
+		if !t.publicUseOnly && t.run.Tracked {
+			all = append(all, homeAttachmentTool())
+		}
 		if t.douyinMemoryRequested {
 			all = append(all, localDouyinRoundsTool(), localDouyinNoticeReplyTool())
 		}
@@ -298,6 +301,9 @@ func (t *localToolSet) Call(ctx context.Context, name string, raw json.RawMessag
 	}
 	if name == localInboxToolName {
 		return t.callInbox(ctx, raw)
+	}
+	if name == localChatAttachmentTool && !t.publicUseOnly && t.publications != nil {
+		return t.readHomeAttachment(ctx, raw)
 	}
 	if name == localDouyinRoundsToolName {
 		return t.callDouyinRounds(ctx, raw)

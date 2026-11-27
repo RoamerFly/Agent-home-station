@@ -67,7 +67,7 @@ func writeLocalTurnResponse(w http.ResponseWriter, response localTurnResponse, e
 // pipeline for an admitted user turn and a host-verified continuation. Callers
 // retain turn serialization and must supply the actual original source/run;
 // this helper never observes a fabricated user message.
-func (h *localChatService) generateLocalTurn(ctx context.Context, store *companion.Store, in companion.Input, run *companion.LocalToolRun, continuationID string) (localTurnResponse, error) {
+func (h *localChatService) generateLocalTurn(ctx context.Context, store *companion.Store, in companion.Input, run *companion.LocalToolRun, continuationID string, selections ...localChatModelSelection) (localTurnResponse, error) {
 	response := localTurnResponse{RequestID: in.TraceID}
 	fail := func(status int, message string) (localTurnResponse, error) {
 		return response, &localTurnError{status: status, message: message}
@@ -94,11 +94,18 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	if err != nil {
 		return fail(409, "本机模型配置不可读，原文件保留")
 	}
+	selection := localChatModelSelection{}
+	if len(selections) != 0 {
+		selection = selections[0]
+	}
+	if err := selection.apply(&settings); err != nil {
+		return fail(400, err.Error())
+	}
 	var model companion.LanguageModel
 	if h.modelFactory != nil {
 		model, err = h.modelFactory()
 	} else {
-		model, settings, err = h.models.ClientSnapshot()
+		model, settings, err = h.models.ClientSnapshotForSelection(selection)
 	}
 	if err != nil {
 		return fail(503, "请先保存有效的本机模型配置和 Key；没有调用模型")
@@ -111,7 +118,7 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 		tools.directMedia, _ = model.(*deepseek.Client)
 	}
 	c.TaskReasoning = settings.TaskReasoning
-	prompt := "你是大肥鱼，正在工作站与主人交谈。按需使用本轮工具、记忆、家目录和已连接应用。本机成品回复实际 artifact_id，供界面下载；微信投递另查回执。"
+	prompt := "你是大肥鱼，在工作站与本机主人交谈。按需使用工具、记忆、家目录和已连接应用。成品存入 works/，已登记的成品回复实际 artifact_id；微信投递另查回执。"
 	if tools.memoryLinked {
 		prompt += "需要关联的跨来源原文时，用 app_memory 的 linked_sources、search、read 查询。"
 	}

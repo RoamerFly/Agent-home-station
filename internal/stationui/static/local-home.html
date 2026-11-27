@@ -91,12 +91,22 @@
                       <span id="chat-memory-link-label"></span>
                       <button id="chat-memory-link-cancel" class="text-action" type="button">取消关联</button>
                     </div>
+                    <div id="chat-attachment-list" class="composer-attachments" aria-label="待发送附件" hidden></div>
                     <label class="sr-only" for="chat-input">对大肥鱼说</label>
                     <textarea id="chat-input" rows="2" placeholder="和大肥鱼说点什么…" autocomplete="off"></textarea>
                     <div class="composer-bar">
-                      <span id="chat-progress" class="chat-progress" role="status"></span>
+                      <div class="composer-controls">
+                        <input id="chat-file-input" class="sr-only" type="file" multiple tabindex="-1" aria-label="选择图片或文件">
+                        <button id="chat-attach" class="button compact secondary composer-attach" type="button" aria-label="添加图片或文件" title="添加图片或文件"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m8 12.5 5.8-5.8a3.5 3.5 0 0 1 5 5l-8.3 8.3a5 5 0 0 1-7.1-7.1l8.5-8.5"/></svg><span>添加文件</span></button>
+                        <label class="composer-model" for="chat-model"><span>模型</span><input id="chat-model" list="chat-model-options" type="text" autocomplete="off" spellcheck="false" aria-label="本轮使用的模型名称"><datalist id="chat-model-options"></datalist></label>
+                        <button id="chat-model-refresh" class="button compact quiet composer-model-refresh" type="button" title="从当前服务商获取模型列表">获取模型</button>
+                        <span class="composer-thought-controls"><label class="composer-thinking" for="chat-thinking"><input id="chat-thinking" type="checkbox"><span>深度思考</span></label><label class="composer-effort" for="chat-reasoning"><span>程度</span><select id="chat-reasoning" aria-label="本轮思考程度"><option value="low">低</option><option value="high">高</option><option value="max">最高</option></select></label></span>
+                        <span id="chat-thinking-note" class="composer-thinking-note" hidden>当前服务不提供思考调节</span>
+                      </div>
                       <button id="chat-send" class="button primary" type="submit">发送</button>
                     </div>
+                    <span id="chat-progress" class="chat-progress" role="status"></span>
+                    <span class="composer-drop-hint" aria-hidden="true">松开即可添加文件</span>
                   </form>
                 </div>
                 <aside class="chat-aside" aria-label="角色与近期记忆">

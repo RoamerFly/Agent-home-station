@@ -92,7 +92,7 @@
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
-    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, retry: 0, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), link: null, poll: 0 };
+    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, retry: 0, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), submittedAttachments: new Map(), submittedOptions: new Map(), draftFiles: [], modelChoices: [], link: null, poll: 0 };
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
@@ -8180,7 +8180,9 @@
     $("#tool-dialog").close();
     $("#app-configuration").close();
     $("#app-dialog").close();
-    state.home = null; state.model = null; window.clearTimeout(state.chat.poll); state.chat = newChatView(); renderChat();
+    state.home = null; state.model = null; window.clearTimeout(state.chat.poll); releaseAllChatAttachmentURLs(state.chat); state.chat = newChatView(); renderChat(); renderChatDraftAttachments();
+    for (const id of ["#chat-model", "#chat-thinking", "#chat-reasoning"]) delete $(id).dataset.edited;
+    $("#chat-model").value = ""; addChatModelChoices();
     window.clearTimeout(apps.loginTimer);
     stopDouyinWebLoginPolling(apps);
     clearOBSPreview();
@@ -8362,10 +8364,45 @@
     $("#model-api-key").value = ""; $("#model-api-key").placeholder = source.key_configured ? "已保存；留空不改" : "填写后保存";
     $("#model-clear-key").checked = false;
   }
+  function addChatModelChoices(names = null) {
+    if (Array.isArray(names)) state.chat.modelChoices = names;
+    const host = $("#chat-model-options"), values = new Set();
+    for (const value of state.chat.modelChoices || []) {
+      const name = typeof value === "string" ? value : value?.id || value?.name || "";
+      if (typeof name === "string" && name.trim()) values.add(name.trim());
+    }
+    if (state.model?.model) values.add(state.model.model);
+    host.replaceChildren(...Array.from(values, name => { const option = document.createElement("option"); option.value = name; return option; }));
+  }
+  function syncChatComposerModel(model, force = false) {
+    if (!model) return;
+    const name = $("#chat-model"), thinking = $("#chat-thinking"), effort = $("#chat-reasoning");
+    const thinkingAvailable = model.provider === "deepseek";
+    if (force || name.dataset.edited !== "true") name.value = model.model || "";
+    if (force || thinking.dataset.edited !== "true" || !thinkingAvailable) thinking.checked = thinkingAvailable && model.thinking_enabled !== false;
+    if (force || effort.dataset.edited !== "true") effort.value = ["low", "high", "max"].includes(model.reasoning_effort) ? model.reasoning_effort : "max";
+    thinking.disabled = !thinkingAvailable;
+    effort.disabled = !thinkingAvailable || !thinking.checked;
+    $("#chat-thinking-note").hidden = thinkingAvailable;
+    if (force) { delete name.dataset.edited; delete thinking.dataset.edited; delete effort.dataset.edited; }
+    addChatModelChoices();
+  }
+  async function fetchChatModels() {
+    const button = $("#chat-model-refresh"); button.disabled = true;
+    try {
+      const value = await request("/api/local/model/models");
+      const models = Array.isArray(value.models) ? value.models : [];
+      addChatModelChoices(models);
+      showMessage(models.length ? `已读取 ${models.length} 个模型，可在输入框中选择。` : "当前服务商未返回模型列表，可直接输入模型名称。", "success");
+      $("#chat-model").focus();
+    } catch (error) { showMessage(error.message || "模型列表暂时不可读取，可直接输入模型名称。", "warn"); }
+    finally { button.disabled = false; }
+  }
   async function loadModel(syncForm = false) {
     try {
       state.model = await request("/api/local/model");
       if (syncForm) setModelForm(state.model);
+      syncChatComposerModel(state.model);
       $("#model-setup-note").hidden = chatConfigured(); $("#open-settings-button").hidden = chatConfigured();
     } catch (error) {
       state.model = null; $("#model-setup-note").hidden = false; $("#open-settings-button").hidden = false;
@@ -8378,23 +8415,88 @@
     return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
   }
   function itemText(item) { return typeof item.text === "string" ? item.text : (typeof item.content === "string" ? item.content : ""); }
+  function chatAttachmentURL(raw) {
+    if (typeof raw !== "string" || !raw) return "";
+    try {
+      const url = new URL(raw, window.location.origin);
+      return url.origin === window.location.origin && url.pathname.startsWith("/api/local/chat/attachments/") ? url.href : "";
+    } catch (_) { return ""; }
+  }
+  function appendChatAttachments(bubble, attachments) {
+    if (!Array.isArray(attachments) || !attachments.length) return;
+    const list = appElement("div", "", "chat-attachments");
+    for (const item of attachments) {
+      const source = item.server || item, name = String(source.name || item.file?.name || "附件");
+      const download = chatAttachmentURL(source.download_url);
+      const card = document.createElement(download ? "a" : "span");
+      card.className = "chat-attachment";
+      if (download) { card.href = download; card.setAttribute("download", name); }
+      const preview = item.localPreviewURL || chatAttachmentURL(source.preview_url);
+      if (String(source.mime || item.file?.type || "").startsWith("image/") && preview) {
+        const thumbnail = document.createElement("img"); thumbnail.src = preview; thumbnail.alt = ""; thumbnail.loading = "lazy"; card.append(thumbnail);
+      }
+      card.append(appElement("span", name, "chat-attachment-name"));
+      list.append(card);
+    }
+    bubble.append(list);
+  }
+  function renderChatDraftAttachments() {
+    const host = $("#chat-attachment-list"); host.replaceChildren();
+    for (const entry of state.chat.draftFiles) {
+      const chip = appElement("span", "", "composer-attachment");
+      if (entry.localPreviewURL) {
+        const thumbnail = document.createElement("img"); thumbnail.src = entry.localPreviewURL; thumbnail.alt = ""; chip.append(thumbnail);
+      }
+      chip.append(appElement("span", entry.file.name, "composer-attachment-name"));
+      const remove = memoryButton("×", "", () => {
+        state.chat.draftFiles = state.chat.draftFiles.filter(file => file !== entry);
+        if (entry.localPreviewURL) URL.revokeObjectURL(entry.localPreviewURL);
+        renderChatDraftAttachments();
+      });
+      remove.setAttribute("aria-label", `移除附件 ${entry.file.name}`);
+      chip.append(remove); host.append(chip);
+    }
+    host.hidden = !state.chat.draftFiles.length;
+  }
+  function addChatFiles(files) {
+    const existing = new Set(state.chat.draftFiles.map(entry => `${entry.file.name}/${entry.file.size}/${entry.file.lastModified}`));
+    for (const file of Array.from(files || [])) {
+      if (!(file instanceof File)) continue;
+      const key = `${file.name}/${file.size}/${file.lastModified}`;
+      if (existing.has(key)) continue;
+      existing.add(key);
+      state.chat.draftFiles.push({ file, localPreviewURL: file.type.startsWith("image/") ? URL.createObjectURL(file) : "", server: null });
+    }
+    renderChatDraftAttachments();
+  }
+  function releaseSubmittedAttachments(requestID) {
+    for (const entry of state.chat.submittedAttachments.get(requestID) || []) {
+      if (entry.localPreviewURL) URL.revokeObjectURL(entry.localPreviewURL);
+    }
+    state.chat.submittedAttachments.delete(requestID);
+    state.chat.submittedOptions.delete(requestID);
+  }
+  function releaseAllChatAttachmentURLs(chat) {
+    const entries = new Set([...chat.draftFiles, ...Array.from(chat.submittedAttachments.values()).flat()]);
+    for (const entry of entries) if (entry.localPreviewURL) URL.revokeObjectURL(entry.localPreviewURL);
+  }
   function renderFailedDraft(requestID, failure) {
     const bubble = document.createElement("article"), meta = document.createElement("div"), body = document.createElement("p"), line = document.createElement("div"), detail = document.createElement("span"), retry = document.createElement("button");
     bubble.className = "chat-bubble is-user";
     meta.className = "bubble-meta"; meta.textContent = "你";
-    body.className = "bubble-text"; body.textContent = failure.text;
+    body.className = "bubble-text"; body.textContent = failure.text; body.hidden = !failure.text;
     line.className = "bubble-failure"; detail.textContent = failure.message;
     retry.type = "button"; retry.className = "text-action"; retry.textContent = "重试";
-    retry.addEventListener("click", () => sendMessage(failure.text, requestID));
-    line.append(detail, retry); bubble.append(meta, body, line);
+    retry.addEventListener("click", () => sendMessage(failure.text, requestID, failure.attachments));
+    line.append(detail, retry); bubble.append(meta, body); appendChatAttachments(bubble, failure.attachments); bubble.append(line);
     chatStream.append(bubble);
   }
   function renderPendingDraft(failure) {
     const bubble = document.createElement("article"), meta = document.createElement("div"), body = document.createElement("p");
     bubble.className = "chat-bubble is-user is-pending";
     meta.className = "bubble-meta"; meta.textContent = "你 · 正在提交";
-    body.className = "bubble-text"; body.textContent = failure.text;
-    bubble.append(meta, body); chatStream.append(bubble);
+    body.className = "bubble-text"; body.textContent = failure.text; body.hidden = !failure.text;
+    bubble.append(meta, body); appendChatAttachments(bubble, failure.attachments); chatStream.append(bubble);
   }
   function appendArtifactDownloads(bubble, text) {
     const identifiers = new Set(String(text || "").match(/\bwork-[a-f0-9]{64}\b/g) || []);
@@ -8439,12 +8541,13 @@
         link.setAttribute("aria-label", `关联继续${time ? " · " + time : "此回复"}`);
         link.addEventListener("click", () => { state.chat.link = { id: item.request_id, time }; renderChat(); $("#chat-input").focus(); }); meta.append(link);
       }
-      const text = itemText(item), body = document.createElement("p"); body.className = "bubble-text"; body.textContent = text; bubble.append(meta, body);
+      const text = itemText(item), body = document.createElement("p"); body.className = "bubble-text"; body.textContent = text; body.hidden = !text; bubble.append(meta, body);
+      appendChatAttachments(bubble, item.attachments);
       if (assistant) appendArtifactDownloads(bubble, text);
       if (!assistant && (state.chat.failed.has(item.request_id) || item.request_id === recoveryID)) {
         const failure = state.chat.failed.get(item.request_id) || { message: "未收到回复。" }, line = document.createElement("div"), detail = document.createElement("span"), retry = document.createElement("button");
         line.className = "bubble-failure"; detail.textContent = failure.message; retry.type = "button"; retry.className = "text-action"; retry.textContent = "重试";
-        retry.addEventListener("click", () => sendMessage(itemText(item), item.request_id)); line.append(detail, retry); bubble.append(line);
+        retry.addEventListener("click", () => sendMessage(itemText(item), item.request_id, item.attachments)); line.append(detail, retry); bubble.append(line);
       }
       chatStream.append(bubble);
     }
@@ -8456,7 +8559,7 @@
       if (!persistedRequestIDs.has(requestID)) renderFailedDraft(requestID, failure);
     }
     $("#load-older-button").hidden = !state.chat.hasMore || state.chat.loading;
-    $("#chat-progress").textContent = state.chat.busy || state.chat.pending.size ? "正在等待回复…" : state.chat.backgroundPending ? "后台任务完成后会继续回复" : "";
+    $("#chat-progress").textContent = Array.from(state.chat.pending.values()).some(item => item.uploading) ? "正在上传附件…" : state.chat.busy || state.chat.pending.size ? "正在等待回复…" : state.chat.backgroundPending ? "后台任务完成后会继续回复" : "";
     $("#chat-memory-link").hidden = !state.chat.link;
     $("#chat-memory-link-label").textContent = state.chat.link ? `已关联${state.chat.link.time ? " · " + state.chat.link.time : "此回复"}，发送时核对资料授权` : "";
     chatStream.setAttribute("aria-busy", String(state.chat.loading || state.chat.busy || state.chat.pending.size > 0));
@@ -8483,7 +8586,7 @@
       current.retry = 0;
       current.backgroundPending = data.background_pending === true;
       const settled = new Set(state.chat.items.filter((item) => item.role === "assistant" && item.request_id).map((item) => item.request_id));
-      for (const requestID of settled) { state.chat.pending.delete(requestID); state.chat.failed.delete(requestID); }
+      for (const requestID of settled) { state.chat.pending.delete(requestID); state.chat.failed.delete(requestID); releaseSubmittedAttachments(requestID); }
     } catch (error) {
       if (current !== state.chat || appSessionExpired([{ status: "rejected", reason: error }])) return;
       // Back off instead of retrying a failing local service every 1.6s.
@@ -8504,20 +8607,51 @@
     current.poll = window.setTimeout(() => { if (current === state.chat) void loadChat(true); }, current.retry || 1600);
   }
   function newRequestID() { return window.crypto && typeof window.crypto.randomUUID === "function" ? window.crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
-  async function sendMessage(raw, requestID = newRequestID()) {
+  function chatMessageOptions() {
+    const model = $("#chat-model").value.trim() || state.model?.model || "";
+    return state.model?.provider === "deepseek"
+      ? { model, thinking_enabled: $("#chat-thinking").checked, reasoning_effort: $("#chat-reasoning").value }
+      : { model };
+  }
+  async function sendMessage(raw, requestID = newRequestID(), suppliedAttachments = null) {
     const current = state.chat;
-    const text = String(raw || ""); if (!text.trim() || state.chat.pending.has(requestID)) return;
+    const fresh = arguments.length === 1;
+    const text = String(raw || "");
+    const attachments = fresh ? current.draftFiles.slice() : current.submittedAttachments.get(requestID) || (Array.isArray(suppliedAttachments) ? suppliedAttachments : []);
+    if ((!text.trim() && !attachments.length) || current.pending.has(requestID)) return;
     if (!chatConfigured()) { setActiveView("settings"); showMessage("先保存可用的聊天模型，再发送消息。", "warn"); return; }
-    const continuation = current.submittedLinks.get(requestID) || (arguments.length === 1 ? current.link?.id || "" : "");
+    const continuation = current.submittedLinks.get(requestID) || (fresh ? current.link?.id || "" : "");
     if (continuation) current.submittedLinks.set(requestID, continuation);
-    if (arguments.length === 1) current.link = null;
-    state.chat.pending.set(requestID, { text }); state.chat.failed.delete(requestID); $("#chat-input").value = ""; renderChat();
+    if (fresh) {
+      current.link = null;
+      current.draftFiles = [];
+      renderChatDraftAttachments();
+      $("#chat-input").value = "";
+    }
+    current.submittedAttachments.set(requestID, attachments);
+    const modelSelection = current.submittedOptions.get(requestID) || chatMessageOptions();
+    current.submittedOptions.set(requestID, modelSelection);
+    const pending = { text, attachments, uploading: attachments.some(item => item.file && !item.server?.id) };
+    current.pending.set(requestID, pending); current.failed.delete(requestID); renderChat();
     // Only an explicit send/retry brings its result into view. Background
     // refreshes and reading older pages preserve the user's scroll position.
     chatStream.scrollTop = chatStream.scrollHeight;
     schedulePoll();
     try {
-      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text, ...(continuation ? { continue_request_id: continuation } : {}) }) });
+      const attachmentIDs = [];
+      for (const entry of attachments) {
+        let attached = entry.server || entry;
+        if (!attached.id && entry.file) {
+          const formData = new FormData(); formData.append("file", entry.file, entry.file.name);
+          const value = await request("/api/local/chat/attachments", { method: "POST", formData });
+          if (!value.attachment?.id) throw new Error("附件未能保存，请重试。");
+          entry.server = value.attachment;
+          attached = entry.server;
+        }
+        if (attached.id) attachmentIDs.push(attached.id);
+      }
+      pending.uploading = false; renderChat();
+      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text, attachments: attachmentIDs, model_selection: modelSelection, ...(continuation ? { continue_request_id: continuation } : {}) }) });
       if (current !== state.chat) return;
       if (result.status === "completed") state.chat.pending.delete(requestID);
       if (result.status === "no_reply") {
@@ -8525,9 +8659,10 @@
         showMessage("本轮没有生成回复。", "warn");
       }
       await loadChat(true);
+      if (result.status === "no_reply") releaseSubmittedAttachments(requestID);
     } catch (error) {
       if (current !== state.chat || appSessionExpired([{ status: "rejected", reason: error }])) return;
-      state.chat.pending.delete(requestID); state.chat.failed.set(requestID, { text, message: error.message || responseMessage(error.status) });
+      current.pending.delete(requestID); current.failed.set(requestID, { text, attachments, message: error.message || responseMessage(error.status) });
       await loadChat(true); renderChat();
     } finally { if (current === state.chat) { if (activeView === "chat" && !document.hidden) chatStream.scrollTop = chatStream.scrollHeight; schedulePoll(); } }
   }
@@ -8572,7 +8707,7 @@
     const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
     const button = $("#model-save"); button.disabled = true;
     try {
-      state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model);
+      state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model); syncChatComposerModel(state.model, true);
       $("#model-setup-note").hidden = chatConfigured(); $("#open-settings-button").hidden = chatConfigured(); showMessage("聊天模型已保存。", "success"); setActiveView("chat");
     } catch (error) {
       if (error.status === 409 && /已更新/.test(String(error.body && error.body.error || error.message))) {
@@ -8761,7 +8896,28 @@
     if (state.personaDocument.dirty && !window.confirm("当前主角色修改尚未保存。重新读取会替换编辑内容，是否继续？")) return;
     void loadPersonaDocument(true);
   });
-  $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
+  $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; });
+  $("#chat-attach").addEventListener("click", () => $("#chat-file-input").click());
+  $("#chat-file-input").addEventListener("change", (event) => { addChatFiles(event.target.files); event.target.value = ""; });
+  $("#chat-model-refresh").addEventListener("click", () => void fetchChatModels());
+  $("#chat-model").addEventListener("input", () => { $("#chat-model").dataset.edited = "true"; });
+  $("#chat-thinking").addEventListener("change", () => { $("#chat-thinking").dataset.edited = "true"; $("#chat-reasoning").disabled = !$("#chat-thinking").checked; });
+  $("#chat-reasoning").addEventListener("change", () => { $("#chat-reasoning").dataset.edited = "true"; });
+  const dragHasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes("Files");
+  document.addEventListener("dragover", (event) => {
+    if (activeView !== "chat" || !dragHasFiles(event)) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+    $("#chat-form").classList.add("is-drag-over");
+  });
+  document.addEventListener("dragleave", (event) => {
+    if (!event.relatedTarget) $("#chat-form").classList.remove("is-drag-over");
+  });
+  document.addEventListener("drop", (event) => {
+    $("#chat-form").classList.remove("is-drag-over");
+    if (activeView !== "chat" || !dragHasFiles(event)) return;
+    event.preventDefault(); addChatFiles(event.dataTransfer.files);
+  });
+  $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#chat-memory-link-cancel").addEventListener("click", () => { state.chat.link = null; renderChat(); $("#chat-input").focus(); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));
   document.addEventListener("visibilitychange", () => {
