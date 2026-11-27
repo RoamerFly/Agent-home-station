@@ -288,10 +288,6 @@ func (g *douyinWebDetailListener) start(parent context.Context, session readerSe
 				if event.SessionID != g.session {
 					continue
 				}
-				if err := authorize(); err != nil {
-					g.fail(err)
-					return
-				}
 				switch event.Method {
 				case "Page.frameNavigated":
 					var data struct {
@@ -315,6 +311,10 @@ func (g *douyinWebDetailListener) start(parent context.Context, session readerSe
 						} `json:"response"`
 					}
 					if json.Unmarshal(event.Params, &data) == nil && (data.Type == "XHR" || data.Type == "Fetch") && data.Response.Status == 200 && !data.Response.FromServiceWorker && g.detailURL(data.Response.URL) {
+						if err := authorize(); err != nil {
+							g.fail(err)
+							return
+						}
 						pending[data.RequestID] = true
 					}
 				case "Network.loadingFinished":
@@ -324,6 +324,10 @@ func (g *douyinWebDetailListener) start(parent context.Context, session readerSe
 					}
 					if json.Unmarshal(event.Params, &data) != nil || !pending[data.RequestID] {
 						continue
+					}
+					if err := authorize(); err != nil {
+						g.fail(err)
+						return
 					}
 					delete(pending, data.RequestID)
 					if data.Length > maxDouyinWebDetailBytes {
