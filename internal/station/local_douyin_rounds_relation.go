@@ -40,6 +40,9 @@ type localDouyinRoundRelationResult struct {
 	Text                  string `json:"text,omitempty"`
 	Coverage              string `json:"coverage"`
 	ReplyEligible         bool   `json:"reply_eligible"`
+	targetRow             stationbrowser.DouyinCommentRelation
+	rootRow               *stationbrowser.DouyinCommentRelation
+	parentRow             *stationbrowser.DouyinCommentRelation
 }
 
 func validDouyinRoundRelationTargetPath(path string) bool {
@@ -240,6 +243,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 	}
 	digest := sha256.Sum256([]byte(got.AuthorUID))
 	result.State, result.CID, result.ReplyID, result.ReplyToReplyID = "observed", got.CID, got.ReplyID, got.ReplyToReplyID
+	result.targetRow = got
 	authorIsCreator := hex.EncodeToString(digest[:]) == evidence.creatorAccount
 	result.AuthorIsCreator = &authorIsCreator
 	result.Text = got.Text
@@ -290,6 +294,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 		return result, nil, apphost.ErrObservationInvalid
 	}
 	result.RootState = "observed"
+	result.rootRow = &root
 	parent, readErr := readChild(rootID, got.ReplyToReplyID)
 	if err := classifyRead(readErr, &result.ParentState, "parent_not_in_natural_page"); err != nil {
 		return result, nil, err
@@ -306,6 +311,7 @@ func (t *localToolSet) readDouyinRoundRelation(ctx context.Context, m *localDouy
 		return result, nil, apphost.ErrObservationInvalid
 	}
 	result.ParentState = "observed"
+	result.parentRow = &parent
 	parentDigest := sha256.Sum256([]byte(parent.AuthorUID))
 	parentIsCreator := hex.EncodeToString(parentDigest[:]) == evidence.creatorAccount
 	result.ParentAuthorIsCreator = &parentIsCreator

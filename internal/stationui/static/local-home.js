@@ -3608,8 +3608,8 @@
         item.candidates.some((candidate) => candidate.path === "comment.comment.cid") &&
         item.candidates.every((candidate) => ["comment.comment.cid", "comment.parent_id"].includes(candidate.path));
       if ((detailTarget || listTarget) && /^[1-9]\d{0,19}$/.test(item.work_id || "")) {
-        card.append(memoryButton("让 Agent 只读核对这条通知", "button compact secondary", () => {
-          const draft = `请只核对北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 读取这条已保存通知，再核对本人作品及现有 context；详情候选或结构唯一的 31 类列表候选都可用 relation 对明确 CID 做只读定向探测。若同一来源有主楼编号候选，可带其路径和编号定向读取；comment.parent_id 仅是候选，必须用目标评论的 reply_id 核对。没有主楼编号候选时，仅在自然主列表命中目标 CID 后，从其结构化关系读取主楼；缺页保持待核对。候选冲突或关系不明时请说明原因，不要猜目标、遍历作品评论区或创建回复。relation 的结果不是回复资格；通知到目标评论的工作台链路尚未验真，不要点赞、评论或投稿。`;
+        card.append(memoryButton("让 Agent 核对并准备回复", "button compact secondary", () => {
+          const draft = `请处理北京时间 ${noticeDay} 的抖音作品 ${item.work_id} 收到的通知 ${item.notice_id}。先用 douyin_rounds 的 notice 核对已保存通知，并在本轮用 context 从首页顺序读完同一作品的简介、音轨和画面证据，直到 agent_context_read_complete=true；证据缺失时再用 locate、prepare 补齐，然后从首页重读。详情候选或结构唯一的 31 类列表候选可用 relation 对明确 CID 做只读定向探测；comment.parent_id 只是主楼候选，须与目标行的 reply_id 核对，直接父评论须另看 reply_to_reply_id。关系核实且符合“主评论或直接回复本账号子评论”时，用 locate 取得当前本人作品 content_id，并先用 app_observe(comments) 建立该作品入口，再调用 douyin_notice_reply(create) 保存待提交回复任务及草稿正文供我审阅。候选冲突、缺页、账号或父评论不明时说明停止位置，不要猜目标或遍历评论区。不要提交回复、点赞或投稿。`;
           handoffDouyinWorkbenchChat(draft, feedback);
         }));
       }

@@ -157,10 +157,18 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 		contextNext["agent_pages_read"] != float64(2) {
 		t.Fatalf("saved context cursor continuation: %v %v", contextNext, err)
 	}
+	completed, err := tools.completedDouyinRoundContextRead(t.Context(), day, workID)
+	if err != nil || completed.Date != day || completed.WorkID != workID || completed.PagesRead != 2 ||
+		completed.MediaSHA != hash || completed.Epoch == "" || completed.Grant == "" {
+		t.Fatalf("completed context was not retained and revalidated: %+v %v", completed, err)
+	}
 	contextNext, err = call(tools, map[string]any{"action": "context", "date": day, "work_id": workID, "limit": 1, "offset": 1})
 	if err != nil || len(contextNext["media_pages"].([]any)) != 1 || contextNext["next_offset"] != nil ||
 		contextNext["snapshot_state"] != "legacy_offset_unpinned" || contextNext["agent_context_read_complete"] != false {
 		t.Fatalf("saved context continuation: %v %v", contextNext, err)
+	}
+	if staleComplete, err := tools.completedDouyinRoundContextRead(t.Context(), day, workID); err == nil || staleComplete != (localDouyinRoundContextRead{}) {
+		t.Fatalf("legacy offset reused completed context: %+v %v", staleComplete, err)
 	}
 	if _, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID,
 		"cursor": contextCursor, "offset": 1}); err == nil {
@@ -183,8 +191,22 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 		t.Fatalf("changed creator description reused prior page cursor: %v %v", stale, err)
 	}
 	updated, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID})
-	if err != nil || !strings.Contains(updated["creator_text"].(string), "更新后标题") || updated["snapshot_state"] != "stable" {
+	if err != nil || !strings.Contains(updated["creator_text"].(string), "更新后标题") ||
+		updated["snapshot_state"] != "stable" || updated["agent_context_read_complete"] != true {
 		t.Fatalf("context could not be refreshed after a same-work update: %v %v", updated, err)
+	}
+	if refreshed, err := tools.completedDouyinRoundContextRead(t.Context(), day, workID); err != nil ||
+		refreshed.PagesRead != 2 || refreshed.CreatorKey == completed.CreatorKey || refreshed.Epoch == completed.Epoch {
+		t.Fatalf("single-page refresh reused an old context snapshot: %+v %v", refreshed, err)
+	}
+	if err := m.captureMemory(t.Context(), record, douyinMemoryWorks, creator, []localDouyinMemoryRecord{{
+		ID: workID, Work: workID, Label: "再次更新标题", Text: "作品编号 " + workID + "\n标题 再次更新标题",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tools.completedDouyinRoundContextRead(t.Context(), day, workID); err == nil ||
+		changed != (localDouyinRoundContextRead{}) || len(tools.douyinRoundContextCompleted) != 0 {
+		t.Fatalf("changed works-memory epoch kept completed context: %+v %v", changed, err)
 	}
 	code, current = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_memory", "revision": current["revision"],
 		"memory_scope": douyinMemoryWorks, "allow_memory": false}, true)
@@ -193,6 +215,10 @@ func TestLocalDouyinRoundsToolReadsSavedWorkContextWithoutPlatformAccess(t *test
 	}
 	if err := tools.ValidateGenerationSources(t.Context()); err == nil {
 		t.Fatal("revoked works-memory grant left previously read context usable")
+	}
+	if revokedComplete, err := tools.completedDouyinRoundContextRead(t.Context(), day, workID); err == nil ||
+		revokedComplete != (localDouyinRoundContextRead{}) || len(tools.douyinRoundContextCompleted) != 0 {
+		t.Fatalf("revoked grant kept completed context: %+v %v", revokedComplete, err)
 	}
 	if disclosed, err := call(tools, map[string]any{"action": "context", "date": day, "work_id": workID,
 		"cursor": contextCursor}); err == nil || disclosed != nil {

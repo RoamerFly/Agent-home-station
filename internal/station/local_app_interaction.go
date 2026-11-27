@@ -52,12 +52,16 @@ func (h *localChatService) interactionHostWithGuard(check func(context.Context, 
 		return nil, actor, err
 	}
 	validate := func(ctx context.Context, job pluginhost.Job, d apphost.InteractionDraft) error {
-		// A generic Douyin reply has only a rendered-comment text hash. It cannot
-		// prove which notification addressed that comment or who authored its
-		// direct parent. Apply this at the host validation boundary as well as
-		// the tool entry so an older pending job cannot submit after an upgrade.
 		if d.Target.AppID == douyinapp.ID && d.Kind == "reply_comment" {
-			return apphost.ErrInteractionDenied
+			// Only the dedicated notice-bound origin carries the saved notification,
+			// structured relation and completed work-context evidence. Old generic
+			// jobs remain denied at create, submit and resume.
+			if check != nil {
+				if err := check(ctx, job, d); err != nil {
+					return err
+				}
+			}
+			return h.validateDouyinNoticeReply(ctx, job, d)
 		}
 		if check != nil {
 			if err := check(ctx, job, d); err != nil {

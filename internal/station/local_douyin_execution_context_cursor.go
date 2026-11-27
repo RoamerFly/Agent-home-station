@@ -117,12 +117,16 @@ func (m *localDouyinWebLogin) executionWorkContextPage(ctx context.Context, scop
 		return result, nil
 	}
 	result.SnapshotState = "stable"
+	if epochAfter != "" {
+		result.contextEpoch = epochAfter
+		result.contextGrant = localCheckpointKey("douyin-context-cursor-v1", scope, source.Scope, record.Revision)
+	}
 	if result.NextOffset > 0 {
 		if epochAfter == "" {
 			return localDouyinExecutionContextRestart(workID, limit), nil
 		}
 		position := localDouyinExecutionContextCursor{Version: 1,
-			Grant: localCheckpointKey("douyin-context-cursor-v1", scope, source.Scope, record.Revision),
+			Grant: result.contextGrant,
 			Date:  day, WorkID: workID, Offset: result.NextOffset, Epoch: epochAfter,
 			CreatorKey:  localCheckpointKey("douyin-context-creator-v1", result.CreatorText, result.CreatorCoverage, result.CreatorObservedAt),
 			MediaSHA256: result.MediaSHA256}

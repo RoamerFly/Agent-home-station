@@ -59,6 +59,8 @@ type localDouyinExecutionWorkContext struct {
 	EffectiveLimit           int                          `json:"effective_limit"`
 	Coverage                 string                       `json:"coverage"`
 	ReplyEligible            bool                         `json:"reply_eligible"`
+	contextEpoch             string
+	contextGrant             string
 }
 
 func (p *localDouyinWebObservation) captureCreatorMediaContext(ctx context.Context, a localDouyinWebAccess,
