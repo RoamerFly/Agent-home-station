@@ -112,6 +112,14 @@ func (s *localModelStore) Save(input LocalModelInput) (LocalModelSettings, error
 		key = input.APIKey
 	}
 	next := localModelRecord{LocalModelSettings: input.LocalModelSettings, APIKey: key}
+	if s.personaPath != "" {
+		// The shared Markdown is authoritative. A stale model form may still
+		// submit the old field, but it cannot replace the main character.
+		if input.Persona != "" && input.Persona != current.Persona {
+			return LocalModelSettings{}, errors.New("主角色请在角色文档中编辑")
+		}
+		next.Persona = current.Persona
+	}
 	next.Revision = current.Revision + 1
 	next.KeyConfigured = key != ""
 	if err := validateLocalModelRecord(next); err != nil {
@@ -147,14 +155,12 @@ func (s *localModelStore) ClientSnapshot(onUsage ...func(deepseek.Usage)) (compa
 	}
 	settings := localModelView(record)
 	if s.personaPath != "" {
-		content, readErr := os.ReadFile(s.personaPath)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) || readErr == nil && (len(content) == 0 || len(content) > 32000 || !utf8.Valid(content)) {
+		content, _, readErr := readSharedPersonaDocument(s.personaPath)
+		if readErr != nil {
 			return nil, settings, errors.New("角色文档不可读")
 		}
-		if readErr == nil {
-			settings.Persona = characterrefs.Append(s.personaPath, string(content), 32000)
-			record.Persona = settings.Persona
-		}
+		settings.Persona = characterrefs.Append(s.personaPath, content, 32000)
+		record.Persona = settings.Persona
 	}
 	if record.APIKey == "" {
 		return nil, settings, errors.New("本机聊天尚未配置模型密钥")

@@ -3,10 +3,11 @@
   const $ = (selector) => document.querySelector(selector);
   const workbenchQuery = new URLSearchParams(window.location.search).get("workbench");
   const standaloneWorkbenchApp = ["douyin", "bilibili"].includes(workbenchQuery) ? workbenchQuery : "";
-  const state = { csrf: "", home: null, model: null, busy: false, chat: newChatView(), toolGrants: null };
-  const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
+  const state = { csrf: "", home: null, model: null, personaDocument: { content: "", revision: 0, path: "", loaded: false, loading: false, saving: false, dirty: false }, busy: false, chat: newChatView(), toolGrants: null };
+  const tabs = ["chat", "memory", "apps", "works", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
+  let works = newWorksView();
   let memory = newMemoryView();
   let projectTools = newProjectToolsView();
   let liveSafety = newLiveSafety();
@@ -16,8 +17,18 @@
   const connectionView = $("#connection-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const initializeButton = $("#initialize-button"), accessButton = $("#access-button");
   const settingsAccessButton = $("#settings-access-button"), chatStream = $("#chat-stream");
+  let messageClearTimer = 0;
 
-  function showMessage(text, kind = "") { message.textContent = text || ""; message.className = `page-message${kind ? ` is-${kind}` : ""}`; }
+  function showMessage(text, kind = "") {
+    window.clearTimeout(messageClearTimer);
+    message.textContent = text || "";
+    message.className = `page-message${kind ? ` is-${kind}` : ""}`;
+    if (text && kind === "success") {
+      messageClearTimer = window.setTimeout(() => {
+        if (message.textContent === text && message.classList.contains("is-success")) showMessage("");
+      }, 4000);
+    }
+  }
   function safeServerMessage(body, fallback) { const value = body && (body.error || body.message || body.detail); return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : fallback; }
   function responseMessage(status) {
     if (status === 401 || status === 403) return "本机连接暂时不可用，请重试。";
@@ -62,6 +73,7 @@
   function setActiveView(view) {
     if (activeView === "project-tools" && view !== "project-tools") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     if (activeView === "chat" && view !== "chat") { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
+    if (activeView === "works" && view !== "works") { works.controller?.abort(); works.generation++; works.loading = false; }
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -73,9 +85,10 @@
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") refreshProjectToolsPanel();
+    if (view === "works" && state.home?.initialized) void loadWorks();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
-    if (view === "settings") void loadToolGrants();
+    if (view === "settings") { void loadToolGrants(); void loadPersonaDocument(); }
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
@@ -99,6 +112,9 @@
       douyinWork: { page: null, cursors: [0], reading: false, readID: 0, pending: new Map(), error: "", notice: "", actionError: false },
       douyinActivityTab: "publications",
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
+  }
+  function newWorksView() {
+    return { items: [], nextCursor: "", hasMore: false, loading: false, application: "all", status: "active", query: "", filterKey: "", generation: 0, controller: null, selected: "" };
   }
   function newProjectToolsView() {
     return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, aliyunBalance: null, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
@@ -1504,16 +1520,217 @@
     panel.append(note, records, more);
     return panel;
   }
-  $("#artifact-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector("button"), path = $("#artifact-path").value;
+  function workURL(value) {
+    if (typeof value !== "string" || !value) return "";
+    try {
+      const url = new URL(value, window.location.origin);
+      return url.origin === window.location.origin && url.pathname.startsWith("/api/local/works/") ? url.href : "";
+    } catch (_) { return ""; }
+  }
+  function workSize(value) {
+    const size = Number(value);
+    if (!Number.isFinite(size) || size < 0) return "";
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  function workDate(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+  }
+  function workSource(value) {
+    return ({ home: "大肥鱼的家", wechat: "微信", douyin: "抖音", bilibili: "哔哩哔哩" })[value] || value || "其他来源";
+  }
+  function workActionNotice(text, error = false, undo = null) {
+    const host = $("#works-action");
+    host.replaceChildren(document.createTextNode(text));
+    host.classList.toggle("is-error", error);
+    host.hidden = false;
+    if (undo) host.append(memoryButton("撤销移至待删除", "button compact secondary", () => void restoreWork(undo)));
+  }
+  async function restoreWork(item) {
+    const url = workURL(item.restore_url) || `/api/local/works/${encodeURIComponent(item.id)}/restore`;
+    try {
+      await request(url, { method: "POST", body: JSON.stringify({}) });
+      workActionNotice(`${item.name || "作品"}已恢复。`);
+      await loadWorks();
+    } catch (error) { workActionNotice(error.message || "恢复失败，请重试。", true); }
+  }
+  async function trashWork(item, button) {
     button.disabled = true;
     try {
-      const artifact = await request("/api/local/artifacts", { method: "POST", body: JSON.stringify({ path, request_key: crypto.randomUUID() }) });
-      $("#artifact-result").textContent = artifact.filename + " 已登记，作品编号 " + artifact.artifact_id;
-    } catch (error) { $("#artifact-result").textContent = error.message; }
-    finally { button.disabled = false; }
+      const value = await request(`/api/local/works/${encodeURIComponent(item.id)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: item.version }) });
+      workActionNotice(`${item.name || "作品"}已移至待删除。`, false, value.item?.can_restore ? value.item : null);
+      if (works.selected === item.id) renderWorkPreview(null);
+      await loadWorks();
+    } catch (error) { workActionNotice(error.message || "移至待删除失败，请重试。", true); button.disabled = false; }
+  }
+  async function revealWork(item, button) {
+    button.disabled = true;
+    try {
+      await request(`/api/local/works/${encodeURIComponent(item.id)}/reveal`, { method: "POST" });
+      workActionNotice(`${item.name || "作品"}已在文件夹中选中。`);
+    } catch (error) {
+      workActionNotice(error.message || "打开所在文件夹失败，请重试。", true);
+    } finally { button.disabled = false; }
+  }
+  function editWorkName(item, detail, button) {
+    if (detail.querySelector(".works-rename")) return;
+    const form = appElement("form", "", "works-rename"), input = document.createElement("input");
+    input.type = "text"; input.required = true; input.maxLength = 255; input.value = item.name || "";
+    input.setAttribute("aria-label", `${item.name || "作品"}的新名称`);
+    const save = appElement("button", "保存名称", "button compact primary"); save.type = "submit";
+    const cancel = memoryButton("取消", "button compact quiet", () => { form.remove(); button.hidden = false; button.focus(); });
+    form.append(input, save, cancel); detail.append(form); button.hidden = true; input.focus(); input.select();
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (!name) return;
+      save.disabled = true; cancel.disabled = true;
+      try {
+        const result = await request(`/api/local/works/${encodeURIComponent(item.id)}`, { method: "PATCH", body: JSON.stringify({ name, expected_version: item.version }) });
+        if (works.selected === item.id && result.item) renderWorkPreview(result.item);
+        workActionNotice("作品名称已更新。");
+        await loadWorks();
+      } catch (error) {
+        workActionNotice(error.status === 409 ? "作品已在别处更新。当前名称仍保留在输入框中，请刷新列表后重试。" : error.message || "重命名失败，请重试。", true);
+        save.disabled = false; cancel.disabled = false;
+      }
+    });
+  }
+  function syncWorkSelection() {
+    for (const row of $("#works-list").querySelectorAll(".works-item")) {
+      const selected = Boolean(works.selected && row.dataset.workId === works.selected);
+      row.classList.toggle("is-selected", selected);
+      row.querySelector(".works-item-select")?.setAttribute("aria-pressed", String(selected));
+    }
+  }
+  function renderWorkPreview(item) {
+    const host = $("#works-preview"), content = $("#works-view .works-content");
+    host.replaceChildren();
+    works.selected = item?.id || "";
+    content.classList.toggle("has-preview", Boolean(item));
+    if (!item) {
+      host.append(appElement("p", "选择左侧作品查看详情。", "works-preview-empty"));
+      syncWorkSelection();
+      return;
+    }
+    host.append(appElement("h4", item.name || "作品详情"), appElement("p", [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · "), "works-preview-meta"));
+    const actions = appElement("div", "", "works-preview-actions");
+    if (works.status === "active" && item.can_reveal) {
+      const reveal = memoryButton("打开所在文件夹", "button compact secondary", () => void revealWork(item, reveal));
+      actions.append(reveal);
+    }
+    if (works.status === "active" && item.can_trash) {
+      const trash = memoryButton("删除作品", "button compact quiet", () => void trashWork(item, trash));
+      actions.append(trash);
+    }
+    if (item.can_restore) actions.append(memoryButton("恢复作品", "button compact secondary", () => void restoreWork(item)));
+    const downloadURL = workURL(item.download_url);
+    if (downloadURL) {
+      const download = appElement("a", "下载作品", "button compact secondary");
+      download.href = downloadURL; download.setAttribute("download", item.name || "");
+      actions.append(download);
+    }
+    if (actions.childElementCount) host.append(actions);
+    const url = item.previewable ? workURL(item.preview_url) : "";
+    if (url) {
+      const mediaType = String(item.mime || "").toLowerCase();
+      let media;
+      if (mediaType.startsWith("image/")) {
+        media = document.createElement("img"); media.alt = item.name || "作品图片";
+      } else if (mediaType.startsWith("video/")) {
+        media = document.createElement("video"); media.controls = true; media.preload = "metadata";
+      } else if (mediaType.startsWith("audio/")) {
+        media = document.createElement("audio"); media.controls = true; media.preload = "metadata";
+      } else {
+        media = document.createElement("iframe"); media.title = `${item.name || "作品"}预览`; media.setAttribute("sandbox", "");
+      }
+      const failure = appElement("p", "预览暂时无法打开，可下载后查看。", "works-preview-error"); failure.hidden = true;
+      media.addEventListener("error", () => { failure.hidden = false; });
+      media.src = url;
+      host.append(media, failure);
+    } else {
+      host.append(appElement("p", item.can_restore ? "此作品在待删除中，恢复后即可查看。" : "此格式暂不支持站内预览，可下载后查看。", "works-preview-empty"));
+    }
+    syncWorkSelection();
+  }
+  function renderWorks() {
+    const host = $("#works-list");
+    host.replaceChildren();
+    if (!works.items.length && !works.loading) host.append(appElement("p", works.status === "trash" ? "待删除中没有作品。" : "这个范围内还没有可显示的作品。", "apps-empty"));
+    for (const item of works.items) {
+      const row = appElement("article", "", "works-item"), detail = appElement("div", ""), actions = appElement("div", "", "works-item-actions");
+      row.dataset.workId = item.id;
+      const meta = [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · ");
+      const title = appElement("h3", ""), select = memoryButton(item.name || item.path || "未命名作品", "works-item-select", () => renderWorkPreview(item));
+      select.setAttribute("aria-label", `查看${item.name || "作品"}`);
+      title.append(select); detail.append(title, appElement("p", meta));
+      row.addEventListener("click", event => { if (!event.target.closest("button, a, input, select")) renderWorkPreview(item); });
+      const downloadURL = workURL(item.download_url);
+      if (downloadURL) {
+        const download = appElement("a", "下载", "button compact secondary");
+        download.href = downloadURL; download.setAttribute("download", item.name || "");
+        download.setAttribute("aria-label", `下载${item.name || "作品"}`); actions.append(download);
+      }
+      if (works.status === "active" && item.can_rename) {
+        const rename = memoryButton("重命名", "button compact secondary", () => editWorkName(item, detail, rename));
+        rename.setAttribute("aria-label", `重命名${item.name || "作品"}`); actions.append(rename);
+      }
+      if (works.status === "active" && item.can_trash) {
+        const trash = memoryButton("移至待删除", "button compact quiet", () => void trashWork(item, trash));
+        trash.setAttribute("aria-label", `将${item.name || "作品"}移至待删除`); actions.append(trash);
+      }
+      if (works.status === "trash" && item.can_restore) {
+        const restore = memoryButton("恢复", "button compact secondary", () => void restoreWork(item));
+        restore.setAttribute("aria-label", `恢复${item.name || "作品"}`); actions.append(restore);
+      }
+      row.append(detail, actions); host.append(row);
+    }
+    host.setAttribute("aria-busy", String(works.loading));
+    $("#works-more").hidden = !works.hasMore;
+    $("#works-more").disabled = works.loading;
+    syncWorkSelection();
+  }
+  async function loadWorks(append = false) {
+    if (activeView !== "works" || append && !works.hasMore) return;
+    works.controller?.abort();
+    const controller = new AbortController(), generation = ++works.generation;
+    works.controller = controller; works.loading = true;
+    if (!append) {
+      const filterKey = JSON.stringify([works.application, works.status, works.query]);
+      if (works.filterKey !== filterKey) { works.items = []; renderWorkPreview(null); }
+      works.filterKey = filterKey;
+      works.nextCursor = ""; works.hasMore = false;
+    }
+    $("#works-status").textContent = append ? "正在加载更多作品…" : "正在读取作品…";
+    renderWorks();
+    try {
+      const params = new URLSearchParams({ application: works.application, status: works.status, q: works.query, limit: "40" });
+      if (append && works.nextCursor) params.set("cursor", works.nextCursor);
+      const value = await request(`/api/local/works?${params}`, { signal: controller.signal });
+      if (generation !== works.generation || activeView !== "works") return;
+      if (!Array.isArray(value.items)) throw new Error("作品列表返回不完整，请重试。");
+      works.items = append ? works.items.concat(value.items) : value.items;
+      works.nextCursor = value.next_cursor || "";
+      works.hasMore = value.has_more === true;
+      if (works.selected) renderWorkPreview(works.items.find(item => item.id === works.selected) || null);
+      $("#works-status").textContent = `已显示 ${works.items.length} 件作品${works.hasMore ? "，可继续加载" : ""}。`;
+    } catch (error) {
+      if (generation !== works.generation || error.name === "AbortError") return;
+      $("#works-status").textContent = error.message || "作品列表暂时无法读取。";
+    } finally {
+      if (generation === works.generation) { works.loading = false; renderWorks(); }
+    }
+  }
+  $("#works-filter-form").addEventListener("submit", event => {
+    event.preventDefault();
+    works.application = $("#works-application").value;
+    works.status = $("#works-status-filter").value;
+    works.query = $("#works-query").value.trim();
+    void loadWorks();
   });
+  $("#works-more").addEventListener("click", () => void loadWorks(true));
   async function runWorkerAction(id, method, action, body) {
     const current = apps;
     if (current.setupBusy || current.loading) return;
@@ -4935,18 +5152,18 @@
     const draft = current.personas.get(id) || { revision: 0, text: "", loaded: false, editing: false, busy: false, error: "" };
     current.personas.set(id, draft);
     const form = appElement("form", "", "app-persona-form");
-    form.setAttribute("aria-label", `${label}子角色`);
+    form.setAttribute("aria-label", `${label}应用补充设定`);
     const heading = appElement("div", "", "app-persona-heading");
     const edit = appElement("button", draft.busy ? "读取中…" : "编辑", "text-action");
     edit.type = "button"; edit.disabled = draft.busy; edit.hidden = draft.editing;
-    heading.append(appElement("strong", "应用子角色"), edit);
-    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用，留空沿用主角色。" : draft.loaded && draft.text ? draft.text : "在主角色之上，补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
+    heading.append(appElement("strong", "应用补充设定"), edit);
+    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用。留空时只使用共享主角色设定。" : draft.loaded && draft.text ? draft.text : "可用 Markdown 补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
     const input = document.createElement("textarea");
-    input.setAttribute("aria-label", `${label}子角色设定`); input.maxLength = 4000; input.rows = 3;
-    input.placeholder = "留空沿用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
+    input.setAttribute("aria-label", `${label}补充设定 Markdown 内容`); input.maxLength = 4000; input.rows = 5;
+    input.placeholder = "留空时只使用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
     input.addEventListener("input", () => { draft.text = input.value; });
     const actions = appElement("div", "", "settings-actions"); actions.hidden = !draft.editing;
-    const save = appElement("button", draft.busy ? "保存中…" : "保存子角色", "button compact primary"); save.type = "submit"; save.disabled = draft.busy;
+    const save = appElement("button", draft.busy ? "保存中…" : "保存补充设定", "button compact primary"); save.type = "submit"; save.disabled = draft.busy;
     const cancel = appElement("button", "取消", "text-action"); cancel.type = "button"; cancel.disabled = draft.busy;
     actions.append(save, cancel);
     edit.addEventListener("click", async () => {
@@ -4965,7 +5182,7 @@
         const value = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`, { method: "PUT", body: JSON.stringify({ revision: draft.revision, persona: draft.text }) });
         if (current !== apps) return;
         draft.revision = value.revision; draft.text = value.persona; draft.editing = false; draft.error = "";
-        appFeedback(`${label}子角色已保存，下次模型调用生效。`);
+        appFeedback(`${label}补充设定已保存，下次模型调用生效。`);
       } catch (error) {
         draft.error = error.message;
         if (error.status === 409) { try { const latest = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`); if (current === apps) draft.revision = latest.revision; } catch (_) { /* Keep the draft and its revision until a fresh read succeeds. */ } }
@@ -7285,6 +7502,11 @@
     projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
     appFeedback("");
+    works.controller?.abort(); works.generation++;
+    works = newWorksView();
+    $("#works-list").replaceChildren(); renderWorkPreview(null);
+    $("#works-status").textContent = ""; $("#works-action").hidden = true;
+    $("#works-status-filter").value = "active"; $("#works-application").value = "all"; $("#works-query").value = "";
     $("#project-tools-list").replaceChildren();
     projectToolsFeedback("");
     setActiveView("chat");
@@ -7325,7 +7547,7 @@
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
       if (activeView === "chat") void loadRecentMemory();
-      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
+      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "works" ? loadWorks() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   // General capabilities are the owner's to hand over. The list is explicit so
@@ -7375,6 +7597,63 @@
       showMessage(feedback.textContent, "error");
     }
   }
+  function personaStatus(text, error = false) {
+    const status = $("#persona-status");
+    status.textContent = text;
+    status.classList.toggle("is-error", error);
+  }
+  async function loadPersonaDocument(force = false) {
+    const draft = state.personaDocument;
+    if (draft.loading || draft.saving || draft.loaded && !force) return;
+    draft.loading = true;
+    $("#persona-save").disabled = true;
+    $("#persona-reload").disabled = true;
+    personaStatus("正在读取主角色设定…");
+    try {
+      const value = await request("/api/persona-document");
+      if (typeof value.content !== "string" || value.revision === undefined) throw new Error("主角色设定返回不完整，请重试。");
+      draft.content = value.content;
+      draft.revision = value.revision;
+      draft.path = value.path || "";
+      draft.loaded = true;
+      draft.dirty = false;
+      $("#persona-content").value = value.content;
+      personaStatus("已读取共享主角色设定。修改后请单独保存主角色。");
+    } catch (error) {
+      personaStatus(error.message || "主角色设定暂时无法读取。", true);
+    } finally {
+      draft.loading = false;
+      $("#persona-save").disabled = !draft.loaded;
+      $("#persona-reload").disabled = false;
+    }
+  }
+  async function savePersonaDocument(event) {
+    event.preventDefault();
+    const draft = state.personaDocument;
+    if (!draft.loaded || draft.loading || draft.saving) return;
+    draft.saving = true;
+    $("#persona-save").disabled = true;
+    $("#persona-reload").disabled = true;
+    personaStatus("正在保存主角色设定…");
+    try {
+      const value = await request("/api/persona-document", { method: "POST", body: JSON.stringify({ content: $("#persona-content").value, revision: draft.revision }) });
+      if (typeof value.content !== "string" || value.revision === undefined) throw new Error("保存结果不完整，请重新读取核对。");
+      draft.content = value.content;
+      draft.revision = value.revision;
+      draft.path = value.path || draft.path;
+      draft.dirty = false;
+      $("#persona-content").value = value.content;
+      personaStatus("主角色设定已保存；已接入角色设定的应用会在下次生成时读取。");
+    } catch (error) {
+      personaStatus(error.status === 409
+        ? "主角色设定已在别处更新。当前编辑已保留；请复制内容，再重新读取并合并。"
+        : error.message || "主角色设定未能保存。", true);
+    } finally {
+      draft.saving = false;
+      $("#persona-save").disabled = false;
+      $("#persona-reload").disabled = false;
+    }
+  }
   function setModelForm(model) {
     const source = model || {};
     $("#model-revision").value = String(source.revision || 0);
@@ -7387,7 +7666,6 @@
     $("#model-direct-media").checked = !!source.direct_media_input;
     $("#model-reasoning").value = ["high", "max"].includes(source.reasoning_effort) ? source.reasoning_effort : "max";
     $("#model-reasoning").disabled = !$("#model-thinking").checked;
-    $("#model-persona").value = source.persona || "";
     $("#model-api-key").value = ""; $("#model-api-key").placeholder = source.key_configured ? "已保存；留空不改" : "填写后保存";
     $("#model-clear-key").checked = false;
   }
@@ -7588,7 +7866,7 @@
   }
   async function saveModel(event) {
     event.preventDefault();
-    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, persona: $("#model-persona").value.trim(), api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
+    const payload = { revision: Number($("#model-revision").value || 0), provider: $("#model-provider").value, base_url: $("#model-base-url").value.trim(), model: $("#model-name").value.trim(), max_tokens: Number($("#model-max-tokens").value), thinking_enabled: $("#model-thinking").checked, task_reasoning: $("#model-task-reasoning").value, direct_media_input: $("#model-direct-media").checked, reasoning_effort: $("#model-reasoning").value, api_key: $("#model-api-key").value, clear_key: $("#model-clear-key").checked };
     const button = $("#model-save"); button.disabled = true;
     try {
       state.model = await request("/api/local/model", { method: "PUT", body: JSON.stringify(payload) }); setModelForm(state.model);
@@ -7716,7 +7994,7 @@
       } else {
         const opener = closed?.record.id;
         apps.openID = "";
-        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+        $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .apps-layout"));
         renderApps(false);
         const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
         (button || $("#apps-search")).focus({ preventScroll: true });
@@ -7732,7 +8010,7 @@
     const opener = apps.openID;
     clearWechatRelocation(apps); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps);
     apps.openID = ""; renderLiveSafety();
-    $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .work-register"));
+    $("#apps-view").insertBefore($("#apps-feedback"), $("#apps-view .apps-layout"));
     if (activeView === "apps" && opener) {
       renderApps(false);
       const button = [...$("#apps-list").querySelectorAll("[data-app]")].find((entry) => entry.dataset.app === opener);
@@ -7768,6 +8046,17 @@
   $("#project-tools-refresh").addEventListener("click", () => { projectToolsFeedback(""); refreshProjectToolsPanel(); });
   $("#open-settings-button").addEventListener("click", () => setActiveView("settings")); $("#back-to-chat-button").addEventListener("click", () => setActiveView("chat"));
   $("#model-form").addEventListener("submit", saveModel);
+  $("#persona-form").addEventListener("submit", savePersonaDocument);
+  $("#persona-content").addEventListener("input", () => {
+    const draft = state.personaDocument;
+    if (!draft.loaded) return;
+    draft.dirty = $("#persona-content").value !== draft.content;
+    personaStatus(draft.dirty ? "主角色有未保存的修改。" : "主角色与已保存内容一致。");
+  });
+  $("#persona-reload").addEventListener("click", () => {
+    if (state.personaDocument.dirty && !window.confirm("当前主角色修改尚未保存。重新读取会替换编辑内容，是否继续？")) return;
+    void loadPersonaDocument(true);
+  });
   $("#model-thinking").addEventListener("change", () => { $("#model-reasoning").disabled = !$("#model-thinking").checked; }); $("#chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#chat-input").value); });
   $("#chat-memory-link-cancel").addEventListener("click", () => { state.chat.link = null; renderChat(); $("#chat-input").focus(); });
   $("#load-older-button").addEventListener("click", () => loadChat(false));

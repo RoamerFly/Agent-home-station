@@ -25,9 +25,10 @@ import (
 )
 
 type localArtifactStore struct {
-	noteMu sync.Mutex
-	home   *localHomeService
-	chat   *localChatService
+	noteMu  sync.Mutex
+	worksMu sync.Mutex
+	home    *localHomeService
+	chat    *localChatService
 }
 
 type localArtifact struct {
@@ -390,6 +391,7 @@ func (s *localArtifactStore) publishFile(ctx context.Context, in localArtifactIn
 }
 
 func (s *localArtifactStore) routes(owner *websession.Store, mux *http.ServeMux) {
+	s.worksRoutes(owner, mux)
 	mux.HandleFunc("POST /api/local/artifacts", owner.Protect(func(w http.ResponseWriter, r *http.Request) {
 		var in localArtifactInput
 		if !websession.Decode(w, r, &in) {

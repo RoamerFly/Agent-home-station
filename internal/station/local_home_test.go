@@ -79,7 +79,16 @@ func (f *localHomeFixture) request(method, path string, value any, csrf bool) (i
 
 func (f *localHomeFixture) login() {
 	f.t.Helper()
-	code, out := f.request("POST", "/api/login", map[string]string{"password": "synthetic-local-password"}, false)
+	// The workstation establishes an owner session on its loopback-only
+	// /api/session route. Small standalone handler fixtures still mount the
+	// legacy password route explicitly and have no LocalHomeHandler.
+	var code int
+	var out map[string]any
+	if f.handler != nil {
+		code, out = f.request("GET", "/api/session", nil, false)
+	} else {
+		code, out = f.request("POST", "/api/login", map[string]string{"password": "synthetic-local-password"}, false)
+	}
 	if code != http.StatusOK {
 		f.t.Fatalf("local login: %d %#v", code, out)
 	}

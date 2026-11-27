@@ -59,3 +59,20 @@ func TestWorkspaceRootPrefersModernWhenBothExist(t *testing.T) {
 		t.Fatalf("workspace root = %q, want %q", got, want)
 	}
 }
+
+func TestPersonaOnlyModernRootKeepsLegacyHome(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	legacy := filepath.Join(data, "workspace")
+	if err := os.MkdirAll(filepath.Join(legacy, "home", "projects"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(data, "applications"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSharedPersonaDocument(data); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultWorkspaceRoot(data); got != legacy {
+		t.Fatalf("persona-only root displaced legacy home: %q", got)
+	}
+}

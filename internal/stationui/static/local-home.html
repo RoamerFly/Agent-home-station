@@ -23,6 +23,7 @@
             <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M21 11.5a8 8 0 0 1-8.5 7.5H4l1.5-3A7 7 0 0 1 4 11.5 8 8 0 0 1 12.5 4a8 8 0 0 1 8.5 7.5Z M8 11h9"/></svg><span>聊天</span></button>
             <button id="memory-tab" class="local-tab" type="button" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M3 6a7 7 0 0 1 9 2 7 7 0 0 1 9-2v13a7 7 0 0 0-9 2 7 7 0 0 0-9-2Z M12 8v13"/></svg><span>生活与记忆</span></button>
             <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z"/></svg><span>应用</span></button>
+            <button id="works-tab" class="local-tab" type="button" role="tab" aria-controls="works-view" aria-selected="false" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m6 16 4-4 3 3 3-4 3 5"/><circle cx="8" cy="8" r="1"/></svg><span>作品大全</span></button>
             <button id="project-tools-tab" class="local-tab" type="button" role="tab" aria-controls="project-tools-view" aria-selected="false" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-2-15-4 18"/></svg><span>项目工具</span></button>
             <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M10 3h4l1 3 3 1 3 3-1 2 1 2-3 3-3 1-1 3h-4l-1-3-3-1-3-3 1-2-1-2 3-3 3-1z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>设置</span></button>
           </div>
@@ -73,31 +74,6 @@
                 <button id="open-settings-button" class="button compact secondary" type="button" hidden>设置模型</button>
               </div>
               <div class="chat-layout">
-                <aside class="chat-conversations" aria-label="聊天会话">
-                  <div class="chat-conversations-heading">
-                    <strong>聊天</strong>
-                    <button class="button compact quiet" type="button" aria-label="新建聊天">＋</button>
-                  </div>
-                  <label class="chat-search">
-                    <span class="sr-only">搜索会话</span>
-                    <input type="search" placeholder="搜索会话" autocomplete="off">
-                  </label>
-                  <div class="chat-conversation-list">
-                    <div class="chat-conversation is-active">
-                      <strong>日常闲聊</strong><small>今天的工作进展如何？</small><time>20:47</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>项目讨论</strong><small>接口方案已更新。</small><time>昨天</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>学习笔记</strong><small>整理了一份速查清单。</small><time>周二</time>
-                    </div>
-                    <div class="chat-conversation">
-                      <strong>灵感收集</strong><small>有个不错的想法，记录一下。</small><time>周一</time>
-                    </div>
-                  </div>
-                  <div class="button secondary chat-new-conversation" aria-hidden="true">＋ 新建聊天</div>
-                </aside>
                 <div class="chat-glass">
                   <div id="model-setup-note" class="model-setup-note" hidden>
                     <strong>先设置聊天模型</strong>
@@ -169,26 +145,42 @@
               </div>
             </section>
 
+            <section id="works-view" class="works-view" role="tabpanel" aria-labelledby="works-tab" hidden>
+              <header class="chat-heading-row works-heading">
+                <div><h3 id="works-title">作品大全</h3><p>浏览大肥鱼的家与各应用工作空间中的作品。</p></div>
+              </header>
+              <form id="works-filter-form" class="works-toolbar" role="search">
+                <label>状态
+                  <select id="works-status-filter"><option value="active">当前作品</option><option value="trash">待删除</option></select>
+                </label>
+                <label>来源
+                  <select id="works-application"><option value="all">全部作品</option><option value="home">大肥鱼的家</option><option value="wechat">微信</option><option value="douyin">抖音</option><option value="bilibili">哔哩哔哩</option></select>
+                </label>
+                <label>搜索作品
+                  <input id="works-query" type="search" placeholder="文件名或路径" autocomplete="off">
+                </label>
+                <button class="button compact primary" type="submit">查询</button>
+              </form>
+              <p id="works-status" class="works-status" role="status" aria-live="polite"></p>
+              <div id="works-action" class="works-action" role="status" aria-live="polite" hidden></div>
+              <div class="works-content">
+                <div id="works-list" class="works-list" aria-busy="false"></div>
+                <section id="works-preview" class="works-preview" aria-label="作品预览"><p class="works-preview-empty">选择左侧作品查看详情。</p></section>
+              </div>
+              <div class="works-footer"><button id="works-more" class="button compact secondary" type="button" hidden>加载更多作品</button></div>
+            </section>
+
             <section id="apps-view" class="apps-view" role="tabpanel" aria-labelledby="apps-tab" hidden>
               <header class="chat-heading-row">
                 <div>
                   <h3>应用中心</h3>
 
                 </div>
-                <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+                <div class="app-dialog-actions">
+                  <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+                </div>
               </header>
               <p id="apps-feedback" class="apps-feedback" role="status"></p>
-              <details class="identity-details work-register">
-                <summary>登记家目录中的作品</summary>
-                <form id="artifact-form" class="details-grid">
-                  <label for="artifact-path">成品文件</label>
-                  <div class="input-row">
-                    <input id="artifact-path" placeholder="如 作品/讲解.pdf" required autocomplete="off">
-                    <button class="button compact secondary" type="submit">登记作品</button>
-                  </div>
-                  <p id="artifact-result" class="apps-feedback" role="status">保存成品快照后，可在微信连接中授权交付。</p>
-                </form>
-              </details>
               <div class="apps-layout">
                 <div class="app-directory">
                   <div class="app-filters">
@@ -243,17 +235,25 @@
                   <h3 id="settings-heading">角色与模型</h3>
                   <p>主角色用于日常相处，各应用可单独补充。</p>
                 </div>
-                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存设置</button>
+                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存模型</button>
               </div>
+              <form id="persona-form" class="persona-form" aria-labelledby="persona-title">
+                <div class="persona-heading">
+                  <div>
+                    <h4 id="persona-title">主角色设定</h4>
+                    <p>所有应用共用这份 Markdown 设定。各应用可在自己的工作台添加补充设定。</p>
+                  </div>
+                  <div class="settings-actions">
+                    <button id="persona-reload" class="button compact secondary" type="button">重新读取</button>
+                    <button id="persona-save" class="button compact primary" type="submit">保存主角色</button>
+                  </div>
+                </div>
+                <label class="sr-only" for="persona-content">主角色 Markdown 内容</label>
+                <textarea id="persona-content" rows="12" spellcheck="false" placeholder="用 Markdown 写下大肥鱼的身份、性格和相处方式…" aria-describedby="persona-status"></textarea>
+                <p id="persona-status" role="status" aria-live="polite">正在读取主角色设定…</p>
+              </form>
               <form id="model-form" class="model-form">
                 <input id="model-revision" type="hidden" value="0">
-                <fieldset class="settings-group">
-                  <legend>主角色</legend>
-                  <p>决定她的性格和与你的相处方式，应用之外也会使用。</p>
-                  <label>性格与相处方式
-                    <textarea id="model-persona" name="persona" rows="4" maxlength="4000" placeholder="例如：自然真诚，喜欢探索新事物…"></textarea>
-                  </label>
-                </fieldset>
                 <fieldset class="settings-group">
                   <legend>聊天模型</legend>
                 <div class="field-grid">
