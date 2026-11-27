@@ -33,7 +33,7 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 			Details: []stationbrowser.DouyinNoticeDetail{{NoticeID: noticeID, NoticeType: 7, WorkID: workID,
 				CandidateFieldsValid: true, Candidates: []stationbrowser.DouyinNoticeCandidate{
 					{Path: "comment.cid", ID: "300"}, {Path: "comment.reply_id", ID: "400"},
-					{Path: "comment.comment.cid", ID: "300"},
+					{Path: "comment.comment.cid", ID: "300"}, {Path: "comment.parent_id", ID: "400"},
 					{Path: "comment.user.uid", ID: "901"},
 				}}}}); err != nil {
 		t.Fatal(err)
@@ -166,6 +166,26 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	if err != nil || fallback["thread_state"] != "self_child_observed" || fallback["reply_eligible"] != false {
 		t.Fatalf("missing embedded reply did not fall back to exact reply list: %v %v", fallback, err)
 	}
+	parentCandidate, err := call(tools, map[string]any{"target_path": "comment.comment.cid", "target_id": "300",
+		"root_path": "comment.parent_id", "root_id": "400"})
+	if err != nil || parentCandidate["thread_state"] != "self_child_observed" ||
+		parentCandidate["reply_id"] != "400" || parentCandidate["reply_eligible"] != false {
+		t.Fatalf("verified type-11 parent_id candidate lost exact reply-list fallback: %v %v", parentCandidate, err)
+	}
+	fallbackReader := m.readRelation
+	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
+		check func() error) (stationbrowser.DouyinCommentRelation, error) {
+		if req.RootID == "400" && req.TargetID == "300" {
+			return stationbrowser.DouyinCommentRelation{CID: "300", WorkID: workID, ReplyID: "401",
+				ReplyToReplyID: "500", AuthorUID: "901", Text: "主楼候选不匹配"}, check()
+		}
+		return fallbackReader(ctx, profile, req, check)
+	}
+	if mismatched, err := call(tools, map[string]any{"target_path": "comment.comment.cid", "target_id": "300",
+		"root_path": "comment.parent_id", "root_id": "400"}); err == nil || mismatched != nil {
+		t.Fatalf("unconfirmed parent_id became a relation: %v %v", mismatched, err)
+	}
+	m.readRelation = fallbackReader
 	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
 		check func() error) (stationbrowser.DouyinCommentRelation, error) {
 		if req.TargetID == "500" {
@@ -179,6 +199,11 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 		otherChild["parent_author_is_creator"] != false || otherChild["reply_eligible"] != false {
 		t.Fatalf("another person's child was not excluded: %v %v", otherChild, err)
 	}
+	otherDerived, err := call(tools, map[string]any{"target_path": "comment.comment.cid", "target_id": "300"})
+	if err != nil || otherDerived["thread_state"] != "other_child_observed" ||
+		otherDerived["parent_author_is_creator"] != false || otherDerived["reply_eligible"] != false {
+		t.Fatalf("derived root accepted another person's child: %v %v", otherDerived, err)
+	}
 	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
 		check func() error) (stationbrowser.DouyinCommentRelation, error) {
 		if req.TargetID == "300" {
@@ -191,6 +216,10 @@ func TestLocalDouyinRoundsRelationOnlyProbesSavedDetailCandidate(t *testing.T) {
 	directRoot, err := call(tools, args())
 	if err != nil || directRoot["thread_state"] != "direct_parent_is_root" || directRoot["reply_eligible"] != false {
 		t.Fatalf("direct reply to root was not excluded: %v %v", directRoot, err)
+	}
+	directDerived, err := call(tools, map[string]any{"target_path": "comment.comment.cid", "target_id": "300"})
+	if err != nil || directDerived["thread_state"] != "direct_parent_is_root" || directDerived["reply_eligible"] != false {
+		t.Fatalf("derived root accepted direct reply to main comment: %v %v", directDerived, err)
 	}
 	m.readRelation = func(ctx context.Context, profile string, req stationbrowser.DouyinCommentRelationRequest,
 		check func() error) (stationbrowser.DouyinCommentRelation, error) {

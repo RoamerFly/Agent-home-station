@@ -176,7 +176,7 @@ func noticeCandidateID(raw json.RawMessage) (id string, present, valid bool) {
 }
 
 func noticeCandidates(fields map[string]json.RawMessage) ([]DouyinNoticeCandidate, bool) {
-	candidates := make([]DouyinNoticeCandidate, 0, 13)
+	candidates := make([]DouyinNoticeCandidate, 0, 14)
 	add := func(path string, fields map[string]json.RawMessage, key string) bool {
 		raw, exists := fields[key]
 		if !exists {
@@ -218,6 +218,19 @@ func noticeCandidates(fields map[string]json.RawMessage) ([]DouyinNoticeCandidat
 			}
 		}
 		if branch == "comment" {
+			// A type-11 notice may carry the main-comment ID in parent_id.
+			// Keep it as an unclassified, single-read hint. The exact target
+			// row's reply_id must confirm it before the relation is trusted.
+			if rawType, exists := object["comment_type"]; exists &&
+				!bytes.Equal(bytes.TrimSpace(rawType), []byte("null")) {
+				var commentType int
+				if json.Unmarshal(rawType, &commentType) != nil {
+					return nil, false
+				}
+				if commentType == 11 && !add("comment.parent_id", object, "parent_id") {
+					return nil, false
+				}
+			}
 			// A web comment notice can wrap the target row one level deeper.
 			// Retain only IDs; the row text, profile and media remain private.
 			nestedRaw, exists := object["comment"]

@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS round_detail_candidates (
 func validDouyinRoundCandidate(candidate stationbrowser.DouyinNoticeCandidate) bool {
 	switch candidate.Path {
 	case "cid", "real_cid", "reply_id", "reply_to_reply_id", "user.uid",
-		"comment.cid", "comment.reply_id", "comment.reply_to_reply_id", "comment.user.uid",
+		"comment.cid", "comment.parent_id", "comment.reply_id", "comment.reply_to_reply_id", "comment.user.uid",
 		"comment.comment.cid", "comment.comment.reply_id", "comment.comment.reply_to_reply_id",
 		"reply_comment.cid", "reply_comment.reply_id", "reply_comment.reply_to_reply_id", "reply_comment.user.uid":
 	default:

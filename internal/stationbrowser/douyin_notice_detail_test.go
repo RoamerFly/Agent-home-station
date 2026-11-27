@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -155,5 +156,40 @@ func TestDouyinNestedCommentNoticeKeepsExactWorkAndTargetCandidate(t *testing.T)
 	badItems, err := parseDouyinNoticeDetail(t.Context(), bad, refs)
 	if err != nil || len(badItems) != 1 || badItems[0].WorkID != "" || badItems[0].CandidateFieldsValid {
 		t.Fatalf("conflicting nested work survived detail parsing: %+v, %v", badItems, err)
+	}
+}
+
+func TestDouyinNestedChildNoticeKeepsParentIDUnclassified(t *testing.T) {
+	// A child notice has a target CID but no reply_id. The type-11 parent_id
+	// is only a candidate for the root reply-list request; the exact target
+	// row must still confirm its reply_id before any relation is trusted.
+	raw := []byte(`{"status_code":0,"has_more":0,"notice_list_v2":[{"nid_str":"123456","type":31,"aweme_id":"200","comment":{"comment":{"cid":"500","aweme_id":"200","text":"private-child"},"aweme":{"aweme_id":"200"},"comment_type":11,"parent_id":"400","reply_comment":{"text":"private-parent"},"level1_comment":{"text":"private-root"}}}]}`)
+	want := []DouyinNoticeCandidate{{Path: "comment.parent_id", ID: "400"}, {Path: "comment.comment.cid", ID: "500"}}
+	page, err := parseDouyinNoticePage(t.Context(), raw)
+	if err != nil || len(page.Items) != 1 || page.Items[0].WorkID != "200" ||
+		!reflect.DeepEqual(page.Items[0].Candidates, want) {
+		t.Fatalf("child notice list lost unclassified candidates: %+v, %v", page, err)
+	}
+	items, err := parseDouyinNoticeDetail(t.Context(), raw, []noticeDetailRef{{id: "123456", requestType: 31}})
+	if err != nil || len(items) != 1 || items[0].WorkID != "200" || !items[0].CandidateFieldsValid ||
+		!reflect.DeepEqual(items[0].Candidates, want) {
+		t.Fatalf("child notice detail lost unclassified candidates: %+v, %v", items, err)
+	}
+	encoded, _ := json.Marshal(items)
+	for _, private := range []string{"private-child", "private-parent", "private-root"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("private child notice text retained: %s", private)
+		}
+	}
+	main := strings.Replace(string(raw), `"comment_type":11`, `"comment_type":1`, 1)
+	mainItems, err := parseDouyinNoticeDetail(t.Context(), []byte(main), []noticeDetailRef{{id: "123456", requestType: 31}})
+	if err != nil || len(mainItems) != 1 || len(mainItems[0].Candidates) != 1 ||
+		mainItems[0].Candidates[0] != (DouyinNoticeCandidate{Path: "comment.comment.cid", ID: "500"}) {
+		t.Fatalf("main-comment notice treated parent_id as a root: %+v, %v", mainItems, err)
+	}
+	bad := strings.Replace(string(raw), `"parent_id":"400"`, `"parent_id":"invalid"`, 1)
+	badItems, err := parseDouyinNoticeDetail(t.Context(), []byte(bad), []noticeDetailRef{{id: "123456", requestType: 31}})
+	if err != nil || len(badItems) != 1 || badItems[0].CandidateFieldsValid || len(badItems[0].Candidates) != 0 {
+		t.Fatalf("invalid child parent_id survived normalization: %+v, %v", badItems, err)
 	}
 }

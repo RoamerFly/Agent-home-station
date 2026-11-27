@@ -51,7 +51,7 @@ func validDouyinRoundRelationTargetPath(path string) bool {
 
 func validDouyinRoundRelationRootPath(path string) bool {
 	switch path {
-	case "reply_id", "comment.reply_id", "comment.comment.reply_id", "reply_comment.reply_id":
+	case "reply_id", "comment.parent_id", "comment.reply_id", "comment.comment.reply_id", "reply_comment.reply_id":
 		return true
 	}
 	return false
