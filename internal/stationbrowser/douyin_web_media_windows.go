@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"wechat-bot/internal/hostfile"
@@ -52,7 +53,7 @@ func readDouyinWebMedia(ctx context.Context, profile, target, videoID string, au
 		return DouyinWebMedia{}, ErrBrowserUnavailable
 	}
 	defer closeDouyinHomeSession(session)
-	page, err := openDouyinWebDetailPage(readCtx, session, target, videoID, authorize, fixture)
+	page, err := openDouyinWebDetailPage(readCtx, session, target, videoID, authorize, fixture, false)
 	if err != nil {
 		if errors.Is(err, ErrPlaybackUnavailable) {
 			err = ErrDouyinWebMediaUnavailable
@@ -67,7 +68,9 @@ func readDouyinWebMedia(ctx context.Context, profile, target, videoID string, au
 	if err != nil {
 		return DouyinWebMedia{}, ErrDouyinWebMediaUnavailable
 	}
-	verify := func() error {
+	var pageCheckMu sync.Mutex
+	var lastPageCheck time.Time
+	verifyPage := func(force bool) error {
 		if err := authorize(); err != nil {
 			return err
 		}
@@ -77,9 +80,19 @@ func readDouyinWebMedia(ctx context.Context, profile, target, videoID string, au
 			}
 			return err
 		}
-		return validateDouyinWebMediaPage(readCtx, session, page.sessionID, world, target)
+		pageCheckMu.Lock()
+		defer pageCheckMu.Unlock()
+		if !force && time.Since(lastPageCheck) < time.Second {
+			return nil
+		}
+		if err := validateDouyinWebMediaPage(readCtx, session, page.sessionID, world, target); err != nil {
+			return err
+		}
+		lastPageCheck = time.Now()
+		return nil
 	}
-	if err := verify(); err != nil {
+	verify := func() error { return verifyPage(false) }
+	if err := verifyPage(true); err != nil {
 		return DouyinWebMedia{}, err
 	}
 	client := fixtureClient
@@ -102,15 +115,21 @@ func readDouyinWebMedia(ctx context.Context, profile, target, videoID string, au
 		if err := verify(); err != nil {
 			return DouyinWebMedia{}, err
 		}
-		media, err := fetchDouyinWebMedia(readCtx, candidate, client, verify, allowURL)
+		candidateCtx, cancelCandidate := context.WithTimeout(readCtx, 45*time.Second)
+		media, err := fetchDouyinWebMedia(candidateCtx, candidate, client, verify, allowURL)
+		candidateExpired := errors.Is(candidateCtx.Err(), context.DeadlineExceeded)
+		cancelCandidate()
 		if err == nil {
-			if err := verify(); err != nil {
+			if err := verifyPage(true); err != nil {
 				return DouyinWebMedia{}, err
 			}
 			return media, nil
 		}
 		if readCtx.Err() != nil {
 			return DouyinWebMedia{}, readCtx.Err()
+		}
+		if candidateExpired || errors.Is(err, context.DeadlineExceeded) {
+			err = ErrDouyinWebMediaUnavailable
 		}
 		if err := verify(); err != nil {
 			return DouyinWebMedia{}, err

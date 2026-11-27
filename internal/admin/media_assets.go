@@ -607,7 +607,7 @@ func (p *permittedTools) reuseAssetConverted(ctx context.Context, id, kind strin
 			if a.ParentAssetID != "" {
 				for _, parent := range items {
 					if parent.ID == a.ParentAssetID && parent.Account == p.trace.Account && parent.Scope == assetScope(p.trace) {
-						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "没有执行下载或发送；当前素材没有所选格式。父素材已在本会话缓存。若用户要原视频文件，请调用media_reuse(asset_id=parent_asset_id,kind=video)；不要重新下载同一资源。根据用户要求自行选择正确素材和格式。"})
+						b, _ := json.Marshal(map[string]any{"media": []companion.GeneratedMedia{}, "requested_format_unavailable": true, "asset_id": a.ID, "cached_mime": a.MIME, "parent_asset_id": parent.ID, "parent_cached_mime": parent.MIME, "parent_filename": parent.Filename, "source_url": a.URL, "parent_original_cached": parent.Hash != "", "instruction": "当前素材没有所选格式，父素材已在本会话缓存。发送微信原生可播放视频时用media_reuse(asset_id=parent_asset_id,kind=video)；只有明确要求原始文件附件时用kind=file。"})
 						return string(b), nil
 					}
 				}
