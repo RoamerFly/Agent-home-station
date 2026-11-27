@@ -79,6 +79,54 @@ func TestWebMediaDownloadDouyinUsesStationOnceAndReusesVideo(t *testing.T) {
 	}
 }
 
+func TestDouyinVideoDefaultsToNativeWechatVideo(t *testing.T) {
+	f, access := trustedAgent(t)
+	native := &fakeTools{fakeNative: f.native}
+	f.manager.native = native
+	const id = "7702768654487735586"
+	video := inspectionFixture(t)
+	hash := sha256.Sum256(video)
+	station := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/session":
+			http.SetCookie(w, &http.Cookie{Name: "station", Value: "fixture"})
+			_, _ = w.Write([]byte(`{"authenticated":true,"csrf":"fixture"}`))
+		case "/api/local/apps/douyin/media/" + id:
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Content-Length", strconv.Itoa(len(video)))
+			w.Header().Set("X-Content-SHA256", hex.EncodeToString(hash[:]))
+			_, _ = w.Write(video)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(station.Close)
+	t.Setenv("AGENT_STATION_URL", station.URL)
+	for _, trace := range []companion.Input{
+		{Channel: "wechat", Account: "test", Thread: "wxid_owner", Sender: "wxid_owner", TraceID: "private-video", Mode: "direct"},
+		{Channel: "wechat", Account: "test", Thread: "room@chatroom", Sender: "wxid_group_member", TraceID: "group-video", IsGroup: true},
+	} {
+		access.SetTrace(trace)
+		args, _ := json.Marshal(map[string]string{"url": "https://www.douyin.com/video/" + id})
+		result, err := access.Call(context.Background(), "web_media_download", args)
+		if err != nil {
+			t.Fatalf("default video in %s: %v", trace.Thread, err)
+		}
+		var out struct {
+			Media []companion.GeneratedMedia `json:"media"`
+		}
+		if json.Unmarshal([]byte(result), &out) != nil || len(out.Media) != 1 || out.Media[0].Kind != "video" || !strings.HasSuffix(out.Media[0].Title, ".mp4") {
+			t.Fatalf("video was not prepared as native WeChat video in %s: %s", trace.Thread, result)
+		}
+		if staged, ok := access.Media(out.Media[0].ID); !ok || staged.Kind != "video" || staged.ID == "" {
+			t.Fatalf("native video source was not staged in %s: %+v", trace.Thread, staged)
+		}
+	}
+	if native.submits.Load() != 0 {
+		t.Fatal("preparing a video sent a WeChat message")
+	}
+}
+
 func TestStationDouyinMediaRejectsBadDigestInPrivateAndGroup(t *testing.T) {
 	f, access := trustedAgent(t)
 	f.manager.native = &fakeTools{fakeNative: f.native}

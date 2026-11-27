@@ -161,7 +161,7 @@ func (e *AgentRunner) Run(ctx context.Context, system string, turns []map[string
 	} else {
 		system += "\n【可自主使用的工具】\n" + string(catalog) + `
 先理解current_message，再按本轮schema选工具、参数和分页；调用格式为 {"action":"tool","tool":"工具名","arguments":{}}。长任务用agent_task记录进展，结果不明时查原任务或回执。
-歌曲先查music_library_search，再按需查media_recent；均无合适原曲再用web_audio_search或web_search。BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice，视频用kind=video；用户要文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
+歌曲先查music_library_search，再按需查media_recent；均无合适原曲再用web_audio_search或web_search。BV/b23可交web_media_download。翻唱原音轨用kind=file,audio_only=true，试听用kind=voice；发送视频默认用kind=video，作为微信原生可播放视频，只有明确要求文件附件或原始文件时用kind=file。媒体ID填media_ids，分段语音保留原文件；配文在微信接收附件后发送。群聊自然回应。`
 
 	}
 	if nativeFunctions {
