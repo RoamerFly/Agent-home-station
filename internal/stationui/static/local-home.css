@@ -2266,3 +2266,165 @@ body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin
     flex-wrap: wrap;
   }
 }
+
+/* Douyin content keeps one width and rhythm across overview, activity, and account pages. */
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body {
+  padding-inline: max(3px, calc((100% - 1280px) / 2));
+  scrollbar-gutter: auto;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header {
+  padding-inline: max(12px, calc((100% - 1280px) / 2));
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .app-evidence {
+  grid-template-columns: repeat(3, max-content minmax(0, 1fr));
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 66px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .app-persona-form {
+  width: 100%;
+  max-width: none;
+  margin: 0 0 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-overview {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, .85fr);
+  grid-template-areas: "account activity" "routes activity";
+  align-items: start;
+  gap: 12px 16px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-account {
+  grid-area: account;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-activity {
+  grid-area: activity;
+  align-content: start;
+  min-height: 100%;
+  padding: 14px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-activity .app-scope-note {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-routes {
+  grid-area: routes;
+  align-self: end;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .configuration-connection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: none;
+  min-height: 58px;
+  margin: 0 0 10px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .configuration-connection select {
+  flex: 0 1 330px;
+  width: min(330px, 100%);
+  min-height: 38px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .switch-row {
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  width: 100%;
+  min-height: 50px;
+  padding-block: 8px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .switch-row > span {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  text-align: left;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .switch-row > input[type="checkbox"] {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  margin: 0;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .memory-detail-section {
+  gap: 8px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .memory-detail-section > h4,
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .memory-detail-section > p {
+  margin: 0;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .memory-detail-section > :is(.publication-actions, .apps-feedback, .configuration-round-records):empty,
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body :is(.douyin-round-groups, .douyin-round-records):empty {
+  display: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-round-filters {
+  display: grid;
+  grid-template-columns: 190px 170px minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-round-filters :is(input, .button) {
+  height: 40px;
+  min-height: 40px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-round-filters .button {
+  justify-self: start;
+}
+@media (max-width: 1150px) {
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-workbench-overview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "account" "activity" "routes";
+  }
+}
+@media (max-width: 1100px) {
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header,
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-heading-main {
+    flex-wrap: wrap;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header p {
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 900px) {
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 10px;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-heading {
+    display: contents;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-heading-main {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-status {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: end;
+    margin: 0;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-actions {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
+}
+@media (max-width: 760px) {
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .app-evidence {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-round-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .douyin-round-filters .button {
+    grid-column: 1 / -1;
+  }
+}
