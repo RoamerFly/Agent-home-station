@@ -437,7 +437,7 @@ p.publication-authorization-note,
 .persona-heading h4, .persona-heading p { margin: 0; }
 .persona-heading h4 { font-size: var(--fs-title); }
 .persona-heading p { margin-top: var(--s-1); color: var(--text-muted); font-size: var(--fs-caption); line-height: var(--lh-caption); }
-.persona-form textarea { box-sizing: border-box; width: 100%; min-height: 320px; resize: vertical; font: var(--fs-body)/var(--lh-body) var(--font-sans); overflow-wrap: anywhere; }
+.persona-form textarea { box-sizing: border-box; width: 100%; min-height: 320px; resize: vertical; font-size: var(--fs-body); line-height: var(--lh-body); font-family: var(--font-sans); overflow-wrap: anywhere; }
 #persona-status { margin: 0; min-height: 1.4em; color: var(--text-muted); font-size: var(--fs-caption); }
 #persona-status.is-error { color: var(--danger); }
 .works-view { display: flex; flex-direction: column; gap: var(--s-3); overflow: hidden; }
@@ -1922,3 +1922,347 @@ body.local-home-page { background:var(--bg); color:var(--text); }
 .tool-file-row.is-selected { background: #edf3ff; border-color: #7ea6ee; }
 #tool-files-panel .project-tool-actions > label:has(input[type="checkbox"]) { display: inline-flex; align-items: center; gap: 8px; }
 @media(max-width: 760px) { .tool-file-row { grid-template-columns: 22px minmax(0,1fr); } .tool-file-locate { grid-column: 2; } }
+
+/* The standalone Douyin workbench uses the same shell and two-level navigation
+   as the native WeChat console. Keep these rules inside the Douyin window. */
+body.is-home-ready.standalone-workbench {
+  background: #f0f3f8;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[open] {
+  --bg: #f0f3f8;
+  --bg-sunken: #f0f3f8;
+  --surface: #fff;
+  --surface-raised: #fff;
+  --border: #dbe2ed;
+  --border-strong: #b7c5d9;
+  --text: #202c3d;
+  --text-muted: #5d6d82;
+  --accent: #225cce;
+  --accent-hover: #174da9;
+  --accent-soft: #e8effd;
+  --on-accent: #fff;
+  --shadow-2: none;
+  color-scheme: light;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  column-gap: 12px;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-layout {
+  display: contents;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 66px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 1px 0 #fff9;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-heading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 5px 12px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-configuration-heading-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header h2 {
+  flex: 0 0 auto;
+  margin: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+  color: var(--text);
+  font-size: 19px;
+  line-height: 28px;
+  letter-spacing: 0;
+  outline: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-context-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-context-nav[hidden] {
+  display: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-context-nav .local-tab {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-context-nav .local-tab.is-active {
+  padding: 4px 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-weight: 700;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-context-nav .local-tab:hover,
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-nav-link:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header p {
+  margin: 0 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-actions {
+  align-items: center;
+  gap: 6px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-actions .button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 16px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-refresh {
+  display: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-feedback {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  padding: 0;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-feedback:has(.apps-feedback:not(:empty)) {
+  padding: 0 0 10px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav {
+  grid-column: 1;
+  grid-row: 1 / 4;
+  display: flex;
+  flex-direction: column;
+  align-content: stretch;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(165deg, #f4f7fe, #fff 30%);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 80px;
+  margin: 0 4px 14px;
+  padding: 4px 4px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-brand img {
+  display: block;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 62px;
+  object-fit: contain;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-primary-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: left;
+  white-space: normal;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-nav-link svg {
+  display: block;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-nav-link.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-nav-link.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 11px;
+  width: 3px;
+  height: 18px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-sidebar-bottom {
+  margin-top: auto;
+  padding-top: 22px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-refresh:hover {
+  color: var(--accent);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-theme-control {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-theme-button {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text-muted);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-theme-button svg {
+  width: 16px;
+  height: 16px;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-nav .douyin-console-theme-button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 2px 8px #1d65d318;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body {
+  grid-column: 2;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 3px 18px;
+  overflow: auto;
+  background: transparent;
+  scrollbar-gutter: stable;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > h3 {
+  display: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > :is(.app-evidence, .app-layer, .configuration-rounds, .configuration-surf, section) {
+  margin: 0 0 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body :is(.app-scope-note, .configuration-cross-scope, .identity-details, .configuration-archive-card, .app-relocation) {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body :is(input, textarea, select) {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body :is(button, a.button) {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body :is(button, a.button):hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body .douyin-rounds {
+  max-width: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[open][data-console-theme="dark"] {
+  --bg: #111927;
+  --bg-sunken: #121c2d;
+  --surface: #18263b;
+  --surface-raised: #1c2d45;
+  --border: #2d405b;
+  --border-strong: #48617f;
+  --text: #f0f4fd;
+  --text-muted: #b3c3d9;
+  --accent: #91b7ff;
+  --accent-hover: #b0caff;
+  --accent-soft: #263d61;
+  color-scheme: dark;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[data-console-theme="dark"] #app-configuration-nav {
+  background: linear-gradient(165deg, #1e304c, var(--surface) 30%);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[data-console-theme="dark"] .app-dialog-header {
+  box-shadow: none;
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[data-console-theme="dark"] #app-configuration-body .primary {
+  color: #111927;
+}
+@media (max-width: 850px) {
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[open] {
+    grid-template-columns: 184px minmax(0, 1fr);
+    column-gap: 8px;
+    padding: 8px;
+  }
+  body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin .app-dialog-header {
+    flex-wrap: wrap;
+  }
+}

@@ -5218,6 +5218,99 @@
     }
     return nodes;
   }
+  const douyinConsoleGroups = [
+    { label: "总览", icon: "overview", sections: ["overview"] },
+    { label: "活动", icon: "activity", sections: ["rounds", "interactions"] },
+    { label: "内容与创作", icon: "content", sections: ["browse", "publications"] },
+    { label: "账号与服务", icon: "account", sections: ["account", "live", "source"] },
+  ];
+  function douyinConsoleIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "18");
+    svg.setAttribute("height", "18");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.8");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ({
+      overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+      activity: '<path d="M5 3h10l4 4v14H5Z"/><path d="M14 3v5h5M8 12h8m-8 4h6"/>',
+      content: '<path d="M4 4h16v16H4zM8 4v16M12 9h5m-5 4h5m-5 4h3"/>',
+      account: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M6 16c1-3 5-3 6 0M15 9h3m-3 5h3"/>',
+      refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.3 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.3 3A7.5 7.5 0 0 0 18.7 16"/>',
+      light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
+      dark: '<path d="M20.1 15.5A8 8 0 0 1 8.5 3.9 8 8 0 1 0 20.1 15.5Z"/>',
+    })[name];
+    return svg;
+  }
+  function douyinConsoleTheme() {
+    try { return localStorage.getItem("douyin-console-theme") === "dark" ? "dark" : "light"; }
+    catch { return "light"; }
+  }
+  function renderDouyinConsoleNavigation(view, nav, contextNav) {
+    const available = new Map(view.sections.map((item) => [item.id, item]));
+    const currentGroup = douyinConsoleGroups.find((group) => group.sections.includes(view.section)) || douyinConsoleGroups[0];
+    const brand = appElement("div", "", "douyin-console-brand");
+    const avatar = document.createElement("img");
+    avatar.src = "/assets/whale-girl-cutout.png";
+    avatar.alt = "";
+    avatar.width = 68;
+    avatar.height = 68;
+    const brandName = document.createElement("b");
+    brandName.append("Agent-home-", document.createElement("br"), "station");
+    brand.append(avatar, brandName);
+    const primary = appElement("div", "", "douyin-console-primary-nav");
+    for (const group of douyinConsoleGroups) {
+      const target = group.sections.find((id) => available.has(id));
+      const active = group === currentGroup;
+      const button = memoryButton("", "douyin-console-nav-link" + (active ? " is-active" : ""), () => {
+        if (target && view.section !== target) selectAppConfiguration(view, target);
+      });
+      button.append(douyinConsoleIcon(group.icon), appElement("span", group.label));
+      button.disabled = !target;
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-controls", "app-configuration-body");
+      if (active) button.setAttribute("aria-current", "page");
+      primary.append(button);
+    }
+    const bottom = appElement("div", "", "douyin-console-sidebar-bottom");
+    const refresh = memoryButton("", "douyin-console-refresh", () => $("#app-configuration-refresh").click());
+    refresh.append(douyinConsoleIcon("refresh"), appElement("span", "刷新"));
+    refresh.setAttribute("aria-label", "刷新抖音工作台");
+    const themeControl = appElement("div", "", "douyin-console-theme-control");
+    const dialog = $("#app-configuration");
+    const selectedTheme = dialog.dataset.consoleTheme || douyinConsoleTheme();
+    dialog.dataset.consoleTheme = selectedTheme;
+    for (const [theme, label] of [["light", "浅色主题"], ["dark", "深色主题"]]) {
+      const button = memoryButton("", "douyin-console-theme-button", () => {
+        dialog.dataset.consoleTheme = theme;
+        try { localStorage.setItem("douyin-console-theme", theme); } catch { /* storage may be unavailable */ }
+        themeControl.querySelectorAll("button").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      });
+      button.append(douyinConsoleIcon(theme));
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+      button.setAttribute("aria-pressed", String(selectedTheme === theme));
+      themeControl.append(button);
+    }
+    bottom.append(refresh, themeControl);
+    nav.replaceChildren(brand, primary, bottom);
+    contextNav.replaceChildren(...currentGroup.sections.filter((id) => available.has(id)).map((id) => {
+      const active = id === view.section;
+      const button = memoryButton(available.get(id).title, "local-tab douyin-console-context-link" + (active ? " is-active" : ""), () => {
+        if (!active) selectAppConfiguration(view, id);
+      });
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-controls", "app-configuration-body");
+      if (active) button.setAttribute("aria-current", "page");
+      return button;
+    }));
+    contextNav.hidden = false;
+    $("#app-configuration-title").textContent = currentGroup.label;
+  }
   function prepareDouyinWorkbenchChat(raw) {
     if (standaloneWorkbenchApp || !state.home?.initialized || state.home.chat_available === false || typeof raw !== "string" || !raw.trim() || raw.length > 6000) return false;
     if ($("#app-configuration").open) $("#app-configuration").close();
@@ -5274,17 +5367,23 @@
     const view = appConfiguration;
     if (!view || !$("#app-configuration").open) return;
     const { record, section } = view;
-    const body = $("#app-configuration-body"), nav = $("#app-configuration-nav");
+    const body = $("#app-configuration-body"), nav = $("#app-configuration-nav"), contextNav = $("#app-configuration-context-nav");
     const scroll = body.scrollTop, focused = document.activeElement;
-    const focusSection = nav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
+    const focusSection = nav.contains(focused), focusContext = contextNav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
     const evidence = appEvidence(record.id);
     const connections = appConfigurationConnections(view);
     if (!connections.some((row) => row.id === view.connection)) view.connection = connections.find((row) => row.primary)?.id || connections[0]?.id || "";
     const selected = connections.find((row) => row.id === view.connection);
     $("#app-configuration-status").textContent = [evidence.service, selected?.label || evidence.account, evidence.grant].join(" · ");
     $("#app-configuration-feedback").append($("#apps-feedback"));
-    nav.replaceChildren(...appConfigurationNavigation(view));
+    if (standaloneWorkbenchApp === "douyin" && record.id === "douyin") renderDouyinConsoleNavigation(view, nav, contextNav);
+    else {
+      nav.replaceChildren(...appConfigurationNavigation(view));
+      contextNav.replaceChildren();
+      contextNav.hidden = true;
+    }
     if (focusSection) nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    if (focusContext) contextNav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     const listing = apps.catalog?.find((row) => row.id === record.id);
     const heading = appElement("h3", view.sections.find((item) => item.id === section)?.title || "概览");
     const controls = [heading];
