@@ -252,12 +252,15 @@ func (h *localChatService) conversation() (*companion.Store, companion.Input, er
 
 func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/local/chat", s.Protect(h.history))
+	mux.HandleFunc("POST /api/local/chat/attachments", s.Protect(h.uploadAttachment))
+	mux.HandleFunc("GET /api/local/chat/attachments/{id}/{mode}", s.Protect(h.serveAttachment))
 	mux.HandleFunc("POST /api/local/project-tools/comfyui/action", s.Protect(h.comfyDirect))
 	mux.HandleFunc("GET /api/local/memory/palace", s.Protect(h.memoryPalace))
 	mux.HandleFunc("GET /api/local/memory/palace/sources", s.Protect(h.memoryPalaceSources))
 	mux.HandleFunc("GET /api/local/memory/palace/{id}", s.Protect(h.memoryPalace))
 	mux.HandleFunc("POST /api/local/chat", s.Protect(h.send))
 	mux.HandleFunc("GET /api/local/model", s.Protect(h.modelView))
+	mux.HandleFunc("GET /api/local/model/models", s.Protect(h.modelChoices))
 	mux.HandleFunc("PUT /api/local/model", s.Protect(h.modelSave))
 	h.personaDocumentRoutes(s, mux)
 	h.toolGrantsRoutes(s, mux)
@@ -266,6 +269,21 @@ func (h *localChatService) routes(s *websession.Store, mux *http.ServeMux) {
 	h.interactionRoutes(s, mux)
 	h.liveRoutes(s, mux)
 	h.localFollowupRoutes(s, mux)
+}
+
+func (h *localChatService) modelChoices(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.models.View()
+	if err != nil {
+		websession.Fail(w, 409, "本机模型配置不可读")
+		return
+	}
+	models, lookupErr := h.models.Models(r.Context())
+	out := map[string]any{"models": models, "configured_model": settings.Model}
+	if lookupErr != nil {
+		out["warning"] = "在线模型目录暂不可用，已提供可选模型"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	websession.Respond(w, 200, out)
 }
 
 func (h *localChatService) modelView(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +353,15 @@ func (h *localChatService) history(w http.ResponseWriter, r *http.Request) {
 			links = append(links, item.RequestID)
 		}
 	}
-	websession.Respond(w, 200, map[string]any{"items": page.Items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load(), "background_pending": pending, "memory_link_requests": links})
+	items := make([]localChatHistoryItem, 0, len(page.Items))
+	for _, item := range page.Items {
+		row := localChatHistoryItem{LocalConversationItem: item}
+		if item.Role == "user" && item.RequestID != "" {
+			row.Attachments = h.historyAttachments(in, item.RequestID)
+		}
+		items = append(items, row)
+	}
+	websession.Respond(w, 200, map[string]any{"items": items, "next_cursor": page.NextCursor, "has_more": page.HasMore, "busy": h.busy.Load(), "background_pending": pending, "memory_link_requests": links})
 }
 
 func localConversationConfig(persona string) companion.Config {
@@ -357,16 +383,26 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		RequestID         string `json:"request_id"`
-		Text              string `json:"text"`
-		ContinueRequestID string `json:"continue_request_id"`
+		RequestID         string                  `json:"request_id"`
+		Text              string                  `json:"text"`
+		ContinueRequestID string                  `json:"continue_request_id"`
+		Attachments       []string                `json:"attachments"`
+		ModelSelection    localChatModelSelection `json:"model_selection"`
 	}
 	if !websession.Decode(w, r, &request) {
 		return
 	}
-	if !identity.ValidPathID(request.RequestID) || request.ContinueRequestID != "" && (!identity.ValidPathID(request.ContinueRequestID) || request.ContinueRequestID == request.RequestID) || strings.TrimSpace(request.Text) == "" || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) {
-		websession.Fail(w, 400, "请提供稳定请求编号及 1–65536 字节的有效正文；长资料可分批继续")
+	if !identity.ValidPathID(request.RequestID) || request.ContinueRequestID != "" && (!identity.ValidPathID(request.ContinueRequestID) || request.ContinueRequestID == request.RequestID) || strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) || len(request.Attachments) > 64 {
+		websession.Fail(w, 400, "请提供稳定请求编号以及有效正文或附件；正文最多 65536 字节，单轮最多 64 个附件")
 		return
+	}
+	seenAttachments := map[string]bool{}
+	for _, id := range request.Attachments {
+		if !localAttachmentID(id) || seenAttachments[id] {
+			websession.Fail(w, 400, "附件编号无效或重复")
+			return
+		}
+		seenAttachments[id] = true
 	}
 	if !h.tryForegroundTurn(r.Context()) {
 		if r.Context().Err() != nil {
@@ -397,6 +433,11 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 409, "同一请求编号的正文已变化，请使用新的请求编号")
 		return
 	}
+	media, err := h.bindRequestAttachments(in, request.RequestID, request.Text, request.ContinueRequestID, request.Attachments, request.ModelSelection, prior != nil)
+	if err != nil {
+		websession.Fail(w, 409, err.Error())
+		return
+	}
 	if prior != nil && prior.Completed {
 		in.TraceID, in.MessageTime = request.RequestID, prior.OccurredAt
 		source, sourceErr := store.LocalRequestSource(r.Context(), in, request.RequestID)
@@ -416,6 +457,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Text, in.OriginalText, in.TraceID = request.Text, &request.Text, request.RequestID
+	in.IncomingMedia = media
 	in.MessageTime = time.Now().UTC().Format(time.RFC3339Nano)
 	if prior != nil {
 		in.MessageTime = prior.OccurredAt
@@ -438,6 +480,6 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 409, "关联请求或资料授权已变化，请重新选择或主动查询")
 		return
 	}
-	response, err := h.generateLocalTurn(r.Context(), store, in, run, "")
+	response, err := h.generateLocalTurn(r.Context(), store, in, run, "", request.ModelSelection)
 	writeLocalTurnResponse(w, response, err)
 }
