@@ -4,7 +4,7 @@
   const workbenchQuery = new URLSearchParams(window.location.search).get("workbench");
   const standaloneWorkbenchApp = ["douyin", "bilibili"].includes(workbenchQuery) ? workbenchQuery : "";
   const state = { csrf: "", home: null, model: null, personaDocument: { content: "", revision: 0, path: "", loaded: false, loading: false, saving: false, dirty: false }, busy: false, chat: newChatView(), toolGrants: null };
-  const tabs = ["chat", "memory", "apps", "project-tools", "settings"];
+  const tabs = ["chat", "memory", "apps", "works", "project-tools", "settings"];
   let activeView = "chat";
   let apps = newAppView();
   let works = newWorksView();
@@ -17,8 +17,18 @@
   const connectionView = $("#connection-view"), homeView = $("#home-view"), localWorkspace = $("#local-workspace"), message = $("#page-message");
   const initializeButton = $("#initialize-button"), accessButton = $("#access-button");
   const settingsAccessButton = $("#settings-access-button"), chatStream = $("#chat-stream");
+  let messageClearTimer = 0;
 
-  function showMessage(text, kind = "") { message.textContent = text || ""; message.className = `page-message${kind ? ` is-${kind}` : ""}`; }
+  function showMessage(text, kind = "") {
+    window.clearTimeout(messageClearTimer);
+    message.textContent = text || "";
+    message.className = `page-message${kind ? ` is-${kind}` : ""}`;
+    if (text && kind === "success") {
+      messageClearTimer = window.setTimeout(() => {
+        if (message.textContent === text && message.classList.contains("is-success")) showMessage("");
+      }, 4000);
+    }
+  }
   function safeServerMessage(body, fallback) { const value = body && (body.error || body.message || body.detail); return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : fallback; }
   function responseMessage(status) {
     if (status === 401 || status === 403) return "本机连接暂时不可用，请重试。";
@@ -63,6 +73,7 @@
   function setActiveView(view) {
     if (activeView === "project-tools" && view !== "project-tools") { stopOBSPreviewOnLeave(); invalidateOBSDeploymentView(); }
     if (activeView === "chat" && view !== "chat") { window.clearTimeout(state.chat.poll); state.chat.poll = 0; }
+    if (activeView === "works" && view !== "works") { works.controller?.abort(); works.generation++; works.loading = false; }
     activeView = view;
     for (const name of tabs) {
       const tab = $(`#${name}-tab`), selected = name === view;
@@ -74,6 +85,7 @@
     if (view === "apps") { loadApps(); scheduleAppLogin(apps); }
     else { clearWechatRelocation(apps); window.clearTimeout(apps.loginTimer); stopDouyinWebLoginPolling(apps); stopDouyinInteractionWork(apps); stopDouyinLiveInspection(apps); }
     if (view === "project-tools") refreshProjectToolsPanel();
+    if (view === "works" && state.home?.initialized) void loadWorks();
     renderLiveSafety();
     if (view === "memory") void loadMemoryPage();
     if (view === "settings") { void loadToolGrants(); void loadPersonaDocument(); }
@@ -102,7 +114,7 @@
       douyinInteractions: { page: null, cursors: [0], reading: false, readID: 0, epoch: 0, pending: new Map(), error: "", notice: "", actionError: false } };
   }
   function newWorksView() {
-    return { items: [], nextCursor: "", hasMore: false, loading: false, application: "all", status: "active", query: "", generation: 0, controller: null, selected: "" };
+    return { items: [], nextCursor: "", hasMore: false, loading: false, application: "all", status: "active", query: "", filterKey: "", generation: 0, controller: null, selected: "" };
   }
   function newProjectToolsView() {
     return { loading: false, applying: "", tools: [], panel: "public", catalogPanel: "public", appToolsLoading: false, aliyunBalance: null, vision: { loading: false, saving: false, generation: 0, server: null, draft: null, apiKey: "", clearKey: false, approved: false, error: "", notice: "" }, comfyDeployment: newDeploymentState(), yueDeployment: newDeploymentState(), obsDeployment: { generation: 0, loading: false, saving: false, readable: false, server: null, archivePath: "", approved: false, needsRefresh: false, error: "", notice: "" }, obsPreview: { loading: false, applying: false, polling: false, starting: false, stopping: false, timer: 0, generation: 0, configured: false, port: 4455, configRevision: 0, active: false, enabled: false, scene: "", observedAt: "", imageURL: "", error: "" } };
@@ -1549,8 +1561,18 @@
     try {
       const value = await request(`/api/local/works/${encodeURIComponent(item.id)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: item.version }) });
       workActionNotice(`${item.name || "作品"}已移至待删除。`, false, value.item?.can_restore ? value.item : null);
+      if (works.selected === item.id) renderWorkPreview(null);
       await loadWorks();
     } catch (error) { workActionNotice(error.message || "移至待删除失败，请重试。", true); button.disabled = false; }
+  }
+  async function revealWork(item, button) {
+    button.disabled = true;
+    try {
+      await request(`/api/local/works/${encodeURIComponent(item.id)}/reveal`, { method: "POST" });
+      workActionNotice(`${item.name || "作品"}已在文件夹中选中。`);
+    } catch (error) {
+      workActionNotice(error.message || "打开所在文件夹失败，请重试。", true);
+    } finally { button.disabled = false; }
   }
   function editWorkName(item, detail, button) {
     if (detail.querySelector(".works-rename")) return;
@@ -1566,7 +1588,8 @@
       if (!name) return;
       save.disabled = true; cancel.disabled = true;
       try {
-        await request(`/api/local/works/${encodeURIComponent(item.id)}`, { method: "PATCH", body: JSON.stringify({ name, expected_version: item.version }) });
+        const result = await request(`/api/local/works/${encodeURIComponent(item.id)}`, { method: "PATCH", body: JSON.stringify({ name, expected_version: item.version }) });
+        if (works.selected === item.id && result.item) renderWorkPreview(result.item);
         workActionNotice("作品名称已更新。");
         await loadWorks();
       } catch (error) {
@@ -1575,29 +1598,62 @@
       }
     });
   }
-  function renderWorkPreview(item) {
-    const host = $("#works-preview"), content = $("#works-dialog .works-content");
-    host.replaceChildren();
-    const url = workURL(item?.preview_url);
-    if (!item || !url) { host.hidden = true; content.classList.remove("has-preview"); works.selected = ""; return; }
-    works.selected = item.id;
-    const title = appElement("h3", item.name || "作品预览");
-    const close = memoryButton("关闭预览", "button compact quiet", () => renderWorkPreview(null));
-    const mediaType = String(item.mime || "").toLowerCase();
-    let media;
-    if (mediaType.startsWith("image/")) {
-      media = document.createElement("img"); media.alt = item.name || "作品图片";
-    } else if (mediaType.startsWith("video/")) {
-      media = document.createElement("video"); media.controls = true; media.preload = "metadata";
-    } else if (mediaType.startsWith("audio/")) {
-      media = document.createElement("audio"); media.controls = true; media.preload = "metadata";
-    } else {
-      media = document.createElement("iframe"); media.title = `${item.name || "作品"}预览`; media.setAttribute("sandbox", "");
+  function syncWorkSelection() {
+    for (const row of $("#works-list").querySelectorAll(".works-item")) {
+      const selected = Boolean(works.selected && row.dataset.workId === works.selected);
+      row.classList.toggle("is-selected", selected);
+      row.querySelector(".works-item-select")?.setAttribute("aria-pressed", String(selected));
     }
-    media.src = url;
-    media.addEventListener("error", () => { $("#works-status").textContent = "预览暂时无法打开，可下载后查看。"; });
-    host.append(title, close, media);
-    host.hidden = false; content.classList.add("has-preview");
+  }
+  function renderWorkPreview(item) {
+    const host = $("#works-preview"), content = $("#works-view .works-content");
+    host.replaceChildren();
+    works.selected = item?.id || "";
+    content.classList.toggle("has-preview", Boolean(item));
+    if (!item) {
+      host.append(appElement("p", "选择左侧作品查看详情。", "works-preview-empty"));
+      syncWorkSelection();
+      return;
+    }
+    host.append(appElement("h4", item.name || "作品详情"), appElement("p", [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · "), "works-preview-meta"));
+    const actions = appElement("div", "", "works-preview-actions");
+    if (works.status === "active" && item.can_reveal) {
+      const reveal = memoryButton("打开所在文件夹", "button compact secondary", () => void revealWork(item, reveal));
+      actions.append(reveal);
+    }
+    if (works.status === "active" && item.can_trash) {
+      const trash = memoryButton("删除作品", "button compact quiet", () => void trashWork(item, trash));
+      actions.append(trash);
+    }
+    if (item.can_restore) actions.append(memoryButton("恢复作品", "button compact secondary", () => void restoreWork(item)));
+    const downloadURL = workURL(item.download_url);
+    if (downloadURL) {
+      const download = appElement("a", "下载作品", "button compact secondary");
+      download.href = downloadURL; download.setAttribute("download", item.name || "");
+      actions.append(download);
+    }
+    if (actions.childElementCount) host.append(actions);
+    const url = item.previewable ? workURL(item.preview_url) : "";
+    if (url) {
+      const mediaType = String(item.mime || "").toLowerCase();
+      let media;
+      if (mediaType.startsWith("image/")) {
+        media = document.createElement("img"); media.alt = item.name || "作品图片";
+      } else if (mediaType.startsWith("video/")) {
+        media = document.createElement("video"); media.controls = true; media.preload = "metadata";
+      } else if (mediaType.startsWith("audio/")) {
+        media = document.createElement("audio"); media.controls = true; media.preload = "metadata";
+      } else {
+        media = document.createElement("iframe"); media.title = `${item.name || "作品"}预览`; media.setAttribute("sandbox", "");
+      }
+      const failure = appElement("p", "预览暂时无法打开，可下载后查看。", "works-preview-error"); failure.hidden = true;
+      media.addEventListener("error", () => { failure.hidden = false; });
+      media.src = url;
+      host.append(media, failure);
+    } else {
+      host.append(appElement("p", item.can_restore ? "此作品在待删除中，恢复后即可查看。" : "此格式暂不支持站内预览，可下载后查看。", "works-preview-empty"));
+    }
+    syncWorkSelection();
   }
   function renderWorks() {
     const host = $("#works-list");
@@ -1605,12 +1661,12 @@
     if (!works.items.length && !works.loading) host.append(appElement("p", works.status === "trash" ? "待删除中没有作品。" : "这个范围内还没有可显示的作品。", "apps-empty"));
     for (const item of works.items) {
       const row = appElement("article", "", "works-item"), detail = appElement("div", ""), actions = appElement("div", "", "works-item-actions");
+      row.dataset.workId = item.id;
       const meta = [workSource(item.application), item.path, workSize(item.bytes), workDate(item.modified_at)].filter(Boolean).join(" · ");
-      detail.append(appElement("h3", item.name || item.path || "未命名作品"), appElement("p", meta));
-      if (item.previewable && workURL(item.preview_url)) {
-        const preview = memoryButton("预览", "button compact secondary", () => renderWorkPreview(item));
-        preview.setAttribute("aria-label", `预览${item.name || "作品"}`); actions.append(preview);
-      }
+      const title = appElement("h3", ""), select = memoryButton(item.name || item.path || "未命名作品", "works-item-select", () => renderWorkPreview(item));
+      select.setAttribute("aria-label", `查看${item.name || "作品"}`);
+      title.append(select); detail.append(title, appElement("p", meta));
+      row.addEventListener("click", event => { if (!event.target.closest("button, a, input, select")) renderWorkPreview(item); });
       const downloadURL = workURL(item.download_url);
       if (downloadURL) {
         const download = appElement("a", "下载", "button compact secondary");
@@ -1634,25 +1690,32 @@
     host.setAttribute("aria-busy", String(works.loading));
     $("#works-more").hidden = !works.hasMore;
     $("#works-more").disabled = works.loading;
-    if (!works.loading && works.items.length) $("#works-status").textContent = `已显示 ${works.items.length} 件作品${works.hasMore ? "，可继续加载" : ""}。`;
+    syncWorkSelection();
   }
   async function loadWorks(append = false) {
-    if (!$("#works-dialog").open || append && !works.hasMore) return;
+    if (activeView !== "works" || append && !works.hasMore) return;
     works.controller?.abort();
     const controller = new AbortController(), generation = ++works.generation;
     works.controller = controller; works.loading = true;
-    if (!append) { works.items = []; works.nextCursor = ""; works.hasMore = false; renderWorkPreview(null); }
+    if (!append) {
+      const filterKey = JSON.stringify([works.application, works.status, works.query]);
+      if (works.filterKey !== filterKey) { works.items = []; renderWorkPreview(null); }
+      works.filterKey = filterKey;
+      works.nextCursor = ""; works.hasMore = false;
+    }
     $("#works-status").textContent = append ? "正在加载更多作品…" : "正在读取作品…";
     renderWorks();
     try {
       const params = new URLSearchParams({ application: works.application, status: works.status, q: works.query, limit: "40" });
       if (append && works.nextCursor) params.set("cursor", works.nextCursor);
       const value = await request(`/api/local/works?${params}`, { signal: controller.signal });
-      if (generation !== works.generation || !$("#works-dialog").open) return;
+      if (generation !== works.generation || activeView !== "works") return;
       if (!Array.isArray(value.items)) throw new Error("作品列表返回不完整，请重试。");
       works.items = append ? works.items.concat(value.items) : value.items;
       works.nextCursor = value.next_cursor || "";
       works.hasMore = value.has_more === true;
+      if (works.selected) renderWorkPreview(works.items.find(item => item.id === works.selected) || null);
+      $("#works-status").textContent = `已显示 ${works.items.length} 件作品${works.hasMore ? "，可继续加载" : ""}。`;
     } catch (error) {
       if (generation !== works.generation || error.name === "AbortError") return;
       $("#works-status").textContent = error.message || "作品列表暂时无法读取。";
@@ -1660,21 +1723,6 @@
       if (generation === works.generation) { works.loading = false; renderWorks(); }
     }
   }
-  $("#works-open").addEventListener("click", () => {
-    $("#works-dialog").showModal();
-    $("#works-title").focus();
-    $("#works-action").hidden = true;
-    works.application = $("#works-application").value;
-    works.status = $("#works-status-filter").value;
-    works.query = $("#works-query").value.trim();
-    void loadWorks();
-  });
-  $("#works-close").addEventListener("click", () => $("#works-dialog").close());
-  $("#works-dialog").addEventListener("close", () => {
-    works.controller?.abort(); works.generation++; works.loading = false;
-    renderWorkPreview(null);
-    $("#works-open").focus({ preventScroll: true });
-  });
   $("#works-filter-form").addEventListener("submit", event => {
     event.preventDefault();
     works.application = $("#works-application").value;
@@ -7454,6 +7502,11 @@
     projectTools = newProjectToolsView();
     $("#apps-list").replaceChildren();
     appFeedback("");
+    works.controller?.abort(); works.generation++;
+    works = newWorksView();
+    $("#works-list").replaceChildren(); renderWorkPreview(null);
+    $("#works-status").textContent = ""; $("#works-action").hidden = true;
+    $("#works-status-filter").value = "active"; $("#works-application").value = "all"; $("#works-query").value = "";
     $("#project-tools-list").replaceChildren();
     projectToolsFeedback("");
     setActiveView("chat");
@@ -7494,7 +7547,7 @@
     if (home.initialized && home.chat_available !== false) {
       void refreshLiveSafety();
       if (activeView === "chat") void loadRecentMemory();
-      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
+      await Promise.all([standaloneWorkbenchApp ? undefined : loadModel(state.model === null), standaloneWorkbenchApp ? undefined : loadChat(true), activeView === "apps" ? loadApps() : undefined, activeView === "works" ? loadWorks() : undefined, activeView === "project-tools" ? loadProjectTools() : undefined]);
     }
   }
   // General capabilities are the owner's to hand over. The list is explicit so
