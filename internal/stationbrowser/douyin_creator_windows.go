@@ -437,6 +437,8 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 func awaitCreatorWorks(ctx context.Context, session readerSession, id string, world int64, target string, in CreatorPublicationRequest, authorize func() error, listener *creatorReceiptListener) error {
 	request := *in.worksRequest
 	seen := map[string]bool{}
+	seenIDs := map[string]bool{}
+	seenCursors := map[string]bool{}
 	var serial uint64
 	owner := request.PreviousAccount
 	for position := 0; ; {
@@ -450,7 +452,10 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 				return err
 			}
 			if err := creatorWait(ctx); err != nil {
-				return errors.Join(ErrCreatorWorksUnavailable, err)
+				if position > 0 {
+					return errors.Join(ErrCreatorWorksNextUnavailable, err)
+				}
+				return errors.Join(ErrCreatorWorksListNotObserved, err)
 			}
 			continue
 		}
@@ -467,6 +472,18 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		}
 		if seen[page.PageKey] {
 			return ErrCreatorWorksChanged
+		}
+		for _, workID := range page.PageIDs {
+			if seenIDs[workID] {
+				return ErrCreatorWorksChanged
+			}
+			seenIDs[workID] = true
+		}
+		if page.HasMore && page.MaxCursor != "" {
+			if seenCursors[page.MaxCursor] {
+				return ErrCreatorWorksChanged
+			}
+			seenCursors[page.MaxCursor] = true
 		}
 		owner, seen[page.PageKey] = page.Account, true
 		if position == request.Page {
@@ -577,6 +594,12 @@ func (l *creatorReceiptListener) worksResult() (DouyinCreatorWorksPage, uint64, 
 	defer l.mu.Unlock()
 	return l.worksPage, l.worksSerial, l.worksError
 }
+func (l *creatorReceiptListener) failWorksResponse(err error) {
+	l.mu.Lock()
+	l.worksPage, l.worksError = DouyinCreatorWorksPage{}, err
+	l.worksSerial++
+	l.mu.Unlock()
+}
 func (l *creatorReceiptListener) manageEndpoint(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.User == nil && u.Scheme+"://"+u.Host == l.origin && u.Path == "/janus/douyin/creator/pc/work_list"
@@ -648,8 +671,13 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 							FromServiceWorker bool
 						}
 					}
-					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] && p.Response.Status == 200 && !p.Response.FromServiceWorker && (l.endpoint(p.Response.URL) || (manage[p.RequestID] && l.manageEndpoint(p.Response.URL))) {
-						accepted[p.RequestID] = true
+					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] &&
+						(l.endpoint(p.Response.URL) || (manage[p.RequestID] && l.manageEndpoint(p.Response.URL))) {
+						if p.Response.Status == 200 && !p.Response.FromServiceWorker {
+							accepted[p.RequestID] = true
+						} else if l.readWorks && manage[p.RequestID] {
+							l.failWorksResponse(ErrCreatorWorksResponseUnverified)
+						}
 					}
 				case "Network.loadingFinished":
 					var p struct {
@@ -667,12 +695,13 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					if isManage && l.readWorks {
 						maxEncoded = creatorWorksResponseMax
 					}
-					if p.EncodedDataLength > maxEncoded {
+					if p.EncodedDataLength < 0 || p.EncodedDataLength > maxEncoded {
 						if isManage && l.readWorks {
-							l.mu.Lock()
-							l.worksError = ErrCreatorWorksResponseTooLarge
-							l.worksSerial++
-							l.mu.Unlock()
+							cause := ErrCreatorWorksResponseUnverified
+							if p.EncodedDataLength > maxEncoded {
+								cause = ErrCreatorWorksResponseTooLarge
+							}
+							l.failWorksResponse(cause)
 						}
 						continue
 					}
@@ -687,13 +716,11 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					bodyErr := session.Call(ctx, l.session, "Network.getResponseBody", map[string]any{"requestId": p.RequestID}, &out)
 					if bodyErr != nil || len(out.Body) > bodyMax {
 						if isManage && l.readWorks {
-							l.mu.Lock()
-							l.worksError = ErrCreatorWorksUnavailable
+							cause := ErrCreatorWorksResponseUnverified
 							if len(out.Body) > bodyMax {
-								l.worksError = ErrCreatorWorksResponseTooLarge
+								cause = ErrCreatorWorksResponseTooLarge
 							}
-							l.worksSerial++
-							l.mu.Unlock()
+							l.failWorksResponse(cause)
 						}
 						continue
 					}
@@ -702,11 +729,17 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						var err error
 						raw, err = base64.StdEncoding.DecodeString(out.Body)
 						if err != nil {
+							if isManage && l.readWorks {
+								l.failWorksResponse(ErrCreatorWorksResponseUnverified)
+							}
 							continue
 						}
 					}
 					if isManage && l.readWorks {
 						page, err := creatorWorksPage(raw)
+						if err != nil && !errors.Is(err, ErrCreatorWorksResponseTooLarge) && !errors.Is(err, ErrCreatorWorksOwnerUnverified) {
+							err = ErrCreatorWorksResponseUnverified
+						}
 						l.mu.Lock()
 						l.worksPage, l.worksError = page, err
 						l.worksSerial++

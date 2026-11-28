@@ -11,9 +11,40 @@
     const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(e =>
       visible(e) && !e.disabled && e.getAttribute("aria-disabled") !== "true" &&
       [e.getAttribute("aria-label"), e.getAttribute("title"), e.textContent.trim()].includes("下一页"));
-    if (buttons.length !== 1) return { clicked: false };
-    buttons[0].click();
-    return { clicked: true };
+    if (buttons.length > 1) return { clicked: false };
+    if (buttons.length === 1) { buttons[0].click(); return { clicked: true }; }
+    // The current management page may use native infinite scrolling. Only
+    // scroll its one visible work-list area; the page itself issues the next
+    // signed work_list request. No request URL or credential is constructed.
+    const main = [...document.querySelectorAll('main,[role="main"]')].filter(visible);
+    const loading = [...document.querySelectorAll('span,p,small,div')].filter(e =>
+      e.children.length === 0 && visible(e) && (main.length !== 1 || main[0].contains(e)) &&
+      /^加载中[.。…]*$/u.test(e.textContent.trim()));
+    const cards = [...document.querySelectorAll('article,[data-e2e="work-item"],[data-e2e="video-card"]')].filter(e =>
+      visible(e) && (main.length !== 1 || main[0].contains(e)));
+    const scrollables = [document.scrollingElement, ...document.querySelectorAll('div,section,main')].filter((e, i, all) =>
+      e && all.indexOf(e) === i && visible(e) && e.clientWidth >= 320 && e.clientHeight >= 150 &&
+      e.scrollHeight > e.clientHeight + 1 && (e === document.scrollingElement || /^(auto|scroll)$/u.test(getComputedStyle(e).overflowY)));
+    const choose = markers => {
+      const candidates = scrollables.filter(e => markers.some(marker => e.contains(marker)));
+      const deepest = candidates.filter(e => !candidates.some(other => other !== e && e.contains(other)));
+      return deepest.length === 1 ? deepest[0] : null;
+    };
+    const mainAreas = main.length === 1 ? scrollables.filter(e => e.contains(main[0]) || main[0].contains(e)) : [];
+    const deepestMain = mainAreas.filter(e => !mainAreas.some(other => other !== e && e.contains(other)));
+    const area = choose(loading) || choose(cards) || (deepestMain.length === 1 ? deepestMain[0] : null) ||
+      (scrollables.length === 1 ? scrollables[0] : null);
+    if (!area) return { clicked: false };
+    const before = area.scrollTop, end = area.scrollHeight - area.clientHeight;
+    if (end > before + 1) {
+      area.scrollTop = end;
+      if (area.scrollTop > before + 1) {
+        return { clicked: true };
+      }
+    }
+    // The native loader may already be visible and in flight. Wait for its
+    // response once; the caller has a bounded deadline and page-key checks.
+    return { clicked: loading.some(e => area.contains(e)) };
   }
   if (input.action === "query") {
     if (!location.pathname.startsWith("/creator-micro/content/manage")) return { invalid: true };

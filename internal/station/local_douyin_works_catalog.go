@@ -128,6 +128,9 @@ func openDouyinWorksCatalog(ctx context.Context, home *localHomeService, fish st
 }
 
 func douyinCatalogReviewStatus(work stationbrowser.DouyinCreatorWork) string {
+	if work.ReviewStatus == "unknown" {
+		return "unknown"
+	}
 	if work.Reviewing {
 		return "reviewing"
 	}

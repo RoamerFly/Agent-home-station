@@ -12,7 +12,6 @@ import (
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
-	"wechat-bot/internal/stationbrowser"
 	"wechat-bot/internal/websession"
 )
 
@@ -160,6 +159,7 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 		stop := context.AfterFunc(h.ctx, cancel)
 		defer stop()
 		var value any
+		worksRead := false
 		if r.Method == http.MethodGet {
 			value = map[string]any{"items": h.observations.DiscoverApplication(ctx, r.URL.Query().Get("app_id"))}
 			err = ctx.Err()
@@ -168,6 +168,7 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 			if !websession.Decode(w, r, &in) {
 				return
 			}
+			worksRead = in.AppID == "douyin" && in.Field == apphost.ObservationAccountWorks
 			var result apphost.ObservationResult
 			result, err = h.observations.Read(ctx, in)
 			if err == nil {
@@ -177,7 +178,14 @@ func (h *localChatService) appObservationRoutes(s *websession.Store, mux *http.S
 		}
 		if err != nil {
 			logFailure("应用观察", err)
-			websession.Fail(w, observationHTTPStatus(err), failureMessage(err, "浏览器读取暂不可用，请确认 Microsoft Edge 可用后重试"))
+			message := failureMessage(err, "浏览器读取暂不可用，请确认 Microsoft Edge 可用后重试")
+			if worksRead {
+				if code := douyinWorksDiagnosticCode(err); code != "" {
+					websession.Respond(w, observationHTTPStatus(err), map[string]string{"error": message, "code": code})
+					return
+				}
+			}
+			websession.Fail(w, observationHTTPStatus(err), message)
 			return
 		}
 		current, err := h.home.identity.Read()
@@ -195,22 +203,44 @@ func observationHTTPStatus(err error) int {
 	switch {
 	case errors.Is(err, apphost.ErrObservationInvalid), errors.Is(err, apphost.ErrObservationPlaybackLimit), errors.Is(err, apphost.ErrObservationCommentPageSize), errors.Is(err, apphost.ErrObservationAudioLimit), errors.Is(err, apphost.ErrObservationVisualLimit), errors.Is(err, apphost.ErrObservationImagesLimit), errors.Is(err, apphost.ErrObservationSearchPageSize), errors.Is(err, apphost.ErrObservationAccountWorksPageSize):
 		return http.StatusBadRequest
-	case errors.Is(err, apphost.ErrObservationPlaybackUnavailable), errors.Is(err, apphost.ErrObservationRemotePlayerUnavailable), errors.Is(err, apphost.ErrObservationWebPlaybackUnavailable), errors.Is(err, apphost.ErrObservationAudioMediaUnavailable), errors.Is(err, apphost.ErrObservationVisualDecode), errors.Is(err, apphost.ErrObservationImagesMedia):
+	case errors.Is(err, apphost.ErrObservationPlaybackUnavailable), errors.Is(err, apphost.ErrObservationRemotePlayerUnavailable), errors.Is(err, apphost.ErrObservationWebPlaybackUnavailable), errors.Is(err, apphost.ErrObservationAudioMediaUnavailable), errors.Is(err, apphost.ErrObservationVisualDecode), errors.Is(err, apphost.ErrObservationImagesMedia), errors.Is(err, apphost.ErrObservationDouyinWorksOwnerUnverified):
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, apphost.ErrObservationAudioSourceChanged), errors.Is(err, apphost.ErrObservationVisualSourceChanged), errors.Is(err, apphost.ErrObservationImagesSourceChanged), errors.Is(err, apphost.ErrObservationCredentialExpired),
-		errors.Is(err, apphost.ErrObservationWebSessionBusy), errors.Is(err, apphost.ErrObservationWebSessionRequired), errors.Is(err, apphost.ErrObservationWebSessionInvalid), errors.Is(err, apphost.ErrObservationWebSnapshotChanged):
+		errors.Is(err, apphost.ErrObservationWebSessionBusy), errors.Is(err, apphost.ErrObservationWebSessionRequired), errors.Is(err, apphost.ErrObservationWebSessionInvalid), errors.Is(err, apphost.ErrObservationWebSnapshotChanged),
+		errors.Is(err, apphost.ErrObservationDouyinWorksNextUnavailable), errors.Is(err, apphost.ErrObservationDouyinWorksAccountChanged):
 		return http.StatusConflict
-	case errors.Is(err, apphost.ErrObservationPlaybackSize), errors.Is(err, apphost.ErrObservationAccountWorksResponseSize), errors.Is(err, apphost.ErrObservationPageTextSize), errors.Is(err, stationbrowser.ErrCreatorWorksResponseTooLarge):
+	case errors.Is(err, apphost.ErrObservationPlaybackSize), errors.Is(err, apphost.ErrObservationAccountWorksResponseSize), errors.Is(err, apphost.ErrObservationPageTextSize), errors.Is(err, apphost.ErrObservationDouyinWorksResponseTooLarge):
 		return http.StatusRequestEntityTooLarge
+	case errors.Is(err, apphost.ErrObservationDouyinWorksResponseUnverified):
+		return http.StatusBadGateway
 	case errors.Is(err, apphost.ErrObservationForbidden), errors.Is(err, apphost.ErrObservationCapabilityDenied):
 		return http.StatusForbidden
 	case errors.Is(err, apphost.ErrObservationNotFound), errors.Is(err, apphost.ErrObservationContentUnavailable):
 		return http.StatusNotFound
 	case errors.Is(err, apphost.ErrObservationThrottled):
 		return http.StatusTooManyRequests
-	case errors.Is(err, apphost.ErrObservationWebReadTimeout):
+	case errors.Is(err, apphost.ErrObservationWebReadTimeout), errors.Is(err, apphost.ErrObservationDouyinWorksListNotObserved):
 		return http.StatusGatewayTimeout
 	default:
 		return http.StatusServiceUnavailable
+	}
+}
+
+func douyinWorksDiagnosticCode(err error) string {
+	switch {
+	case errors.Is(err, apphost.ErrObservationDouyinWorksListNotObserved):
+		return "douyin_works_list_not_observed"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksResponseUnverified):
+		return "douyin_works_response_unverified"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksNextUnavailable):
+		return "douyin_works_next_unavailable"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksAccountChanged):
+		return "douyin_works_account_changed"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksResponseTooLarge):
+		return "douyin_works_response_too_large"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksOwnerUnverified):
+		return "douyin_works_owner_unverified"
+	default:
+		return ""
 	}
 }
