@@ -11,6 +11,7 @@ import (
 type DouyinCommentLikeRequest struct {
 	VideoID          string
 	CommentID        string
+	RootCommentID    string // Empty for a main comment; exact main CID for a reply.
 	ExpectedText     string
 	ExpectedAuthorID string // Rendered sec_uid, as returned by ReadDouyinComments.
 	Submitted        bool   // Reconcile only; never click again.
@@ -25,6 +26,7 @@ type DouyinCommentLikeResult struct {
 
 func validDouyinCommentLike(req DouyinCommentLikeRequest) bool {
 	if !douyinInteractionVideoID.MatchString(req.VideoID) || !douyinCommentID.MatchString(req.CommentID) ||
+		(req.RootCommentID != "" && (!douyinCommentID.MatchString(req.RootCommentID) || req.RootCommentID == req.CommentID)) ||
 		!douyinAuthorID.MatchString(req.ExpectedAuthorID) ||
 		strings.TrimSpace(req.ExpectedText) == "" || len(req.ExpectedText) > 8192 {
 		return false

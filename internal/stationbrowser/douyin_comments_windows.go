@@ -5,6 +5,7 @@ package stationbrowser
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,9 @@ func readDouyinComments(ctx context.Context, profile, target string, req DouyinC
 	if !douyinCommentID.MatchString(req.Cursor) && req.Cursor != "" {
 		return DouyinCommentPage{}, ErrDouyinCommentsCursorExpired
 	}
+	if req.RootCommentID != "" && !douyinCommentID.MatchString(req.RootCommentID) {
+		return DouyinCommentPage{}, ErrDouyinCommentsUnavailable
+	}
 	if authorize == nil {
 		return DouyinCommentPage{}, ErrDouyinCommentsUnavailable
 	}
@@ -63,14 +67,14 @@ func readDouyinComments(ctx context.Context, profile, target string, req DouyinC
 		return DouyinCommentPage{}, fmt.Errorf("%w: %v", ErrDouyinCommentsUnavailable, err)
 	}
 	defer closeDouyinHomeSession(session)
-	page, readErr := readDouyinCommentsSession(readCtx, session, target, req.Cursor, limit, authorize, localFixture)
+	page, readErr := readDouyinCommentsSession(readCtx, session, target, req.RootCommentID, req.Cursor, limit, authorize, localFixture)
 	if ctxErr := readCtx.Err(); ctxErr != nil {
 		return DouyinCommentPage{}, ctxErr
 	}
 	return page, readErr
 }
 
-func readDouyinCommentsSession(ctx context.Context, session *cdpSession, target, cursor string, limit int, authorize func() error, localFixture bool) (DouyinCommentPage, error) {
+func readDouyinCommentsSession(ctx context.Context, session *cdpSession, target, rootID, cursor string, limit int, authorize func() error, localFixture bool) (DouyinCommentPage, error) {
 	var created struct {
 		TargetID string `json:"targetId"`
 	}
@@ -111,8 +115,12 @@ func readDouyinCommentsSession(ctx context.Context, session *cdpSession, target,
 	// completeness proof and otherwise return a resumable partial page.
 	var latest renderedDouyinComments
 	stable, stableCount := "", 0
-	for until := time.Now().Add(6 * time.Second); time.Now().Before(until); time.Sleep(80 * time.Millisecond) {
-		page, err := renderedDouyinCommentsPage(ctx, session, attached.SessionID, target, localFixture)
+	initialWindow := 6 * time.Second
+	if rootID != "" {
+		initialWindow = 18 * time.Second
+	}
+	for until := time.Now().Add(initialWindow); time.Now().Before(until); time.Sleep(80 * time.Millisecond) {
+		page, err := renderedDouyinCommentsPageForRoot(ctx, session, attached.SessionID, target, rootID, localFixture)
 		if err != nil {
 			return DouyinCommentPage{}, err
 		}
@@ -124,6 +132,15 @@ func readDouyinCommentsSession(ctx context.Context, session *cdpSession, target,
 		}
 		if !sameDouyinHomeLocation(page.URL, target) {
 			return DouyinCommentPage{}, ErrDouyinCommentsUnavailable
+		}
+		if rootID != "" && !page.RootFound {
+			if err := authorize(); err != nil {
+				return DouyinCommentPage{}, err
+			}
+			if err := scrollDouyinComments(ctx, session, attached.SessionID); err != nil {
+				return DouyinCommentPage{}, err
+			}
+			continue
 		}
 		if page.Invalid || !page.Loaded {
 			continue
@@ -186,18 +203,24 @@ func readDouyinCommentsSession(ctx context.Context, session *cdpSession, target,
 		if err := authorize(); err != nil {
 			return DouyinCommentPage{}, err
 		}
-		if err := scrollDouyinComments(ctx, session, attached.SessionID); err != nil {
-			return DouyinCommentPage{}, err
+		if rootID != "" {
+			if err := expandDouyinReplies(ctx, session, attached.SessionID, rootID); err != nil {
+				return DouyinCommentPage{}, err
+			}
+		} else {
+			if err := scrollDouyinComments(ctx, session, attached.SessionID); err != nil {
+				return DouyinCommentPage{}, err
+			}
 		}
 		time.Sleep(150 * time.Millisecond)
-		next, err := renderedDouyinCommentsPage(ctx, session, attached.SessionID, target, localFixture)
+		next, err := renderedDouyinCommentsPageForRoot(ctx, session, attached.SessionID, target, rootID, localFixture)
 		if err != nil {
 			return DouyinCommentPage{}, err
 		}
 		if next.LoginForm || next.Challenge {
 			return DouyinCommentPage{}, ErrDouyinWebLoginRequired
 		}
-		if next.Invalid || !next.Loaded || !sameDouyinHomeLocation(next.URL, target) {
+		if next.Invalid || !next.Loaded || rootID != "" && !next.RootFound || !sameDouyinHomeLocation(next.URL, target) {
 			return DouyinCommentPage{}, ErrDouyinCommentsUnavailable
 		}
 		if next.fingerprint() != latest.fingerprint() {
@@ -294,6 +317,26 @@ func scrollDouyinComments(ctx context.Context, session *cdpSession, id string) e
 	return nil
 }
 
+// expandDouyinReplies only opens the reply list beneath one exact main card.
+// It never touches reply, share or like controls. The page must expose one
+// unambiguous visible control before another reply page can be claimed.
+func expandDouyinReplies(ctx context.Context, session *cdpSession, id, rootID string) error {
+	if !douyinCommentID.MatchString(rootID) {
+		return ErrDouyinCommentsUnavailable
+	}
+	var out struct {
+		Result struct {
+			Type  string `json:"type"`
+			Value bool   `json:"value"`
+		} `json:"result"`
+	}
+	expression := `(() => {const id=` + strconv.Quote(rootID) + `;const own=e=>[...e.querySelectorAll('[id^="tooltip_"]')].some(n=>n.id==='tooltip_'+id&&n.closest('[data-e2e="comment-item"]')===e);const roots=[...document.querySelectorAll('[data-e2e="comment-item"]')].filter(e=>!e.parentElement?.closest('[data-e2e="comment-item"]')&&own(e));if(roots.length!==1)return false;const root=roots[0];const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden';const text=e=>String(e.textContent||'').trim();const buttons=[...root.querySelectorAll('button,[role="button"]')].filter(e=>e.closest('[data-e2e="comment-item"]')===root&&visible(e)&&(/^(?:展开|查看|加载|更多).{0,16}回复|^回复.{0,16}(?:展开|查看|加载|更多)/.test(text(e))||e.getAttribute('data-e2e')==='comment-replies-more'));if(buttons.length!==1)return false;buttons[0].click();return true})()`
+	if err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": expression, "returnByValue": true, "awaitPromise": true}, &out); err != nil || out.Result.Type != "boolean" || !out.Result.Value {
+		return ErrDouyinCommentsUnavailable
+	}
+	return nil
+}
+
 type renderedDouyinComments struct {
 	URL       string          `json:"url"`
 	Ready     bool            `json:"ready"`
@@ -304,6 +347,7 @@ type renderedDouyinComments struct {
 	Challenge bool            `json:"challenge"`
 	Invalid   bool            `json:"invalid"`
 	TooLarge  bool            `json:"tooLarge"`
+	RootFound bool            `json:"rootFound"`
 	Comments  []DouyinComment `json:"comments"`
 }
 
@@ -324,12 +368,17 @@ func (p renderedDouyinComments) fingerprint() string {
 }
 
 func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
-	return strings.Replace(`(() => {
+	return renderedDouyinCommentsExpressionForRoot("", localFixture)
+}
+
+func renderedDouyinCommentsExpressionForRoot(rootID string, localFixture bool) string {
+	expression := strings.Replace(`(() => {
  const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden';
  const txt=e=>String(e?.textContent||'').trim();
  const relative=/^(?:刚刚|\d+\s*(?:秒|分钟|小时|天|周|月|年)前)$/;
  const rfc3339=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
  const fixture=__LOCAL_FIXTURE__;
+ const rootID=__ROOT_ID__;
  const comments=[], seen=new Set();
  const outerLists=document.querySelectorAll('#merge-all-comment-container');
  const innerLists=document.querySelectorAll('[data-e2e="comment-list"].comment-mainContent');
@@ -340,7 +389,13 @@ func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
    else invalid=true;
  }else if(!invalid&&outerLists.length===1) nativeList=outerLists[0];
  if(!fixture&&!nativeList) invalid=true;
- const cards=nativeList?nativeList.querySelectorAll('[data-e2e="comment-item"]'):fixture?document.querySelectorAll('[data-e2e="comment-item"],[data-comment-id],[data-cid]'):[];
+ const allCards=nativeList?[...nativeList.querySelectorAll('[data-e2e="comment-item"]')]:fixture?[...document.querySelectorAll('[data-e2e="comment-item"],[data-comment-id],[data-cid]')]:[];
+ const roots=allCards.filter(e=>!e.parentElement?.closest('[data-e2e="comment-item"]'));
+ const rootsMatching=rootID?roots.filter(e=>[...e.querySelectorAll('[id^="tooltip_"]')].some(node=>node.id==='tooltip_'+rootID&&node.closest('[data-e2e="comment-item"]')===e)):[];
+ if(rootsMatching.length>1)invalid=true;
+ const root=rootsMatching.length===1?rootsMatching[0]:null;
+ const rootFound=!!root;
+ const cards=rootID?(root?[...root.querySelectorAll('.replyContainer [data-e2e="comment-item"]')].filter(e=>e.closest('.replyContainer')?.closest('[data-e2e="comment-item"]')===root):[]):roots;
  for(const e of cards){
    if(!visible(e)) continue;
    const explicitID=String(e.getAttribute('data-comment-id')||e.dataset.commentId||e.getAttribute('data-cid')||e.dataset.cid||'').trim();
@@ -376,33 +431,41 @@ func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
    const ownTime=[...e.querySelectorAll('time[datetime]')].find(own);
    const rawTime=String(e.getAttribute('data-comment-created-at')||e.dataset.commentCreatedAt||ownTime?.getAttribute('datetime')||'').trim();
    const createdAt=(rawTime&&!relative.test(rawTime)&&rfc3339.test(rawTime)&&!Number.isNaN(Date.parse(rawTime)))?new Date(rawTime).toISOString():'';
-   comments.push({id,authorID,author:txt(authorEl),text,createdAt});seen.add(id);
+   comments.push({id,rootCommentID:rootID,authorID,author:txt(authorEl),text,createdAt});seen.add(id);
  }
  const hasItems=cards.length>0;
- const endings=nativeList?[...nativeList.querySelectorAll(':scope > [data-e2e="comments-end"],:scope > .Fk1OBkgC')].filter(visible):[];
+ const endings=nativeList?[...nativeList.querySelectorAll(':scope > [data-e2e="comments-end"],:scope > .Fk1OBkgC')].filter(visible):fixture?[...document.querySelectorAll('[data-e2e="comments-end"]')].filter(visible):[];
  if(endings.length>1) invalid=true;
- const end=endings.length===1&&(endings[0].getAttribute('data-e2e')==='comments-end'||txt(endings[0])==='暂时没有更多评论');
- const emptyMarker=visible(nativeList?.querySelector('[data-e2e="comment-empty"]'));
- const page={url:String(location.href||''),ready:document.readyState==='complete',loaded:hasItems||emptyMarker||end,empty:!hasItems&&(emptyMarker||end),end,loginForm:visible(document.querySelector('input[type=password],form[action*="login"],form[action*="passport"]')),challenge:visible(document.querySelector('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')),invalid,comments};
+ const moreReplies=root?[...root.querySelectorAll('button,[role="button"]')].filter(visible).filter(e=>e.closest('[data-e2e="comment-item"]')===root).filter(e=>/^(?:展开|查看|加载|更多).{0,16}回复|^回复.{0,16}(?:展开|查看|加载|更多)/.test(txt(e))||e.getAttribute('data-e2e')==='comment-replies-more'):[];
+ if(moreReplies.length>1)invalid=true;
+ const mainEnd=endings.length===1&&(endings[0].getAttribute('data-e2e')==='comments-end'||txt(endings[0])==='暂时没有更多评论');
+ const end=rootID?rootFound&&moreReplies.length===0:mainEnd;
+ const emptyMarker=rootID?rootFound&&!hasItems&&moreReplies.length===0:visible(nativeList?.querySelector('[data-e2e="comment-empty"]')||(fixture?document.querySelector('[data-e2e="comment-empty"]'):null));
+ const page={url:String(location.href||''),ready:document.readyState==='complete',loaded:rootID?rootFound:hasItems||emptyMarker||end,empty:!hasItems&&(emptyMarker||end),end,rootFound,loginForm:visible(document.querySelector('input[type=password],form[action*="login"],form[action*="passport"]')),challenge:visible(document.querySelector('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')),invalid,comments};
  if(new TextEncoder().encode(JSON.stringify(page)).length>3600000)return {tooLarge:true};return page;
 })()`, "__LOCAL_FIXTURE__", fmt.Sprint(localFixture), 1)
+	return strings.Replace(expression, "__ROOT_ID__", strconv.Quote(rootID), 1)
 }
 
 func renderedDouyinCommentsPage(ctx context.Context, session *cdpSession, id, target string, localFixture bool) (renderedDouyinComments, error) {
+	return renderedDouyinCommentsPageForRoot(ctx, session, id, target, "", localFixture)
+}
+
+func renderedDouyinCommentsPageForRoot(ctx context.Context, session *cdpSession, id, target, rootID string, localFixture bool) (renderedDouyinComments, error) {
 	var out struct {
 		Result struct {
 			Type  string                 `json:"type"`
 			Value renderedDouyinComments `json:"value"`
 		} `json:"result"`
 	}
-	if err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": renderedDouyinCommentsExpression(target, localFixture), "returnByValue": true, "awaitPromise": true}, &out); err != nil || out.Result.Type != "object" {
+	if err := session.Call(ctx, id, "Runtime.evaluate", map[string]any{"expression": renderedDouyinCommentsExpressionForRoot(rootID, localFixture), "returnByValue": true, "awaitPromise": true}, &out); err != nil || out.Result.Type != "object" {
 		return renderedDouyinComments{}, ErrDouyinCommentsUnavailable
 	}
 	if out.Result.Value.TooLarge {
 		return renderedDouyinComments{}, ErrDouyinCommentsTooLarge
 	}
 	for _, c := range out.Result.Value.Comments {
-		if !douyinCommentID.MatchString(c.ID) || !douyinAuthorID.MatchString(c.AuthorID) || strings.TrimSpace(c.Text) == "" {
+		if !douyinCommentID.MatchString(c.ID) || c.RootCommentID != rootID || !douyinAuthorID.MatchString(c.AuthorID) || strings.TrimSpace(c.Text) == "" {
 			return renderedDouyinComments{}, ErrDouyinCommentsUnavailable
 		}
 		if c.CreatedAt != "" {

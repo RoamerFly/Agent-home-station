@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from update_windows_release import EXE, MIGRATION, SERVER, BotConsole, Replacement, payload, probe_health, restore_bot_state, stop_release_for_update, update
+from update_windows_release import EXE, MIGRATION, SERVER, BotConsole, Replacement, describe_port_blockers, payload, probe_health, restore_bot_state, stop_release_for_update, update
 
 
 class UpdateTests(unittest.TestCase):
@@ -133,11 +133,41 @@ class UpdateTests(unittest.TestCase):
             with (
                 patch("update_windows_release.running_release_pids", return_value=[]),
                 patch("update_windows_release.listeners", return_value=[8082]),
+                patch("update_windows_release.port_owner_pids", return_value={8080: set(), 8082: {712}, 6174: set()}),
+                patch("update_windows_release.process_image_path", return_value=r"C:\foreign\agent-home-station-server.exe"),
                 patch("update_windows_release.subprocess.run") as signal,
             ):
-                with self.assertRaisesRegex(RuntimeError, "another process"):
+                with self.assertRaisesRegex(RuntimeError, "unverified or foreign"):
                     stop_release_for_update(Path(directory), 1)
             signal.assert_not_called()
+
+    def test_same_release_orphan_is_identified_but_never_started_or_killed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory)
+            image = str(release / SERVER)
+            with (
+                patch("update_windows_release.running_release_pids", return_value=[]),
+                patch("update_windows_release.listeners", return_value=[8082]),
+                patch("update_windows_release.port_owner_pids", return_value={8080: set(), 8082: {901}, 6174: set()}),
+                patch("update_windows_release.process_image_path", return_value=image),
+                patch("update_windows_release.subprocess.run") as run,
+                patch("update_windows_release.subprocess.Popen") as launch,
+            ):
+                with self.assertRaisesRegex(RuntimeError, r"8082: PID 901, this release"):
+                    stop_release_for_update(release, 1)
+            run.assert_not_called()
+            launch.assert_not_called()
+
+    def test_unverified_listener_owner_blocks_without_service_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory)
+            with (
+                patch("update_windows_release.port_owner_pids", side_effect=OSError("inspection unavailable")),
+                patch("update_windows_release.subprocess.run") as run,
+            ):
+                reason = describe_port_blockers(release, [8080, 6174])
+            self.assertIn("Cannot verify listener ownership", reason)
+            run.assert_not_called()
 
     def test_healthy_station_does_not_require_wechat_account_online(self):
         with tempfile.TemporaryDirectory() as directory:

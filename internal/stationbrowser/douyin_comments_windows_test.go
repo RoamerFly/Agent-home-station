@@ -96,6 +96,12 @@ func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
 		case "/native-empty":
 			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container">
 <div data-e2e="comment-list" class="comment-mainContent"><div class="Fk1OBkgC">暂时没有更多评论</div></div></div>`))
+		case "/reply-more":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container"><div data-e2e="comment-list" class="comment-mainContent">
+<div data-e2e="comment-item"><div id="tooltip_1234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_root">主评论作者</a></div><div class="FduGc_lz">主评论</div>
+<button data-e2e="comment-replies-more" onclick="document.querySelector('#hidden-replies').style.display='block';this.remove()">展开回复</button>
+<div class="replyContainer" id="hidden-replies" style="display:none"><div data-e2e="comment-item"><div id="tooltip_2234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_child">子评论作者</a></div><div class="FduGc_lz">子评论</div></div></div></div>
+<div class="Fk1OBkgC">暂时没有更多评论</div></div></div>`))
 		default:
 			_, _ = w.Write([]byte(`<!doctype html><title>comments</title>
 <div data-e2e="comment-item"><div id="tooltip_9234567890123456789"></div><span data-sec-uid="sec_outside">外部</span><p data-e2e="comment-content">容器外</p></div>
@@ -115,11 +121,24 @@ func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
 	defer cancel()
 	profile := t.TempDir() + "\\profile"
 	page, err := readDouyinComments(ctx, profile, s.URL+"/video/123", DouyinCommentsRequest{VideoID: "123", Limit: 10}, func() error { return nil }, true)
-	if err != nil || !page.Complete || len(page.Comments) != 2 ||
+	if err != nil || !page.Complete || len(page.Comments) != 1 ||
 		page.Comments[0].ID != "1234567890123456789" || page.Comments[0].AuthorID != "sec_root" ||
-		page.Comments[0].Text != "主评论" || page.Comments[1].ID != "2234567890123456789" ||
-		page.Comments[1].AuthorID != "sec_child" || page.Comments[1].Text != "子评论" {
+		page.Comments[0].Text != "主评论" || page.Comments[0].RootCommentID != "" {
 		t.Fatalf("tooltip comment cards: %+v %v", page, err)
+	}
+	replies, err := readDouyinComments(ctx, profile, s.URL+"/video/123", DouyinCommentsRequest{
+		VideoID: "123", RootCommentID: "1234567890123456789", Limit: 10,
+	}, func() error { return nil }, true)
+	if err != nil || !replies.Complete || len(replies.Comments) != 1 ||
+		replies.Comments[0].ID != "2234567890123456789" || replies.Comments[0].RootCommentID != "1234567890123456789" ||
+		replies.Comments[0].AuthorID != "sec_child" || replies.Comments[0].Text != "子评论" {
+		t.Fatalf("reply cards: %+v %v", replies, err)
+	}
+	more, err := readDouyinComments(ctx, profile, s.URL+"/reply-more", DouyinCommentsRequest{
+		VideoID: "123", RootCommentID: "1234567890123456789", Limit: 10,
+	}, func() error { return nil }, true)
+	if err != nil || !more.Complete || len(more.Comments) != 1 || more.Comments[0].ID != "2234567890123456789" {
+		t.Fatalf("expanded replies: %+v %v", more, err)
 	}
 	probe, err := openCDP(ctx, t.TempDir()+"\\probe-profile")
 	if err != nil {
@@ -154,7 +173,7 @@ func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
 		return renderedDouyinComments{}
 	}
 	native := stateAt("/video/123", false)
-	if native.Invalid || len(native.Comments) != 2 || native.Comments[0].ID != page.Comments[0].ID || native.Comments[1].ID != page.Comments[1].ID {
+	if native.Invalid || len(native.Comments) != 1 || native.Comments[0].ID != page.Comments[0].ID {
 		t.Fatalf("production parser lost nested comment cards: %+v", native)
 	}
 	direct := stateAt("/direct", false)
@@ -272,7 +291,7 @@ func douyinCommentsFixture(t *testing.T) *httptest.Server {
 		default:
 			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><main id="comments"></main><script>
 const data=[['101','sec_alpha','甲','第一条','2026-01-02T03:04:05Z'],['102','sec_beta','乙','第二条','几分钟前'],['103','sec_gamma','丙','第三条','2026-01-02T03:06:05Z'],['104','sec_delta','丁','第四条','2026-01-02T03:07:05Z']];let n=0;
-function add(k){while(n<data.length&&k-->0){let x=data[n++],e=document.createElement('article');e.dataset.e2e='comment-item';e.dataset.commentId=x[0];e.dataset.authorId=x[1];e.innerHTML='<span data-e2e="comment-user-name" data-sec-uid="'+x[1]+'">'+x[2]+'</span><p data-e2e="comment-content">'+x[3]+'</p><time datetime="'+x[4]+'">'+x[4]+'</time>';comments.append(e)}if(n===data.length){let e=document.createElement('i');e.dataset.e2e='comments-end';comments.append(e)}}add(2);window.scrollTo=()=>add(2);
+function add(k){while(n<data.length&&k-->0){let x=data[n++],e=document.createElement('article');e.dataset.e2e='comment-item';e.dataset.commentId=x[0];e.dataset.authorId=x[1];e.innerHTML='<span data-e2e="comment-user-name" data-sec-uid="'+x[1]+'">'+x[2]+'</span><p data-e2e="comment-content">'+x[3]+'</p><time datetime="'+x[4]+'">'+x[4]+'</time>';comments.append(e)}if(n===data.length){let e=document.createElement('div');e.dataset.e2e='comments-end';e.textContent='结束';comments.append(e)}}add(2);window.scrollTo=()=>add(2);
 </script>`))
 		}
 	}))

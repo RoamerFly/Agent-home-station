@@ -91,6 +91,26 @@ func TestLocalDouyinCommentLikeSingleClickAndRecovery(t *testing.T) {
 	}
 }
 
+func TestLocalDouyinCommentLikeRevealsExactChild(t *testing.T) {
+	if !Available() {
+		t.Skip("Microsoft Edge unavailable")
+	}
+	var clicks atomic.Int32
+	html := `<div id="merge-all-comment-container"><article data-e2e="comment-item"><div id="tooltip_789"></div>` +
+		`<button data-e2e="comment-replies-more" onclick="document.querySelector('#child-thread').style.display='block';this.remove()">展开回复</button>` +
+		`<div id="child-thread" class="replyContainer" style="display:none">` + commentLikeCard + `</div></article></div>`
+	s := commentLikeFixture(t, html, &clicks)
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+	req := commentLikeRequest()
+	req.RootCommentID = "789"
+	got, err := runDouyinCommentLike(ctx, t.TempDir()+"\\profile", s.URL+"/video/123", req, func() error { return nil }, true)
+	if err != nil || got.State != DouyinInteractionApplied || clicks.Load() != 1 {
+		t.Fatalf("child like=%+v %v clicks=%d", got, err, clicks.Load())
+	}
+}
+
 func TestLocalDouyinCommentLikeFailsClosedOnUnverifiedControls(t *testing.T) {
 	if !Available() {
 		t.Skip("Microsoft Edge unavailable")

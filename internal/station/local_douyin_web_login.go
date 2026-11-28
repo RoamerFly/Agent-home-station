@@ -134,6 +134,7 @@ type localDouyinWebLogin struct {
 	readVideo        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
 	commentLike      func(context.Context, string, stationbrowser.DouyinCommentLikeRequest, func() error) (stationbrowser.DouyinCommentLikeResult, error)
+	commentLikePause func(context.Context) error
 	probeNotice      func(context.Context, string, func() error) (string, error)
 	readNotice       func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error)
 	readRelation     func(context.Context, string, stationbrowser.DouyinCommentRelationRequest, func() error) (stationbrowser.DouyinCommentRelation, error)
@@ -827,8 +828,8 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if *in.AllowAutoCommentLikes {
 			view := m.view(record)
 			if view.State != "saved" || view.AttemptID != "" || !view.Available ||
-				!view.WorksEnabled || !view.CommentsEnabled {
-				return fail(409, "请先确认网页登录，并允许读取本人作品与视频评论")
+				!view.WorksEnabled || !view.CommentsEnabled || !view.LikesEnabled {
+				return fail(409, "请先确认网页登录，并允许读取本人作品、视频评论及独立点赞授权")
 			}
 		}
 		record.AutoCommentLikesEnabled = *in.AllowAutoCommentLikes

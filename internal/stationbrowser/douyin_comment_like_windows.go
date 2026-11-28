@@ -73,7 +73,7 @@ type douyinCommentLikePageState struct {
 func douyinCommentLikePage(ctx context.Context, s readerSession, id string, world int64, target, action string, req DouyinCommentLikeRequest) (douyinCommentLikePageState, error) {
 	input, _ := json.Marshal(map[string]string{
 		"target": target, "action": action, "commentID": req.CommentID,
-		"text": req.ExpectedText, "authorID": req.ExpectedAuthorID,
+		"rootID": req.RootCommentID, "text": req.ExpectedText, "authorID": req.ExpectedAuthorID,
 	})
 	var out struct {
 		Result struct {
@@ -143,7 +143,7 @@ func runDouyinCommentLikeSession(ctx context.Context, session readerSession, tar
 		}
 	}
 	var state douyinCommentLikePageState
-	for until := time.Now().Add(6 * time.Second); ; {
+	for until := time.Now().Add(18 * time.Second); ; {
 		if err := authorize(); err != nil {
 			result.State, result.Code = DouyinInteractionCancelled, "authorization_changed"
 			return result, err
@@ -155,6 +155,11 @@ func runDouyinCommentLikeSession(ctx context.Context, session readerSession, tar
 		}
 		if state.Ready && state.Code != "comment_unavailable" && sameDouyinHomeLocation(state.URL, target) {
 			break
+		}
+		if state.Ready && state.Code == "comment_unavailable" && sameDouyinHomeLocation(state.URL, target) {
+			if _, err := douyinCommentLikePage(ctx, session, id, world, target, "reveal", req); err != nil {
+				return result, err
+			}
 		}
 		if time.Now().After(until) {
 			result.Code = "comment_unavailable"

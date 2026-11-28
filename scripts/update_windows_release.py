@@ -180,6 +180,87 @@ def listeners():
     return result
 
 
+def port_owner_pids():
+    """Read Windows TCP listener owners without opening or changing a service."""
+    if os.name != "nt":
+        raise RuntimeError("Windows port inspection is required")
+    command = (
+        "$ErrorActionPreference='Stop'; "
+        "@(Get-NetTCPConnection -State Listen "
+        "| Where-Object { $_.LocalPort -in 8080,8082,6174 } "
+        "| Select-Object LocalPort,OwningProcess) | ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, text=True, timeout=10, check=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    rows = json.loads(result.stdout.strip() or "[]")
+    if isinstance(rows, dict):
+        rows = [rows]
+    owners = {port: set() for port in PORTS}
+    for row in rows:
+        port, pid = int(row["LocalPort"]), int(row["OwningProcess"])
+        if port in owners and pid > 0:
+            owners[port].add(pid)
+    return owners
+
+
+def process_image_path(pid):
+    """Get the kernel-reported executable path; inaccessible PIDs stay unknown."""
+    kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD,
+                                                  wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+    kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        path = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(path))
+        return path.value if kernel.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)) else None
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def describe_port_blockers(release, occupied):
+    """Explain why a stopped launcher cannot safely reclaim running children."""
+    try:
+        owners = port_owner_pids()
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return f"Cannot verify listener ownership for ports {occupied}: {error}. Update not started"
+    runtime = release / "applications/wechat/runtime/windows-x64"
+    fallback = release / ("env/windows-x64" if (release / "env").is_dir() else "runtimes/windows-x64")
+    expected = {
+        8080: (runtime / "wechat-admin.exe", fallback / "wechat-admin.exe"),
+        8082: (release / SERVER,),
+        6174: (runtime / "wx.exe", fallback / "wx.exe"),
+    }
+    details = []
+    for port in sorted(set(occupied) | {port for port, pids in owners.items() if pids}):
+        pids = owners.get(port, set())
+        if not pids:
+            details.append(f"{port}: listener PID unavailable")
+        for pid in sorted(pids):
+            path = process_image_path(pid)
+            known = path is not None and any(
+                os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(item))
+                for item in expected[port]
+            )
+            relation = "this release" if known else "unverified or foreign"
+            details.append(f"{port}: PID {pid}, {relation}, image {path or 'unavailable'}")
+    return (
+        "Workstation listener remains while its launcher is absent; update not started. "
+        + "; ".join(details)
+        + ". The existing release has no external graceful stop for its desktop server. "
+          "Close the owning services through their original owner, then retry; no process was terminated"
+    )
+
+
 def running_release_pids(launcher):
     """Find only processes executing this exact release, not another station copy."""
     if os.name != "nt":
@@ -230,8 +311,9 @@ def stop_release_for_update(release, timeout, on_running=None):
     if len(running) > 1:
         raise RuntimeError("Multiple processes own this release; update not started")
     if not running:
-        if listeners():
-            raise RuntimeError("Workstation ports are in use by another process; update not started")
+        occupied = listeners()
+        if occupied:
+            raise RuntimeError(describe_port_blockers(release, occupied))
         return False
     if on_running is not None:
         on_running()
@@ -425,8 +507,11 @@ def update(args, release, work):
         raise ValueError("Existing release migration manifest is invalid")
     bot_before = None
     if args.keep_stopped:
-        if running_release_pids(release / EXE) or listeners():
-            raise RuntimeError("Stop the workstation before a keep-stopped update")
+        if running_release_pids(release / EXE):
+            raise RuntimeError("Stop the workstation launcher before a keep-stopped update")
+        occupied = listeners()
+        if occupied:
+            raise RuntimeError(describe_port_blockers(release, occupied))
     else:
         def remember_bot_state():
             nonlocal bot_before

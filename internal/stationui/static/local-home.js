@@ -2010,8 +2010,8 @@
           : (options.allowLikes ? "已允许点赞。" : "已停止点赞。");
       }
       if (action === "set_auto_comment_likes") feedback = updated.auto_comment_likes_enabled
-        ? "自动点赞已开启；后台约 30 秒后开始逐批扫描。也可在互动任务中立即处理一批。"
-        : "已关闭本人作品评论自动点赞偏好。";
+        ? "已开启自动点赞；正在建立已有评论基线，完成后才开始点赞新评论。基线期间纳入的评论不会补赞。"
+        : "已关闭新评论自动点赞；历史批量任务可单独操作。";
       appFeedback(feedback);
     } catch (error) {
       if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -2261,111 +2261,111 @@
     const enabled = value?.auto_comment_likes_enabled === true;
     const supported = typeof value?.auto_comment_likes_enabled === "boolean";
     const ready = value?.state === "saved" && !value?.attempt_id && value?.available === true &&
-      !value?.paused && !value?.detached && value?.works_enabled === true && value?.comments_enabled === true;
+      !value?.paused && !value?.detached && value?.works_enabled === true && value?.comments_enabled === true &&
+      value?.likes_enabled === true;
     const row = appElement("section", "", "app-layer douyin-auto-comment-likes");
-    row.append(appElement("h4", "本人作品评论自动点赞"));
+    row.append(appElement("h4", "新评论自动点赞"));
     const label = appElement("label", "", "switch-row");
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = enabled;
     input.disabled = Boolean(web.loading || web.applying) || !supported || (!enabled && !ready);
     input.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_auto_comment_likes", { allowAutoCommentLikes: input.checked }); });
-    label.append(input, appElement("span", "自动点赞本人作品的公开视频主评论（试用）"));
+    label.append(input, appElement("span", "开启自动点赞"));
     row.append(label);
-    row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "偏好已开启。" : "偏好已关闭。", "app-scope-note"));
-    row.append(appElement("p", "启用后后台约 30 秒开始首轮，随后逐次处理一页；下方也可立即处理所选作品的一批。当前仅覆盖已核对的公开视频主评论，子评论及图文、非公开作品尚未接入。已点赞评论会跳过；按钮状态无法确认时不会点击。", "app-scope-note"));
+    row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : value?.likes_enabled !== true ? "请先到「账号与授权」开启“允许点赞”，并确认本人作品及评论读取授权。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "已开启；基线状态见下方。基线完成后才开始自动点赞，期间纳入的评论不会补赞。" : "已关闭；开启不会补赞已有评论。", "app-scope-note"));
+    row.append(appElement("p", "仅处理启用后新增的评论。当前覆盖已核对的公开视频主评论及其可验证的已展开子评论；无法读取或分页未核实的回复不计为完成。图文及非公开作品仍未覆盖。历史评论请使用下方独立的批量任务。", "app-scope-note"));
     return row;
   }
   function douyinAutoCommentLikesPanel(view) {
     const panel = appElement("section", "", "app-layer douyin-auto-comment-likes-progress");
-    const summary = appElement("p", "正在读取已保存进度…", "app-scope-note");
-    const selection = appElement("label", "选择已核对的公开作品", "settings-field");
-    const select = document.createElement("select");
-    select.setAttribute("aria-label", "选择要处理评论的本人公开作品");
-    selection.append(select);
+    const summary = appElement("p", "正在读取点赞任务状态…", "app-scope-note");
+    const automatic = appElement("p", "", "app-scope-note");
     const actions = appElement("div", "", "publication-actions");
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
-    const progress = appElement("p", "", "app-scope-note");
+    const progress = appElement("div", "", "douyin-like-progress");
     const uncoveredNote = appElement("p", "", "app-scope-note");
+    const replyCoverage = appElement("p", "未覆盖回复：无法读取或分页未确认的子评论不计为已完成；目前无法可靠统计数量。", "app-scope-note");
     const controller = new AbortController();
     view.douyinAutoLikeAbort = controller;
-    let status = null, catalog = null, selectedWork = "", cursor = "", loading = false, running = false;
+    let status = null, loading = false, mutating = false, poll = 0;
     const active = () => appConfiguration === view && view.section === "interactions" && panel.isConnected && !controller.signal.aborted;
-    const eligibleWorks = () => {
-      if (!catalog || catalog.coverage?.state !== "complete" || catalog.coverage?.previous_complete || catalog.coverage?.has_more !== false || !catalog.account_id) return [];
-      return (Array.isArray(catalog.works) ? catalog.works : []).filter((work) =>
-        /^[1-9]\d{0,19}$/.test(String(work.id || "")) && work.visibility === "公开" &&
-        work.review_status === "not_reviewing" && work.media_type === "video");
-    };
+    controller.signal.addEventListener("abort", () => window.clearTimeout(poll), { once: true });
+    const amount = (value) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+    const autoLabel = { off: "已关闭", arming: "基线建立中，完成后开始自动点赞", active: "正在处理基线完成后的新评论" };
+    const batchLabel = { idle: "未开始", running: "运行中", cancelled: "已停止，可续办", complete: "当前可覆盖范围已处理完", error: "发生错误，可核对后续办" };
+    function scheduleRefresh() {
+      window.clearTimeout(poll);
+      if (active() && (status?.batch?.state === "running" || status?.auto?.state === "arming" || status?.auto?.state === "active")) {
+        poll = window.setTimeout(() => void refreshStatus(true), status?.batch?.state === "running" ? 2500 : 10000);
+      }
+    }
     function render() {
-      const works = eligibleWorks();
-      const available = works.some((work) => String(work.id) === selectedWork);
-      if (!available) { selectedWork = String(works[0]?.id || ""); cursor = ""; }
-      select.replaceChildren();
-      for (const work of works) select.add(new Option((work.title || "作品") + " · " + work.id, String(work.id)));
-      select.value = selectedWork;
-      select.disabled = loading || running || works.length === 0;
-      refresh.disabled = loading || running;
-      run.disabled = loading || running || status?.enabled !== true || works.length === 0;
-      run.textContent = running ? "正在处理…" : cursor ? "继续处理下一批" : "立即处理一批";
-      const counts = status?.works?.[selectedWork] || { applied: 0, unknown: 0, failed: 0 };
-      const catalogLabel = { complete: "已核对完整", partial: "部分覆盖", unknown: "待核对" }[status?.catalog_state] || "待核对";
-      const coverageLabel = status?.coverage_state === "partial" ? "部分覆盖" : "未覆盖";
-      summary.textContent = !status ? "正在读取已保存进度…" :
-        `自动扫描${status.enabled ? "已启用" : "未就绪"} · 作品目录${catalogLabel} · 评论${coverageLabel} · 可处理公开视频 ${status.eligible_works || 0} 件。`;
-      progress.textContent = selectedWork ?
-        `当前作品已保存：成功 ${counts.applied || 0} 条，状态未知 ${counts.unknown || 0} 条，未提交失败 ${counts.failed || 0} 条。${cursor ? "还有下一批主评论。" : "当前页面没有已保存的续页位置。"}` :
-        "没有可安全选择的本人公开视频；请先到「内容与创作 → 本人作品」同步并核对完整目录。";
+      const batch = status?.batch || {};
+      const state = batch.state || "idle";
+      const likeGrant = apps?.douyinWebLogin?.value?.likes_enabled === true;
+      const ready = likeGrant && status?.catalog_state === "complete" && amount(status?.eligible_works) > 0;
+      start.disabled = loading || mutating || !ready || state === "running";
+      start.textContent = mutating ? "正在提交…" : state === "cancelled" || state === "error" ? "继续批量任务" : "一键点赞全部评论";
+      stop.disabled = loading || mutating || state !== "running";
+      stop.hidden = state !== "running";
+      refresh.disabled = loading || mutating;
+      summary.textContent = !status ? "正在读取点赞任务状态…" : `历史批量任务：${batchLabel[state] || "状态待核对"}。已核对的可处理公开视频 ${amount(status.eligible_works)} 件；作品目录${status.catalog_state === "complete" ? "已核对" : "尚未完整核对"}。${!likeGrant ? "请先到「账号与授权」开启“允许点赞”。" : !ready ? status.reason || "请先核对完整作品目录和评论读取授权。" : ""}${state === "complete" ? "再次点击可重新扫描新增评论；已有提交记录会跳过。" : ""}`;
+      const auto = status?.auto || {};
+      automatic.textContent = `新评论自动点赞：${autoLabel[auto.state] || (status?.enabled ? "状态待核对" : "已关闭")}；基线已核对 ${amount(auto.baseline_completed_works)}/${amount(auto.baseline_total_works)} 件作品。${auto.last_error ? `最近错误：${auto.last_error}。` : ""}`;
+      const delayMin = amount(batch.delay_min_ms), delayMax = amount(batch.delay_max_ms);
+      const pacing = delayMin && delayMax ? `每次点赞随机间隔 ${(delayMin / 1000).toFixed(1)}–${(delayMax / 1000).toFixed(1)} 秒。` : "点赞间隔以执行端状态为准。";
+      const failed = Object.values(status?.works || {}).reduce((total, counts) => total + amount(counts?.failed), 0);
+      progress.replaceChildren(
+        appElement("span", `作品 ${amount(batch.completed_works)}/${amount(batch.total_works)}`, "douyin-like-metric"),
+        appElement("span", `已查看 ${amount(batch.seen)} 条`, "douyin-like-metric"),
+        appElement("span", `已提交 ${amount(batch.submitted)} 次`, "douyin-like-metric"),
+        appElement("span", `结果未知 ${amount(batch.unverified)} 次`, "douyin-like-metric"),
+        appElement("span", `账本失败 ${failed} 条`, "douyin-like-metric")
+      );
+      progress.setAttribute("aria-label", `批量任务进度，作品 ${amount(batch.completed_works)} / ${amount(batch.total_works)}，已查看 ${amount(batch.seen)} 条，已提交 ${amount(batch.submitted)} 次，结果未知 ${amount(batch.unverified)} 次，账本失败 ${failed} 条`);
       const reasons = new Map();
       for (const item of Array.isArray(status?.uncovered_works) ? status.uncovered_works : []) {
         const reason = String(item?.reason || "原因待核对");
         reasons.set(reason, (reasons.get(reason) || 0) + 1);
       }
-      uncoveredNote.textContent = reasons.size ? "未覆盖作品：" + Array.from(reasons, ([reason, count]) => `${reason} ${count} 件`).join("；") + "。" :
-        "子评论总数及回复分页尚未形成完整覆盖证据，不能认定全部评论已处理。";
+      uncoveredNote.textContent = `${pacing} 当前处理已核对的公开视频主评论及其可验证的已展开子评论；图文和非公开作品不在此范围，任务完成也不表示全部评论已点赞。${batch.work_id ? `当前作品 ${batch.work_id}；` : ""}${batch.root_comment_id ? `当前主楼 ${batch.root_comment_id}；` : ""}${batch.cursor ? "已保存续页位置；" : ""}${batch.last_error ? `最近错误：${batch.last_error}。` : ""}${reasons.size ? "未覆盖作品：" + Array.from(reasons, ([reason, count]) => `${reason} ${count} 件`).join("；") + "。" : ""}`;
     }
-    async function refreshStatus() {
-      if (loading || running) return;
-      loading = true; render();
+    async function refreshStatus(silent = false) {
+      if (loading || mutating) return;
+      loading = true; if (!silent) render();
       try {
         const nextStatus = await request("/api/local/apps/douyin/auto-comment-likes", { signal: controller.signal });
         if (!active()) return;
-        if (!nextStatus || typeof nextStatus.enabled !== "boolean") throw new Error("点赞进度返回格式无效。");
-        status = nextStatus; catalog = null;
-        if (nextStatus.enabled) {
-          const nextCatalog = await request("/api/local/apps/douyin/works", { signal: controller.signal });
-          if (!active()) return;
-          if (!nextCatalog || !Array.isArray(nextCatalog.works)) throw new Error("本人作品目录返回格式无效。");
-          catalog = nextCatalog;
-        }
-        feedback.textContent = nextStatus.reason || "已刷新保存进度；未据此推断子评论覆盖完成。";
+        if (!nextStatus || typeof nextStatus.enabled !== "boolean" || !nextStatus.batch || !nextStatus.auto) throw new Error("点赞进度返回格式无效。");
+        status = nextStatus;
+        if (!silent) feedback.textContent = nextStatus.reason || "已刷新保存进度。";
       } catch (error) {
         if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
-      } finally { if (active()) { loading = false; render(); } }
+      } finally { if (active()) { loading = false; render(); scheduleRefresh(); } }
     }
-    async function runBatch() {
-      if (!status?.enabled || !selectedWork || running || loading || !eligibleWorks().some((work) => String(work.id) === selectedWork)) return;
-      const work = selectedWork;
-      running = true; feedback.textContent = "正在处理所选作品的一批主评论；请等待结果后再继续。"; render();
+    async function changeBatch(action) {
+      if (mutating || loading || !status) return;
+      mutating = true; feedback.textContent = action === "cancel_all" ? "正在停止历史批量任务…" : "正在启动历史批量任务…"; render();
       try {
         const next = await request("/api/local/apps/douyin/auto-comment-likes", { method: "POST", signal: controller.signal,
-          body: JSON.stringify({ action: "run", revision: status.revision, work_id: work, cursor }) });
+          body: JSON.stringify({ action }) });
         if (!active()) return;
-        if (!next || next.work_id !== work || typeof next.enabled !== "boolean") throw new Error("单批结果返回格式无效，请刷新核对账本。");
-        status = next; cursor = next.next_cursor || "";
-        feedback.textContent = `本批查看 ${next.seen || 0} 条主评论，跳过 ${next.skipped || 0} 条已有记录；${next.main_list_end ? "主评论分页已到尾" : cursor ? "可继续下一批主评论" : "续页位置待核对"}。子评论仍未覆盖，请按成功、未知和失败分别核对。`;
+        if (!next || !next.batch || !next.auto) throw new Error("批量任务状态返回格式无效，请刷新核对账本。");
+        status = next;
+        feedback.textContent = action === "cancel_all" ? "已请求停止；执行中的单次操作结束后会保存位置。" : "已启动；进度将自动刷新，状态未知的点赞不会盲目重试。";
       } catch (error) {
-        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message + "；本批结果请刷新账本核对，勿盲目重试。";
-      } finally { if (active()) { running = false; render(); } }
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message + "；请刷新账本核对状态。";
+      } finally { if (active()) { mutating = false; render(); scheduleRefresh(); } }
     }
     const refresh = memoryButton("刷新进度", "button compact secondary", () => void refreshStatus());
-    const run = memoryButton("立即处理一批", "button compact primary", () => void runBatch());
-    select.addEventListener("change", () => { selectedWork = select.value; cursor = ""; render(); });
-    actions.append(run, refresh);
-    panel.append(appElement("h4", "单批执行与保存进度"),
-      appElement("p", "后台启用后逐次扫描一页；“立即处理一批”可手动触发所选作品的一页主评论。请用“刷新进度”查看最新账本，状态未知的点赞不会盲目重试。", "app-scope-note"),
-      summary, selection, actions, progress, uncoveredNote, feedback);
+    const start = memoryButton("一键点赞全部评论", "button compact primary", () => void changeBatch("start_all"));
+    const stop = memoryButton("停止批量任务", "button compact secondary", () => void changeBatch("cancel_all"));
+    actions.append(start, stop, refresh);
+    panel.append(appElement("h4", "历史评论批量点赞"),
+      appElement("p", "此任务独立于上方自动开关；点击后遍历当前已核对的可处理作品，停止后可从保存的位置续办。", "app-scope-note"),
+      summary, automatic, actions, progress, uncoveredNote, replyCoverage, feedback);
     render();
     void refreshStatus();
     return panel;

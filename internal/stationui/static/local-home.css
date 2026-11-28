@@ -2482,3 +2482,46 @@ body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin
     grid-column: 1 / -1;
   }
 }
+
+.douyin-auto-comment-likes,
+.douyin-auto-comment-likes-progress {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.douyin-auto-comment-likes > h4,
+.douyin-auto-comment-likes-progress > h4 {
+  margin: 0;
+  font-size: var(--fs-title);
+}
+.douyin-auto-comment-likes > .switch-row {
+  margin: 0;
+}
+.douyin-auto-comment-likes > .app-scope-note,
+.douyin-auto-comment-likes-progress > .app-scope-note,
+.douyin-auto-comment-likes-progress > .apps-feedback {
+  margin: 0;
+}
+.douyin-auto-comment-likes-progress > .publication-actions {
+  margin: 2px 0;
+}
+.douyin-like-progress {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.douyin-like-metric {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  background: var(--surface);
+}
+@media (max-width: 760px) {
+  .douyin-like-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

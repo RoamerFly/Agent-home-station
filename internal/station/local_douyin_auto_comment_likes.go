@@ -35,13 +35,30 @@ CREATE TABLE IF NOT EXISTS scan_progress (
  account TEXT NOT NULL, work_id TEXT NOT NULL, cursor TEXT NOT NULL,
  updated_at TEXT NOT NULL,
  PRIMARY KEY(owner,profile,grant,account)
+);
+CREATE TABLE IF NOT EXISTS auto_seen (
+ owner TEXT NOT NULL, profile TEXT NOT NULL, grant TEXT NOT NULL,
+ account TEXT NOT NULL, epoch INTEGER NOT NULL, work_id TEXT NOT NULL,
+ comment_id TEXT NOT NULL,
+ PRIMARY KEY(owner,profile,grant,account,epoch,work_id,comment_id)
+);
+CREATE TABLE IF NOT EXISTS comment_like_jobs (
+ owner TEXT NOT NULL, profile TEXT NOT NULL, grant TEXT NOT NULL,
+ account TEXT NOT NULL, mode TEXT NOT NULL, epoch INTEGER NOT NULL,
+ catalog_hash TEXT NOT NULL, state TEXT NOT NULL, work_id TEXT NOT NULL,
+ cursor TEXT NOT NULL, root_ids TEXT NOT NULL, root_index INTEGER NOT NULL,
+ reply_cursor TEXT NOT NULL, next_cursor TEXT NOT NULL, main_complete INTEGER NOT NULL,
+ completed_works INTEGER NOT NULL, seen INTEGER NOT NULL, submitted INTEGER NOT NULL,
+ unverified INTEGER NOT NULL, last_error TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(owner,profile,grant,account,mode)
 );`
 
 type localDouyinAutoCommentLikeInput struct {
-	Action   string `json:"action"`
-	Revision uint64 `json:"revision"`
-	WorkID   string `json:"work_id"`
-	Cursor   string `json:"cursor,omitempty"`
+	Action        string `json:"action"`
+	Revision      uint64 `json:"revision"`
+	WorkID        string `json:"work_id"`
+	Cursor        string `json:"cursor,omitempty"`
+	RootCommentID string `json:"root_comment_id,omitempty"`
 }
 
 type localDouyinAutoCommentLikeCounts struct {
@@ -69,23 +86,28 @@ func douyinAutoCommentLikeWorkReason(work localDouyinCatalogWork) string {
 }
 
 type localDouyinAutoCommentLikeStatus struct {
-	Enabled       bool                                        `json:"enabled"`
-	Revision      uint64                                      `json:"revision"`
-	CatalogState  string                                      `json:"catalog_state"`
-	CoverageState string                                      `json:"coverage_state"`
-	Reason        string                                      `json:"reason"`
-	Works         map[string]localDouyinAutoCommentLikeCounts `json:"works"`
-	WorkID        string                                      `json:"work_id,omitempty"`
-	NextCursor    string                                      `json:"next_cursor,omitempty"`
-	MainListEnd   bool                                        `json:"main_list_end,omitempty"`
-	Seen          int                                         `json:"seen,omitempty"`
-	Skipped       int                                         `json:"skipped,omitempty"`
-	Submitted     int                                         `json:"submitted,omitempty"`
-	Unverified    int                                         `json:"unverified,omitempty"`
-	ScanWorkID    string                                      `json:"scan_work_id,omitempty"`
-	ScanCursor    string                                      `json:"scan_cursor,omitempty"`
-	EligibleWorks int                                         `json:"eligible_works"`
-	Uncovered     []localDouyinAutoCommentLikeUncovered       `json:"uncovered_works"`
+	Enabled        bool                                        `json:"enabled"`
+	Revision       uint64                                      `json:"revision"`
+	CatalogState   string                                      `json:"catalog_state"`
+	CoverageState  string                                      `json:"coverage_state"`
+	Reason         string                                      `json:"reason"`
+	Works          map[string]localDouyinAutoCommentLikeCounts `json:"works"`
+	WorkID         string                                      `json:"work_id,omitempty"`
+	NextCursor     string                                      `json:"next_cursor,omitempty"`
+	MainListEnd    bool                                        `json:"main_list_end,omitempty"`
+	Seen           int                                         `json:"seen,omitempty"`
+	Skipped        int                                         `json:"skipped,omitempty"`
+	Submitted      int                                         `json:"submitted,omitempty"`
+	Unverified     int                                         `json:"unverified,omitempty"`
+	ScanWorkID     string                                      `json:"scan_work_id,omitempty"`
+	ScanCursor     string                                      `json:"scan_cursor,omitempty"`
+	EligibleWorks  int                                         `json:"eligible_works"`
+	Uncovered      []localDouyinAutoCommentLikeUncovered       `json:"uncovered_works"`
+	Auto           localDouyinLikeAutoStatus                   `json:"auto"`
+	Batch          localDouyinLikeBatchStatus                  `json:"batch"`
+	RootCommentID  string                                      `json:"root_comment_id,omitempty"`
+	PageEnd        bool                                        `json:"page_end,omitempty"`
+	PageCommentIDs []string                                    `json:"-"`
 }
 
 func douyinAutoCommentLikesPath(home *localHomeService, fish string) string {
@@ -116,9 +138,10 @@ func openDouyinAutoCommentLikes(ctx context.Context, home *localHomeService, fis
 	}
 	db.SetMaxOpenConns(1)
 	if _, err = db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err == nil && create {
-		if _, err = db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err == nil {
-			_, err = db.ExecContext(ctx, douyinAutoCommentLikesSchema)
-		}
+		_, err = db.ExecContext(ctx, "PRAGMA journal_mode=WAL")
+	}
+	if err == nil {
+		_, err = db.ExecContext(ctx, douyinAutoCommentLikesSchema)
 	}
 	if err == nil && create {
 		err = os.Chmod(path, 0600)
@@ -131,11 +154,20 @@ func openDouyinAutoCommentLikes(ctx context.Context, home *localHomeService, fis
 }
 
 func localDouyinAutoCommentLikeReady(r localDouyinWebRecord, v localDouyinWebView) bool {
-	return r.AutoCommentLikesEnabled && v.AutoCommentLikesEnabled && v.State == "saved" &&
-		r.ReadEnabled && r.WorksEnabled && r.CommentsEnabled && localDouyinWebScope(r) == "home_and_videos"
+	return r.AutoCommentLikesEnabled && v.AutoCommentLikesEnabled && localDouyinCommentLikeReady(r, v)
+}
+
+func localDouyinCommentLikeReady(r localDouyinWebRecord, v localDouyinWebView) bool {
+	return v.State == "saved" && v.Available &&
+		r.ReadEnabled && r.WorksEnabled && r.CommentsEnabled && r.LikesEnabled && v.LikesEnabled &&
+		localDouyinWebScope(r) == "home_and_videos"
 }
 
 func (m *localDouyinWebLogin) autoCommentLikeCatalog(ctx context.Context, fish, owner string) (localDouyinCatalogResponse, localDouyinWebRecord, string, error) {
+	return m.commentLikeCatalog(ctx, fish, owner, true)
+}
+
+func (m *localDouyinWebLogin) commentLikeCatalog(ctx context.Context, fish, owner string, requireAuto bool) (localDouyinCatalogResponse, localDouyinWebRecord, string, error) {
 	catalog, record, err := m.readWorksCatalog(ctx, fish, owner)
 	if err != nil {
 		return catalog, record, "本人作品目录不可读", err
@@ -143,8 +175,11 @@ func (m *localDouyinWebLogin) autoCommentLikeCatalog(ctx context.Context, fish, 
 	m.mu.Lock()
 	view := m.view(record)
 	m.mu.Unlock()
-	if !localDouyinAutoCommentLikeReady(record, view) {
-		return catalog, record, "自动点赞或前置读取授权尚未启用", errLocalDouyinNoticeGrant
+	if !record.LikesEnabled || !view.LikesEnabled {
+		return catalog, record, "请先开启独立的允许点赞授权", errLocalDouyinNoticeGrant
+	}
+	if !localDouyinCommentLikeReady(record, view) || requireAuto && !localDouyinAutoCommentLikeReady(record, view) {
+		return catalog, record, "评论点赞所需网页读取授权尚未启用", errLocalDouyinNoticeGrant
 	}
 	if catalog.Coverage.State != "complete" || catalog.Coverage.PreviousComplete ||
 		catalog.Coverage.HasMore == nil || *catalog.Coverage.HasMore || catalog.AccountID == "" {
@@ -155,14 +190,21 @@ func (m *localDouyinWebLogin) autoCommentLikeCatalog(ctx context.Context, fish, 
 
 func (m *localDouyinWebLogin) autoCommentLikeStatus(ctx context.Context, fish, owner string) (localDouyinAutoCommentLikeStatus, error) {
 	status := localDouyinAutoCommentLikeStatus{CatalogState: "unknown", CoverageState: "unsupported", Works: map[string]localDouyinAutoCommentLikeCounts{},
-		Uncovered: []localDouyinAutoCommentLikeUncovered{}, Reason: "子评论总数及回复分页尚无完整覆盖证据"}
-	catalog, record, reason, err := m.autoCommentLikeCatalog(ctx, fish, owner)
+		Uncovered: []localDouyinAutoCommentLikeUncovered{}, Reason: "仅覆盖已核对的公开视频作品评论；其他作品及未能完整读取的回复不计为完成",
+		Auto: localDouyinLikeAutoStatus{State: "off"}, Batch: localDouyinLikeBatchStatus{State: "idle", DelayMinMS: 1800, DelayMaxMS: 4200}}
+	catalog, record, reason, err := m.commentLikeCatalog(ctx, fish, owner, false)
 	status.Revision, status.CatalogState = record.Revision, catalog.Coverage.State
+	status.Enabled = record.AutoCommentLikesEnabled
+	if status.Enabled {
+		status.Auto.State = "arming"
+	}
 	if err != nil {
 		status.Reason = reason
+		if status.Enabled {
+			status.Auto.LastError = reason
+		}
 		return status, nil
 	}
-	status.Enabled = true
 	status.CoverageState = "partial"
 	for _, work := range catalog.Works {
 		if reason := douyinAutoCommentLikeWorkReason(work); reason != "" {
@@ -170,6 +212,11 @@ func (m *localDouyinWebLogin) autoCommentLikeStatus(ctx context.Context, fish, o
 		} else {
 			status.EligibleWorks++
 		}
+	}
+	status.Auto.BaselineTotalWorks = status.EligibleWorks
+	status.Batch.TotalWorks = status.EligibleWorks
+	if status.Enabled {
+		status.Auto.State = "arming"
 	}
 	db, err := openDouyinAutoCommentLikes(ctx, m.home, fish, false)
 	if errors.Is(err, os.ErrNotExist) {
@@ -210,16 +257,14 @@ WHERE owner=? AND profile=? AND grant=? AND account=? GROUP BY work_id,state`, o
 	if err := rows.Close(); err != nil {
 		return status, err
 	}
-	err = db.QueryRowContext(ctx, `SELECT work_id,cursor FROM scan_progress
-WHERE owner=? AND profile=? AND grant=? AND account=?`, owner,
-		a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID).Scan(&status.ScanWorkID, &status.ScanCursor)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := m.commentLikeJobStatuses(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID, record, catalog, &status); err != nil {
 		return status, err
 	}
 	return status, nil
 }
 
 func (m *localDouyinWebLogin) autoCommentLikeRun(ctx context.Context, fish, owner string, input localDouyinAutoCommentLikeInput) (localDouyinAutoCommentLikeStatus, int, error) {
+	requireAuto := input.Action == "auto" || input.Action == "baseline"
 	status, err := m.autoCommentLikeStatus(ctx, fish, owner)
 	if err != nil {
 		return status, http.StatusServiceUnavailable, err
@@ -227,13 +272,14 @@ func (m *localDouyinWebLogin) autoCommentLikeRun(ctx context.Context, fish, owne
 	if input.Revision != status.Revision {
 		return status, http.StatusConflict, errors.New("网页登录状态已变化，请刷新后执行")
 	}
-	if !status.Enabled {
-		return status, http.StatusConflict, errors.New(status.Reason)
+	if requireAuto && !status.Enabled {
+		return status, http.StatusConflict, errors.New("自动点赞已关闭")
 	}
-	if !validLocalDouyinCommentID(input.WorkID) || input.Cursor != "" && !validLocalDouyinCommentID(input.Cursor) {
+	if !validLocalDouyinCommentID(input.WorkID) || input.Cursor != "" && !validLocalDouyinCommentID(input.Cursor) ||
+		input.RootCommentID != "" && !validLocalDouyinCommentID(input.RootCommentID) {
 		return status, http.StatusBadRequest, errors.New("作品或评论续页编号无效")
 	}
-	catalog, record, _, err := m.autoCommentLikeCatalog(ctx, fish, owner)
+	catalog, record, _, err := m.commentLikeCatalog(ctx, fish, owner, requireAuto)
 	if err != nil || record.Revision != input.Revision {
 		return status, http.StatusConflict, errors.New("本人作品目录或授权已变化")
 	}
@@ -249,11 +295,18 @@ func (m *localDouyinWebLogin) autoCommentLikeRun(ctx context.Context, fish, owne
 	}
 	profile := filepath.Join(filepath.Dir(douyinWorksCatalogPath(m.home, fish)), record.Profile)
 	a := (&localDouyinWebObservation{home: m.home}).access(fish, owner, record, localDouyinWebView{})
+	var db *sql.DB
 	authorize := func() error {
-		current, saved, _, err := m.autoCommentLikeCatalog(ctx, fish, owner)
+		current, saved, _, err := m.commentLikeCatalog(ctx, fish, owner, requireAuto)
 		if err != nil || saved != record || current.AccountID != catalog.AccountID ||
 			!m.worksCatalogStillAuthorized(fish, owner, record, catalog.AccountID) {
 			return errLocalDouyinNoticeGrant
+		}
+		if input.Action == "batch" && db != nil {
+			running, err := commentLikeBatchIsRunning(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID)
+			if err != nil || !running {
+				return errLocalDouyinLikeCancelled
+			}
 		}
 		return nil
 	}
@@ -275,7 +328,7 @@ func (m *localDouyinWebLogin) autoCommentLikeRun(ctx context.Context, fish, owne
 	if err := authorize(); err != nil {
 		return status, http.StatusConflict, err
 	}
-	page, err := readComments(ctx, profile, stationbrowser.DouyinCommentsRequest{VideoID: input.WorkID, Cursor: input.Cursor, Limit: 20}, authorize)
+	page, err := readComments(ctx, profile, stationbrowser.DouyinCommentsRequest{VideoID: input.WorkID, RootCommentID: input.RootCommentID, Cursor: input.Cursor, Limit: 20}, authorize)
 	if err != nil {
 		return status, http.StatusServiceUnavailable, errors.New("当前作品评论无法安全读取")
 	}
@@ -286,22 +339,42 @@ func (m *localDouyinWebLogin) autoCommentLikeRun(ctx context.Context, fish, owne
 	seen := map[string]bool{input.Cursor: true}
 	for _, comment := range page.Comments {
 		if !validLocalDouyinCommentID(comment.ID) || seen[comment.ID] || strings.TrimSpace(comment.Text) == "" ||
-			strings.TrimSpace(comment.AuthorID) == "" || len(comment.AuthorID) > 256 || strings.ContainsAny(comment.AuthorID, "\x00\r\n") {
+			comment.RootCommentID != input.RootCommentID || strings.TrimSpace(comment.AuthorID) == "" ||
+			len(comment.AuthorID) > 256 || strings.ContainsAny(comment.AuthorID, "\x00\r\n") {
 			return status, http.StatusServiceUnavailable, errors.New("评论身份或内容证据无效")
 		}
 		seen[comment.ID] = true
+		status.PageCommentIDs = append(status.PageCommentIDs, comment.ID)
 	}
-	db, err := openDouyinAutoCommentLikes(ctx, m.home, fish, true)
+	db, err = openDouyinAutoCommentLikes(ctx, m.home, fish, true)
 	if err != nil {
 		return status, http.StatusServiceUnavailable, errors.New("点赞记录无法持久保存")
 	}
 	defer db.Close()
-	status.WorkID, status.MainListEnd, status.NextCursor = input.WorkID, page.Complete, page.NextCursor
+	status.WorkID, status.RootCommentID, status.PageEnd, status.NextCursor = input.WorkID, input.RootCommentID, page.Complete, page.NextCursor
+	status.MainListEnd = input.RootCommentID == "" && page.Complete
 	for _, comment := range page.Comments {
 		if err := authorize(); err != nil {
 			return status, http.StatusConflict, err
 		}
 		status.Seen++
+		if input.Action == "baseline" {
+			if err := insertDouyinAutoSeen(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID, record.Revision, input.WorkID, comment.ID); err != nil {
+				return status, http.StatusServiceUnavailable, errors.New("自动点赞基线无法持久保存")
+			}
+			status.Skipped++
+			continue
+		}
+		if input.Action == "auto" {
+			seen, err := douyinAutoSeen(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID, record.Revision, input.WorkID, comment.ID)
+			if err != nil {
+				return status, http.StatusServiceUnavailable, errors.New("自动点赞基线无法核对")
+			}
+			if seen {
+				status.Skipped++
+				continue
+			}
+		}
 		hash := sha256.Sum256([]byte(comment.Text))
 		var priorState string
 		var priorSubmitted int
@@ -314,6 +387,11 @@ WHERE owner=? AND profile=? AND grant=? AND account=? AND work_id=? AND comment_
 		}
 		if err == nil && (priorSubmitted != 0 || priorState == "applied") {
 			status.Skipped++
+			if input.Action == "auto" {
+				if err := insertDouyinAutoSeen(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID, record.Revision, input.WorkID, comment.ID); err != nil {
+					return status, http.StatusServiceUnavailable, errors.New("自动点赞进度无法保存")
+				}
+			}
 			continue
 		}
 		if err == nil {
@@ -341,17 +419,46 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, owner, a.connection.AccountID, douyinWorksCata
 			intentInserted = true
 			return nil
 		}
+		if input.Action == "batch" || input.Action == "auto" {
+			m.mu.Lock()
+			pause := m.commentLikePause
+			m.mu.Unlock()
+			if pause == nil {
+				pause = randomDouyinCommentLikePause
+			}
+			if err := pause(ctx); err != nil {
+				return status, http.StatusConflict, err
+			}
+		}
 		outcome, runErr := like(ctx, profile, stationbrowser.DouyinCommentLikeRequest{VideoID: input.WorkID,
-			CommentID: comment.ID, ExpectedText: comment.Text, ExpectedAuthorID: comment.AuthorID,
+			CommentID: comment.ID, RootCommentID: comment.RootCommentID, ExpectedText: comment.Text, ExpectedAuthorID: comment.AuthorID,
 			BeforeSubmit: before}, authorize)
 		if !intentInserted && !(runErr == nil && outcome.State == "applied") {
-			// The browser never crossed the durable submit boundary. It may
-			// safely be queried again on a later run.
+			// No request crossed the durable submit boundary. Keep a retryable
+			// failure and the page cursor; a later run can re-observe this comment.
+			code := outcome.Code
+			if code == "" {
+				code = "pre_submit_unverified"
+			}
+			if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO comment_likes
+(owner,profile,grant,account,work_id,comment_id,author_id,text_hash,state,code,submitted,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID,
+				input.WorkID, comment.ID, comment.AuthorID, hex.EncodeToString(hash[:]), "failed", code, 0, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return status, http.StatusServiceUnavailable, errors.New("未提交的点赞失败记录无法保存")
+			}
+			status.Unverified++
+			if runErr != nil && errors.Is(runErr, errLocalDouyinLikeCancelled) {
+				return status, http.StatusConflict, runErr
+			}
 			if runErr != nil && errors.Is(runErr, errLocalDouyinNoticeGrant) {
 				return status, http.StatusConflict, runErr
 			}
-			status.Unverified++
-			continue
+			return status, http.StatusServiceUnavailable, errors.New("评论点赞提交前未通过核对，当前页保留待重试")
+		}
+		if input.Action == "auto" {
+			if err := insertDouyinAutoSeen(ctx, db, owner, a.connection.AccountID, douyinWorksCatalogGrant(record), catalog.AccountID, record.Revision, input.WorkID, comment.ID); err != nil {
+				return status, http.StatusServiceUnavailable, errors.New("自动点赞进度无法保存")
+			}
 		}
 		state := "unknown"
 		if runErr == nil && outcome.State == "applied" {
@@ -385,8 +492,9 @@ WHERE owner=? AND profile=? AND grant=? AND account=? AND work_id=? AND comment_
 	if err != nil {
 		return status, http.StatusServiceUnavailable, err
 	}
-	updated.WorkID, updated.MainListEnd, updated.NextCursor = status.WorkID, status.MainListEnd, status.NextCursor
+	updated.WorkID, updated.RootCommentID, updated.MainListEnd, updated.PageEnd, updated.NextCursor = status.WorkID, status.RootCommentID, status.MainListEnd, status.PageEnd, status.NextCursor
 	updated.Seen, updated.Skipped, updated.Submitted, updated.Unverified = status.Seen, status.Skipped, status.Submitted, status.Unverified
+	updated.PageCommentIDs = status.PageCommentIDs
 	return updated, http.StatusOK, nil
 }
 
@@ -412,11 +520,26 @@ func (m *localDouyinWebLogin) autoCommentLikeRoutes(owner *websession.Store, mux
 		if !websession.Decode(w, r, &input) {
 			return
 		}
-		if input.Action != "run" {
-			websession.Fail(w, http.StatusBadRequest, "请指定 run 动作")
+		var status localDouyinAutoCommentLikeStatus
+		var code int
+		switch input.Action {
+		case "run":
+			status, code, err = m.autoCommentLikeRun(r.Context(), identity.FishID, identity.LocalOwner.ID, input)
+		case "start_all", "run_all", "resume_all":
+			status, code, err = m.commentLikeBatchSet(r.Context(), identity.FishID, identity.LocalOwner.ID, true)
+			if err == nil {
+				go func() {
+					runCtx, cancel := context.WithTimeout(m.ctx, 3*time.Minute)
+					defer cancel()
+					_, _ = m.commentLikeStep(runCtx, "batch")
+				}()
+			}
+		case "cancel_all":
+			status, code, err = m.commentLikeBatchSet(r.Context(), identity.FishID, identity.LocalOwner.ID, false)
+		default:
+			websession.Fail(w, http.StatusBadRequest, "请指定点赞动作")
 			return
 		}
-		status, code, err := m.autoCommentLikeRun(r.Context(), identity.FishID, identity.LocalOwner.ID, input)
 		if err != nil {
 			websession.Fail(w, code, err.Error())
 			return

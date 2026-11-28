@@ -12,7 +12,7 @@
   if ([...document.querySelectorAll('input[type=password],form[action*="login"],iframe[src*="captcha"],iframe[src*="verify"]')].some(visible)) {
     return {...page, login: true};
   }
-  if (input.action !== 'query' && input.action !== 'submit') return {invalid: true};
+  if (input.action !== 'query' && input.action !== 'reveal' && input.action !== 'submit') return {invalid: true};
   const nativeSelector = 'div.dIlRe7ZV';
   const itemSelector = '[data-e2e="comment-item"]';
   const owner = node => node.closest(itemSelector) || node.closest(nativeSelector);
@@ -25,7 +25,37 @@
     const tooltip = tooltips.length === 1 ? tooltips[0].id.slice('tooltip_'.length) : '';
     return (explicit === input.commentID || tooltip === input.commentID);
   });
-  if (cards.length !== 1) return {...page, code: 'comment_unavailable'};
+  if (cards.length !== 1) {
+    if (input.action === 'reveal' && cards.length === 0) {
+      // Reveal only the requested thread. A missing root is searched through
+      // the normal rendered comment list; no reply or reaction is submitted.
+      const root = input.rootID ? [...document.querySelectorAll(itemSelector)].filter(card =>
+        !card.parentElement?.closest(itemSelector) && [...card.querySelectorAll('[id^="tooltip_"]')]
+          .some(node => node.id === 'tooltip_' + input.rootID && own(node, card))) : [];
+      if (root.length > 1) return {...page, code: 'comment_identity_ambiguous'};
+      if (root.length === 1) {
+        const controls = [...root[0].querySelectorAll('button,[role="button"]')].filter(node =>
+          own(node, root[0]) && visible(node) &&
+          (/^(?:展开|查看|加载|更多).{0,16}回复|^回复.{0,16}(?:展开|查看|加载|更多)/
+            .test((node.textContent || '').trim()) || node.getAttribute('data-e2e') === 'comment-replies-more'));
+        if (controls.length > 1) return {...page, code: 'comment_identity_ambiguous'};
+        if (controls.length === 1) controls[0].click();
+      } else {
+        const list = document.querySelector('#merge-all-comment-container,[data-e2e="comment-list"].comment-mainContent');
+        let scrolled = false;
+        for (let node = list; node && node !== document.documentElement; node = node.parentElement) {
+          const overflow = getComputedStyle(node).overflowY;
+          if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+            node.scrollTop = Math.min(node.scrollHeight - node.clientHeight, node.scrollTop + Math.max(node.clientHeight, 1));
+            scrolled = true;
+            break;
+          }
+        }
+        if (!scrolled) window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+      }
+    }
+    return {...page, code: 'comment_unavailable'};
+  }
   const card = cards[0];
   const explicit = card.getAttribute('data-comment-id');
   const tooltips = [...card.querySelectorAll('[id^="tooltip_"]')].filter(node => own(node, card));
@@ -74,7 +104,7 @@
     const before = state();
     if (before === null) return {...page, code: 'comment_like_state_unavailable'};
     if (before) return {...page, liked: true};
-    if (input.action === 'query') return {...page, liked: false};
+    if (input.action !== 'submit') return {...page, liked: false};
     first.click();
     return {...page, clicked: true, liked: state() === true};
   }
@@ -96,7 +126,7 @@
   const before = state();
   if (before === null) return {...page, code: 'comment_like_state_unavailable'};
   if (before) return {...page, liked: true};
-  if (input.action === 'query') return {...page, liked: false};
+  if (input.action !== 'submit') return {...page, liked: false};
   control.click();
   // A single click is permitted. The caller may only query after this point.
   return {...page, clicked: true, liked: state() === true};
