@@ -40,12 +40,8 @@ func TestLocalDouyinAutoCommentLikesRunPersistsUnknownAndStaysPartial(t *testing
 	if err := m.captureWorksCatalog(t.Context(), a, localCreatorWorksCursor{}, page, page.Works, len(page.Works)); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := f.request(http.MethodPost, localDouyinWebRoute, map[string]any{"action": "set_auto_comment_likes", "revision": view["revision"], "allow_auto_comment_likes": true}, true); code != http.StatusConflict {
-		t.Fatalf("auto option bypassed independent like authorization: %d", code)
-	}
-	_, view = f.request(http.MethodPost, localDouyinWebRoute, map[string]any{"action": "set_interactions", "revision": view["revision"], "allow_likes": true}, true)
 	code, view := f.request(http.MethodPost, localDouyinWebRoute, map[string]any{"action": "set_auto_comment_likes", "revision": view["revision"], "allow_auto_comment_likes": true}, true)
-	if code != 200 || view["auto_comment_likes_enabled"] != true {
+	if code != 200 || view["auto_comment_likes_enabled"] != true || view["likes_enabled"] != false {
 		t.Fatalf("enable auto comment likes: %d %v", code, view)
 	}
 	m.readWorks = func(_ context.Context, _ string, _ stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
@@ -156,7 +152,7 @@ func TestLocalDouyinAutoCommentLikesRunPersistsUnknownAndStaysPartial(t *testing
 		t.Fatalf("disable auto mode: %d %v", code, view)
 	}
 	batch, code, err := m.commentLikeBatchSet(t.Context(), identity.FishID, identity.LocalOwner.ID, true)
-	if err != nil || code != 200 || batch.Batch.State != "running" || batch.Enabled {
+	if err != nil || code != 200 || batch.Batch.State != "running" || batch.Enabled || view["likes_enabled"] != false {
 		t.Fatalf("historical batch must start independently: %d %+v %v", code, batch.Batch, err)
 	}
 	if did, err := m.commentLikeStep(t.Context(), "batch"); err != nil || !did {
@@ -204,18 +200,6 @@ func TestLocalDouyinAutoCommentLikesRunPersistsUnknownAndStaysPartial(t *testing
 	}
 	if did, err := m.commentLikeStep(t.Context(), "batch"); err != nil || !did || calls != 6 {
 		t.Fatalf("retry after pre-submit failure: did=%v err=%v calls=%d", did, err, calls)
-	}
-	code, view = f.request(http.MethodPost, localDouyinWebRoute, map[string]any{
-		"action": "set_interactions", "revision": view["revision"], "allow_likes": false,
-	}, true)
-	if code != 200 || view["likes_enabled"] != false {
-		t.Fatalf("revoke independent like authorization: %d %v", code, view)
-	}
-	if did, err := m.commentLikeStep(t.Context(), "batch"); err != nil || did || calls != 6 {
-		t.Fatalf("revoked like authorization allowed batch execution: did=%v err=%v calls=%d", did, err, calls)
-	}
-	if _, code, err := m.commentLikeBatchSet(t.Context(), identity.FishID, identity.LocalOwner.ID, true); code != http.StatusConflict || err == nil {
-		t.Fatalf("revoked like authorization allowed batch start: %d %v", code, err)
 	}
 	_, view = f.request(http.MethodPost, localDouyinWebRoute, map[string]any{"action": "pause", "revision": view["revision"]}, true)
 	if code, result := f.request(http.MethodPost, localDouyinAutoCommentLikesPath, map[string]any{"action": "run", "revision": view["revision"], "work_id": workID}, true); code != http.StatusConflict || result["error"] == nil || calls != 6 {

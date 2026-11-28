@@ -2007,7 +2007,7 @@
       if (action === "set_interactions") {
         feedback = typeof options.allowReplies === "boolean"
           ? (options.allowReplies ? "已允许回复视频评论。" : "已停止回复视频评论。")
-          : (options.allowLikes ? "已允许点赞。" : "已停止点赞。");
+          : (options.allowLikes ? "已允许视频点赞任务。" : "已停止视频点赞任务。");
       }
       if (action === "set_auto_comment_likes") feedback = updated.auto_comment_likes_enabled
         ? "已开启自动点赞；正在建立已有评论基线，完成后才开始点赞新评论。基线期间纳入的评论不会补赞。"
@@ -2227,9 +2227,9 @@
             likes.type = "checkbox";
             likes.checked = douyinWebLikesEnabled(value);
             likes.disabled = busy || (!likes.checked && !available);
-            likes.setAttribute("aria-label", "允许点赞");
+            likes.setAttribute("aria-label", "允许视频点赞任务");
             likes.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_interactions", { allowLikes: likes.checked }); });
-            likesLabel.append(likes, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许点赞"));
+            likesLabel.append(likes, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "允许视频点赞任务"));
             interactionActions.append(likesLabel);
             const repliesLabel = appElement("label", "", "douyin-web-media-label douyin-web-replies-label");
             const replies = document.createElement("input");
@@ -2241,8 +2241,8 @@
             repliesLabel.append(replies, document.createTextNode(web.applying === "set_interactions" ? "正在保存互动许可…" : "保留回复许可（当前暂停发送）"));
             interactionActions.append(repliesLabel);
             const interactionNote = douyinWebCommentsEnabled(value)
-              ? "点赞需要首页及视频页文字读取；回复许可还依赖视频评论读取。通知到目标评论及直接父评论尚未核实，当前暂停回复发送。"
-              : "点赞需要首页及视频页文字读取；回复许可还需先允许读取视频评论，当前暂停回复发送。";
+              ? "视频点赞任务需要首页及视频页文字读取；回复许可还依赖视频评论读取。通知到目标评论及直接父评论尚未核实，当前暂停回复发送。"
+              : "视频点赞任务需要首页及视频页文字读取；回复许可还需先允许读取视频评论，当前暂停回复发送。";
             if (!section || ["browse", "interactions"].includes(section)) detail.append(appElement("p", value.visual_ready === true ? `播放、音轨、画面、评论和互动许可分别记录。${interactionNote} 画面分析仅将当前获准视频的实际采样帧交给项目工具中已启用的共享视觉能力处理。` : `${value.visual_reason || "请先在项目工具中启用媒体理解；抖音这里无需重复配置。"} ${interactionNote}`, "publication-authorization-note"));
           }
         }
@@ -2261,8 +2261,7 @@
     const enabled = value?.auto_comment_likes_enabled === true;
     const supported = typeof value?.auto_comment_likes_enabled === "boolean";
     const ready = value?.state === "saved" && !value?.attempt_id && value?.available === true &&
-      !value?.paused && !value?.detached && value?.works_enabled === true && value?.comments_enabled === true &&
-      value?.likes_enabled === true;
+      !value?.paused && !value?.detached && value?.works_enabled === true && value?.comments_enabled === true;
     const row = appElement("section", "", "app-layer douyin-auto-comment-likes");
     row.append(appElement("h4", "新评论自动点赞"));
     const label = appElement("label", "", "switch-row");
@@ -2273,7 +2272,7 @@
     input.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_auto_comment_likes", { allowAutoCommentLikes: input.checked }); });
     label.append(input, appElement("span", "开启自动点赞"));
     row.append(label);
-    row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : value?.likes_enabled !== true ? "请先到「账号与授权」开启“允许点赞”，并确认本人作品及评论读取授权。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "已开启；基线状态见下方。基线完成后才开始自动点赞，期间纳入的评论不会补赞。" : "已关闭；开启不会补赞已有评论。", "app-scope-note"));
+    row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "已开启；基线状态见下方。基线完成后才开始自动点赞，期间纳入的评论不会补赞。" : "已关闭；开启不会补赞已有评论。", "app-scope-note"));
     row.append(appElement("p", "仅处理启用后新增的评论。当前覆盖已核对的公开视频主评论及其可验证的已展开子评论；无法读取或分页未核实的回复不计为完成。图文及非公开作品仍未覆盖。历史评论请使用下方独立的批量任务。", "app-scope-note"));
     return row;
   }
@@ -2304,14 +2303,13 @@
     function render() {
       const batch = status?.batch || {};
       const state = batch.state || "idle";
-      const likeGrant = apps?.douyinWebLogin?.value?.likes_enabled === true;
-      const ready = likeGrant && status?.catalog_state === "complete" && amount(status?.eligible_works) > 0;
+      const ready = status?.catalog_state === "complete" && amount(status?.eligible_works) > 0;
       start.disabled = loading || mutating || !ready || state === "running";
       start.textContent = mutating ? "正在提交…" : state === "cancelled" || state === "error" ? "继续批量任务" : "一键点赞全部评论";
       stop.disabled = loading || mutating || state !== "running";
       stop.hidden = state !== "running";
       refresh.disabled = loading || mutating;
-      summary.textContent = !status ? "正在读取点赞任务状态…" : `历史批量任务：${batchLabel[state] || "状态待核对"}。已核对的可处理公开视频 ${amount(status.eligible_works)} 件；作品目录${status.catalog_state === "complete" ? "已核对" : "尚未完整核对"}。${!likeGrant ? "请先到「账号与授权」开启“允许点赞”。" : !ready ? status.reason || "请先核对完整作品目录和评论读取授权。" : ""}${state === "complete" ? "再次点击可重新扫描新增评论；已有提交记录会跳过。" : ""}`;
+      summary.textContent = !status ? "正在读取点赞任务状态…" : `历史批量任务：${batchLabel[state] || "状态待核对"}。已核对的可处理公开视频 ${amount(status.eligible_works)} 件；作品目录${status.catalog_state === "complete" ? "已核对" : "尚未完整核对"}。${!ready ? status.reason || "请先核对完整作品目录和评论读取授权。" : ""}${state === "complete" ? "再次点击可重新扫描新增评论；已有提交记录会跳过。" : ""}`;
       const auto = status?.auto || {};
       automatic.textContent = `新评论自动点赞：${autoLabel[auto.state] || (status?.enabled ? "状态待核对" : "已关闭")}；基线已核对 ${amount(auto.baseline_completed_works)}/${amount(auto.baseline_total_works)} 件作品。${auto.last_error ? `最近错误：${auto.last_error}。` : ""}`;
       const delayMin = amount(batch.delay_min_ms), delayMax = amount(batch.delay_max_ms);
@@ -2834,7 +2832,7 @@
           ["视频画面分析", visualStatus, "按批分析确切视频的采样帧；需要已配置的媒体理解工具。", "browse"],
           ["平台互动通知", noticeStatus, "绑定账号后按批手动读取；平台网页可能同时标记已读，Agent 读取另行授权。", "interactions"],
           ["执行回合", noticeStatus, "按本人作品分别查看已保存通知、作品简介和音画证据，并定向核对评论关系。", "rounds"],
-          ["点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
+          ["视频点赞任务", auth(douyinWebLikesEnabled(value)), "从已读视频由主人聊天创建任务，此处管理原任务；真实平台操作尚待验收。", "interactions"],
           ["评论回复任务", auth(douyinWebRepliesEnabled(value)), "通知限定回复须先在执行回合读完本人作品证据并核对评论关系；创建后在此管理原任务。", "interactions"],
           ["普通账号作品发布", auth(publish), "从已登记成品由主人聊天创建草稿，此处管理原任务；公开发布尚待验收。", "publications"],
           ["工作站按需记忆", auth(memoryScopes.length > 0), memoryScopes.length ? `已允许 ${memoryScopes.length} 类抖音资料按需留存与检索；各类来源单独授权。` : "可分别授权本人作品、评论和互动通知的按需留存与检索。", "account"],

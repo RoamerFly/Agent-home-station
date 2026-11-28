@@ -803,11 +803,11 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 	case "set_interactions":
 		if in.AllowLikes == nil && in.AllowReplies == nil {
-			return fail(400, "请明确是否允许点赞或回复评论")
+			return fail(400, "请明确是否允许视频点赞任务或回复评论")
 		}
 		view := m.view(record)
 		if in.AllowLikes != nil && *in.AllowLikes && (view.State != "saved" || view.AttemptID != "" || !view.Available || !view.ReadEnabled || view.ReadScope != "home_and_videos") {
-			return fail(409, "请先完成网页登录并允许读取首页及视频页文字，再开启点赞")
+			return fail(409, "请先完成网页登录并允许读取首页及视频页文字，再开启视频点赞任务")
 		}
 		if in.AllowReplies != nil && *in.AllowReplies && (view.State != "saved" || view.AttemptID != "" || !view.Available || !view.CommentsEnabled) {
 			return fail(409, "请先完成网页登录、允许读取首页及视频页文字和视频评论，再开启回复评论")
@@ -828,8 +828,8 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if *in.AllowAutoCommentLikes {
 			view := m.view(record)
 			if view.State != "saved" || view.AttemptID != "" || !view.Available ||
-				!view.WorksEnabled || !view.CommentsEnabled || !view.LikesEnabled {
-				return fail(409, "请先确认网页登录，并允许读取本人作品、视频评论及独立点赞授权")
+				!view.WorksEnabled || !view.CommentsEnabled {
+				return fail(409, "请先确认网页登录，并允许读取本人作品与视频评论")
 			}
 		}
 		record.AutoCommentLikesEnabled = *in.AllowAutoCommentLikes

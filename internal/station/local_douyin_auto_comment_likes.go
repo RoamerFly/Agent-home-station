@@ -159,7 +159,7 @@ func localDouyinAutoCommentLikeReady(r localDouyinWebRecord, v localDouyinWebVie
 
 func localDouyinCommentLikeReady(r localDouyinWebRecord, v localDouyinWebView) bool {
 	return v.State == "saved" && v.Available &&
-		r.ReadEnabled && r.WorksEnabled && r.CommentsEnabled && r.LikesEnabled && v.LikesEnabled &&
+		r.ReadEnabled && r.WorksEnabled && r.CommentsEnabled &&
 		localDouyinWebScope(r) == "home_and_videos"
 }
 
@@ -175,9 +175,6 @@ func (m *localDouyinWebLogin) commentLikeCatalog(ctx context.Context, fish, owne
 	m.mu.Lock()
 	view := m.view(record)
 	m.mu.Unlock()
-	if !record.LikesEnabled || !view.LikesEnabled {
-		return catalog, record, "请先开启独立的允许点赞授权", errLocalDouyinNoticeGrant
-	}
 	if !localDouyinCommentLikeReady(record, view) || requireAuto && !localDouyinAutoCommentLikeReady(record, view) {
 		return catalog, record, "评论点赞所需网页读取授权尚未启用", errLocalDouyinNoticeGrant
 	}

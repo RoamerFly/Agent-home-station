@@ -140,14 +140,8 @@ func TestLocalDouyinAutoCommentLikesRequiresOwnedWorkAndCommentReads(t *testing.
 		t.Fatalf("auto comment likes must default off and differ from video likes: %v", view)
 	}
 	stale := view["revision"]
-	if code, _ := set(view, true); code != http.StatusConflict {
-		t.Fatalf("enabled without independent like authorization: %d", code)
-	}
-	_, view = f.request("POST", localDouyinWebRoute, map[string]any{
-		"action": "set_interactions", "revision": view["revision"], "allow_likes": true,
-	}, true)
 	code, view := set(view, true)
-	if code != http.StatusOK || view["auto_comment_likes_enabled"] != true || view["likes_enabled"] != true {
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != true || view["likes_enabled"] != false {
 		t.Fatalf("enable after work and comment reads: %d %v", code, view)
 	}
 	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_auto_comment_likes", "revision": stale, "allow_auto_comment_likes": false}, true); code != http.StatusConflict {
