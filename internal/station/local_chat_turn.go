@@ -119,6 +119,17 @@ func (h *localChatService) generateLocalTurn(ctx context.Context, store *compani
 	}
 	c.TaskReasoning = settings.TaskReasoning
 	prompt := "你是大肥鱼，在工作站与本机主人交谈。按需使用工具、记忆、家目录和已连接应用。成品存入 works/，已登记的成品回复实际 artifact_id；微信投递另查回执。"
+	manifest, err := h.readRequestManifest(in, in.TraceID)
+	if err != nil {
+		return fail(409, "原请求的应用范围不可读，未调用模型")
+	}
+	if manifest != nil && manifest.AppID == "douyin" {
+		appRole, roleErr := (localAppPersonaStore{dir: h.home.dataDir}).View("douyin")
+		if roleErr != nil {
+			return fail(409, "抖音应用内角色设定不可读，未调用模型")
+		}
+		prompt += applicationPersonaSupplement(appRole)
+	}
 	if tools.memoryLinked {
 		prompt += "需要关联的跨来源原文时，用 app_memory 的 linked_sources、search、read 查询。"
 	}

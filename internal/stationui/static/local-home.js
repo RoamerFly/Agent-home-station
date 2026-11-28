@@ -92,7 +92,7 @@
     if (view === "chat" && state.home?.initialized && !document.hidden) { void loadChat(true); void loadRecentMemory(); }
   }
   function newChatView() {
-    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, retry: 0, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), submittedAttachments: new Map(), submittedOptions: new Map(), draftFiles: [], modelChoices: [], link: null, poll: 0 };
+    return { items: [], nextCursor: "", hasMore: false, busy: false, backgroundPending: false, loading: false, refreshRequested: false, retry: 0, pending: new Map(), failed: new Map(), memoryLinks: new Set(), submittedLinks: new Map(), submittedAttachments: new Map(), submittedOptions: new Map(), submittedScopes: new Map(), draftFiles: [], modelChoices: [], link: null, poll: 0 };
   }
   function newAppView() {
     return { loading: false, installing: "", catalog: null, registered: null, personas: new Map(), connections: new Map(), accountStatuses: new Map(), setupBusy: false, provisionKey: "", logins: new Map(), selectedLogin: "", loginTimer: 0, workerDrafts: new Map(), historyDrafts: new Map(), attachmentDrafts: new Map(), autoImagesDrafts: new Map(), stationImageVisionDrafts: new Map(), stationVideoVisionDrafts: new Map(), stationLocalAudioDrafts: new Map(), autoVideosDrafts: new Map(), mediaReplyDrafts: new Map(), groupMuteDrafts: new Map(), groupRuleDrafts: new Map(), workDrafts: new Map(), resumeDrafts: new Map(), editWorker: "",
@@ -1843,6 +1843,7 @@
       (typeof value.images_ready === "undefined" || typeof value.images_ready === "boolean") &&
       (typeof value.comments_enabled === "undefined" || typeof value.comments_enabled === "boolean") &&
       (typeof value.likes_enabled === "undefined" || typeof value.likes_enabled === "boolean") &&
+      (typeof value.auto_comment_likes_enabled === "undefined" || typeof value.auto_comment_likes_enabled === "boolean") &&
       (typeof value.replies_enabled === "undefined" || typeof value.replies_enabled === "boolean") &&
       (typeof value.visual_ready === "undefined" || typeof value.visual_ready === "boolean") &&
       (typeof value.visual_reason === "undefined" || typeof value.visual_reason === "string") &&
@@ -1977,6 +1978,7 @@
       if (typeof options.allowLikes === "boolean") body.allow_likes = options.allowLikes;
       if (typeof options.allowReplies === "boolean") body.allow_replies = options.allowReplies;
     }
+    if (action === "set_auto_comment_likes") body.allow_auto_comment_likes = options.allowAutoCommentLikes === true;
     let reloadAfterConflict = false;
     try {
       const updated = await request("/api/local/apps/douyin/web-login", { method: "POST", body: JSON.stringify(body) });
@@ -2007,6 +2009,9 @@
           ? (options.allowReplies ? "已允许回复视频评论。" : "已停止回复视频评论。")
           : (options.allowLikes ? "已允许点赞。" : "已停止点赞。");
       }
+      if (action === "set_auto_comment_likes") feedback = updated.auto_comment_likes_enabled
+        ? "自动点赞已开启；后台约 30 秒后开始逐批扫描。也可在互动任务中立即处理一批。"
+        : "已关闭本人作品评论自动点赞偏好。";
       appFeedback(feedback);
     } catch (error) {
       if (current === apps && web.generation === generation && !appSessionExpired([{ status: "rejected", reason: error }])) {
@@ -2250,6 +2255,120 @@
     }
     row.append(appElement("h5", "网页登录"), detail);
     return row;
+  }
+  function douyinAutoCommentLikesRow(current) {
+    const web = current.douyinWebLogin, value = web.value;
+    const enabled = value?.auto_comment_likes_enabled === true;
+    const supported = typeof value?.auto_comment_likes_enabled === "boolean";
+    const ready = value?.state === "saved" && !value?.attempt_id && value?.available === true &&
+      !value?.paused && !value?.detached && value?.works_enabled === true && value?.comments_enabled === true;
+    const row = appElement("section", "", "app-layer douyin-auto-comment-likes");
+    row.append(appElement("h4", "本人作品评论自动点赞"));
+    const label = appElement("label", "", "switch-row");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = enabled;
+    input.disabled = Boolean(web.loading || web.applying) || !supported || (!enabled && !ready);
+    input.addEventListener("change", () => { void updateDouyinWebLogin(current, "set_auto_comment_likes", { allowAutoCommentLikes: input.checked }); });
+    label.append(input, appElement("span", "自动点赞本人作品的公开视频主评论（试用）"));
+    row.append(label);
+    row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "偏好已开启。" : "偏好已关闭。", "app-scope-note"));
+    row.append(appElement("p", "启用后后台约 30 秒开始首轮，随后逐次处理一页；下方也可立即处理所选作品的一批。当前仅覆盖已核对的公开视频主评论，子评论及图文、非公开作品尚未接入。已点赞评论会跳过；按钮状态无法确认时不会点击。", "app-scope-note"));
+    return row;
+  }
+  function douyinAutoCommentLikesPanel(view) {
+    const panel = appElement("section", "", "app-layer douyin-auto-comment-likes-progress");
+    const summary = appElement("p", "正在读取已保存进度…", "app-scope-note");
+    const selection = appElement("label", "选择已核对的公开作品", "settings-field");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "选择要处理评论的本人公开作品");
+    selection.append(select);
+    const actions = appElement("div", "", "publication-actions");
+    const feedback = appElement("p", "", "apps-feedback");
+    feedback.setAttribute("role", "status");
+    const progress = appElement("p", "", "app-scope-note");
+    const uncoveredNote = appElement("p", "", "app-scope-note");
+    const controller = new AbortController();
+    view.douyinAutoLikeAbort = controller;
+    let status = null, catalog = null, selectedWork = "", cursor = "", loading = false, running = false;
+    const active = () => appConfiguration === view && view.section === "interactions" && panel.isConnected && !controller.signal.aborted;
+    const eligibleWorks = () => {
+      if (!catalog || catalog.coverage?.state !== "complete" || catalog.coverage?.previous_complete || catalog.coverage?.has_more !== false || !catalog.account_id) return [];
+      return (Array.isArray(catalog.works) ? catalog.works : []).filter((work) =>
+        /^[1-9]\d{0,19}$/.test(String(work.id || "")) && work.visibility === "公开" &&
+        work.review_status === "not_reviewing" && work.media_type === "video");
+    };
+    function render() {
+      const works = eligibleWorks();
+      const available = works.some((work) => String(work.id) === selectedWork);
+      if (!available) { selectedWork = String(works[0]?.id || ""); cursor = ""; }
+      select.replaceChildren();
+      for (const work of works) select.add(new Option((work.title || "作品") + " · " + work.id, String(work.id)));
+      select.value = selectedWork;
+      select.disabled = loading || running || works.length === 0;
+      refresh.disabled = loading || running;
+      run.disabled = loading || running || status?.enabled !== true || works.length === 0;
+      run.textContent = running ? "正在处理…" : cursor ? "继续处理下一批" : "立即处理一批";
+      const counts = status?.works?.[selectedWork] || { applied: 0, unknown: 0, failed: 0 };
+      const catalogLabel = { complete: "已核对完整", partial: "部分覆盖", unknown: "待核对" }[status?.catalog_state] || "待核对";
+      const coverageLabel = status?.coverage_state === "partial" ? "部分覆盖" : "未覆盖";
+      summary.textContent = !status ? "正在读取已保存进度…" :
+        `自动扫描${status.enabled ? "已启用" : "未就绪"} · 作品目录${catalogLabel} · 评论${coverageLabel} · 可处理公开视频 ${status.eligible_works || 0} 件。`;
+      progress.textContent = selectedWork ?
+        `当前作品已保存：成功 ${counts.applied || 0} 条，状态未知 ${counts.unknown || 0} 条，未提交失败 ${counts.failed || 0} 条。${cursor ? "还有下一批主评论。" : "当前页面没有已保存的续页位置。"}` :
+        "没有可安全选择的本人公开视频；请先到「内容与创作 → 本人作品」同步并核对完整目录。";
+      const reasons = new Map();
+      for (const item of Array.isArray(status?.uncovered_works) ? status.uncovered_works : []) {
+        const reason = String(item?.reason || "原因待核对");
+        reasons.set(reason, (reasons.get(reason) || 0) + 1);
+      }
+      uncoveredNote.textContent = reasons.size ? "未覆盖作品：" + Array.from(reasons, ([reason, count]) => `${reason} ${count} 件`).join("；") + "。" :
+        "子评论总数及回复分页尚未形成完整覆盖证据，不能认定全部评论已处理。";
+    }
+    async function refreshStatus() {
+      if (loading || running) return;
+      loading = true; render();
+      try {
+        const nextStatus = await request("/api/local/apps/douyin/auto-comment-likes", { signal: controller.signal });
+        if (!active()) return;
+        if (!nextStatus || typeof nextStatus.enabled !== "boolean") throw new Error("点赞进度返回格式无效。");
+        status = nextStatus; catalog = null;
+        if (nextStatus.enabled) {
+          const nextCatalog = await request("/api/local/apps/douyin/works", { signal: controller.signal });
+          if (!active()) return;
+          if (!nextCatalog || !Array.isArray(nextCatalog.works)) throw new Error("本人作品目录返回格式无效。");
+          catalog = nextCatalog;
+        }
+        feedback.textContent = nextStatus.reason || "已刷新保存进度；未据此推断子评论覆盖完成。";
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+      } finally { if (active()) { loading = false; render(); } }
+    }
+    async function runBatch() {
+      if (!status?.enabled || !selectedWork || running || loading || !eligibleWorks().some((work) => String(work.id) === selectedWork)) return;
+      const work = selectedWork;
+      running = true; feedback.textContent = "正在处理所选作品的一批主评论；请等待结果后再继续。"; render();
+      try {
+        const next = await request("/api/local/apps/douyin/auto-comment-likes", { method: "POST", signal: controller.signal,
+          body: JSON.stringify({ action: "run", revision: status.revision, work_id: work, cursor }) });
+        if (!active()) return;
+        if (!next || next.work_id !== work || typeof next.enabled !== "boolean") throw new Error("单批结果返回格式无效，请刷新核对账本。");
+        status = next; cursor = next.next_cursor || "";
+        feedback.textContent = `本批查看 ${next.seen || 0} 条主评论，跳过 ${next.skipped || 0} 条已有记录；${next.main_list_end ? "主评论分页已到尾" : cursor ? "可继续下一批主评论" : "续页位置待核对"}。子评论仍未覆盖，请按成功、未知和失败分别核对。`;
+      } catch (error) {
+        if (active() && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message + "；本批结果请刷新账本核对，勿盲目重试。";
+      } finally { if (active()) { running = false; render(); } }
+    }
+    const refresh = memoryButton("刷新进度", "button compact secondary", () => void refreshStatus());
+    const run = memoryButton("立即处理一批", "button compact primary", () => void runBatch());
+    select.addEventListener("change", () => { selectedWork = select.value; cursor = ""; render(); });
+    actions.append(run, refresh);
+    panel.append(appElement("h4", "单批执行与保存进度"),
+      appElement("p", "后台启用后逐次扫描一页；“立即处理一批”可手动触发所选作品的一页主评论。请用“刷新进度”查看最新账本，状态未知的点赞不会盲目重试。", "app-scope-note"),
+      summary, selection, actions, progress, uncoveredNote, feedback);
+    render();
+    void refreshStatus();
+    return panel;
   }
   function parseBilibiliVideos(value) {
     const unique = new Set();
@@ -2894,8 +3013,9 @@
     view.douyinWorksAbort?.abort();
     view.douyinNoticeAbort?.abort();
     view.douyinRoundsAbort?.abort();
+    view.douyinAutoLikeAbort?.abort();
     view.surfAbort?.abort();
-    view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinWorksPanel = null; view.douyinNoticePanel = null;
+    view.archivePanel = null; view.surfPanel = null; view.ownerPanel = null; view.memoryGrantPanel = null; view.crossMemoryPanel = null; view.crossMemoryRefresh = null; view.stationMemoryPanel = null; view.stationMemoryRefresh = null; view.douyinMemoryPanel = null; view.douyinMemoryRefresh = null; view.douyinReadPanel = null; view.douyinWorksPanel = null; view.douyinNoticePanel = null; view.douyinAutoLikePanel = null;
     stopAppConfigurationReads();
     view.section = section;
     if (view.record.id === "douyin") {
@@ -5382,7 +5502,7 @@
       ["总览", ["overview"]],
       ["活动", ["rounds", "interactions"]],
       ["内容与创作", ["browse", "publications"]],
-      ["账号与服务", ["account", "live", "source"]],
+      ["账号与服务", ["account", "persona", "live", "source"]],
     ];
     const nodes = [];
     for (const [label, ids] of groups) {
@@ -5409,7 +5529,7 @@
     { label: "总览", icon: "overview", sections: ["overview"] },
     { label: "活动", icon: "activity", sections: ["rounds", "interactions"] },
     { label: "内容与创作", icon: "content", sections: ["browse", "publications"] },
-    { label: "账号与服务", icon: "account", sections: ["account", "live", "source"] },
+    { label: "账号与服务", icon: "account", sections: ["account", "persona", "live", "source"] },
   ];
   function douyinConsoleIcon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -5504,7 +5624,9 @@
     if ($("#app-dialog").open) $("#app-dialog").close();
     setActiveView("chat");
     const input = $("#chat-input");
-    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${raw.trim()}` : raw.trim();
+    const existing = Boolean(input.value.trim());
+    input.value = existing ? `${input.value.trimEnd()}\n\n${raw.trim()}` : raw.trim();
+    if (!existing) $("#chat-douyin-role").checked = true;
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     showMessage("请求已放入聊天输入框，请核对后手动发送。", "success");
@@ -5586,7 +5708,8 @@
     }
     switch (section) {
       case "overview":
-        controls.push(appEvidenceRows(evidence), appPersonaRow(record));
+        controls.push(appEvidenceRows(evidence));
+        if (record.id !== "douyin") controls.push(appPersonaRow(record));
         if (record.id === "douyin") {
           const [title, description] = douyinWebLoginSummary(apps.douyinWebLogin.value);
           const overview = appElement("section", "", "app-layer douyin-workbench-overview");
@@ -5599,7 +5722,7 @@
             activity.append(memoryButton("打开执行回合", "button compact primary", () => openDouyinWorkbenchSection(view, "rounds")));
           }
           const routes = appElement("div", "", "douyin-workbench-routes");
-          for (const [id, label] of [["account", "账号与授权"], ["browse", "本人作品"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
+          for (const [id, label] of [["account", "账号与授权"], ["persona", "应用内角色设定"], ["browse", "本人作品"], ["publications", "作品发布"], ["interactions", "互动任务"], ["rounds", "执行回合"], ["live", "直播与本机预览"]]) {
             if (view.sections.some((item) => item.id === id)) routes.append(memoryButton(label, "button compact secondary", () => openDouyinWorkbenchSection(view, id)));
           }
           overview.append(account, activity, routes);
@@ -5629,6 +5752,14 @@
           controls.push(page);
         } else controls.push(douyinWebLoginRow(apps, listing, section), appConnectionRow(record, view.connection));
         break;
+      case "persona": {
+        const page = appElement("section", "", "app-layer douyin-persona-page");
+        page.append(appElement("h4", "抖音应用内角色设定"),
+          appElement("p", "此设定叠加在工作站主角色之上，只用于明确选择抖音范围的聊天请求。与主角色冲突时以主角色为准；不改变账号授权、工具权限或可读取的资料。主聊天输入框可为每条请求选择是否使用。", "app-scope-note"),
+          appPersonaRow(record));
+        controls.push(page);
+        break;
+      }
       case "conversations": {
         const status = selected && apps.accountStatuses.get(selected.id);
         if (record.id === "wechat" && selected) {
@@ -5765,10 +5896,17 @@
         if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
         if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
           appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
-        if (record.id === "douyin" && section === "interactions") controls.push(appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
+        if (record.id === "douyin" && section === "interactions") controls.push(douyinAutoCommentLikesRow(apps), appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
           if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
+          if (view.douyinAutoLikeLogin !== login) {
+            view.douyinAutoLikeAbort?.abort();
+            view.douyinAutoLikeLogin = login;
+            view.douyinAutoLikePanel = null;
+          }
+          view.douyinAutoLikePanel ||= douyinAutoCommentLikesPanel(view);
+          controls.push(view.douyinAutoLikePanel);
           if (view.douyinNoticeLogin !== login) {
             view.douyinNoticeAbort?.abort();
             view.douyinNoticeLogin = login;
@@ -5964,15 +6102,16 @@
   }
   function appPersonaRow(record) {
     const current = apps, id = record.id, label = record.name || id;
+    const douyin = id === "douyin";
     const draft = current.personas.get(id) || { revision: 0, text: "", loaded: false, editing: false, busy: false, error: "" };
     current.personas.set(id, draft);
     const form = appElement("form", "", "app-persona-form");
-    form.setAttribute("aria-label", `${label}应用补充设定`);
+    form.setAttribute("aria-label", douyin ? "抖音应用内角色设定" : `${label}应用补充设定`);
     const heading = appElement("div", "", "app-persona-heading");
     const edit = appElement("button", draft.busy ? "读取中…" : "编辑", "text-action");
     edit.type = "button"; edit.disabled = draft.busy; edit.hidden = draft.editing;
-    heading.append(appElement("strong", "应用补充设定"), edit);
-    const note = appElement("p", draft.error || (draft.editing ? "仅在本应用使用。留空时只使用共享主角色设定。" : draft.loaded && draft.text ? draft.text : "可用 Markdown 补充本应用的表达方式、兴趣和偏好。"), "app-persona-note");
+    heading.append(appElement("strong", douyin ? "抖音子角色" : "应用补充设定"), edit);
+    const note = appElement("p", draft.error || (draft.editing ? (douyin ? "仅用于明确选择抖音范围的请求。留空时只使用工作站主角色设定。" : "仅在本应用使用。留空时只使用共享主角色设定。") : draft.loaded && draft.text ? draft.text : (douyin ? "可用 Markdown 补充抖音场景下的表达方式、兴趣和偏好。" : "可用 Markdown 补充本应用的表达方式、兴趣和偏好。")), "app-persona-note");
     const input = document.createElement("textarea");
     input.setAttribute("aria-label", `${label}补充设定 Markdown 内容`); input.maxLength = 4000; input.rows = 5;
     input.placeholder = "留空时只使用主角色。例如：在这个应用里更喜欢聊音乐…"; input.value = draft.text; input.hidden = !draft.editing;
@@ -5997,7 +6136,7 @@
         const value = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`, { method: "PUT", body: JSON.stringify({ revision: draft.revision, persona: draft.text }) });
         if (current !== apps) return;
         draft.revision = value.revision; draft.text = value.persona; draft.editing = false; draft.error = "";
-        appFeedback(`${label}补充设定已保存，下次模型调用生效。`);
+        appFeedback(douyin ? "抖音应用内角色设定已保存，下次明确选择抖音范围的模型调用生效。" : `${label}补充设定已保存，下次模型调用生效。`);
       } catch (error) {
         draft.error = error.message;
         if (error.status === 409) { try { const latest = await request(`/api/local/apps/${encodeURIComponent(id)}/persona`); if (current === apps) draft.revision = latest.revision; } catch (_) { /* Keep the draft and its revision until a fresh read succeeds. */ } }
@@ -8665,6 +8804,7 @@
     }
     state.chat.submittedAttachments.delete(requestID);
     state.chat.submittedOptions.delete(requestID);
+    state.chat.submittedScopes.delete(requestID);
   }
   function releaseAllChatAttachmentURLs(chat) {
     const entries = new Set([...chat.draftFiles, ...Array.from(chat.submittedAttachments.values()).flat()]);
@@ -8812,11 +8952,14 @@
     if (!chatConfigured()) { setActiveView("settings"); showMessage("先保存可用的聊天模型，再发送消息。", "warn"); return; }
     const continuation = current.submittedLinks.get(requestID) || (fresh ? current.link?.id || "" : "");
     if (continuation) current.submittedLinks.set(requestID, continuation);
+    const appID = current.submittedScopes.get(requestID) || (fresh && $("#chat-douyin-role").checked ? "douyin" : "");
+    if (appID) current.submittedScopes.set(requestID, appID);
     if (fresh) {
       current.link = null;
       current.draftFiles = [];
       renderChatDraftAttachments();
       $("#chat-input").value = "";
+      $("#chat-douyin-role").checked = false;
     }
     current.submittedAttachments.set(requestID, attachments);
     const modelSelection = current.submittedOptions.get(requestID) || chatMessageOptions();
@@ -8841,7 +8984,7 @@
         if (attached.id) attachmentIDs.push(attached.id);
       }
       pending.uploading = false; renderChat();
-      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text, attachments: attachmentIDs, model_selection: modelSelection, ...(continuation ? { continue_request_id: continuation } : {}) }) });
+      const result = await request("/api/local/chat", { method: "POST", body: JSON.stringify({ request_id: requestID, text, attachments: attachmentIDs, model_selection: modelSelection, ...(appID ? { app_id: appID } : {}), ...(continuation ? { continue_request_id: continuation } : {}) }) });
       if (current !== state.chat) return;
       if (result.status === "completed") state.chat.pending.delete(requestID);
       if (result.status === "no_reply") {
@@ -8865,7 +9008,7 @@
       if (!standaloneWorkbenchApp && state.home?.initialized) {
         try {
           const draft = window.sessionStorage.getItem("douyin-creation-chat-draft");
-          if (draft && prepareDouyinCreationChat(draft)) window.sessionStorage.removeItem("douyin-creation-chat-draft");
+          if (draft && prepareDouyinWorkbenchChat(draft)) window.sessionStorage.removeItem("douyin-creation-chat-draft");
           if (window.sessionStorage.getItem("douyin-open-project-tools") === "1") {
             window.sessionStorage.removeItem("douyin-open-project-tools");
             setActiveView("project-tools"); selectToolPanel("public");
@@ -9151,7 +9294,7 @@
         setActiveView("project-tools"); selectToolPanel("public");
         return;
       }
-      if (value.type === "prepare-douyin-creation-chat") { prepareDouyinCreationChat(value.text); return; }
+      if (value.type === "prepare-douyin-creation-chat") { prepareDouyinWorkbenchChat(value.text); return; }
       if (value.type === "application-workbench-route-error") { appFeedback(value.message || "主工作站暂不可用，请稍后重试。", true); return; }
       if (value.type === "share-reader-auth-result") {
         if (value.ok === true) {

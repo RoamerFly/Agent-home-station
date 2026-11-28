@@ -84,6 +84,18 @@ func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
 <div><div><div id="tooltip_3234567890123456789"></div></div></div></div></div>` + suffix))
 		case "/both":
 			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container"></div><div data-e2e="comment-list" class="comment-mainContent"></div>`))
+		case "/native-end":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container">
+<div data-e2e="comment-list" class="comment-mainContent">
+<div data-e2e="comment-item"><div id="tooltip_3234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_native">作者</a></div><div class="FduGc_lz">真实结构评论</div></div>
+<div class="Fk1OBkgC">暂时没有更多评论</div></div></div>`))
+		case "/native-end-outside":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container">
+<div data-e2e="comment-list" class="comment-mainContent"><div data-e2e="comment-item"><div id="tooltip_3234567890123456789"></div><div class="comment-item-info-wrap"><a href="//www.douyin.com/user/sec_native">作者</a></div><div class="FduGc_lz">真实结构评论</div></div></div>
+<div class="Fk1OBkgC">暂时没有更多评论</div></div>`))
+		case "/native-empty":
+			_, _ = w.Write([]byte(`<!doctype html><title>comments</title><div id="merge-all-comment-container">
+<div data-e2e="comment-list" class="comment-mainContent"><div class="Fk1OBkgC">暂时没有更多评论</div></div></div>`))
 		default:
 			_, _ = w.Write([]byte(`<!doctype html><title>comments</title>
 <div data-e2e="comment-item"><div id="tooltip_9234567890123456789"></div><span data-sec-uid="sec_outside">外部</span><p data-e2e="comment-content">容器外</p></div>
@@ -148,6 +160,16 @@ func TestLocalDouyinCommentsTooltipIDsStayWithinCommentCards(t *testing.T) {
 	direct := stateAt("/direct", false)
 	if direct.Invalid || len(direct.Comments) != 1 || direct.Comments[0].ID != "3234567890123456789" || direct.Comments[0].AuthorID != "sec_direct" {
 		t.Fatalf("production parser lost direct video comment list: %+v", direct)
+	}
+	nativeEnd := stateAt("/native-end", false)
+	if nativeEnd.Invalid || !nativeEnd.End || len(nativeEnd.Comments) != 1 || nativeEnd.Comments[0].AuthorID != "sec_native" {
+		t.Fatalf("production parser lost nested native list or end marker: %+v", nativeEnd)
+	}
+	if outside := stateAt("/native-end-outside", false); outside.Invalid || outside.End || len(outside.Comments) != 1 {
+		t.Fatalf("end marker outside the exact list was accepted: %+v", outside)
+	}
+	if empty := stateAt("/native-empty", false); empty.Invalid || !empty.Loaded || !empty.Empty || !empty.End || len(empty.Comments) != 0 {
+		t.Fatalf("native empty list was not recognized: %+v", empty)
 	}
 	for _, path := range []string{"/invalid", "/multiple", "/bad-author", "/ambiguous-body"} {
 		state := stateAt(path, false)

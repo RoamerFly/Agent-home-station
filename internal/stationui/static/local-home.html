@@ -101,6 +101,7 @@
                         <label class="composer-model" for="chat-model"><span>模型</span><input id="chat-model" list="chat-model-options" type="text" autocomplete="off" spellcheck="false" aria-label="本轮使用的模型名称"><datalist id="chat-model-options"></datalist></label>
                         <button id="chat-model-refresh" class="button compact quiet composer-model-refresh" type="button" title="从当前服务商获取模型列表">获取模型</button>
                         <span class="composer-thought-controls"><label class="composer-thinking" for="chat-thinking"><input id="chat-thinking" type="checkbox"><span>深度思考</span></label><label class="composer-effort" for="chat-reasoning"><span>程度</span><select id="chat-reasoning" aria-label="本轮思考程度"><option value="low">低</option><option value="high">高</option><option value="max">最高</option></select></label></span>
+                        <label class="composer-thinking composer-app-role" for="chat-douyin-role" title="仅本条请求叠加抖音应用内角色；主角色与权限保持优先"><input id="chat-douyin-role" type="checkbox"><span>使用抖音应用内角色</span></label>
                         <span id="chat-thinking-note" class="composer-thinking-note" hidden>当前服务不提供思考调节</span>
                       </div>
                       <button id="chat-send" class="button primary" type="submit">发送</button>

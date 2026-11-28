@@ -385,6 +385,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		RequestID         string                  `json:"request_id"`
 		Text              string                  `json:"text"`
+		AppID             string                  `json:"app_id"`
 		ContinueRequestID string                  `json:"continue_request_id"`
 		Attachments       []string                `json:"attachments"`
 		ModelSelection    localChatModelSelection `json:"model_selection"`
@@ -392,7 +393,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 	if !websession.Decode(w, r, &request) {
 		return
 	}
-	if !identity.ValidPathID(request.RequestID) || request.ContinueRequestID != "" && (!identity.ValidPathID(request.ContinueRequestID) || request.ContinueRequestID == request.RequestID) || strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) || len(request.Attachments) > 64 {
+	if !identity.ValidPathID(request.RequestID) || request.AppID != "" && request.AppID != "douyin" || request.ContinueRequestID != "" && (!identity.ValidPathID(request.ContinueRequestID) || request.ContinueRequestID == request.RequestID) || strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 || !utf8.ValidString(request.Text) || len(request.Text) > 64<<10 || strings.ContainsRune(request.Text, 0) || len(request.Attachments) > 64 {
 		websession.Fail(w, 400, "请提供稳定请求编号以及有效正文或附件；正文最多 65536 字节，单轮最多 64 个附件")
 		return
 	}
@@ -433,7 +434,7 @@ func (h *localChatService) send(w http.ResponseWriter, r *http.Request) {
 		websession.Fail(w, 409, "同一请求编号的正文已变化，请使用新的请求编号")
 		return
 	}
-	media, err := h.bindRequestAttachments(in, request.RequestID, request.Text, request.ContinueRequestID, request.Attachments, request.ModelSelection, prior != nil)
+	media, err := h.bindRequestAttachments(in, request.RequestID, request.Text, request.ContinueRequestID, request.AppID, request.Attachments, request.ModelSelection, prior != nil)
 	if err != nil {
 		websession.Fail(w, 409, err.Error())
 		return

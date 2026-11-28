@@ -121,6 +121,72 @@ func TestLocalDouyinWebCommentsPermissionNeedsVideoScopeAndRevokes(t *testing.T)
 	}
 }
 
+func TestLocalDouyinAutoCommentLikesRequiresOwnedWorkAndCommentReads(t *testing.T) {
+	f, _ := newLocalDouyinWebFixture(t)
+	initializeDouyinWeb(t, f)
+	set := func(view map[string]any, enabled bool) (int, map[string]any) {
+		return f.request("POST", localDouyinWebRoute, map[string]any{
+			"action": "set_auto_comment_likes", "revision": view["revision"],
+			"allow_auto_comment_likes": enabled,
+		}, true)
+	}
+	_, view := f.request("GET", localDouyinWebRoute, nil, false)
+	if code, _ := set(view, true); code != http.StatusConflict {
+		t.Fatalf("enabled before confirmed login: %d", code)
+	}
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": view["revision"], "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	if view["auto_comment_likes_enabled"] != false || view["likes_enabled"] != false {
+		t.Fatalf("auto comment likes must default off and differ from video likes: %v", view)
+	}
+	stale := view["revision"]
+	code, view := set(view, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != true || view["likes_enabled"] != false {
+		t.Fatalf("enable after work and comment reads: %d %v", code, view)
+	}
+	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_auto_comment_likes", "revision": stale, "allow_auto_comment_likes": false}, true); code != http.StatusConflict {
+		t.Fatalf("stale revision changed auto comment likes: %d", code)
+	}
+	_, loaded := f.request("GET", localDouyinWebRoute, nil, false)
+	if loaded["auto_comment_likes_enabled"] != true {
+		t.Fatalf("saved option not readable: %v", loaded)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "pause", "revision": view["revision"]}, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != false {
+		t.Fatalf("pause did not close auto comment likes: %d %v", code, view)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "resume", "revision": view["revision"]}, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != false {
+		t.Fatalf("resume unexpectedly restored auto comment likes: %d %v", code, view)
+	}
+	code, view = set(view, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != true {
+		t.Fatalf("re-enable after pause: %d %v", code, view)
+	}
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": false}, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != false {
+		t.Fatalf("works revocation did not close auto comment likes: %d %v", code, view)
+	}
+	if code, _ := set(view, true); code != http.StatusConflict {
+		t.Fatalf("enabled without works read: %d", code)
+	}
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": true}, true)
+	_, view = set(view, true)
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": false}, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != false {
+		t.Fatalf("comments revocation did not close auto comment likes: %d %v", code, view)
+	}
+	if code, _ := set(view, true); code != http.StatusConflict {
+		t.Fatalf("enabled without comments read: %d", code)
+	}
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_read", "revision": view["revision"], "allow_read": true, "read_scope": "home_and_videos", "allow_comments": true}, true)
+	_, view = set(view, true)
+	code, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": view["revision"], "approve_profile": true}, true)
+	if code != http.StatusOK || view["auto_comment_likes_enabled"] != false {
+		t.Fatalf("relogin carried auto comment likes forward: %d %v", code, view)
+	}
+}
+
 func initializeDouyinWeb(t *testing.T, f *localHomeFixture) {
 	t.Helper()
 	f.login()

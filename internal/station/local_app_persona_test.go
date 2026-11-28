@@ -38,6 +38,46 @@ func TestLocalChatReadsOnlyRequestedApplicationPersonaOnDemand(t *testing.T) {
 	}
 }
 
+func TestLocalChatDouyinPersonaRequiresExplicitRequestScope(t *testing.T) {
+	f := localChatFixture(t)
+	store := localAppPersonaStore{dir: f.dir}
+	if _, err := store.Save("douyin", localAppPersona{Persona: "合成抖音子角色：偏好短视频分镜"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save("wechat", localAppPersona{Persona: "合成微信子角色：偏好家庭群聊"}); err != nil {
+		t.Fatal(err)
+	}
+	systems := []string{}
+	f.handler.chat.modelFactory = func() (companion.LanguageModel, error) {
+		return localModelFunc(func(_ context.Context, system string, _ []map[string]string) (string, error) {
+			systems = append(systems, system)
+			return `{"action":"reply","messages":["已处理。"]}`, nil
+		}), nil
+	}
+	if code, out := localChatSend(f, "ordinary-douyin-mention", "谈谈抖音作品"); code != 200 || out["status"] != "completed" {
+		t.Fatal(code, out)
+	}
+	if len(systems) != 1 || strings.Contains(systems[0], "合成抖音子角色") || strings.Contains(systems[0], "合成微信子角色") {
+		t.Fatal("ordinary chat inherited an app role", systems)
+	}
+	request := map[string]any{"request_id": "scoped-douyin-turn", "text": "整理本人的作品", "app_id": "douyin"}
+	if code, out := f.request("POST", "/api/local/chat", request, true); code != 200 || out["status"] != "completed" {
+		t.Fatal(code, out)
+	}
+	if len(systems) != 2 || !strings.Contains(systems[1], "合成抖音子角色") || !strings.Contains(systems[1], "主角色为准") || strings.Contains(systems[1], "合成微信子角色") {
+		t.Fatal("explicit Douyin scope did not layer only its subrole", systems)
+	}
+	if code, out := f.request("POST", "/api/local/chat", request, true); code != 200 || out["reused"] != true || len(systems) != 2 {
+		t.Fatal("same scoped request was not reused", code, out, len(systems))
+	}
+	if code, _ := localChatSend(f, "scoped-douyin-turn", "整理本人的作品"); code != 409 {
+		t.Fatal("existing request changed its app scope", code)
+	}
+	if code, _ := f.request("POST", "/api/local/chat", map[string]any{"request_id": "unknown-scope", "text": "hello", "app_id": "wechat"}, true); code != 400 {
+		t.Fatal("unsupported chat app scope accepted", code)
+	}
+}
+
 func TestApplicationPersonasAreScopedVersionedAndReadAtCallTime(t *testing.T) {
 	dir := t.TempDir()
 	store := localAppPersonaStore{dir: dir}

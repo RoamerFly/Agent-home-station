@@ -331,9 +331,15 @@ func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
  const rfc3339=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
  const fixture=__LOCAL_FIXTURE__;
  const comments=[], seen=new Set();
- const nativeLists=document.querySelectorAll('#merge-all-comment-container,[data-e2e="comment-list"].comment-mainContent');
- const nativeList=nativeLists.length===1?nativeLists[0]:null;
- let invalid=nativeLists.length>1||(!fixture&&!nativeList);
+ const outerLists=document.querySelectorAll('#merge-all-comment-container');
+ const innerLists=document.querySelectorAll('[data-e2e="comment-list"].comment-mainContent');
+ let nativeList=null;
+ let invalid=outerLists.length>1||innerLists.length>1;
+ if(!invalid&&innerLists.length===1){
+   if(outerLists.length===0||outerLists[0].contains(innerLists[0])) nativeList=innerLists[0];
+   else invalid=true;
+ }else if(!invalid&&outerLists.length===1) nativeList=outerLists[0];
+ if(!fixture&&!nativeList) invalid=true;
  const cards=nativeList?nativeList.querySelectorAll('[data-e2e="comment-item"]'):fixture?document.querySelectorAll('[data-e2e="comment-item"],[data-comment-id],[data-cid]'):[];
  for(const e of cards){
    if(!visible(e)) continue;
@@ -373,7 +379,11 @@ func renderedDouyinCommentsExpression(_ string, localFixture bool) string {
    comments.push({id,authorID,author:txt(authorEl),text,createdAt});seen.add(id);
  }
  const hasItems=cards.length>0;
- const page={url:String(location.href||''),ready:document.readyState==='complete',loaded:hasItems||visible(document.querySelector('[data-e2e="comment-empty"]')),empty:visible(document.querySelector('[data-e2e="comment-empty"]')),end:visible(document.querySelector('[data-e2e="comments-end"]')),loginForm:visible(document.querySelector('input[type=password],form[action*="login"],form[action*="passport"]')),challenge:visible(document.querySelector('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')),invalid,comments};
+ const endings=nativeList?[...nativeList.querySelectorAll(':scope > [data-e2e="comments-end"],:scope > .Fk1OBkgC')].filter(visible):[];
+ if(endings.length>1) invalid=true;
+ const end=endings.length===1&&(endings[0].getAttribute('data-e2e')==='comments-end'||txt(endings[0])==='暂时没有更多评论');
+ const emptyMarker=visible(nativeList?.querySelector('[data-e2e="comment-empty"]'));
+ const page={url:String(location.href||''),ready:document.readyState==='complete',loaded:hasItems||emptyMarker||end,empty:!hasItems&&(emptyMarker||end),end,loginForm:visible(document.querySelector('input[type=password],form[action*="login"],form[action*="passport"]')),challenge:visible(document.querySelector('iframe[src*="captcha"],[class*="captcha"],[class*="verify"]')),invalid,comments};
  if(new TextEncoder().encode(JSON.stringify(page)).length>3600000)return {tooLarge:true};return page;
 })()`, "__LOCAL_FIXTURE__", fmt.Sprint(localFixture), 1)
 }
