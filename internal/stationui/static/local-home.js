@@ -5102,8 +5102,6 @@
       busy = true; render();
       feedback.textContent = "正在核对网页登录状态…";
       let pages = 0, mediaFailures = 0, grantedWorks = false;
-      let cursor = "";
-      const seenCursors = new Set();
       try {
         const web = apps.douyinWebLogin;
         const previous = web.value;
@@ -5134,7 +5132,7 @@
           feedback.textContent = "正在核对创作者作品第 " + (pages + 1) + " 页…";
           const result = await request("/api/local/apps/observation", { method: "POST", signal: controller.signal,
             body: JSON.stringify({ app_id: "douyin", connection_id: "web-page-text", content_id: "account-works",
-              field: "account_works", refresh: refresh && pages === 0, limit: 20, cursor }) });
+              field: "account_works", refresh: refresh && pages === 0, limit: 20 }) });
           if (!active(controller)) return;
           pages++;
           const chunks = Array.isArray(result.chunks) ? result.chunks : [];
@@ -5164,12 +5162,8 @@
               "画面语义以作品卡片中已保存的记录为准。";
             break;
           }
-          const nextCursor = result.next_cursor;
-          if (typeof nextCursor !== "string" || !nextCursor || nextCursor.length > 4096 ||
-              nextCursor === cursor || seenCursors.has(nextCursor))
-            throw new Error("平台作品列表未提供可继续的分页位置，已保留当前进度。");
-          seenCursors.add(nextCursor);
-          cursor = nextCursor;
+          // The observation service stores and validates the continuation
+          // position. A subsequent read with refresh=false resumes it.
         }
       } catch (error) {
         if (active(controller)) {
