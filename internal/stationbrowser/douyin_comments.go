@@ -10,18 +10,22 @@ import (
 // opaque value copied from the web site.
 type DouyinCommentsRequest struct {
 	VideoID string
-	Cursor  string
-	Limit   int
+	// RootCommentID selects the replies of one verified main comment. An empty
+	// value selects main comments only.
+	RootCommentID string
+	Cursor        string
+	Limit         int
 }
 
 // DouyinComment contains only rendered, public page fields.  AuthorID is a
 // Douyin platform identity (normally sec_uid), not a WeChat identity.
 type DouyinComment struct {
-	ID        string
-	AuthorID  string
-	Author    string
-	Text      string
-	CreatedAt string // RFC3339 only; relative page labels are deliberately omitted.
+	ID            string
+	RootCommentID string // Empty for a main comment; set for a reply.
+	AuthorID      string
+	Author        string
+	Text          string
+	CreatedAt     string // RFC3339 only; relative page labels are deliberately omitted.
 }
 
 // DouyinCommentPage is deliberately explicit about incomplete reads.  When

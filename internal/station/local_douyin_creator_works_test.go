@@ -68,6 +68,11 @@ func TestLocalDouyinCreatorWorksSeparateGrantListDetailsAndRevocation(t *testing
 	if code != 200 || result["complete"] != false || len(result["chunks"].([]any)) != 1 {
 		t.Fatalf("works first page: %d %v", code, result)
 	}
+	code, catalog := f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	if code != 200 || catalog["account_id"] != "account-proof" || catalog["coverage"].(map[string]any)["state"] != "partial" ||
+		len(catalog["works"].([]any)) != 1 || catalog["works"].([]any)[0].(map[string]any)["description"] != "私密正文只在详细读取返回" {
+		t.Fatalf("private creator catalog first page: %d %v", code, catalog)
+	}
 	row := result["chunks"].([]any)[0].(map[string]any)
 	if strings.Contains(row["text"].(string), "私密正文") {
 		t.Fatal("list exposed detailed body")
@@ -87,12 +92,110 @@ func TestLocalDouyinCreatorWorksSeparateGrantListDetailsAndRevocation(t *testing
 	if code, third := f.request("POST", path, list, true); code != 200 || third["chunks"].([]any)[0].(map[string]any)["source_id"] != "7391234567890123458" || third["complete"] != true {
 		t.Fatalf("platform continuation: %d %v", code, third)
 	}
+	code, catalog = f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	if code != 200 || catalog["coverage"].(map[string]any)["state"] != "complete" ||
+		catalog["coverage"].(map[string]any)["loaded"] != float64(3) || len(catalog["works"].([]any)) != 3 {
+		t.Fatalf("completed creator catalog: %d %v", code, catalog)
+	}
+	manager.readWorks = func(_ context.Context, _ string, in stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		if err := authorize(); err != nil {
+			return stationbrowser.DouyinCreatorWorksPage{}, err
+		}
+		if in.Page > 0 {
+			return stationbrowser.DouyinCreatorWorksPage{}, stationbrowser.ErrCreatorWorksUnavailable
+		}
+		return stationbrowser.DouyinCreatorWorksPage{Account: "account-proof", PageKey: "refresh-first", CoverageKnown: true, HasMore: true,
+			Works: []stationbrowser.DouyinCreatorWork{{ID: "7391234567890123459", Title: "刷新中的新作品", Visibility: "公开"}}}, nil
+	}
+	list["refresh"] = true
+	if code, refreshed := f.request("POST", path, list, true); code != 200 || refreshed["complete"] != false {
+		t.Fatalf("refresh first page: %d %v", code, refreshed)
+	}
+	code, catalog = f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	coverage := catalog["coverage"].(map[string]any)
+	if code != 200 || coverage["state"] != "partial" || coverage["previous_complete"] != true ||
+		coverage["sync_loaded"] != float64(1) || len(catalog["works"].([]any)) != 3 {
+		t.Fatalf("refresh replaced previous complete catalog early: %d %v", code, catalog)
+	}
+	list["refresh"] = false
+	if code, _ := f.request("POST", path, list, true); code == 200 {
+		t.Fatal("synthetic next page should fail")
+	}
+	if code, afterFailure := f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false); code != 200 || len(afterFailure["works"].([]any)) != 3 {
+		t.Fatalf("failed refresh discarded complete catalog: %d %v", code, afterFailure)
+	}
 	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_works", "revision": view["revision"], "allow_works": false}, true); code != 200 {
 		t.Fatalf("revoke works: %d", code)
+	}
+	if code, _ := f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false); code != http.StatusForbidden {
+		t.Fatalf("revoked creator catalog was readable: %d", code)
 	}
 	detail["field"] = "page_text"
 	if code, _ := f.request("POST", path, detail, true); code != 403 {
 		t.Fatalf("revoked detail: %d", code)
+	}
+}
+
+func TestLocalDouyinCreatorWorksUnknownPaginationDoesNotClaimComplete(t *testing.T) {
+	f, manager := newLocalDouyinWebFixture(t)
+	initializeDouyinWeb(t, f)
+	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	manager.readWorks = func(_ context.Context, _ string, _ stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		if err := authorize(); err != nil {
+			return stationbrowser.DouyinCreatorWorksPage{}, err
+		}
+		return stationbrowser.DouyinCreatorWorksPage{Account: "unknown-page-account", PageKey: "unknown-page", Works: []stationbrowser.DouyinCreatorWork{
+			{ID: "7391234567890123456", Title: "合成作品", Visibility: "公开"},
+		}}, nil
+	}
+	code, read := f.request("POST", "/api/local/apps/observation", map[string]any{
+		"app_id": "douyin", "connection_id": douyinapp.WebReadConnectionID,
+		"content_id": douyinapp.WebWorksContentID, "field": "account_works", "refresh": true,
+	}, true)
+	if code != 200 || read["complete"] != false {
+		t.Fatalf("unknown has_more claimed complete: %d %v", code, read)
+	}
+	code, catalog := f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	if code != 200 || catalog["coverage"].(map[string]any)["state"] != "unknown" ||
+		catalog["coverage"].(map[string]any)["has_more"] != nil {
+		t.Fatalf("unknown catalog coverage: %d %v", code, catalog)
+	}
+}
+
+func TestLocalDouyinCatalogHasMoreWhenLocalLimitSplitsFinalPlatformPage(t *testing.T) {
+	f, manager := newLocalDouyinWebFixture(t)
+	initializeDouyinWeb(t, f)
+	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
+	_, view = f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	manager.readWorks = func(_ context.Context, _ string, _ stationbrowser.DouyinCreatorWorksRequest, authorize func() error) (stationbrowser.DouyinCreatorWorksPage, error) {
+		if err := authorize(); err != nil {
+			return stationbrowser.DouyinCreatorWorksPage{}, err
+		}
+		return stationbrowser.DouyinCreatorWorksPage{Account: "local-limit-account", PageKey: "final-platform-page", CoverageKnown: true,
+			Works: []stationbrowser.DouyinCreatorWork{
+				{ID: "7391234567890123456", Title: "第一件", Visibility: "公开"},
+				{ID: "7391234567890123457", Title: "第二件", Visibility: "公开"},
+			}}, nil
+	}
+	request := map[string]any{"app_id": "douyin", "connection_id": douyinapp.WebReadConnectionID,
+		"content_id": douyinapp.WebWorksContentID, "field": "account_works", "limit": 1, "refresh": true}
+	if code, out := f.request("POST", "/api/local/apps/observation", request, true); code != 200 || out["complete"] != false {
+		t.Fatalf("split final platform page: %d %v", code, out)
+	}
+	code, catalog := f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	coverage := catalog["coverage"].(map[string]any)
+	if code != 200 || coverage["state"] != "partial" || coverage["has_more"] != true || coverage["loaded"] != float64(1) {
+		t.Fatalf("local remainder was hidden: %d %v", code, catalog)
+	}
+	request["refresh"] = false
+	if code, out := f.request("POST", "/api/local/apps/observation", request, true); code != 200 || out["complete"] != true {
+		t.Fatalf("finish local remainder: %d %v", code, out)
+	}
+	code, catalog = f.request(http.MethodGet, "/api/local/apps/douyin/works", nil, false)
+	coverage = catalog["coverage"].(map[string]any)
+	if code != 200 || coverage["state"] != "complete" || coverage["has_more"] != false || coverage["loaded"] != float64(2) {
+		t.Fatalf("final platform page not complete: %d %v", code, catalog)
 	}
 }
 

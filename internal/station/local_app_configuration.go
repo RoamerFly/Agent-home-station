@@ -48,7 +48,7 @@ func applicationConfigurationRoutes(owner *websession.Store, mux *http.ServeMux,
 				appConfigurationSection{"delivery", "投递与回执"})
 			sections = append(sections, appConfigurationSection{"tasks", "任务与文档"})
 		case "douyin":
-			sections = append(sections, appConfigurationSection{"browse", "内容浏览"}, appConfigurationSection{"publications", "作品发布"}, appConfigurationSection{"interactions", "互动任务"}, appConfigurationSection{"rounds", "执行回合"}, appConfigurationSection{"live", "直播与本机预览"})
+			sections = append(sections, appConfigurationSection{"browse", "本人作品"}, appConfigurationSection{"publications", "作品发布"}, appConfigurationSection{"interactions", "互动任务"}, appConfigurationSection{"rounds", "执行回合"}, appConfigurationSection{"live", "直播与本机预览"}, appConfigurationSection{"persona", "应用内角色设定"})
 		case "bilibili":
 			sections = append(sections, appConfigurationSection{"browse", "公开读取"}, appConfigurationSection{"publications", "作品发布"})
 		}

@@ -25,32 +25,34 @@ import (
 // claim that the platform has verified an account. Never expose its contents
 // to capability discovery, the editable fish home or model input.
 type localDouyinWebView struct {
-	Revision        uint64   `json:"revision"`
-	Paused          bool     `json:"paused"`
-	Detached        bool     `json:"detached"`
-	State           string   `json:"state"`
-	Active          bool     `json:"active"`
-	AttemptID       string   `json:"attempt_id,omitempty"`
-	ConfirmedAt     string   `json:"confirmed_at,omitempty"`
-	Available       bool     `json:"available"`
-	Reason          string   `json:"reason,omitempty"`
-	ReadEnabled     bool     `json:"read_enabled"`
-	WorksEnabled    bool     `json:"works_enabled"`
-	ImagesEnabled   bool     `json:"images_enabled"`
-	ImagesReady     bool     `json:"images_ready"`
-	ReadScope       string   `json:"read_scope"`
-	PlaybackEnabled bool     `json:"playback_enabled"`
-	AudioEnabled    bool     `json:"audio_enabled"`
-	VisualEnabled   bool     `json:"visual_enabled"`
-	CommentsEnabled bool     `json:"comments_enabled"`
-	LikesEnabled    bool     `json:"likes_enabled"`
-	RepliesEnabled  bool     `json:"replies_enabled"`
-	NoticeBound     bool     `json:"notice_bound"`
-	NoticeAgent     bool     `json:"notice_agent_enabled"`
-	VisualReady     bool     `json:"visual_ready"`
-	VisualReason    string   `json:"visual_reason,omitempty"`
-	PublishEnabled  bool     `json:"publish_enabled"`
-	MemoryScopes    []string `json:"memory_scopes,omitempty"`
+	Revision                uint64   `json:"revision"`
+	Paused                  bool     `json:"paused"`
+	Detached                bool     `json:"detached"`
+	State                   string   `json:"state"`
+	Active                  bool     `json:"active"`
+	AttemptID               string   `json:"attempt_id,omitempty"`
+	AttemptKind             string   `json:"attempt_kind,omitempty"`
+	ConfirmedAt             string   `json:"confirmed_at,omitempty"`
+	Available               bool     `json:"available"`
+	Reason                  string   `json:"reason,omitempty"`
+	ReadEnabled             bool     `json:"read_enabled"`
+	WorksEnabled            bool     `json:"works_enabled"`
+	ImagesEnabled           bool     `json:"images_enabled"`
+	ImagesReady             bool     `json:"images_ready"`
+	ReadScope               string   `json:"read_scope"`
+	PlaybackEnabled         bool     `json:"playback_enabled"`
+	AudioEnabled            bool     `json:"audio_enabled"`
+	VisualEnabled           bool     `json:"visual_enabled"`
+	CommentsEnabled         bool     `json:"comments_enabled"`
+	LikesEnabled            bool     `json:"likes_enabled"`
+	AutoCommentLikesEnabled bool     `json:"auto_comment_likes_enabled"`
+	RepliesEnabled          bool     `json:"replies_enabled"`
+	NoticeBound             bool     `json:"notice_bound"`
+	NoticeAgent             bool     `json:"notice_agent_enabled"`
+	VisualReady             bool     `json:"visual_ready"`
+	VisualReason            string   `json:"visual_reason,omitempty"`
+	PublishEnabled          bool     `json:"publish_enabled"`
+	MemoryScopes            []string `json:"memory_scopes,omitempty"`
 	// SignedIn is a probe, not an authorization: the owner still confirms the
 	// saved profile, it only lets the page close the window the moment the
 	// platform session actually exists.
@@ -58,25 +60,26 @@ type localDouyinWebView struct {
 }
 
 type localDouyinWebInput struct {
-	Action           string  `json:"action"`
-	Revision         uint64  `json:"revision"`
-	AttemptID        string  `json:"attempt_id,omitempty"`
-	ApproveProfile   bool    `json:"approve_profile"`
-	AllowRead        *bool   `json:"allow_read,omitempty"`
-	AllowWorks       *bool   `json:"allow_works,omitempty"`
-	AllowImages      *bool   `json:"allow_images,omitempty"`
-	ReadScope        *string `json:"read_scope,omitempty"`
-	AllowPlayback    *bool   `json:"allow_playback,omitempty"`
-	AllowAudio       *bool   `json:"allow_audio,omitempty"`
-	AllowVisual      *bool   `json:"allow_visual,omitempty"`
-	AllowComments    *bool   `json:"allow_comments,omitempty"`
-	AllowPublish     *bool   `json:"allow_publish,omitempty"`
-	AllowLikes       *bool   `json:"allow_likes,omitempty"`
-	AllowReplies     *bool   `json:"allow_replies,omitempty"`
-	AllowNoticeAgent *bool   `json:"allow_notice_agent,omitempty"`
-	MemoryScope      string  `json:"memory_scope,omitempty"`
-	AllowMemory      *bool   `json:"allow_memory,omitempty"`
-	noticeAccount    *string
+	Action                string  `json:"action"`
+	Revision              uint64  `json:"revision"`
+	AttemptID             string  `json:"attempt_id,omitempty"`
+	ApproveProfile        bool    `json:"approve_profile"`
+	AllowRead             *bool   `json:"allow_read,omitempty"`
+	AllowWorks            *bool   `json:"allow_works,omitempty"`
+	AllowImages           *bool   `json:"allow_images,omitempty"`
+	ReadScope             *string `json:"read_scope,omitempty"`
+	AllowPlayback         *bool   `json:"allow_playback,omitempty"`
+	AllowAudio            *bool   `json:"allow_audio,omitempty"`
+	AllowVisual           *bool   `json:"allow_visual,omitempty"`
+	AllowComments         *bool   `json:"allow_comments,omitempty"`
+	AllowPublish          *bool   `json:"allow_publish,omitempty"`
+	AllowLikes            *bool   `json:"allow_likes,omitempty"`
+	AllowAutoCommentLikes *bool   `json:"allow_auto_comment_likes,omitempty"`
+	AllowReplies          *bool   `json:"allow_replies,omitempty"`
+	AllowNoticeAgent      *bool   `json:"allow_notice_agent,omitempty"`
+	MemoryScope           string  `json:"memory_scope,omitempty"`
+	AllowMemory           *bool   `json:"allow_memory,omitempty"`
+	noticeAccount         *string
 }
 
 type localDouyinWebRecord struct {
@@ -89,19 +92,21 @@ type localDouyinWebRecord struct {
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
 	// account cannot inherit an earlier task's target reference.
-	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
-	ConfirmedAt     string `json:"confirmed_at,omitempty"`
-	ReadEnabled     bool   `json:"read_enabled,omitempty"`
-	WorksEnabled    bool   `json:"works_enabled,omitempty"`
-	ImagesEnabled   bool   `json:"images_enabled,omitempty"`
-	ReadScope       string `json:"read_scope,omitempty"`
-	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
-	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
-	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
-	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
-	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
-	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
-	NoticeAccount   string `json:"notice_account,omitempty"`
+	ProfileEpoch            uint64 `json:"profile_epoch,omitempty"`
+	ConfirmedAt             string `json:"confirmed_at,omitempty"`
+	ReadEnabled             bool   `json:"read_enabled,omitempty"`
+	WorksEnabled            bool   `json:"works_enabled,omitempty"`
+	WorksCatalogGrant       string `json:"works_catalog_grant,omitempty"`
+	ImagesEnabled           bool   `json:"images_enabled,omitempty"`
+	ReadScope               string `json:"read_scope,omitempty"`
+	PlaybackEnabled         bool   `json:"playback_enabled,omitempty"`
+	AudioEnabled            bool   `json:"audio_enabled,omitempty"`
+	VisualEnabled           bool   `json:"visual_enabled,omitempty"`
+	CommentsEnabled         bool   `json:"comments_enabled,omitempty"`
+	LikesEnabled            bool   `json:"likes_enabled,omitempty"`
+	AutoCommentLikesEnabled bool   `json:"auto_comment_likes_enabled,omitempty"`
+	RepliesEnabled          bool   `json:"replies_enabled,omitempty"`
+	NoticeAccount           string `json:"notice_account,omitempty"`
 	// NoticeEpoch changes only when the bound notice account changes. It keeps
 	// read-only execution history stable across unrelated permission edits.
 	NoticeEpoch    uint64                  `json:"notice_epoch,omitempty"`
@@ -129,6 +134,8 @@ type localDouyinWebLogin struct {
 	imageVision      stationLocalVision
 	readVideo        func(context.Context, string, string, func() error) (stationbrowser.DouyinWebPage, error)
 	readComments     func(context.Context, string, stationbrowser.DouyinCommentsRequest, func() error) (stationbrowser.DouyinCommentPage, error)
+	commentLike      func(context.Context, string, stationbrowser.DouyinCommentLikeRequest, func() error) (stationbrowser.DouyinCommentLikeResult, error)
+	commentLikePause func(context.Context) error
 	probeNotice      func(context.Context, string, func() error) (string, error)
 	readNotice       func(context.Context, string, stationbrowser.DouyinNoticeRequest, func() error) (stationbrowser.DouyinNoticePage, error)
 	readRelation     func(context.Context, string, stationbrowser.DouyinCommentRelationRequest, func() error) (stationbrowser.DouyinCommentRelation, error)
@@ -145,10 +152,12 @@ type localDouyinWebLogin struct {
 	window           localDouyinLoginWindow
 	cancel           context.CancelFunc
 	attempt, fish    string
+
+	attemptKind string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
-	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readWorks: stationbrowser.ReadDouyinCreatorWorks, readComments: stationbrowser.ReadDouyinComments, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
+	m := &localDouyinWebLogin{home: h, ctx: ctx, available: stationbrowser.Available, readPage: stationbrowser.ReadDouyinHome, readVideo: stationbrowser.ReadDouyinVideo, readWorks: stationbrowser.ReadDouyinCreatorWorks, readComments: stationbrowser.ReadDouyinComments, commentLike: stationbrowser.RunDouyinCommentLike, interact: stationbrowser.RunDouyinInteraction, sampleVideo: stationbrowser.SampleDouyinWebVideo,
 		readMedia: stationbrowser.ReadDouyinWebMedia, audio: stationLocalASR{version: h.localDouyinAudioVersion, transcribe: h.transcribeLocalStationAudio},
 		readImages: stationbrowser.ReadDouyinCreatorImages, imageVision: stationLocalVision{version: h.localStationVisionVersion, observe: h.observeLocalStationImages},
 		probeNotice: stationbrowser.DouyinNoticeAccount, readNotice: stationbrowser.ReadDouyinNotice,
@@ -192,6 +201,9 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 	mux.HandleFunc("GET /api/local/apps/douyin/web-login", handler)
 	mux.HandleFunc("POST /api/local/apps/douyin/web-login", handler)
 	m.noticeRoutes(owner, mux)
+	m.worksCatalogRoutes(owner, mux)
+	m.autoCommentLikeRoutes(owner, mux)
+	go m.autoCommentLikeBackground()
 }
 
 func localDouyinWebID() (string, error) {
@@ -246,6 +258,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	if !record.Memory.valid() {
 		return record, errors.New("抖音记忆授权登记无效，原资料保留")
 	}
+	if record.WorksCatalogGrant != "" && !validLocalDouyinWebID(record.WorksCatalogGrant) {
+		return record, errors.New("本人作品目录授权登记无效，原资料保留")
+	}
 	if record.Detached && !record.Paused {
 		return record, errors.New("抖音接入状态无效，原资料保留")
 	}
@@ -272,6 +287,11 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	}
 	if record.LikesEnabled && (!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("点赞许可缺少有效的视频页读取范围，原资料保留")
+	}
+	if record.AutoCommentLikesEnabled && (!record.WorksEnabled || !record.CommentsEnabled ||
+		!record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" ||
+		record.Profile == "" || record.ConfirmedAt == "") {
+		return record, errors.New("自动点赞本人作品评论缺少有效的作品与评论读取授权，原资料保留")
 	}
 	if record.RepliesEnabled && (!record.CommentsEnabled || !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos") {
 		return record, errors.New("评论回复许可缺少有效的评论读取范围，原资料保留")
@@ -344,6 +364,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	}
 	if m.window != nil && m.fish == record.FishID {
 		v.AttemptID = m.attempt
+		v.AttemptKind = m.attemptKind
 		if m.window.Active() {
 			v.State, v.Active = "login_open", true
 		}
@@ -359,6 +380,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	v.VisualEnabled = v.ReadEnabled && record.VisualEnabled
 	v.CommentsEnabled = v.ReadEnabled && v.ReadScope == "home_and_videos" && record.CommentsEnabled
 	v.LikesEnabled = v.ReadEnabled && v.ReadScope == "home_and_videos" && record.LikesEnabled
+	v.AutoCommentLikesEnabled = v.WorksEnabled && v.CommentsEnabled && v.Available && record.AutoCommentLikesEnabled
 	v.RepliesEnabled = v.CommentsEnabled && record.RepliesEnabled
 	v.PublishEnabled = !record.Paused && record.PublishEnabled && v.State == "saved" && v.AttemptID == ""
 	return v
@@ -436,6 +458,8 @@ func localDouyinWebRevokesOnly(in *localDouyinWebInput) bool {
 		return (in.AllowLikes != nil || in.AllowReplies != nil) &&
 			(in.AllowLikes == nil || !*in.AllowLikes) &&
 			(in.AllowReplies == nil || !*in.AllowReplies)
+	case "set_auto_comment_likes":
+		return in.AllowAutoCommentLikes != nil && !*in.AllowAutoCommentLikes
 	case "set_read":
 		return in.AllowRead != nil && !*in.AllowRead &&
 			(in.AllowPlayback == nil || !*in.AllowPlayback) &&
@@ -477,11 +501,12 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 	if in.Revision != record.Revision {
 		return fail(409, "网页登录状态已变化，请重新读取后操作")
 	}
-	noticeRevocation := (in.Action == "set_notice" || in.Action == "set_notice_agent" || in.Action == "set_memory") && localDouyinWebRevokesOnly(in)
-	if record.Detached && in.Action != "attach" && in.Action != "detach" && !noticeRevocation {
+	revocationWhileInactive := ((in.Action == "set_notice" || in.Action == "set_notice_agent" || in.Action == "set_memory") ||
+		in.Action == "set_auto_comment_likes") && localDouyinWebRevokesOnly(in)
+	if record.Detached && in.Action != "attach" && in.Action != "detach" && !revocationWhileInactive {
 		return fail(409, "抖音已撤下，请先重新登记")
 	}
-	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !noticeRevocation && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
+	if record.Paused && in.Action != "resume" && in.Action != "pause" && in.Action != "clear" && in.Action != "attach" && in.Action != "detach" && !revocationWhileInactive && !(in.Action == "set_works" && localDouyinWebRevokesOnly(in)) {
 		return fail(409, "抖音应用已关闭，请先开启后再操作")
 	}
 	original := record
@@ -540,6 +565,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			return fail(409, "请先保存或取消本次登录")
 		}
 		record.Detached, record.Paused = detached, true
+		record.AutoCommentLikesEnabled = false
 		if detached {
 			record.NoticeAccount = ""
 			record.NoticeAgent = false
@@ -556,6 +582,9 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			return fail(409, "请先保存或取消本次登录")
 		}
 		record.Paused = paused
+		if paused {
+			record.AutoCommentLikesEnabled = false
+		}
 		if save() != nil {
 			return fail(503, "抖音网页能力状态未保存，请重新读取后核对")
 		}
@@ -570,6 +599,13 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.WorksEnabled = *in.AllowWorks
 		if !record.WorksEnabled {
 			record.ImagesEnabled = false
+			record.WorksCatalogGrant = ""
+			record.AutoCommentLikesEnabled = false
+		} else if !original.WorksEnabled && record.WorksCatalogGrant == "" {
+			record.WorksCatalogGrant, err = localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法创建本人作品目录授权")
+			}
 		}
 		if save() != nil {
 			return fail(503, "本人作品读取授权未保存")
@@ -645,7 +681,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			m.cancel()
 			m.cancel = nil
 		}
-		m.window, m.attempt, m.fish = nil, "", ""
+		m.window, m.attempt, m.attemptKind, m.fish = nil, "", "", ""
 		profile := filepath.Join(dir, record.Profile)
 		probe, err := lockLocalDouyinWebProfile(profile)
 		if err != nil {
@@ -660,6 +696,8 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.NoticeAccount = ""
 		record.NoticeAgent = false
 		record.WorksEnabled = false
+		record.AutoCommentLikesEnabled = false
+		record.WorksCatalogGrant = ""
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
@@ -695,7 +733,11 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			cancel()
 			return fail(503, "创作者中心无法打开或网页登录资料正在使用")
 		}
-		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
+		kind := "creator"
+		if in.Action == "begin_creator_works" {
+			kind = "creator_works"
+		}
+		m.window, m.cancel, m.attempt, m.attemptKind, m.fish = window, cancel, attempt, kind, fish
 	case "set_read":
 		if in.AllowRead == nil {
 			return fail(400, "请明确是否允许大肥鱼读取抖音首页网页文字")
@@ -757,21 +799,23 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		if !record.CommentsEnabled {
 			record.RepliesEnabled = false
+			record.AutoCommentLikesEnabled = false
 		}
 		if !record.ReadEnabled || localDouyinWebScope(record) != "home_and_videos" {
 			record.LikesEnabled = false
 			record.RepliesEnabled = false
+			record.AutoCommentLikesEnabled = false
 		}
 		if save() != nil {
 			return fail(503, "网页读取授权未保存，请重新读取后核对")
 		}
 	case "set_interactions":
 		if in.AllowLikes == nil && in.AllowReplies == nil {
-			return fail(400, "请明确是否允许点赞或回复评论")
+			return fail(400, "请明确是否允许视频点赞任务或回复评论")
 		}
 		view := m.view(record)
 		if in.AllowLikes != nil && *in.AllowLikes && (view.State != "saved" || view.AttemptID != "" || !view.Available || !view.ReadEnabled || view.ReadScope != "home_and_videos") {
-			return fail(409, "请先完成网页登录并允许读取首页及视频页文字，再开启点赞")
+			return fail(409, "请先完成网页登录并允许读取首页及视频页文字，再开启视频点赞任务")
 		}
 		if in.AllowReplies != nil && *in.AllowReplies && (view.State != "saved" || view.AttemptID != "" || !view.Available || !view.CommentsEnabled) {
 			return fail(409, "请先完成网页登录、允许读取首页及视频页文字和视频评论，再开启回复评论")
@@ -784,6 +828,21 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		if save() != nil {
 			return fail(503, "抖音互动授权未保存，请重新读取后核对")
+		}
+	case "set_auto_comment_likes":
+		if in.AllowAutoCommentLikes == nil {
+			return fail(400, "请明确是否启用本人作品评论自动点赞")
+		}
+		if *in.AllowAutoCommentLikes {
+			view := m.view(record)
+			if view.State != "saved" || view.AttemptID != "" || !view.Available ||
+				!view.WorksEnabled || !view.CommentsEnabled {
+				return fail(409, "请先确认网页登录，并允许读取本人作品与视频评论")
+			}
+		}
+		record.AutoCommentLikesEnabled = *in.AllowAutoCommentLikes
+		if save() != nil {
+			return fail(503, "本人作品评论自动点赞选项未保存")
 		}
 	case "begin":
 		if !in.ApproveProfile {
@@ -799,7 +858,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			m.cancel()
 			m.cancel = nil
 		}
-		m.window, m.attempt, m.fish = nil, "", ""
+		m.window, m.attempt, m.attemptKind, m.fish = nil, "", "", ""
 		if record.Profile == "" {
 			record.Profile, err = localDouyinWebID()
 			if err != nil {
@@ -826,6 +885,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.NoticeAccount = ""
 		record.NoticeAgent = false
 		record.WorksEnabled = false
+		record.AutoCommentLikesEnabled = false
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
@@ -849,7 +909,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			cancel()
 			return fail(503, "登录窗口启动失败或资料正被使用，请稍后重试")
 		}
-		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
+		m.window, m.cancel, m.attempt, m.attemptKind, m.fish = window, cancel, attempt, "web", fish
 	case "confirm", "cancel":
 		if in.AttemptID == "" || in.AttemptID != m.attempt || m.window == nil || m.fish != fish {
 			return fail(409, "本次登录已结束或服务已重启，请重新打开登录窗口")
@@ -860,7 +920,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if m.cancel != nil {
 			m.cancel()
 		}
-		m.window, m.cancel, m.attempt = nil, nil, ""
+		m.window, m.cancel, m.attempt, m.attemptKind = nil, nil, "", ""
 		if err != nil {
 			return fail(503, "登录窗口未能确认正常退出，尚未确认保存；请重新打开后核对")
 		}
@@ -875,11 +935,16 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			record.ReadEnabled = true
 			record.ReadScope = "home_and_videos"
 			record.WorksEnabled = true
+			record.WorksCatalogGrant, err = localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法创建本人作品目录授权")
+			}
 			record.CommentsEnabled = true
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false
 			record.VisualEnabled = false
 			record.LikesEnabled = false
+			record.AutoCommentLikesEnabled = false
 			record.RepliesEnabled = false
 			record.PublishEnabled = false
 		}
@@ -892,11 +957,12 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		}
 		// Revoke pending reads before trying to close/delete profile files.
 		// Another browser may still own the profile lock during that cleanup.
-		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.RepliesEnabled || record.NoticeAccount != "" {
+		if record.ReadEnabled || record.WorksEnabled || record.PublishEnabled || record.CommentsEnabled || record.LikesEnabled || record.AutoCommentLikesEnabled || record.RepliesEnabled || record.NoticeAccount != "" {
 			record.NoticeAccount = ""
 			record.NoticeAgent = false
 			record.ReadEnabled = false
 			record.WorksEnabled = false
+			record.WorksCatalogGrant = ""
 			record.ImagesEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false
@@ -904,6 +970,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			record.VisualEnabled = false
 			record.CommentsEnabled = false
 			record.LikesEnabled = false
+			record.AutoCommentLikesEnabled = false
 			record.RepliesEnabled = false
 			record.PublishEnabled = false
 			if save() != nil {
@@ -917,7 +984,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			if m.cancel != nil {
 				m.cancel()
 			}
-			m.window, m.cancel, m.attempt = nil, nil, ""
+			m.window, m.cancel, m.attempt, m.attemptKind = nil, nil, "", ""
 			if err != nil {
 				return fail(503, "登录窗口尚未确认退出，未删除网页登录资料")
 			}

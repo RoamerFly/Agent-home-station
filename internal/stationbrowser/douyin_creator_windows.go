@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,7 +76,7 @@ func readDouyinCreatorWorks(ctx context.Context, profile, target string, input D
 	if input.Page < 0 || input.Page > 0 && (input.PreviousAccount == "" || input.PreviousPageKey == "") {
 		return page, ErrCreatorWorksChanged
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, DouyinCreatorWorksTimeout(input.Page))
 	defer cancel()
 	_, err := runDouyinCreator(ctx, profile, target, CreatorPublicationRequest{Submitted: true, worksRequest: &input, worksPage: &page}, authorize, fixture)
 	return page, err
@@ -217,7 +218,13 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 			return result, err
 		}
 	}
-	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": 512 << 10, "maxTotalBufferSize": 2 << 20}, nil); err != nil {
+	resourceBuffer, totalBuffer := 512<<10, 2<<20
+	if in.worksRequest != nil {
+		// A single creator work can include many signed media variants. Keep
+		// the capture bounded while allowing richer real work-list pages.
+		resourceBuffer, totalBuffer = 12<<20, 24<<20
+	}
+	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": resourceBuffer, "maxTotalBufferSize": totalBuffer}, nil); err != nil {
 		return result, err
 	}
 	if in.worksRequest != nil {
@@ -431,6 +438,8 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 func awaitCreatorWorks(ctx context.Context, session readerSession, id string, world int64, target string, in CreatorPublicationRequest, authorize func() error, listener *creatorReceiptListener) error {
 	request := *in.worksRequest
 	seen := map[string]bool{}
+	seenIDs := map[string]bool{}
+	seenCursors := map[string]bool{}
 	var serial uint64
 	owner := request.PreviousAccount
 	for position := 0; ; {
@@ -444,11 +453,18 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 				return err
 			}
 			if err := creatorWait(ctx); err != nil {
-				return errors.Join(ErrCreatorWorksUnavailable, err)
+				if position > 0 {
+					return errors.Join(ErrCreatorWorksNextUnavailable, err)
+				}
+				return errors.Join(ErrCreatorWorksListNotObserved, err)
 			}
 			continue
 		}
 		serial = nextSerial
+		if parseErr != nil {
+			return parseErr
+		}
+		page, parseErr = anchorCreatorWorksPage(page, owner, position)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -457,6 +473,18 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		}
 		if seen[page.PageKey] {
 			return ErrCreatorWorksChanged
+		}
+		for _, workID := range page.PageIDs {
+			if seenIDs[workID] {
+				return ErrCreatorWorksChanged
+			}
+			seenIDs[workID] = true
+		}
+		if page.HasMore && page.MaxCursor != "" {
+			if seenCursors[page.MaxCursor] {
+				return ErrCreatorWorksChanged
+			}
+			seenCursors[page.MaxCursor] = true
 		}
 		owner, seen[page.PageKey] = page.Account, true
 		if position == request.Page {
@@ -472,7 +500,7 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		if position == request.Page-1 && request.PreviousPageKey != page.PageKey {
 			return ErrCreatorWorksChanged
 		}
-		if !page.HasMore {
+		if page.CoverageKnown && !page.HasMore {
 			return ErrCreatorWorksChanged
 		}
 		availableUntil := time.Now().Add(2 * time.Second)
@@ -567,9 +595,28 @@ func (l *creatorReceiptListener) worksResult() (DouyinCreatorWorksPage, uint64, 
 	defer l.mu.Unlock()
 	return l.worksPage, l.worksSerial, l.worksError
 }
+func (l *creatorReceiptListener) failWorksResponse(err error) {
+	l.mu.Lock()
+	l.worksPage, l.worksError = DouyinCreatorWorksPage{}, err
+	l.worksSerial++
+	l.mu.Unlock()
+}
 func (l *creatorReceiptListener) manageEndpoint(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.User == nil && u.Scheme+"://"+u.Host == l.origin && u.Path == "/janus/douyin/creator/pc/work_list"
+}
+func (l *creatorReceiptListener) worksListEndpoint(raw string) bool {
+	if !l.manageEndpoint(raw) {
+		return false
+	}
+	u, _ := url.Parse(raw)
+	query := u.Query()
+	status, count := query["status"], query["count"]
+	if len(status) != 1 || status[0] != "0" || len(count) != 1 {
+		return false
+	}
+	n, err := strconv.Atoi(count[0])
+	return err == nil && n >= 2
 }
 func (l *creatorReceiptListener) rejection() (int, bool) {
 	l.mu.Lock()
@@ -621,7 +668,11 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						delete(requests, p.RequestID)
 						delete(accepted, p.RequestID)
 						delete(manage, p.RequestID)
-						if (l.query != nil || l.knownID != "" || l.readWorks) && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST") {
+						manageRequest := (l.query != nil || l.knownID != "") && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST")
+						if l.readWorks {
+							manageRequest = p.Request.Method == "GET" && l.worksListEndpoint(p.Request.URL)
+						}
+						if manageRequest {
 							requests[p.RequestID] = true
 							manage[p.RequestID] = true
 						}
@@ -638,8 +689,19 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 							FromServiceWorker bool
 						}
 					}
-					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] && p.Response.Status == 200 && !p.Response.FromServiceWorker && (l.endpoint(p.Response.URL) || (manage[p.RequestID] && l.manageEndpoint(p.Response.URL))) {
-						accepted[p.RequestID] = true
+					if json.Unmarshal(event.Params, &p) != nil || !requests[p.RequestID] {
+						continue
+					}
+					manageResponse := manage[p.RequestID] && l.manageEndpoint(p.Response.URL)
+					if l.readWorks {
+						manageResponse = manage[p.RequestID] && l.worksListEndpoint(p.Response.URL)
+					}
+					if l.endpoint(p.Response.URL) || manageResponse {
+						if p.Response.Status == 200 && !p.Response.FromServiceWorker {
+							accepted[p.RequestID] = true
+						} else if l.readWorks && manage[p.RequestID] {
+							l.failWorksResponse(ErrCreatorWorksResponseUnverified)
+						}
 					}
 				case "Network.loadingFinished":
 					var p struct {
@@ -653,14 +715,37 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					delete(requests, p.RequestID)
 					isManage := manage[p.RequestID]
 					delete(manage, p.RequestID)
-					if p.EncodedDataLength > 256<<10 {
+					maxEncoded := float64(256 << 10)
+					if isManage && l.readWorks {
+						maxEncoded = creatorWorksResponseMax
+					}
+					if p.EncodedDataLength < 0 || p.EncodedDataLength > maxEncoded {
+						if isManage && l.readWorks {
+							cause := ErrCreatorWorksResponseUnverified
+							if p.EncodedDataLength > maxEncoded {
+								cause = ErrCreatorWorksResponseTooLarge
+							}
+							l.failWorksResponse(cause)
+						}
 						continue
 					}
 					var out struct {
 						Body          string
 						Base64Encoded bool
 					}
-					if session.Call(ctx, l.session, "Network.getResponseBody", map[string]any{"requestId": p.RequestID}, &out) != nil || len(out.Body) > 512<<10 {
+					bodyMax := 512 << 10
+					if isManage && l.readWorks {
+						bodyMax = 12 << 20 // base64 expansion of an 8 MiB body
+					}
+					bodyErr := session.Call(ctx, l.session, "Network.getResponseBody", map[string]any{"requestId": p.RequestID}, &out)
+					if bodyErr != nil || len(out.Body) > bodyMax {
+						if isManage && l.readWorks {
+							cause := ErrCreatorWorksResponseUnverified
+							if len(out.Body) > bodyMax {
+								cause = ErrCreatorWorksResponseTooLarge
+							}
+							l.failWorksResponse(cause)
+						}
 						continue
 					}
 					raw := []byte(out.Body)
@@ -668,11 +753,17 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						var err error
 						raw, err = base64.StdEncoding.DecodeString(out.Body)
 						if err != nil {
+							if isManage && l.readWorks {
+								l.failWorksResponse(ErrCreatorWorksResponseUnverified)
+							}
 							continue
 						}
 					}
 					if isManage && l.readWorks {
 						page, err := creatorWorksPage(raw)
+						if err != nil && !errors.Is(err, ErrCreatorWorksResponseTooLarge) && !errors.Is(err, ErrCreatorWorksOwnerUnverified) && !errors.Is(err, ErrCreatorWorksAccessRejected) {
+							err = ErrCreatorWorksResponseUnverified
+						}
 						l.mu.Lock()
 						l.worksPage, l.worksError = page, err
 						l.worksSerial++

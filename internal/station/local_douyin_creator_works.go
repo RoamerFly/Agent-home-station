@@ -115,7 +115,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	if read == nil {
 		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, stationbrowser.DouyinCreatorWorksTimeout(cursor.Request.Page))
 	defer cancel()
 	stop := context.AfterFunc(service, cancel)
 	defer stop()
@@ -128,11 +128,21 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	}
 	switch {
 	case errors.Is(err, stationbrowser.ErrCreatorWorksAccountChanged):
-		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, access, "")
+		return apphost.ObservationPage{}, p.creatorWorksAccountChanged(ctx, access)
+	case errors.Is(err, stationbrowser.ErrCreatorWorksListNotObserved):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksListNotObserved
 	case errors.Is(err, stationbrowser.ErrCreatorWorksChanged):
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
-	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) && !errors.Is(err, context.DeadlineExceeded):
-		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationContentUnavailable, err)
+	case errors.Is(err, stationbrowser.ErrCreatorWorksResponseTooLarge):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksResponseTooLarge
+	case errors.Is(err, stationbrowser.ErrCreatorWorksOwnerUnverified):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksOwnerUnverified
+	case errors.Is(err, stationbrowser.ErrCreatorWorksAccessRejected):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksAccessRejected
+	case errors.Is(err, stationbrowser.ErrCreatorWorksResponseUnverified), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksResponseUnverified
+	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksNextUnavailable
 	case err != nil:
 		return apphost.ObservationPage{}, localDouyinWebReadError(err)
 	}
@@ -140,7 +150,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
 	}
 	if cursor.Account != "" && cursor.Account != result.Account {
-		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, access, "")
+		return apphost.ObservationPage{}, p.creatorWorksAccountChanged(ctx, access)
 	}
 	if err := p.admitCreatorAccount(ctx, access, result.Account); err != nil {
 		return apphost.ObservationPage{}, err
@@ -165,11 +175,14 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
+	if err := manager.captureWorksCatalog(ctx, access, cursor, result, works, end); err != nil {
+		return apphost.ObservationPage{}, err
+	}
 	coverage := fmt.Sprintf("已登录创作者管理页 · 第 %d 页 · 本次返回 %d 条可核对的本人作品", cursor.Request.Page+1, len(works))
 	if !result.CoverageKnown {
 		coverage += "。平台未报告后续页，列表总覆盖待核对"
 	}
-	page := apphost.ObservationPage{Coverage: coverage, Complete: end == len(result.Works) && !result.HasMore}
+	page := apphost.ObservationPage{Coverage: coverage, Complete: end == len(result.Works) && result.CoverageKnown && !result.HasMore}
 	mediaFields := p.mediaFollowUps(ctx, access.record)
 	imagesReady := access.record.ImagesEnabled && slices.ContainsFunc(works, validCreatorImageWork) && p.creatorImagesReady(ctx)
 	for index, work := range works {
@@ -206,6 +219,14 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	return page, nil
 }
 
+func (p *localDouyinWebObservation) creatorWorksAccountChanged(ctx context.Context, access localDouyinWebAccess) error {
+	err := p.admitCreatorAccount(ctx, access, "")
+	if err != nil && !errors.Is(err, apphost.ErrObservationWebSnapshotChanged) {
+		return err
+	}
+	return apphost.ErrObservationDouyinWorksAccountChanged
+}
+
 func creatorWorkText(row stationbrowser.DouyinCreatorWork) string {
 	lines := []string{"作品编号 " + row.ID, "可见范围 " + row.Visibility}
 	if row.Title != "" {
@@ -217,7 +238,9 @@ func creatorWorkText(row stationbrowser.DouyinCreatorWork) string {
 	if row.CreatedAt != "" {
 		lines = append(lines, "创建时间 "+row.CreatedAt)
 	}
-	if row.Reviewing {
+	if row.ReviewStatus == "unknown" {
+		lines = append(lines, "平台未提供完整审核或可用状态，暂待核对")
+	} else if row.Reviewing {
 		lines = append(lines, "平台记录显示审核中")
 	}
 	return strings.Join(lines, "\n")
@@ -251,7 +274,7 @@ func (p *localDouyinWebObservation) recheckCreatorVideo(ctx context.Context, a l
 	if read == nil {
 		return apphost.ErrObservationBrowserUnavailable
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, stationbrowser.DouyinCreatorWorksTimeout(target.creatorPage.Page))
 	defer cancel()
 	stop := context.AfterFunc(service, cancel)
 	defer stop()

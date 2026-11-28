@@ -168,11 +168,14 @@ func (h *localHomeService) appPersonaRoutes(s *websession.Store, mux *http.Serve
 }
 
 func applicationPersonaPolicy(main string, app localAppPersona) string {
-	text := "\n主角色设定：\n" + main
+	return "\n主角色设定：\n" + main + applicationPersonaSupplement(app)
+}
+
+func applicationPersonaSupplement(app localAppPersona) string {
 	if app.Persona != "" {
-		text += "\n当前应用的子角色补充（仅补充本应用的表达、喜好与相处方式；与主角色冲突时以主角色为准，不改变身份、工具权限或资料可见范围）：\n" + app.Persona
+		return "\n当前应用的子角色补充（仅补充本应用的表达、喜好与相处方式；与主角色冲突时以主角色为准，不改变身份、工具权限或资料可见范围）：\n" + app.Persona
 	}
-	return text
+	return ""
 }
 
 // Older station imports put the WeChat character into the global role. Move

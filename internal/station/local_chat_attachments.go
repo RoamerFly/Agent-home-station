@@ -55,6 +55,7 @@ type localChatAttachmentDisk struct {
 
 type localChatRequestManifest struct {
 	Text              string                  `json:"text"`
+	AppID             string                  `json:"app_id,omitempty"`
 	Attachments       []string                `json:"attachments"`
 	ContinueRequestID string                  `json:"continue_request_id,omitempty"`
 	ModelSelection    localChatModelSelection `json:"model_selection,omitempty"`
@@ -378,16 +379,16 @@ func (h *localChatService) readRequestManifest(in companion.Input, requestID str
 	return &m, nil
 }
 
-func (h *localChatService) bindRequestAttachments(in companion.Input, requestID, text, continueID string, ids []string, selection localChatModelSelection, existing bool) ([]companion.IncomingMediaRef, error) {
+func (h *localChatService) bindRequestAttachments(in companion.Input, requestID, text, continueID, appID string, ids []string, selection localChatModelSelection, existing bool) ([]companion.IncomingMediaRef, error) {
 	manifest, err := h.readRequestManifest(in, requestID)
 	if err != nil {
 		return nil, err
 	}
-	if manifest != nil && (manifest.Text != text || manifest.ContinueRequestID != continueID || !sameAttachmentIDs(manifest.Attachments, ids) || !sameModelSelection(manifest.ModelSelection, selection)) {
-		return nil, errors.New("同一请求编号的附件、正文或模型选项已变化，请使用新请求编号")
+	if manifest != nil && (manifest.Text != text || manifest.ContinueRequestID != continueID || manifest.AppID != appID || !sameAttachmentIDs(manifest.Attachments, ids) || !sameModelSelection(manifest.ModelSelection, selection)) {
+		return nil, errors.New("同一请求编号的应用范围、附件、正文或模型选项已变化，请使用新请求编号")
 	}
-	if existing && manifest == nil && (len(ids) > 0 || !emptyModelSelection(selection)) {
-		return nil, errors.New("原请求没有附件或模型选项记录")
+	if existing && manifest == nil && (appID != "" || len(ids) > 0 || !emptyModelSelection(selection)) {
+		return nil, errors.New("原请求没有应用范围、附件或模型选项记录")
 	}
 	refs := make([]companion.IncomingMediaRef, 0, len(ids))
 	if len(ids) > 0 {
@@ -421,7 +422,7 @@ func (h *localChatService) bindRequestAttachments(in companion.Input, requestID,
 		}
 	}
 	if manifest == nil && !existing {
-		manifest = &localChatRequestManifest{Text: text, ContinueRequestID: continueID, Attachments: append([]string(nil), ids...), ModelSelection: selection, Owner: in.Sender}
+		manifest = &localChatRequestManifest{Text: text, AppID: appID, ContinueRequestID: continueID, Attachments: append([]string(nil), ids...), ModelSelection: selection, Owner: in.Sender}
 		root, err := h.requestManifestRoot(in, true)
 		if err != nil {
 			return nil, err
