@@ -225,6 +225,7 @@ var (
 	ErrObservationDouyinWorksAccountChanged     = errors.New("创作者中心账号已变化，请重新核对网页登录资料")
 	ErrObservationDouyinWorksResponseTooLarge   = errors.New("创作者中心作品列表响应超过本机安全读取范围，本页未保存")
 	ErrObservationDouyinWorksOwnerUnverified    = errors.New("作品列表缺少可核对的作者标识，请在创作者中心打开作品管理页并刷新后重试")
+	ErrObservationDouyinWorksAccessRejected     = errors.New("创作者中心未允许当前登录资料读取作品（平台状态码 8）；请核对工作台专属的创作者账号登录")
 	ErrObservationImagesUnavailable             = errors.New("请在项目工具中启用并配置工作站视觉服务")
 	ErrObservationImagesLimit                   = errors.New("图文图片每次可读取 1–6 张，省略时使用 2 张")
 	ErrObservationImagesMedia                   = errors.New("未取得可核对的公开图文图片。支持 JPEG、PNG 和 WebP，单张上限 2 MiB")
@@ -429,7 +430,7 @@ func (o *Observer) Read(ctx context.Context, in ObservationInput) (ObservationRe
 			ErrObservationSearchPageSize, ErrObservationAccountWorksPageSize, ErrObservationAccountWorksResponseSize,
 			ErrObservationDouyinWorksListNotObserved, ErrObservationDouyinWorksResponseUnverified,
 			ErrObservationDouyinWorksNextUnavailable, ErrObservationDouyinWorksAccountChanged,
-			ErrObservationDouyinWorksResponseTooLarge, ErrObservationDouyinWorksOwnerUnverified,
+			ErrObservationDouyinWorksResponseTooLarge, ErrObservationDouyinWorksOwnerUnverified, ErrObservationDouyinWorksAccessRejected,
 			ErrObservationCredentialExpired, ErrObservationCapabilityDenied,
 		} {
 			if errors.Is(err, known) {

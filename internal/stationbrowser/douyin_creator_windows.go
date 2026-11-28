@@ -761,7 +761,7 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					}
 					if isManage && l.readWorks {
 						page, err := creatorWorksPage(raw)
-						if err != nil && !errors.Is(err, ErrCreatorWorksResponseTooLarge) && !errors.Is(err, ErrCreatorWorksOwnerUnverified) {
+						if err != nil && !errors.Is(err, ErrCreatorWorksResponseTooLarge) && !errors.Is(err, ErrCreatorWorksOwnerUnverified) && !errors.Is(err, ErrCreatorWorksAccessRejected) {
 							err = ErrCreatorWorksResponseUnverified
 						}
 						l.mu.Lock()

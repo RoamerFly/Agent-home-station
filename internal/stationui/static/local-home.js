@@ -1833,6 +1833,7 @@
       (typeof value.paused === "undefined" || typeof value.paused === "boolean") &&
       (typeof value.detached === "undefined" || typeof value.detached === "boolean") &&
       (typeof value.attempt_id === "undefined" || typeof value.attempt_id === "string") &&
+      (typeof value.attempt_kind === "undefined" || typeof value.attempt_kind === "string") &&
       (typeof value.confirmed_at === "undefined" || typeof value.confirmed_at === "string") &&
       (typeof value.read_enabled === "undefined" || typeof value.read_enabled === "boolean") &&
       (typeof value.read_scope === "undefined" || ["home", "home_and_videos"].includes(value.read_scope)) &&
@@ -1912,7 +1913,8 @@
       // The owner already signed in inside the owned browser. Close it and
       // save the profile without another click; the attempt id keeps this
       // from repeating.
-      if (value.signed_in && value.attempt_id && value.attempt_id !== web.autoAttempt && !web.applying) {
+      if (value.signed_in && value.attempt_id && value.attempt_kind !== "creator_works" &&
+          value.attempt_id !== web.autoAttempt && !web.applying) {
         web.autoAttempt = value.attempt_id;
         // updateDouyinWebLogin advances the generation, so clear the loading
         // flag before handing over or the poll would stay blocked.
@@ -1944,6 +1946,8 @@
       unconfirmed: ["网页登录资料待核对", "资料已保留，重新打开窗口核对登录后再保存。"],
       saved: ["网页登录资料已保存", "登录状态以网页为准，保存后可用于本软件已支持的抖音功能。"],
     };
+    if (value?.attempt_id && value.attempt_kind === "creator_works")
+      return ["创作者中心登录窗口已打开", "请在窗口里确认能看到本人作品，再点击“我已完成登录，保存”。"];
     if (value?.signed_in && value.attempt_id && value.state === "login_open") return ["已检测到登录", "正在关闭登录窗口并保存资料，请稍候。"];
     if (value?.state === "unconfirmed" && value.attempt_id) return ["等待主人确认", "请确认新窗口已完成登录，再保存资料。"];
     return states[value?.state] || ["网页登录状态暂不可读", "刷新后可重新查看。"];
@@ -4941,6 +4945,12 @@
     feedback.textContent = view.douyinWorksNotice || "";
     view.douyinWorksNotice = "";
     const controls = appElement("div", "", "publication-actions douyin-works-controls");
+    const loginRecovery = appElement("div", "", "publication-actions douyin-works-controls");
+    const loginButton = memoryButton("打开专属创作者登录窗口", "button compact secondary", () => {
+      openDouyinWorkbenchSection(view, "account");
+      void updateDouyinWebLogin(apps, "begin_creator_works");
+    });
+    loginRecovery.append(appElement("p", "此操作会重置当前网页授权。请在专属窗口确认能看到本人作品，保存登录后回到这里同步。", "app-scope-note"), loginButton);
     const list = appElement("div", "", "douyin-works-grid");
     const visualChoice = appElement("label", "同步时读取可用的画面语义", "douyin-works-visual-choice");
     const visualInput = document.createElement("input");
@@ -4974,6 +4984,7 @@
       summary.textContent = webValue?.works_enabled !== true ? "本人作品目录尚未同步 · 点击“同步全部作品”即可读取" :
         retained + " · " + status + (coverage.pages ? " · 已核对 " + coverage.pages + " 页" : "");
       syncButton.disabled = busy;
+      loginRecovery.hidden = view.douyinWorksCreatorAccessRequired !== true;
       syncButton.textContent = busy ? "正在同步…" : "同步全部作品";
       syncButton.title = !canSync ? "点击核对网页登录状态并查看不能同步的原因" :
         webValue?.works_enabled === true ? "重新核对创作者中心的全部作品" : "点击后同时允许读取本人作品并同步目录";
@@ -5099,6 +5110,7 @@
     async function sync(refresh, intent = null) {
       if (busy) return;
       const controller = begin();
+      view.douyinWorksCreatorAccessRequired = false;
       busy = true; render();
       feedback.textContent = "正在核对网页登录状态…";
       let pages = 0, mediaFailures = 0, grantedWorks = false;
@@ -5168,6 +5180,7 @@
       } catch (error) {
         if (active(controller)) {
           appSessionExpired([{ status: "rejected", reason: error }]);
+          view.douyinWorksCreatorAccessRequired = error.body?.code === "douyin_works_creator_access_required";
           feedback.textContent = (catalog.coverage?.previous_complete ?
             "保留上次完整目录 " + (catalog.works?.length || 0) + " 件，本轮已核对 " +
               (catalog.coverage.sync_loaded || 0) + " 件" :
@@ -5201,7 +5214,7 @@
     controls.append(syncButton, resumeButton, commentsButton, options);
     panel.append(appElement("h4", "本人作品目录"),
       appElement("p", "查看已同步作品的内容、可见范围、审核状态和画面语义。", "app-scope-note"),
-      summary, controls, visualNote, feedback, list);
+      summary, controls, visualNote, feedback, loginRecovery, list);
     render();
     const pending = view.douyinWorksPendingSync;
     if (pending) {

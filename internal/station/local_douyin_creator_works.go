@@ -137,6 +137,8 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksResponseTooLarge
 	case errors.Is(err, stationbrowser.ErrCreatorWorksOwnerUnverified):
 		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksOwnerUnverified
+	case errors.Is(err, stationbrowser.ErrCreatorWorksAccessRejected):
+		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksAccessRejected
 	case errors.Is(err, stationbrowser.ErrCreatorWorksResponseUnverified), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable):
 		return apphost.ObservationPage{}, apphost.ErrObservationDouyinWorksResponseUnverified
 	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable):

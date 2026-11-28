@@ -72,7 +72,7 @@ func TestLocalDouyinWebCreatorLifecycleKeepsPublishGrant(t *testing.T) {
 		t.Fatal("publish grant was not saved")
 	}
 	code, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin_creator", "revision": view["revision"]}, true)
-	if code != 200 || view["state"] != "login_open" || view["attempt_id"] == nil {
+	if code != 200 || view["state"] != "login_open" || view["attempt_id"] == nil || view["attempt_kind"] != "creator" {
 		t.Fatalf("creator begin: %d %v", code, view)
 	}
 	if code, _ := f.request("POST", localDouyinWebRoute, map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true); code != 200 {
@@ -84,6 +84,23 @@ func TestLocalDouyinWebCreatorLifecycleKeepsPublishGrant(t *testing.T) {
 	}
 	if code, final := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_publish", "revision": final["revision"], "allow_publish": true}, true); code != 200 || final["publish_enabled"] != true {
 		t.Fatalf("re-enable publish: %d %v", code, final)
+	}
+}
+
+func TestLocalDouyinCreatorWorksLoginRequiresManualVerification(t *testing.T) {
+	f, m := newLocalDouyinWebFixture(t)
+	m.openCreatorWorks = m.openCreator
+	initializeDouyinWeb(t, f)
+	_, view := f.request("POST", localDouyinWebRoute, map[string]any{"action": "begin", "revision": 0, "approve_profile": true}, true)
+	if view["attempt_kind"] != "web" {
+		t.Fatalf("ordinary login kind: %v", view["attempt_kind"])
+	}
+	_, view = f.request("POST", localDouyinWebRoute,
+		map[string]any{"action": "confirm", "revision": view["revision"], "attempt_id": view["attempt_id"]}, true)
+	code, view := f.request("POST", localDouyinWebRoute,
+		map[string]any{"action": "begin_creator_works", "revision": view["revision"], "approve_profile": true}, true)
+	if code != 200 || view["attempt_kind"] != "creator_works" || view["attempt_id"] == nil {
+		t.Fatalf("creator works login kind: %d %v", code, view)
 	}
 }
 

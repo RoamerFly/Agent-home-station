@@ -28,6 +28,15 @@ func TestCreatorWorksKeepsMissingStatusFieldsAsUnknown(t *testing.T) {
 	}
 }
 
+func TestCreatorWorksReportsRejectedCreatorAccess(t *testing.T) {
+	// The private workbench profile can have a Douyin session cookie while
+	// the creator service still refuses its work list.
+	raw := []byte(`{"status_code":8,"has_more":null,"total":null,"items":[],"aweme_list":[]}`)
+	if _, err := creatorWorksPage(raw); !errors.Is(err, ErrCreatorWorksAccessRejected) {
+		t.Fatalf("creator access rejection lost: %v", err)
+	}
+}
+
 func TestCreatorWorksJoinsItemAndAwemeListWithoutLosingOwnerProof(t *testing.T) {
 	const id = "7391234567890123456"
 	build := func(owner any) []byte {

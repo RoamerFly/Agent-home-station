@@ -31,6 +31,7 @@ type localDouyinWebView struct {
 	State                   string   `json:"state"`
 	Active                  bool     `json:"active"`
 	AttemptID               string   `json:"attempt_id,omitempty"`
+	AttemptKind             string   `json:"attempt_kind,omitempty"`
 	ConfirmedAt             string   `json:"confirmed_at,omitempty"`
 	Available               bool     `json:"available"`
 	Reason                  string   `json:"reason,omitempty"`
@@ -151,6 +152,8 @@ type localDouyinWebLogin struct {
 	window           localDouyinLoginWindow
 	cancel           context.CancelFunc
 	attempt, fish    string
+
+	attemptKind string
 }
 
 func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *http.ServeMux, ctx context.Context) {
@@ -361,6 +364,7 @@ func (m *localDouyinWebLogin) view(record localDouyinWebRecord) localDouyinWebVi
 	}
 	if m.window != nil && m.fish == record.FishID {
 		v.AttemptID = m.attempt
+		v.AttemptKind = m.attemptKind
 		if m.window.Active() {
 			v.State, v.Active = "login_open", true
 		}
@@ -677,7 +681,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			m.cancel()
 			m.cancel = nil
 		}
-		m.window, m.attempt, m.fish = nil, "", ""
+		m.window, m.attempt, m.attemptKind, m.fish = nil, "", "", ""
 		profile := filepath.Join(dir, record.Profile)
 		probe, err := lockLocalDouyinWebProfile(profile)
 		if err != nil {
@@ -729,7 +733,11 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			cancel()
 			return fail(503, "创作者中心无法打开或网页登录资料正在使用")
 		}
-		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
+		kind := "creator"
+		if in.Action == "begin_creator_works" {
+			kind = "creator_works"
+		}
+		m.window, m.cancel, m.attempt, m.attemptKind, m.fish = window, cancel, attempt, kind, fish
 	case "set_read":
 		if in.AllowRead == nil {
 			return fail(400, "请明确是否允许大肥鱼读取抖音首页网页文字")
@@ -850,7 +858,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			m.cancel()
 			m.cancel = nil
 		}
-		m.window, m.attempt, m.fish = nil, "", ""
+		m.window, m.attempt, m.attemptKind, m.fish = nil, "", "", ""
 		if record.Profile == "" {
 			record.Profile, err = localDouyinWebID()
 			if err != nil {
@@ -901,7 +909,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			cancel()
 			return fail(503, "登录窗口启动失败或资料正被使用，请稍后重试")
 		}
-		m.window, m.cancel, m.attempt, m.fish = window, cancel, attempt, fish
+		m.window, m.cancel, m.attempt, m.attemptKind, m.fish = window, cancel, attempt, "web", fish
 	case "confirm", "cancel":
 		if in.AttemptID == "" || in.AttemptID != m.attempt || m.window == nil || m.fish != fish {
 			return fail(409, "本次登录已结束或服务已重启，请重新打开登录窗口")
@@ -912,7 +920,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		if m.cancel != nil {
 			m.cancel()
 		}
-		m.window, m.cancel, m.attempt = nil, nil, ""
+		m.window, m.cancel, m.attempt, m.attemptKind = nil, nil, "", ""
 		if err != nil {
 			return fail(503, "登录窗口未能确认正常退出，尚未确认保存；请重新打开后核对")
 		}
@@ -976,7 +984,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			if m.cancel != nil {
 				m.cancel()
 			}
-			m.window, m.cancel, m.attempt = nil, nil, ""
+			m.window, m.cancel, m.attempt, m.attemptKind = nil, nil, "", ""
 			if err != nil {
 				return fail(503, "登录窗口尚未确认退出，未删除网页登录资料")
 			}

@@ -31,6 +31,7 @@ func TestLocalDouyinCreatorWorksReturnsFixedDiagnosticCodes(t *testing.T) {
 	}{
 		{"list not observed", stationbrowser.ErrCreatorWorksListNotObserved, apphost.ErrObservationDouyinWorksListNotObserved, "douyin_works_list_not_observed", http.StatusGatewayTimeout},
 		{"response unverified", stationbrowser.ErrCreatorWorksResponseUnverified, apphost.ErrObservationDouyinWorksResponseUnverified, "douyin_works_response_unverified", http.StatusBadGateway},
+		{"creator access rejected", stationbrowser.ErrCreatorWorksAccessRejected, apphost.ErrObservationDouyinWorksAccessRejected, "douyin_works_creator_access_required", http.StatusForbidden},
 		{"next unavailable", stationbrowser.ErrCreatorWorksNextUnavailable, apphost.ErrObservationDouyinWorksNextUnavailable, "douyin_works_next_unavailable", http.StatusConflict},
 		{"response too large", stationbrowser.ErrCreatorWorksResponseTooLarge, apphost.ErrObservationDouyinWorksResponseTooLarge, "douyin_works_response_too_large", http.StatusRequestEntityTooLarge},
 		{"owner unverified", stationbrowser.ErrCreatorWorksOwnerUnverified, apphost.ErrObservationDouyinWorksOwnerUnverified, "douyin_works_owner_unverified", http.StatusUnprocessableEntity},

@@ -22,6 +22,7 @@ var (
 	ErrCreatorWorksNextUnavailable  = errors.New("创作者中心报告还有作品，但当前页面未提供可核对的下一页入口")
 	ErrCreatorWorksResponseTooLarge = errors.New("创作者作品列表响应超过本机 8 MiB 安全读取范围，本页未保存")
 	ErrCreatorWorksOwnerUnverified  = errors.New("创作者作品列表缺少作者 UID，无法核对是否属于当前账号；请在创作者中心打开作品管理页并刷新后重试")
+	ErrCreatorWorksAccessRejected   = errors.New("创作者中心未允许当前登录资料读取作品（平台状态码 8）；请核对工作台专属的创作者账号登录")
 )
 
 const creatorWorksResponseMax = 8 << 20
@@ -163,8 +164,13 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 		Items      *[]creatorWorksRecord `json:"items"`
 		Works      *[]creatorWorksRecord `json:"aweme_list"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.StatusCode == nil || *envelope.StatusCode != 0 ||
-		envelope.Items == nil && envelope.Works == nil {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.StatusCode == nil {
+		return result, ErrCreatorWorksUnavailable
+	}
+	if *envelope.StatusCode == 8 {
+		return result, ErrCreatorWorksAccessRejected
+	}
+	if *envelope.StatusCode != 0 || envelope.Items == nil && envelope.Works == nil {
 		return result, ErrCreatorWorksUnavailable
 	}
 	items, awemes := []creatorWorksRecord{}, []creatorWorksRecord{}

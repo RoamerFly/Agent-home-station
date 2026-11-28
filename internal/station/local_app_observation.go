@@ -213,6 +213,8 @@ func observationHTTPStatus(err error) int {
 		return http.StatusRequestEntityTooLarge
 	case errors.Is(err, apphost.ErrObservationDouyinWorksResponseUnverified):
 		return http.StatusBadGateway
+	case errors.Is(err, apphost.ErrObservationDouyinWorksAccessRejected):
+		return http.StatusForbidden
 	case errors.Is(err, apphost.ErrObservationForbidden), errors.Is(err, apphost.ErrObservationCapabilityDenied):
 		return http.StatusForbidden
 	case errors.Is(err, apphost.ErrObservationNotFound), errors.Is(err, apphost.ErrObservationContentUnavailable):
@@ -232,6 +234,8 @@ func douyinWorksDiagnosticCode(err error) string {
 		return "douyin_works_list_not_observed"
 	case errors.Is(err, apphost.ErrObservationDouyinWorksResponseUnverified):
 		return "douyin_works_response_unverified"
+	case errors.Is(err, apphost.ErrObservationDouyinWorksAccessRejected):
+		return "douyin_works_creator_access_required"
 	case errors.Is(err, apphost.ErrObservationDouyinWorksNextUnavailable):
 		return "douyin_works_next_unavailable"
 	case errors.Is(err, apphost.ErrObservationDouyinWorksAccountChanged):
