@@ -107,6 +107,12 @@ func TestLocalDouyinCreatorImagesRequiresCurrentOwnedWork(t *testing.T) {
 		t.Fatalf("image read before consent: %d", code)
 	}
 	permit("set_images", "allow_images", true, 200)
+	code, memoryView := f.request("POST", localDouyinWebRoute, map[string]any{"action": "set_memory", "revision": view["revision"],
+		"memory_scope": douyinMemoryWorks, "allow_memory": true}, true)
+	if code != 200 {
+		t.Fatalf("works memory grant: %d %v", code, memoryView)
+	}
+	view = memoryView
 	public, private := list()
 	if !strings.Contains(fmt.Sprint(public["follow_up_fields"]), "images") || strings.Contains(fmt.Sprint(private["follow_up_fields"]), "images") {
 		t.Fatalf("wrong follow-ups: %v %v", public, private)
@@ -132,6 +138,26 @@ func TestLocalDouyinCreatorImagesRequiresCurrentOwnedWork(t *testing.T) {
 	code, next := f.request("POST", path, detail, true)
 	if code != 200 || next["complete"] != true || !strings.Contains(fmt.Sprint(next["chunks"]), "图片位置 2") {
 		t.Fatalf("image continuation: %d %v", code, next)
+	}
+	identity, err := manager.home.identity.Read()
+	if err != nil || identity.LocalOwner == nil {
+		t.Fatal(err)
+	}
+	record, _, err := manager.noticeState(identity.FishID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := manager.readSavedWorkVisual(t.Context(), record, identity.FishID, identity.LocalOwner.ID,
+		owner, stationbrowser.DouyinCreatorWork{ID: "7391234567890123456", Visibility: "公开"})
+	if err != nil || !saved.ImageComplete || saved.ImagePages != 2 ||
+		!strings.Contains(saved.ImageSummary, "图片位置 01") || !strings.Contains(saved.ImageSummary, "图片位置 2") {
+		t.Fatalf("saved image summary: %+v %v", saved, err)
+	}
+	batch, err := manager.readSavedWorksVisual(t.Context(), record, identity.FishID, identity.LocalOwner.ID, owner,
+		[]stationbrowser.DouyinCreatorWork{{ID: "7391234567890123456", Visibility: "公开"},
+			{ID: "7391234567890123457", Visibility: "仅自己可见"}})
+	if err != nil || len(batch) != 1 || !batch["7391234567890123456"].ImageComplete {
+		t.Fatalf("saved image batch: %+v %v", batch, err)
 	}
 	visibility = "仅自己可见"
 	if code, _ := f.request("POST", path, detail, true); code != 409 {

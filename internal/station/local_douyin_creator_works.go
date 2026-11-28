@@ -115,7 +115,7 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	if read == nil {
 		return apphost.ObservationPage{}, apphost.ErrObservationBrowserUnavailable
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, stationbrowser.DouyinCreatorWorksTimeout(cursor.Request.Page))
 	defer cancel()
 	stop := context.AfterFunc(service, cancel)
 	defer stop()
@@ -165,11 +165,14 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 	if err != nil {
 		return apphost.ObservationPage{}, err
 	}
+	if err := manager.captureWorksCatalog(ctx, access, cursor, result, works, end); err != nil {
+		return apphost.ObservationPage{}, err
+	}
 	coverage := fmt.Sprintf("已登录创作者管理页 · 第 %d 页 · 本次返回 %d 条可核对的本人作品", cursor.Request.Page+1, len(works))
 	if !result.CoverageKnown {
 		coverage += "。平台未报告后续页，列表总覆盖待核对"
 	}
-	page := apphost.ObservationPage{Coverage: coverage, Complete: end == len(result.Works) && !result.HasMore}
+	page := apphost.ObservationPage{Coverage: coverage, Complete: end == len(result.Works) && result.CoverageKnown && !result.HasMore}
 	mediaFields := p.mediaFollowUps(ctx, access.record)
 	imagesReady := access.record.ImagesEnabled && slices.ContainsFunc(works, validCreatorImageWork) && p.creatorImagesReady(ctx)
 	for index, work := range works {
@@ -251,7 +254,7 @@ func (p *localDouyinWebObservation) recheckCreatorVideo(ctx context.Context, a l
 	if read == nil {
 		return apphost.ErrObservationBrowserUnavailable
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, stationbrowser.DouyinCreatorWorksTimeout(target.creatorPage.Page))
 	defer cancel()
 	stop := context.AfterFunc(service, cancel)
 	defer stop()

@@ -82,6 +82,25 @@ func TestLocalDouyinExecutionWorkContextRequiresSameCreatorAndRetainedProof(t *t
 			t.Fatal(err)
 		}
 	}
+	savedVisual, err := m.readSavedWorkVisual(t.Context(), record, identity.FishID, identity.LocalOwner.ID, account, work)
+	if err != nil || savedVisual.VideoSummary != "" {
+		t.Fatalf("video visual exposed without visual grant: %+v %v", savedVisual, err)
+	}
+	memoryDB, err := openLocalDouyinMemory(t.Context(), m.home, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memoryDB.Close()
+	source, granted := douyinMemorySource(record, identity.FishID, identity.LocalOwner.ID, douyinMemoryWorks)
+	if !granted {
+		t.Fatal("works memory grant missing")
+	}
+	savedVisual = localDouyinSavedWorkVisual{}
+	err = readSavedDouyinVideoVisual(t.Context(), memoryDB, source, workID, &savedVisual)
+	if err != nil || !savedVisual.VideoComplete || savedVisual.VideoPages != 2 || savedVisual.VideoSHA256 != hash ||
+		!strings.Contains(savedVisual.VideoSummary, "开场采样帧见海面") || !strings.Contains(savedVisual.VideoSummary, "结尾采样帧见落日") {
+		t.Fatalf("saved video visual: %+v %v", savedVisual, err)
+	}
 	code, result = f.request("GET", url+"&limit=2", nil, false)
 	if code != http.StatusOK || result["audio_complete"] != true || result["visual_complete"] != true ||
 		result["media_page_count"] != float64(4) || len(result["media_pages"].([]any)) != 2 || result["next_offset"] != float64(2) ||

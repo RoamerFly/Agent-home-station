@@ -89,19 +89,20 @@ type localDouyinWebRecord struct {
 	// ProfileEpoch changes before any browser login/creator re-login. It is
 	// part of the host connection identity so a possibly changed platform
 	// account cannot inherit an earlier task's target reference.
-	ProfileEpoch    uint64 `json:"profile_epoch,omitempty"`
-	ConfirmedAt     string `json:"confirmed_at,omitempty"`
-	ReadEnabled     bool   `json:"read_enabled,omitempty"`
-	WorksEnabled    bool   `json:"works_enabled,omitempty"`
-	ImagesEnabled   bool   `json:"images_enabled,omitempty"`
-	ReadScope       string `json:"read_scope,omitempty"`
-	PlaybackEnabled bool   `json:"playback_enabled,omitempty"`
-	AudioEnabled    bool   `json:"audio_enabled,omitempty"`
-	VisualEnabled   bool   `json:"visual_enabled,omitempty"`
-	CommentsEnabled bool   `json:"comments_enabled,omitempty"`
-	LikesEnabled    bool   `json:"likes_enabled,omitempty"`
-	RepliesEnabled  bool   `json:"replies_enabled,omitempty"`
-	NoticeAccount   string `json:"notice_account,omitempty"`
+	ProfileEpoch      uint64 `json:"profile_epoch,omitempty"`
+	ConfirmedAt       string `json:"confirmed_at,omitempty"`
+	ReadEnabled       bool   `json:"read_enabled,omitempty"`
+	WorksEnabled      bool   `json:"works_enabled,omitempty"`
+	WorksCatalogGrant string `json:"works_catalog_grant,omitempty"`
+	ImagesEnabled     bool   `json:"images_enabled,omitempty"`
+	ReadScope         string `json:"read_scope,omitempty"`
+	PlaybackEnabled   bool   `json:"playback_enabled,omitempty"`
+	AudioEnabled      bool   `json:"audio_enabled,omitempty"`
+	VisualEnabled     bool   `json:"visual_enabled,omitempty"`
+	CommentsEnabled   bool   `json:"comments_enabled,omitempty"`
+	LikesEnabled      bool   `json:"likes_enabled,omitempty"`
+	RepliesEnabled    bool   `json:"replies_enabled,omitempty"`
+	NoticeAccount     string `json:"notice_account,omitempty"`
 	// NoticeEpoch changes only when the bound notice account changes. It keeps
 	// read-only execution history stable across unrelated permission edits.
 	NoticeEpoch    uint64                  `json:"notice_epoch,omitempty"`
@@ -192,6 +193,7 @@ func (h *localHomeService) douyinWebLoginRoutes(owner *websession.Store, mux *ht
 	mux.HandleFunc("GET /api/local/apps/douyin/web-login", handler)
 	mux.HandleFunc("POST /api/local/apps/douyin/web-login", handler)
 	m.noticeRoutes(owner, mux)
+	m.worksCatalogRoutes(owner, mux)
 }
 
 func localDouyinWebID() (string, error) {
@@ -245,6 +247,9 @@ func readLocalDouyinWebRecord(root *os.Root, fish string) (localDouyinWebRecord,
 	}
 	if !record.Memory.valid() {
 		return record, errors.New("抖音记忆授权登记无效，原资料保留")
+	}
+	if record.WorksCatalogGrant != "" && !validLocalDouyinWebID(record.WorksCatalogGrant) {
+		return record, errors.New("本人作品目录授权登记无效，原资料保留")
 	}
 	if record.Detached && !record.Paused {
 		return record, errors.New("抖音接入状态无效，原资料保留")
@@ -570,6 +575,12 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.WorksEnabled = *in.AllowWorks
 		if !record.WorksEnabled {
 			record.ImagesEnabled = false
+			record.WorksCatalogGrant = ""
+		} else if !original.WorksEnabled && record.WorksCatalogGrant == "" {
+			record.WorksCatalogGrant, err = localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法创建本人作品目录授权")
+			}
 		}
 		if save() != nil {
 			return fail(503, "本人作品读取授权未保存")
@@ -660,6 +671,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 		record.NoticeAccount = ""
 		record.NoticeAgent = false
 		record.WorksEnabled = false
+		record.WorksCatalogGrant = ""
 		record.ImagesEnabled = false
 		record.ReadEnabled = false
 		record.ReadScope = ""
@@ -875,6 +887,10 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			record.ReadEnabled = true
 			record.ReadScope = "home_and_videos"
 			record.WorksEnabled = true
+			record.WorksCatalogGrant, err = localDouyinWebID()
+			if err != nil {
+				return fail(503, "无法创建本人作品目录授权")
+			}
 			record.CommentsEnabled = true
 			record.PlaybackEnabled = false
 			record.AudioEnabled = false
@@ -897,6 +913,7 @@ func (m *localDouyinWebLogin) apply(ctx context.Context, fish string, in *localD
 			record.NoticeAgent = false
 			record.ReadEnabled = false
 			record.WorksEnabled = false
+			record.WorksCatalogGrant = ""
 			record.ImagesEnabled = false
 			record.ReadScope = ""
 			record.PlaybackEnabled = false

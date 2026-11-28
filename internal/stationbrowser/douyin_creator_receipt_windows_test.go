@@ -137,6 +137,8 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 	}
 	var changes atomic.Int32
 	var wrongAccount atomic.Bool
+	var emptyLast atomic.Bool
+	var emptyFirst atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			changes.Add(1)
@@ -148,6 +150,11 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 		case "/janus/douyin/creator/pc/work_list":
 			item := first
 			more := r.URL.Query().Get("page") == "1"
+			if more && emptyFirst.Load() || !more && emptyLast.Load() {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 0, "has_more": false, "aweme_list": []any{}})
+				return
+			}
 			if !more {
 				item = next
 				if wrongAccount.Load() {
@@ -183,6 +190,16 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 	wrongAccount.Store(true)
 	if _, err := read(continuation); !errors.Is(err, ErrCreatorWorksChanged) {
 		t.Fatalf("account switch accepted: %v", err)
+	}
+	wrongAccount.Store(false)
+	emptyLast.Store(true)
+	empty, err := read(continuation)
+	if err != nil || len(empty.Works) != 0 || empty.Account != page.Account || empty.HasMore || !empty.CoverageKnown {
+		t.Fatalf("verified empty final page: %+v %v", empty, err)
+	}
+	emptyFirst.Store(true)
+	if _, err := read(DouyinCreatorWorksRequest{}); !errors.Is(err, ErrCreatorWorksUnavailable) {
+		t.Fatalf("unverified zero-work first page accepted: %v", err)
 	}
 	if changes.Load() != 0 {
 		t.Fatal("read-only management sent a write")

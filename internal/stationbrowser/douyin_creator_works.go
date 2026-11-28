@@ -41,6 +41,22 @@ type DouyinCreatorWorksRequest struct {
 	PreviousAccount, PreviousPageKey string
 }
 
+// Later pages currently require clicking through the preceding pages from a
+// fresh, account-bound browser session. Leave headroom under the local HTTP
+// route's three-minute deadline for authorization and result persistence.
+func DouyinCreatorWorksTimeout(page int) time.Duration {
+	const base = 45 * time.Second
+	const perPage = 10 * time.Second
+	const maximum = 165 * time.Second
+	if page <= 0 {
+		return base
+	}
+	if page >= int((maximum-base)/perPage) {
+		return maximum
+	}
+	return base + time.Duration(page)*perPage
+}
+
 func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 	var result DouyinCreatorWorksPage
 	if len(raw) > 256<<10 {
@@ -72,7 +88,7 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 			} `json:"status"`
 		} `json:"aweme_list"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.StatusCode == nil || *envelope.StatusCode != 0 || envelope.Works == nil || len(*envelope.Works) == 0 || len(*envelope.Works) > 1000 {
+	if json.Unmarshal(raw, &envelope) != nil || envelope.StatusCode == nil || *envelope.StatusCode != 0 || envelope.Works == nil || len(*envelope.Works) > 1000 {
 		return result, ErrCreatorWorksUnavailable
 	}
 	switch string(envelope.HasMore) {
@@ -80,6 +96,12 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 		result.HasMore, result.CoverageKnown = true, true
 	case "false", "0":
 		result.CoverageKnown = true
+	}
+	// An empty final page is usable only after the browser has revalidated a
+	// preceding page in this same session. The parser itself cannot attest the
+	// account of a zero-work first page, so it leaves Account empty.
+	if len(*envelope.Works) == 0 && (!result.CoverageKnown || result.HasMore) {
+		return result, ErrCreatorWorksUnavailable
 	}
 	owner := ""
 	seen := map[string]bool{}
@@ -92,8 +114,10 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 		owner, seen[item.ID] = item.Author.UID, true
 		keys = append(keys, item.ID)
 		status := item.Status
-		if status.Deleted == nil || status.Prohibited == nil || status.Reviewing == nil || status.Private == nil ||
-			*status.Deleted || *status.Prohibited {
+		if status.Deleted == nil || status.Prohibited == nil || status.Reviewing == nil || status.Private == nil {
+			return DouyinCreatorWorksPage{}, ErrCreatorWorksUnavailable
+		}
+		if *status.Deleted || *status.Prohibited {
 			continue
 		}
 		visibility := "待核对"
@@ -138,9 +162,24 @@ func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 		}
 		result.Works = append(result.Works, work)
 	}
-	result.Account = creatorWorksDigest(owner)
+	if owner != "" {
+		result.Account = creatorWorksDigest(owner)
+	}
 	result.PageKey = creatorWorksDigest(strings.Join(keys, ","))
 	return result, nil
+}
+
+func anchorCreatorWorksPage(page DouyinCreatorWorksPage, previousAccount string, position int) (DouyinCreatorWorksPage, error) {
+	if page.Account != "" {
+		return page, nil
+	}
+	// Only a later, explicit final empty page may inherit the account from
+	// preceding nonempty page(s) verified in the same browser session.
+	if position <= 0 || previousAccount == "" || !page.CoverageKnown || page.HasMore || page.PageKey == "" || len(page.Works) != 0 {
+		return DouyinCreatorWorksPage{}, ErrCreatorWorksUnavailable
+	}
+	page.Account = previousAccount
+	return page, nil
 }
 
 func creatorWorksDigest(value string) string {

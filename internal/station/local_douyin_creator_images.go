@@ -156,5 +156,8 @@ func (p *localDouyinWebObservation) readCreatorImages(ctx context.Context, a loc
 	if !result.Complete {
 		result.NextCursor = strconv.Itoa(end)
 	}
+	if err := p.captureCreatorImageContext(ctx, a, snapshot, result); err != nil {
+		return apphost.ObservationPage{}, err
+	}
 	return result, nil
 }

@@ -75,7 +75,7 @@ func readDouyinCreatorWorks(ctx context.Context, profile, target string, input D
 	if input.Page < 0 || input.Page > 0 && (input.PreviousAccount == "" || input.PreviousPageKey == "") {
 		return page, ErrCreatorWorksChanged
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, DouyinCreatorWorksTimeout(input.Page))
 	defer cancel()
 	_, err := runDouyinCreator(ctx, profile, target, CreatorPublicationRequest{Submitted: true, worksRequest: &input, worksPage: &page}, authorize, fixture)
 	return page, err
@@ -452,6 +452,10 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		if parseErr != nil {
 			return parseErr
 		}
+		page, parseErr = anchorCreatorWorksPage(page, owner, position)
+		if parseErr != nil {
+			return parseErr
+		}
 		if owner != "" && owner != page.Account {
 			return errors.Join(ErrCreatorWorksChanged, ErrCreatorWorksAccountChanged)
 		}
@@ -472,7 +476,7 @@ func awaitCreatorWorks(ctx context.Context, session readerSession, id string, wo
 		if position == request.Page-1 && request.PreviousPageKey != page.PageKey {
 			return ErrCreatorWorksChanged
 		}
-		if !page.HasMore {
+		if page.CoverageKnown && !page.HasMore {
 			return ErrCreatorWorksChanged
 		}
 		availableUntil := time.Now().Add(2 * time.Second)
