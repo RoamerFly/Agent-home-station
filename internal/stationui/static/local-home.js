@@ -4973,13 +4973,15 @@
         coverage.state === "complete" || coverage.pages ? "已保存 " + works.length + " 件本人作品" : "作品数量待核对";
       summary.textContent = webValue?.works_enabled !== true ? "本人作品目录尚未同步 · 点击“同步全部作品”即可读取" :
         retained + " · " + status + (coverage.pages ? " · 已核对 " + coverage.pages + " 页" : "");
-      syncButton.disabled = busy || !canSync;
-      syncButton.title = webValue?.works_enabled === true ? "重新核对创作者中心的全部作品" : "点击后同时允许读取本人作品并同步目录";
+      syncButton.disabled = busy;
+      syncButton.textContent = busy ? "正在同步…" : "同步全部作品";
+      syncButton.title = !canSync ? "点击核对网页登录状态并查看不能同步的原因" :
+        webValue?.works_enabled === true ? "重新核对创作者中心的全部作品" : "点击后同时允许读取本人作品并同步目录";
       resumeButton.disabled = busy || !canSync || coverage.has_more !== true;
       resumeButton.hidden = coverage.has_more !== true;
       visualInput.disabled = busy || !memoryReady;
       if (!memoryReady) visualInput.checked = false;
-      visualNote.textContent = !canSync ? "请先在「账号与授权」完成网页登录，再同步本人作品。" :
+      visualNote.textContent = !canSync ? (apps.douyinWebLogin.error || "点击「同步全部作品」核对网页登录状态；登录未确认时不会开启作品读取。") :
         webValue?.works_enabled !== true ? "点击「同步全部作品」将同时开启本人作品读取授权；撤销入口保留在「账号与授权」。" :
           memoryReady ? "画面结果只保存已授权作品的采样证据。" : "如需在目录保留画面语义，请到「账号与授权」允许本人作品记忆。";
       list.replaceChildren();
@@ -5094,18 +5096,30 @@
         if (active(controller)) { busy = false; render(); }
       }
     }
-    async function sync(refresh) {
+    async function sync(refresh, intent = null) {
       if (busy) return;
       const controller = begin();
       busy = true; render();
+      feedback.textContent = "正在核对网页登录状态…";
       let pages = 0, mediaFailures = 0, grantedWorks = false;
       let cursor = "";
       const seenCursors = new Set();
       try {
         const web = apps.douyinWebLogin;
-        const before = web.value;
+        const previous = web.value;
+        const before = await request("/api/local/apps/douyin/web-login", { signal: controller.signal });
+        if (!active(controller)) return;
+        if (!validDouyinWebLogin(before)) throw new Error("网页登录状态返回格式无效，请刷新后重试。");
+        if (web.value !== previous && web.value?.revision !== before.revision ||
+            intent?.retries > 0 && intent.baseRevision !== null && intent.baseRevision !== before.revision)
+          throw new Error("网页登录或作品授权已变化，请再次点击同步。");
+        web.value = before;
+        web.loaded = true;
+        web.error = "";
+        if (before.paused || before.detached) throw new Error("抖音应用已关闭，请在「账号与授权」开启后再同步。");
+        if (before.state !== "saved") throw new Error(before.reason || "网页登录尚未确认，请在「账号与授权」完成登录后再同步。");
+        if (before.available !== true) throw new Error(before.reason || "当前无法打开创作者中心，请在「账号与授权」核对网页登录能力。");
         if (before?.works_enabled !== true) {
-          if (!before || !Number.isFinite(Number(before.revision))) throw new Error("网页登录状态不可读，请到「账号与授权」核对。");
           feedback.textContent = "正在开启本人作品读取授权并同步…";
           const granted = await request("/api/local/apps/douyin/web-login", { method: "POST", signal: controller.signal,
             body: JSON.stringify({ action: "set_works", revision: before.revision, allow_works: true }) });
@@ -5115,7 +5129,6 @@
           web.value = granted;
           web.loaded = true;
           grantedWorks = true;
-          view.douyinWorksAutoSyncRevision = granted.revision;
         }
         for (;;) {
           feedback.textContent = "正在核对创作者作品第 " + (pages + 1) + " 页…";
@@ -5159,24 +5172,35 @@
           cursor = nextCursor;
         }
       } catch (error) {
-        if (active(controller) && !appSessionExpired([{ status: "rejected", reason: error }]))
+        if (active(controller)) {
+          appSessionExpired([{ status: "rejected", reason: error }]);
           feedback.textContent = (catalog.coverage?.previous_complete ?
             "保留上次完整目录 " + (catalog.works?.length || 0) + " 件，本轮已核对 " +
               (catalog.coverage.sync_loaded || 0) + " 件" :
             "本轮已核对 " + (catalog.works?.length || 0) + " 件") +
             "；同步在第 " + (pages + 1) + " 页暂停：" + error.message;
+        }
       } finally {
         if (active(controller)) {
+          if (intent && view.douyinWorksPendingSync === intent) view.douyinWorksPendingSync = null;
           busy = false; render();
           if (grantedWorks) {
             view.douyinWorksNotice = feedback.textContent;
             renderApps();
           }
-        }
+        } else if (intent && view.douyinWorksPendingSync === intent &&
+            (appConfiguration !== view || view.section !== "browse")) view.douyinWorksPendingSync = null;
       }
     }
-    const syncButton = memoryButton("同步全部作品", "button compact primary", () => void sync(true));
-    const resumeButton = memoryButton("继续同步", "button compact secondary", () => void sync(false));
+    function startSync(refresh) {
+      if (busy) return;
+      const revision = apps.douyinWebLogin.value?.revision;
+      const intent = { refresh, retries: 0, baseRevision: Number.isFinite(Number(revision)) ? revision : null };
+      view.douyinWorksPendingSync = intent;
+      void sync(refresh, intent);
+    }
+    const syncButton = memoryButton("同步全部作品", "button compact primary", () => startSync(true));
+    const resumeButton = memoryButton("继续同步", "button compact secondary", () => startSync(false));
     const commentsButton = memoryButton("处理作品评论", "button compact secondary", () => openDouyinWorkbenchSection(view, "interactions"));
     const options = appElement("details", "", "douyin-works-options");
     options.append(appElement("summary", "画面语义同步选项"), visualChoice);
@@ -5185,16 +5209,29 @@
       appElement("p", "查看已同步作品的内容、可见范围、审核状态和画面语义。", "app-scope-note"),
       summary, controls, visualNote, feedback, list);
     render();
-    if (apps.douyinWebLogin.value?.works_enabled === true) {
-      const controller = begin();
-      void reload(controller).then(() => {
-        if (!active(controller) || apps.douyinWebLogin.value?.works_enabled !== true) return;
-        const revision = apps.douyinWebLogin.value?.revision;
-        if (view.douyinWorksAutoSyncRevision === revision || catalog.coverage?.state === "complete") return;
-        view.douyinWorksAutoSyncRevision = revision;
-        void sync(catalog.coverage?.has_more !== true);
-      }).catch((error) => {
-        if (active(controller) && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+    const pending = view.douyinWorksPendingSync;
+    if (pending) {
+      if (pending.retries >= 1) {
+        view.douyinWorksPendingSync = null;
+        feedback.textContent = "网页登录状态在同步时再次变化，请重新点击「同步全部作品」。";
+      } else {
+        pending.retries++;
+        queueMicrotask(() => {
+          if (panel.isConnected && appConfiguration === view && view.section === "browse" && view.douyinWorksPendingSync === pending)
+            void sync(pending.refresh, pending);
+        });
+      }
+    } else if (apps.douyinWebLogin.value?.works_enabled === true) {
+      queueMicrotask(() => {
+        if (!panel.isConnected || appConfiguration !== view || view.section !== "browse") return;
+        const controller = begin();
+        void reload(controller).then(() => {
+          if (!active(controller) || apps.douyinWebLogin.value?.works_enabled !== true) return;
+          if (catalog.coverage?.state === "complete") return;
+          void sync(catalog.coverage?.has_more !== true);
+        }).catch((error) => {
+          if (active(controller) && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+        });
       });
     }
     return panel;
