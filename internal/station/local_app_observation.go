@@ -12,7 +12,7 @@ import (
 	douyinapp "wechat-bot/connected-apps/douyin/adapter"
 	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/mcptools"
-
+	"wechat-bot/internal/stationbrowser"
 	"wechat-bot/internal/websession"
 )
 
@@ -200,7 +200,7 @@ func observationHTTPStatus(err error) int {
 	case errors.Is(err, apphost.ErrObservationAudioSourceChanged), errors.Is(err, apphost.ErrObservationVisualSourceChanged), errors.Is(err, apphost.ErrObservationImagesSourceChanged), errors.Is(err, apphost.ErrObservationCredentialExpired),
 		errors.Is(err, apphost.ErrObservationWebSessionBusy), errors.Is(err, apphost.ErrObservationWebSessionRequired), errors.Is(err, apphost.ErrObservationWebSessionInvalid), errors.Is(err, apphost.ErrObservationWebSnapshotChanged):
 		return http.StatusConflict
-	case errors.Is(err, apphost.ErrObservationPlaybackSize), errors.Is(err, apphost.ErrObservationAccountWorksResponseSize), errors.Is(err, apphost.ErrObservationPageTextSize):
+	case errors.Is(err, apphost.ErrObservationPlaybackSize), errors.Is(err, apphost.ErrObservationAccountWorksResponseSize), errors.Is(err, apphost.ErrObservationPageTextSize), errors.Is(err, stationbrowser.ErrCreatorWorksResponseTooLarge):
 		return http.StatusRequestEntityTooLarge
 	case errors.Is(err, apphost.ErrObservationForbidden), errors.Is(err, apphost.ErrObservationCapabilityDenied):
 		return http.StatusForbidden

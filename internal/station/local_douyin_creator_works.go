@@ -131,6 +131,8 @@ func (p *localDouyinWebObservation) readCreatorWorks(ctx context.Context, access
 		return apphost.ObservationPage{}, p.admitCreatorAccount(ctx, access, "")
 	case errors.Is(err, stationbrowser.ErrCreatorWorksChanged):
 		return apphost.ObservationPage{}, apphost.ErrObservationWebSnapshotChanged
+	case errors.Is(err, stationbrowser.ErrCreatorWorksResponseTooLarge):
+		return apphost.ObservationPage{}, err
 	case errors.Is(err, stationbrowser.ErrCreatorWorksNextUnavailable), errors.Is(err, stationbrowser.ErrCreatorWorksUnavailable) && !errors.Is(err, context.DeadlineExceeded):
 		return apphost.ObservationPage{}, errors.Join(apphost.ErrObservationContentUnavailable, err)
 	case err != nil:

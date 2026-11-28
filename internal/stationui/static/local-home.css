@@ -2525,3 +2525,102 @@ body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin
 @media (max-width: 760px) {
   .douyin-like-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[data-section="browse"] #app-configuration-body {
+  padding-inline: clamp(12px, 1.8vw, 32px);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin[data-section="browse"] .app-dialog-header {
+  padding-inline: clamp(12px, 1.8vw, 32px);
+}
+body.is-home-ready.standalone-workbench #app-configuration.douyin-workbench-skin #app-configuration-body > .douyin-published-works {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+.is-home-ready .douyin-workbench-skin .douyin-works-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  align-items: stretch;
+}
+.is-home-ready .douyin-workbench-skin .douyin-work-card {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.is-home-ready .douyin-workbench-skin .douyin-work-cover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  height: clamp(116px, 11vw, 164px);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  background: linear-gradient(135deg, var(--accent-soft), var(--surface));
+}
+.douyin-work-cover-type {
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--surface);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+.douyin-work-cover-label { font-size: var(--fs-caption); }
+.is-home-ready .douyin-workbench-skin .douyin-work-description.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.is-home-ready .douyin-workbench-skin .douyin-work-visual-text.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.is-home-ready .douyin-workbench-skin .douyin-work-description.is-empty { color: var(--text-muted); }
+.is-home-ready .douyin-workbench-skin .douyin-work-expand,
+.is-home-ready .douyin-workbench-skin .douyin-work-comment-link { justify-self: start; }
+.is-home-ready .douyin-workbench-skin .douyin-work-comment-link { align-self: end; }
+.douyin-works-empty {
+  display: grid;
+  justify-items: start;
+  align-content: center;
+  gap: 10px;
+  grid-column: 1 / -1;
+  min-height: 200px;
+  padding: 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+}
+.douyin-works-empty strong { color: var(--text); font-size: var(--fs-title); }
+.douyin-works-empty p { margin: 0; }
+.douyin-works-options { min-width: 0; color: var(--text-muted); font-size: var(--fs-caption); }
+.douyin-works-options summary { min-height: 38px; padding: 8px 4px; cursor: pointer; }
+.douyin-works-options .douyin-works-visual-choice { display: flex; margin-top: 8px; }
+.douyin-login-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  min-width: 0;
+}
+.douyin-login-strip-copy { min-width: 0; }
+.douyin-login-strip-copy p { margin: 2px 0 0; color: var(--text-muted); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.douyin-login-strip .button { flex: 0 0 auto; }
+.douyin-comment-like-hub { display: grid; gap: 14px; min-width: 0; }
+.douyin-comment-like-hub > .app-layer { padding: 0; }
+.douyin-comment-like-hub > .app-layer + .app-layer { padding-top: 14px; }
+.douyin-interaction-help { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-md); color: var(--text-muted); }
+.douyin-interaction-help summary { cursor: pointer; color: var(--text); font-weight: var(--fw-strong); }
+.douyin-interaction-help p { margin: 10px 0 0; }
+@media (max-width: 620px) {
+  .douyin-login-strip { align-items: flex-start; flex-direction: column; }
+  .is-home-ready .douyin-workbench-skin .douyin-work-cover { height: 120px; }
+}

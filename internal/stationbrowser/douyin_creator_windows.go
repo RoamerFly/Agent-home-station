@@ -217,7 +217,13 @@ func runDouyinCreatorSession(ctx context.Context, session readerSession, target 
 			return result, err
 		}
 	}
-	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": 512 << 10, "maxTotalBufferSize": 2 << 20}, nil); err != nil {
+	resourceBuffer, totalBuffer := 512<<10, 2<<20
+	if in.worksRequest != nil {
+		// A single creator work can include many signed media variants. Keep
+		// the capture bounded while allowing richer real work-list pages.
+		resourceBuffer, totalBuffer = 12<<20, 24<<20
+	}
+	if err := session.Call(ctx, id, "Network.enable", map[string]any{"maxPostDataSize": 1, "maxResourceBufferSize": resourceBuffer, "maxTotalBufferSize": totalBuffer}, nil); err != nil {
 		return result, err
 	}
 	if in.worksRequest != nil {
@@ -657,14 +663,38 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 					delete(requests, p.RequestID)
 					isManage := manage[p.RequestID]
 					delete(manage, p.RequestID)
-					if p.EncodedDataLength > 256<<10 {
+					maxEncoded := float64(256 << 10)
+					if isManage && l.readWorks {
+						maxEncoded = creatorWorksResponseMax
+					}
+					if p.EncodedDataLength > maxEncoded {
+						if isManage && l.readWorks {
+							l.mu.Lock()
+							l.worksError = ErrCreatorWorksResponseTooLarge
+							l.worksSerial++
+							l.mu.Unlock()
+						}
 						continue
 					}
 					var out struct {
 						Body          string
 						Base64Encoded bool
 					}
-					if session.Call(ctx, l.session, "Network.getResponseBody", map[string]any{"requestId": p.RequestID}, &out) != nil || len(out.Body) > 512<<10 {
+					bodyMax := 512 << 10
+					if isManage && l.readWorks {
+						bodyMax = 12 << 20 // base64 expansion of an 8 MiB body
+					}
+					bodyErr := session.Call(ctx, l.session, "Network.getResponseBody", map[string]any{"requestId": p.RequestID}, &out)
+					if bodyErr != nil || len(out.Body) > bodyMax {
+						if isManage && l.readWorks {
+							l.mu.Lock()
+							l.worksError = ErrCreatorWorksUnavailable
+							if len(out.Body) > bodyMax {
+								l.worksError = ErrCreatorWorksResponseTooLarge
+							}
+							l.worksSerial++
+							l.mu.Unlock()
+						}
 						continue
 					}
 					raw := []byte(out.Body)

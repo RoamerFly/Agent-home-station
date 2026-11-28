@@ -2256,6 +2256,17 @@
     row.append(appElement("h5", "网页登录"), detail);
     return row;
   }
+  function douyinWorkbenchLoginStrip(current, view) {
+    const value = current.douyinWebLogin.value;
+    const [title, note] = douyinWebLoginSummary(value);
+    const ready = value?.state === "saved" && value?.available === true && !value?.paused && !value?.detached;
+    const strip = appElement("section", "", "douyin-login-strip");
+    const copy = appElement("div", "", "douyin-login-strip-copy");
+    copy.append(appElement("strong", title), appElement("p", ready ? "登录资料已保存；授权可在账号页调整。" : note));
+    if (current.douyinWebLogin.error) copy.append(appElement("p", current.douyinWebLogin.error, "is-warn"));
+    strip.append(copy, memoryButton("账号与授权", "button compact secondary", () => openDouyinWorkbenchSection(view, "account")));
+    return strip;
+  }
   function douyinAutoCommentLikesRow(current) {
     const web = current.douyinWebLogin, value = web.value;
     const enabled = value?.auto_comment_likes_enabled === true;
@@ -2273,7 +2284,6 @@
     label.append(input, appElement("span", "开启自动点赞"));
     row.append(label);
     row.append(appElement("p", !supported ? "选项接口准备中，当前不可启用。" : !ready && !enabled ? "请先确认网页登录，并允许读取本人作品及视频评论。" : enabled ? "已开启；基线状态见下方。基线完成后才开始自动点赞，期间纳入的评论不会补赞。" : "已关闭；开启不会补赞已有评论。", "app-scope-note"));
-    row.append(appElement("p", "仅处理启用后新增的评论。当前覆盖已核对的公开视频主评论及其可验证的已展开子评论；无法读取或分页未核实的回复不计为完成。图文及非公开作品仍未覆盖。历史评论请使用下方独立的批量任务。", "app-scope-note"));
     return row;
   }
   function douyinAutoCommentLikesPanel(view) {
@@ -2362,7 +2372,7 @@
     const stop = memoryButton("停止批量任务", "button compact secondary", () => void changeBatch("cancel_all"));
     actions.append(start, stop, refresh);
     panel.append(appElement("h4", "历史评论批量点赞"),
-      appElement("p", "此任务独立于上方自动开关；点击后遍历当前已核对的可处理作品，停止后可从保存的位置续办。", "app-scope-note"),
+      appElement("p", "一键处理当前可核对的公开视频主评论及已展开子评论；图文、非公开作品与无法核实的回复不在本次范围。停止后可从保存位置续办。", "app-scope-note"),
       summary, automatic, actions, progress, uncoveredNote, replyCoverage, feedback);
     render();
     void refreshStatus();
@@ -4928,6 +4938,8 @@
     const summary = appElement("p", "正在读取本机作品目录…", "app-scope-note");
     const feedback = appElement("p", "", "apps-feedback");
     feedback.setAttribute("role", "status");
+    feedback.textContent = view.douyinWorksNotice || "";
+    view.douyinWorksNotice = "";
     const controls = appElement("div", "", "publication-actions douyin-works-controls");
     const list = appElement("div", "", "douyin-works-grid");
     const visualChoice = appElement("label", "同步时读取可用的画面语义", "douyin-works-visual-choice");
@@ -4936,6 +4948,7 @@
     visualChoice.prepend(visualInput);
     const visualNote = appElement("p", "", "app-scope-note");
     const entries = new Map();
+    const expandedWorks = new Set();
     let catalog = { works: [], coverage: { state: "partial", has_more: null } };
     let busy = false;
     const active = (controller) => appConfiguration === view && view.section === "browse" && panel.isConnected && !controller.signal.aborted;
@@ -4948,31 +4961,56 @@
     function render() {
       const works = Array.isArray(catalog.works) ? catalog.works : [];
       const coverage = catalog.coverage || {};
+      const webValue = apps.douyinWebLogin.value;
+      const canSync = webValue?.state === "saved" && webValue?.available === true && !webValue?.paused && !webValue?.detached;
       const memoryReady = Array.isArray(apps.douyinWebLogin.value?.memory_scopes) &&
         apps.douyinWebLogin.value.memory_scopes.includes("works");
       const status = coverage.state === "complete" ? "平台分页已读完" :
         coverage.state === "unknown" ? "平台分页总覆盖待核对" :
           coverage.has_more === true ? "仍有后续页" : "尚未完成同步";
       const retained = coverage.previous_complete ? "保留上次完整目录 " + works.length +
-        " 件；本轮已核对 " + (coverage.sync_loaded || 0) + " 件" : "已保存 " + works.length + " 件本人作品";
-      summary.textContent = retained + " · " + status +
-        (coverage.pages ? " · 已核对 " + coverage.pages + " 页" : "");
-      syncButton.disabled = busy;
-      resumeButton.disabled = busy || coverage.has_more !== true;
+        " 件；本轮已核对 " + (coverage.sync_loaded || 0) + " 件" :
+        coverage.state === "complete" || coverage.pages ? "已保存 " + works.length + " 件本人作品" : "作品数量待核对";
+      summary.textContent = webValue?.works_enabled !== true ? "本人作品目录尚未同步 · 点击“同步全部作品”即可读取" :
+        retained + " · " + status + (coverage.pages ? " · 已核对 " + coverage.pages + " 页" : "");
+      syncButton.disabled = busy || !canSync;
+      syncButton.title = webValue?.works_enabled === true ? "重新核对创作者中心的全部作品" : "点击后同时允许读取本人作品并同步目录";
+      resumeButton.disabled = busy || !canSync || coverage.has_more !== true;
       resumeButton.hidden = coverage.has_more !== true;
       visualInput.disabled = busy || !memoryReady;
       if (!memoryReady) visualInput.checked = false;
-      visualNote.textContent = memoryReady ? "画面结果只保存已授权作品的采样证据。" :
-        "如需在目录保留画面语义，请先到“账号与授权”允许本人作品记忆。";
+      visualNote.textContent = !canSync ? "请先在「账号与授权」完成网页登录，再同步本人作品。" :
+        webValue?.works_enabled !== true ? "点击「同步全部作品」将同时开启本人作品读取授权；撤销入口保留在「账号与授权」。" :
+          memoryReady ? "画面结果只保存已授权作品的采样证据。" : "如需在目录保留画面语义，请到「账号与授权」允许本人作品记忆。";
       list.replaceChildren();
       for (const work of works) {
         const card = appElement("article", "", "douyin-work-card");
+        const cover = appElement("div", "", "douyin-work-cover");
+        cover.setAttribute("role", "img");
+        cover.setAttribute("aria-label", `${work.media_type === "video" ? "视频" : work.media_type === "images" ? "图文" : "作品"}封面尚未同步`);
+        cover.append(appElement("span", work.media_type === "video" ? "视频作品" : work.media_type === "images" ? "图文作品" : "本人作品", "douyin-work-cover-type"),
+          appElement("span", "封面尚未同步", "douyin-work-cover-label"));
+        card.append(cover);
         const top = appElement("div", "", "douyin-work-card-top");
         top.append(appElement("strong", work.title || "作品 " + work.id));
         top.append(appElement("span", work.review_status === "reviewing" ? "审核中" :
           work.visibility || "可见范围待核对", "station-label"));
         card.append(top);
-        if (work.description) card.append(appElement("p", work.description, "douyin-work-description"));
+        if (work.description) {
+          const text = appElement("p", work.description, "douyin-work-description");
+          const long = Array.from(work.description).length > 140;
+          text.classList.toggle("is-collapsed", long && !expandedWorks.has(String(work.id)));
+          card.append(text);
+          if (long) {
+            const expand = memoryButton(expandedWorks.has(String(work.id)) ? "收起文案" : "展开文案", "button compact quiet douyin-work-expand", () => {
+              if (expandedWorks.has(String(work.id))) expandedWorks.delete(String(work.id));
+              else expandedWorks.add(String(work.id));
+              text.classList.toggle("is-collapsed", !expandedWorks.has(String(work.id)));
+              expand.textContent = expandedWorks.has(String(work.id)) ? "收起文案" : "展开文案";
+            });
+            card.append(expand);
+          }
+        } else card.append(appElement("p", "暂无作品文案记录。", "douyin-work-description is-empty"));
         const metadata = appElement("div", "", "douyin-work-metadata");
         metadata.append(appElement("span", "作品编号 " + work.id));
         if (work.published_at) metadata.append(appElement("span", "平台记录时间 " + work.published_at));
@@ -4980,8 +5018,21 @@
         card.append(metadata);
         const visual = work.image_summary || work.visual_summary;
         const box = appElement("div", "", "douyin-work-visual");
-        box.append(appElement("span", work.image_summary ? "图文画面" : work.visual_summary ? "视频采样画面" : "画面语义", "douyin-work-visual-label"),
-          appElement("p", visual || "尚未读取；需作品与媒体授权及本机视觉工具。", "app-scope-note"));
+        box.append(appElement("span", work.image_summary ? "图文画面" : work.visual_summary ? "视频采样画面" : "画面语义", "douyin-work-visual-label"));
+        const visualText = appElement("p", visual || "尚未读取；需作品与媒体授权及本机视觉工具。", "app-scope-note douyin-work-visual-text");
+        const visualKey = String(work.id) + ":visual";
+        const longVisual = Array.from(visual || "").length > 140;
+        visualText.classList.toggle("is-collapsed", longVisual && !expandedWorks.has(visualKey));
+        box.append(visualText);
+        if (longVisual) {
+          const expand = memoryButton(expandedWorks.has(visualKey) ? "收起画面语义" : "展开画面语义", "button compact quiet douyin-work-expand", () => {
+            if (expandedWorks.has(visualKey)) expandedWorks.delete(visualKey);
+            else expandedWorks.add(visualKey);
+            visualText.classList.toggle("is-collapsed", !expandedWorks.has(visualKey));
+            expand.textContent = expandedWorks.has(visualKey) ? "收起画面语义" : "展开画面语义";
+          });
+          box.append(expand);
+        }
         const visualCoverage = work.image_coverage || work.visual_coverage;
         if (visualCoverage) box.append(appElement("small", visualCoverage, "app-scope-note"));
         if (visual && !(work.image_complete || work.visual_complete))
@@ -4995,9 +5046,17 @@
           box.append(button);
         }
         card.append(box);
+        const openInteractions = memoryButton("处理评论", "button compact secondary douyin-work-comment-link", () => openDouyinWorkbenchSection(view, "interactions"));
+        openInteractions.title = "打开互动任务；批量点赞会处理全部可覆盖作品";
+        card.append(openInteractions);
         list.append(card);
       }
-      if (!works.length) list.append(appElement("p", "尚无已核对的本人作品。点击“同步全部作品”开始读取。", "app-scope-note"));
+      if (!works.length) {
+        const empty = appElement("div", "", "douyin-works-empty");
+        empty.append(appElement("strong", webValue?.works_enabled === true ? "尚无已同步作品" : "本人作品目录待同步"),
+          appElement("p", canSync ? "点击上方「同步全部作品」读取创作者中心；作品内容与画面语义将在这里显示。" : "完成网页登录后，可用上方按钮同步已发布作品。"));
+        list.append(empty);
+      }
     }
     async function reload(controller) {
       const response = await request("/api/local/apps/douyin/works", { signal: controller.signal });
@@ -5039,8 +5098,23 @@
       if (busy) return;
       const controller = begin();
       busy = true; render();
-      let pages = 0, mediaFailures = 0;
+      let pages = 0, mediaFailures = 0, grantedWorks = false;
       try {
+        const web = apps.douyinWebLogin;
+        const before = web.value;
+        if (before?.works_enabled !== true) {
+          if (!before || !Number.isFinite(Number(before.revision))) throw new Error("网页登录状态不可读，请到「账号与授权」核对。");
+          feedback.textContent = "正在开启本人作品读取授权并同步…";
+          const granted = await request("/api/local/apps/douyin/web-login", { method: "POST", signal: controller.signal,
+            body: JSON.stringify({ action: "set_works", revision: before.revision, allow_works: true }) });
+          if (!active(controller)) return;
+          if (!validDouyinWebLogin(granted) || granted.works_enabled !== true) throw new Error("本人作品读取授权未能核对，请到「账号与授权」查看状态。");
+          if (web.value !== before) throw new Error("网页登录状态已变化，请刷新后再同步。");
+          web.value = granted;
+          web.loaded = true;
+          grantedWorks = true;
+          view.douyinWorksAutoSyncRevision = granted.revision;
+        }
         for (;;) {
           feedback.textContent = "正在核对创作者作品第 " + (pages + 1) + " 页…";
           const result = await request("/api/local/apps/observation", { method: "POST", signal: controller.signal,
@@ -5084,20 +5158,37 @@
             "本轮已核对 " + (catalog.works?.length || 0) + " 件") +
             "；同步在第 " + (pages + 1) + " 页暂停：" + error.message;
       } finally {
-        if (active(controller)) { busy = false; render(); }
+        if (active(controller)) {
+          busy = false; render();
+          if (grantedWorks) {
+            view.douyinWorksNotice = feedback.textContent;
+            renderApps();
+          }
+        }
       }
     }
     const syncButton = memoryButton("同步全部作品", "button compact primary", () => void sync(true));
     const resumeButton = memoryButton("继续同步", "button compact secondary", () => void sync(false));
-    controls.append(syncButton, resumeButton, visualChoice);
+    const commentsButton = memoryButton("处理作品评论", "button compact secondary", () => openDouyinWorkbenchSection(view, "interactions"));
+    const options = appElement("details", "", "douyin-works-options");
+    options.append(appElement("summary", "画面语义同步选项"), visualChoice);
+    controls.append(syncButton, resumeButton, commentsButton, options);
     panel.append(appElement("h4", "本人作品目录"),
-      appElement("p", "逐页核对已登录账号的创作者管理记录，保留可见范围和审核状态。", "app-scope-note"),
+      appElement("p", "查看已同步作品的内容、可见范围、审核状态和画面语义。", "app-scope-note"),
       summary, controls, visualNote, feedback, list);
     render();
-    const controller = begin();
-    void reload(controller).catch((error) => {
-      if (active(controller) && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
-    });
+    if (apps.douyinWebLogin.value?.works_enabled === true) {
+      const controller = begin();
+      void reload(controller).then(() => {
+        if (!active(controller) || apps.douyinWebLogin.value?.works_enabled !== true) return;
+        const revision = apps.douyinWebLogin.value?.revision;
+        if (view.douyinWorksAutoSyncRevision === revision || catalog.coverage?.state === "complete") return;
+        view.douyinWorksAutoSyncRevision = revision;
+        void sync(catalog.coverage?.has_more !== true);
+      }).catch((error) => {
+        if (active(controller) && !appSessionExpired([{ status: "rejected", reason: error }])) feedback.textContent = error.message;
+      });
+    }
     return panel;
   }
   function douyinReadPanel(view) {
@@ -5483,6 +5574,15 @@
       }
       grid.append(card);
     }
+    if (view.sections.some((item) => item.id === "interactions")) {
+      const value = apps.douyinWebLogin.value;
+      const card = appElement("article", "", "app-capability douyin-workbench-feature");
+      card.append(appElement("h4", "本人作品评论点赞"),
+        appElement("span", value?.auto_comment_likes_enabled === true ? "新评论自动点赞已开启" : "可设置", "station-label"),
+        appElement("p", "开启后从基线完成时起处理新评论；历史评论可在互动任务中单独启动批量任务。目前只覆盖可核对的公开作品评论。"),
+        memoryButton("打开互动任务", "button compact secondary", () => openDouyinWorkbenchSection(view, "interactions")));
+      grid.append(card);
+    }
     section.append(grid);
     return section;
   }
@@ -5675,6 +5775,7 @@
     if (!view || !$("#app-configuration").open) return;
     const { record, section } = view;
     const body = $("#app-configuration-body"), nav = $("#app-configuration-nav"), contextNav = $("#app-configuration-context-nav");
+    $("#app-configuration").dataset.section = section;
     const scroll = body.scrollTop, focused = document.activeElement;
     const focusSection = nav.contains(focused), focusContext = contextNav.contains(focused), focusConnection = focused?.id === "app-configuration-connection";
     const evidence = appEvidence(record.id);
@@ -5886,17 +5987,15 @@
           }
           view.douyinReadPanel ||= douyinReadPanel(view);
           view.douyinWorksPanel ||= douyinPublishedWorksPanel(view);
-          controls.push(douyinWebLoginRow(apps, listing, section), view.douyinWorksPanel, view.douyinReadPanel);
+          controls.push(douyinWorkbenchLoginStrip(apps, view), view.douyinWorksPanel, view.douyinReadPanel);
         } else controls.push(bilibiliPublicRow(record));
         break;
       case "publications":
       case "interactions":
-        if (record.id === "douyin") controls.push(douyinWebLoginRow(apps, listing, section));
+        if (record.id === "douyin" && section === "publications") controls.push(douyinWebLoginRow(apps, listing, section));
         if (record.id === "douyin" && section === "publications") controls.push(douyinCreationRow(view),
           appElement("p", "草稿创建后，可在下方按原任务编号提交、续办并核对回执。", "app-scope-note"));
-        if (record.id === "douyin" && section === "interactions") controls.push(douyinAutoCommentLikesRow(apps), appElement("p", "可在主工作站聊天中创建点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
         if (record.id === "douyin" && section === "interactions") {
-          if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
           const login = apps.douyinWebLogin.value;
           if (view.douyinAutoLikeLogin !== login) {
             view.douyinAutoLikeAbort?.abort();
@@ -5904,7 +6003,15 @@
             view.douyinAutoLikePanel = null;
           }
           view.douyinAutoLikePanel ||= douyinAutoCommentLikesPanel(view);
-          controls.push(view.douyinAutoLikePanel);
+          const likeHub = appElement("section", "", "douyin-comment-like-hub");
+          likeHub.append(douyinAutoCommentLikesRow(apps), view.douyinAutoLikePanel);
+          controls.push(likeHub);
+          if (view.sections.some((item) => item.id === "rounds")) controls.push(memoryButton("查看已保存的执行回合", "button compact secondary", () => openDouyinWorkbenchSection(view, "rounds")));
+          controls.push(douyinWorkbenchLoginStrip(apps, view));
+          const interactionHelp = appElement("details", "", "douyin-interaction-help");
+          interactionHelp.append(appElement("summary", "其他互动任务说明"),
+            appElement("p", "可在主工作站聊天中创建视频点赞任务。评论回复请先到「活动 → 执行回合」按作品核对通知、简介与音画证据，再用专用 douyin_notice_reply 创建待提交任务；通用 app_action 不接受抖音回复。真实平台互动尚待验收。", "app-scope-note"));
+          controls.push(interactionHelp);
           if (view.douyinNoticeLogin !== login) {
             view.douyinNoticeAbort?.abort();
             view.douyinNoticeLogin = login;

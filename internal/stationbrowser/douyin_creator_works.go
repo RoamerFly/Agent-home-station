@@ -15,11 +15,14 @@ const DouyinCreatorManageURL = "https://creator.douyin.com/creator-micro/content
 var creatorWorksNumericID = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
 var (
-	ErrCreatorWorksUnavailable     = errors.New("创作者中心未返回可核对的本人作品")
-	ErrCreatorWorksChanged         = errors.New("创作者账号或前一页作品已变化，请从首页重查")
-	ErrCreatorWorksAccountChanged  = errors.New("创作者中心账号已变化，请重新核对登录")
-	ErrCreatorWorksNextUnavailable = errors.New("创作者中心报告还有作品，但当前页面未提供可核对的下一页入口")
+	ErrCreatorWorksUnavailable      = errors.New("创作者中心未返回可核对的本人作品")
+	ErrCreatorWorksChanged          = errors.New("创作者账号或前一页作品已变化，请从首页重查")
+	ErrCreatorWorksAccountChanged   = errors.New("创作者中心账号已变化，请重新核对登录")
+	ErrCreatorWorksNextUnavailable  = errors.New("创作者中心报告还有作品，但当前页面未提供可核对的下一页入口")
+	ErrCreatorWorksResponseTooLarge = errors.New("创作者作品列表响应超过本机 8 MiB 安全读取范围，本页未保存")
 )
+
+const creatorWorksResponseMax = 8 << 20
 
 type DouyinCreatorWork struct {
 	ID, Title, Caption, CreatedAt, Visibility string
@@ -59,8 +62,8 @@ func DouyinCreatorWorksTimeout(page int) time.Duration {
 
 func creatorWorksPage(raw []byte) (DouyinCreatorWorksPage, error) {
 	var result DouyinCreatorWorksPage
-	if len(raw) > 256<<10 {
-		return result, ErrCreatorWorksUnavailable
+	if len(raw) > creatorWorksResponseMax {
+		return result, ErrCreatorWorksResponseTooLarge
 	}
 	var envelope struct {
 		StatusCode *int            `json:"status_code"`
