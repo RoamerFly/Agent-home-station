@@ -15,6 +15,29 @@ import (
 	"time"
 )
 
+func TestCreatorWorksListRequestSelection(t *testing.T) {
+	listener := newCreatorReceiptListener(DouyinCreatorManageURL, "session")
+	for _, tc := range []struct {
+		query string
+		want  bool
+	}{
+		{"status=0&count=1&max_cursor=0", false},
+		{"status=0&count=12&max_cursor=0", true},
+		{"status=0&count=2&max_cursor=0", true},
+		{"status=1&count=12&max_cursor=0", false},
+		{"status=0&count=12&count=1", false},
+		{"count=12&max_cursor=0", false},
+	} {
+		got := listener.worksListEndpoint("https://creator.douyin.com/janus/douyin/creator/pc/work_list?" + tc.query)
+		if got != tc.want {
+			t.Fatalf("request %q: got %t, want %t", tc.query, got, tc.want)
+		}
+	}
+	if listener.worksListEndpoint("https://www.douyin.com/janus/douyin/creator/pc/work_list?status=0&count=12") {
+		t.Fatal("another origin matched the creator request")
+	}
+}
+
 func TestCreatorWorksNativeScrollLoadsNextResponse(t *testing.T) {
 	if !Available() {
 		t.Skip("Edge unavailable")
@@ -34,10 +57,10 @@ func TestCreatorWorksNativeScrollLoadsNextResponse(t *testing.T) {
 <section id="cards"></section><span>加载中…</span></main><script>
 const list=document.querySelector('#works'), cards=document.querySelector('#cards');
 for(let i=0;i<12;i++){const card=document.createElement('article');card.style.height='60px';card.textContent='合成作品 '+i;cards.append(card)}
-fetch('/janus/douyin/creator/pc/work_list?cursor=first');
+fetch('/janus/douyin/creator/pc/work_list?status=0&count=12&cursor=first');
 let loading=false;
 list.addEventListener('scroll',()=>{if(loading||list.scrollTop+list.clientHeight<list.scrollHeight-2)return;
-loading=true;fetch('/janus/douyin/creator/pc/work_list?cursor=second')});
+loading=true;fetch('/janus/douyin/creator/pc/work_list?status=0&count=12&cursor=second')});
 </script>`))
 		case "/janus/douyin/creator/pc/work_list":
 			w.Header().Set("Content-Type", "application/json")

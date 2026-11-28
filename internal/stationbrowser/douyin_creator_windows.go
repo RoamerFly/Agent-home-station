@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -604,6 +605,19 @@ func (l *creatorReceiptListener) manageEndpoint(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.User == nil && u.Scheme+"://"+u.Host == l.origin && u.Path == "/janus/douyin/creator/pc/work_list"
 }
+func (l *creatorReceiptListener) worksListEndpoint(raw string) bool {
+	if !l.manageEndpoint(raw) {
+		return false
+	}
+	u, _ := url.Parse(raw)
+	query := u.Query()
+	status, count := query["status"], query["count"]
+	if len(status) != 1 || status[0] != "0" || len(count) != 1 {
+		return false
+	}
+	n, err := strconv.Atoi(count[0])
+	return err == nil && n >= 2
+}
 func (l *creatorReceiptListener) rejection() (int, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -654,7 +668,11 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 						delete(requests, p.RequestID)
 						delete(accepted, p.RequestID)
 						delete(manage, p.RequestID)
-						if (l.query != nil || l.knownID != "" || l.readWorks) && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST") {
+						manageRequest := (l.query != nil || l.knownID != "") && l.manageEndpoint(p.Request.URL) && (p.Request.Method == "GET" || p.Request.Method == "POST")
+						if l.readWorks {
+							manageRequest = p.Request.Method == "GET" && l.worksListEndpoint(p.Request.URL)
+						}
+						if manageRequest {
 							requests[p.RequestID] = true
 							manage[p.RequestID] = true
 						}
@@ -671,8 +689,14 @@ func (l *creatorReceiptListener) start(parent context.Context, session readerSes
 							FromServiceWorker bool
 						}
 					}
-					if json.Unmarshal(event.Params, &p) == nil && requests[p.RequestID] &&
-						(l.endpoint(p.Response.URL) || (manage[p.RequestID] && l.manageEndpoint(p.Response.URL))) {
+					if json.Unmarshal(event.Params, &p) != nil || !requests[p.RequestID] {
+						continue
+					}
+					manageResponse := manage[p.RequestID] && l.manageEndpoint(p.Response.URL)
+					if l.readWorks {
+						manageResponse = manage[p.RequestID] && l.worksListEndpoint(p.Response.URL)
+					}
+					if l.endpoint(p.Response.URL) || manageResponse {
 						if p.Response.Status == 200 && !p.Response.FromServiceWorker {
 							accepted[p.RequestID] = true
 						} else if l.readWorks && manage[p.RequestID] {

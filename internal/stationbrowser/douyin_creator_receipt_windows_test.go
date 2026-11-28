@@ -146,8 +146,13 @@ func TestCreatorWorksPaginationUsesOwnedManagementPage(t *testing.T) {
 		switch r.URL.Path {
 		case "/creator-micro/content/manage":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(`<button aria-label="下一页" onclick="fetch('/janus/douyin/creator/pc/work_list?page=2')">下一页</button><script>fetch('/janus/douyin/creator/pc/work_list?page=1')</script>`))
+			_, _ = w.Write([]byte(`<button aria-label="下一页" onclick="fetch('/janus/douyin/creator/pc/work_list?status=0&count=12&page=2')">下一页</button><script>fetch('/janus/douyin/creator/pc/work_list?status=0&count=1&page=1').then(()=>fetch('/janus/douyin/creator/pc/work_list?status=0&count=12&page=1'))</script>`))
 		case "/janus/douyin/creator/pc/work_list":
+			if r.URL.Query().Get("count") == "1" {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 0, "has_more": false, "aweme_list": []any{}})
+				return
+			}
 			item := first
 			more := r.URL.Query().Get("page") == "1"
 			if more && emptyFirst.Load() || !more && emptyLast.Load() {
